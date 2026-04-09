@@ -1,9 +1,14 @@
 const express = require('express');
+const crypto = require('node:crypto');
 const OAuthClient = require('intuit-oauth');
 const config = require('../config');
 const Connection = require('../models/Connection');
 const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
+
+// In-memory nonce store (keyed by nonce → { userId, createdAt })
+// In production this should be Redis/DB with TTL
+const pendingOAuthStates = new Map();
 
 const router = express.Router();
 
@@ -25,10 +30,19 @@ function buildOAuthClient() {
  */
 router.get('/connect', authenticate, (req, res) => {
   try {
+    const nonce = crypto.randomBytes(32).toString('hex');
+    pendingOAuthStates.set(nonce, { userId: req.user.id, createdAt: Date.now() });
+
+    // Clean up stale nonces older than 10 minutes
+    const TEN_MIN = 10 * 60 * 1000;
+    for (const [key, val] of pendingOAuthStates) {
+      if (Date.now() - val.createdAt > TEN_MIN) pendingOAuthStates.delete(key);
+    }
+
     const oauthClient = buildOAuthClient();
     const authUri = oauthClient.authorizeUri({
       scope: [OAuthClient.scopes.Accounting, OAuthClient.scopes.OpenId],
-      state: req.user.id, // pass userId so callback can associate
+      state: nonce,
     });
     return res.json({ authUri });
   } catch (err) {
@@ -60,13 +74,28 @@ router.get('/callback', async (req, res) => {
     }
 
     const realmId = req.query.realmId;
-    const userId = req.query.state; // we passed userId as state
+    const nonce = req.query.state;
 
-    if (!realmId || !userId) {
-      return res.status(400).json({ error: 'Missing realmId or user state' });
+    if (!realmId || !nonce) {
+      return res.status(400).json({ error: 'Missing realmId or state' });
     }
 
-    // Upsert Connection document
+    // Validate and consume the nonce
+    const pending = pendingOAuthStates.get(nonce);
+    if (!pending) {
+      return res.status(403).send('<html><body><p>Invalid or expired OAuth state. Please try connecting again.</p></body></html>');
+    }
+    pendingOAuthStates.delete(nonce);
+
+    const userId = pending.userId;
+
+    // Revoke any existing active connections for this user (one company per user)
+    await Connection.updateMany(
+      { userId, status: 'active' },
+      { status: 'revoked' }
+    );
+
+    // Create or update Connection document for this realm
     const connection = await Connection.findOneAndUpdate(
       { userId, realmId },
       {
@@ -94,7 +123,7 @@ router.get('/callback', async (req, res) => {
       <html><body>
         <script>
           if (window.opener) {
-            window.opener.postMessage({ type: 'qbo_connected', realmId: '${realmId}' }, '*');
+            window.opener.postMessage({ type: 'qbo_connected', realmId: '${realmId}' }, 'http://localhost:5173');
           }
           window.close();
         </script>
@@ -107,7 +136,7 @@ router.get('/callback', async (req, res) => {
       <html><body>
         <script>
           if (window.opener) {
-            window.opener.postMessage({ type: 'qbo_error', error: '${err.message.replace(/'/g, "\\'")}' }, '*');
+            window.opener.postMessage({ type: 'qbo_error', error: '${err.message.replace(/'/g, "\\'")}' }, 'http://localhost:5173');
           }
           window.close();
         </script>

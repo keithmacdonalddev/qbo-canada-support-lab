@@ -23,7 +23,7 @@ function signToken(user) {
  */
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, displayName, role } = req.body;
+    const { email, password, displayName } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -38,7 +38,7 @@ router.post('/register', async (req, res) => {
       email,
       password,
       displayName: displayName || email.split('@')[0],
-      role: role || 'agent',
+      role: 'agent',
     });
 
     const token = signToken(user);

@@ -6,26 +6,29 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(() => localStorage.getItem('token'))
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!!token)
 
   const isAuthenticated = !!token && !!user
 
   useEffect(() => {
-    if (token) {
-      client
-        .get('/auth/me')
-        .then((res) => {
-          setUser(res.data.user)
-        })
-        .catch(() => {
+    if (!token) return
+    let cancelled = false
+    client
+      .get('/auth/me')
+      .then((res) => {
+        if (!cancelled) setUser(res.data.user)
+      })
+      .catch(() => {
+        if (!cancelled) {
           localStorage.removeItem('token')
           setToken(null)
           setUser(null)
-        })
-        .finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [token])
 
   const login = useCallback(async (email, password) => {
@@ -63,6 +66,7 @@ export function AuthProvider({ children }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be used within AuthProvider')

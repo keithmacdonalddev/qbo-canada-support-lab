@@ -12,11 +12,18 @@ export default function Dashboard() {
   const [seedProgress, setSeedProgress] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const fetchHealth = () => {
+    client
+      .get('/company/health')
+      .then((res) => setCompany(res.data))
+      .catch(() => { /* ignore */ })
+  }
+
   useEffect(() => {
     client
       .get('/company/health')
       .then((res) => setCompany(res.data))
-      .catch(() => {})
+      .catch(() => { /* ignore */ })
       .finally(() => setLoading(false))
   }, [])
 
@@ -31,7 +38,6 @@ export default function Dashboard() {
         if (run?.status === 'completed' || run?.status === 'failed') {
           setSeeding(false)
           setSeedProgress(null)
-          // Build result message
           const created = run.entitiesCreated || {}
           const skipped = run.entitiesSkipped || {}
           const errors = run.seedErrors?.length || 0
@@ -50,17 +56,10 @@ export default function Dashboard() {
           })
           fetchHealth()
         }
-      } catch (_) {}
+      } catch { /* ignore polling errors */ }
     }, 2000)
     return () => clearInterval(interval)
   }, [seeding])
-
-  const fetchHealth = () => {
-    client
-      .get('/company/health')
-      .then((res) => setCompany(res.data))
-      .catch(() => {})
-  }
 
   const handleSeed = async () => {
     setSeeding(true)

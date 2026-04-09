@@ -86,10 +86,17 @@ router.get('/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Audit entry not found' });
     }
 
-    // Access control: agents can only see their own; supervisors can see
-    // any entry for a realm they're connected to.
-    if (req.user.role !== 'supervisor' && entry.userId._id.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Access control: agents see own entries only; supervisors see entries
+    // for their active company's realm only.
+    if (req.user.role !== 'supervisor') {
+      if (entry.userId._id.toString() !== req.user.id) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+    } else {
+      const connection = await getActiveConnection(req.user.id);
+      if (!connection || entry.realmId !== connection.realmId) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
     }
 
     return res.json({ entry });

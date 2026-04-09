@@ -36,6 +36,7 @@ export default function Onboarding() {
 
       // Listen for postMessage from callback popup
       const onMessage = async (event) => {
+        if (event.origin !== window.location.origin) return
         if (event.data?.type === 'qbo_connected') {
           window.removeEventListener('message', onMessage)
           clearInterval(interval)
