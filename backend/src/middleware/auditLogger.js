@@ -22,6 +22,7 @@ async function createAuditEntry(userId, realmId, action, details = {}) {
       beforeState: details.beforeState,
       afterState: details.afterState,
       aiDriven: details.aiDriven || false,
+      approvalEvent: details.approvalEvent,
       error: details.error,
     });
     return entry;

@@ -5,6 +5,7 @@ import client from '../api/client'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: '\u25A3' },
+  { to: '/ai', label: 'AI Assistant', icon: '\u2726' },
   { to: '/explorer', label: 'Entity Explorer', icon: '\u229E' },
   { to: '/checkpoints', label: 'Checkpoints', icon: '\u2299' },
   { to: '/issuepacks', label: 'Issue Packs', icon: '\u2298' },

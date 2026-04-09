@@ -105,4 +105,35 @@ router.get('/me', authenticate, async (req, res) => {
   }
 });
 
+/**
+ * PUT /api-key
+ * Save or clear the user's personal Anthropic API key.
+ * Body: { apiKey: string | null }
+ */
+router.put('/api-key', authenticate, async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (apiKey && typeof apiKey === 'string' && apiKey.trim().length > 0) {
+      // Basic format check
+      if (!apiKey.startsWith('sk-ant-')) {
+        return res.status(400).json({ error: 'Invalid Anthropic API key format (should start with sk-ant-)' });
+      }
+      user.anthropicApiKey = apiKey.trim();
+    } else {
+      user.anthropicApiKey = undefined;
+    }
+
+    await user.save();
+    return res.json({ success: true, user: user.toJSON() });
+  } catch (err) {
+    console.error('[auth/api-key]', err.message);
+    return res.status(500).json({ error: 'Failed to update API key' });
+  }
+});
+
 module.exports = router;

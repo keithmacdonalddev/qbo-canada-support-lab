@@ -23,6 +23,12 @@ app.use('/api/generate', require('./routes/generate'));
 app.use('/api/checkpoint', require('./routes/checkpoint'));
 app.use('/api/explore', require('./routes/explore'));
 app.use('/api/issuepacks', require('./routes/issuepacks'));
+const aiRoutes = require('./routes/ai');
+app.use('/api/ai', aiRoutes.router);
+
+// Wire SSE emitter from routes into the orchestrator (breaks circular dep)
+const orchestrator = require('./modules/ai-orchestrator');
+orchestrator.bindSSE(aiRoutes.emitSSE);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -55,7 +61,12 @@ async function start() {
     { status: 'in_progress' },
     { $set: { status: 'failed', completedAt: new Date() } }
   );
-  const recovered = staleGenRuns.modifiedCount + staleSeedRuns.modifiedCount + stalePackRuns.modifiedCount;
+  const AIPlan = require('./models/AIPlan');
+  const stalePlans = await AIPlan.updateMany(
+    { status: 'executing' },
+    { $set: { status: 'failed', completedAt: new Date() } }
+  );
+  const recovered = staleGenRuns.modifiedCount + staleSeedRuns.modifiedCount + stalePackRuns.modifiedCount + stalePlans.modifiedCount;
   if (recovered > 0) {
     console.log(`[startup] Recovered ${recovered} stale in_progress job(s)`);
   }

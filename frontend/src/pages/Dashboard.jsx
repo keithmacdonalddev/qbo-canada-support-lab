@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import client from '../api/client'
 import { Card, CardContent } from '@/components/ui/card'
@@ -9,7 +10,9 @@ import {
 } from '@/components/ui/table'
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [company, setCompany] = useState(null)
+  const [aiSessionCount, setAiSessionCount] = useState(null)
   const [seeding, setSeeding] = useState(false)
   const [seedResult, setSeedResult] = useState(null)
   const [seedProgress, setSeedProgress] = useState(null)
@@ -58,6 +61,13 @@ export default function Dashboard() {
       .finally(() => setLoading(false))
     fetchGenHistory()
     fetchSeedHistory()
+    client.get('/ai/sessions')
+      .then((res) => {
+        if (res.data?.success) {
+          setAiSessionCount(res.data.data?.sessions?.length ?? 0)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // Toggle generation run expansion — lazy-load log
@@ -246,6 +256,28 @@ export default function Dashboard() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* AI Assistant card */}
+            <Card className="shadow-sm mb-6 py-0">
+              <CardContent className="py-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">AI Assistant</div>
+                    <div className="text-sm text-[var(--text-heading)]">
+                      {aiSessionCount != null
+                        ? `${aiSessionCount} session${aiSessionCount !== 1 ? 's' : ''}`
+                        : 'Loading...'}
+                    </div>
+                    <p className="text-xs text-[#6B7280] mt-1">
+                      Investigate issues, run AI-guided plans, and generate support notes.
+                    </p>
+                  </div>
+                  <Button size="sm" onClick={() => navigate('/ai')}>
+                    Open AI Command Center
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Seed button */}
             <div className="flex items-center gap-4 mb-6">

@@ -9,6 +9,7 @@ import AuditLog from './pages/AuditLog'
 import EntityExplorer from './pages/EntityExplorer'
 import Checkpoints from './pages/Checkpoints'
 import IssuePacks from './pages/IssuePacks'
+import AICommandCenter from './pages/AICommandCenter'
 
 export default function App() {
   return (
@@ -52,6 +53,22 @@ export default function App() {
           element={
             <ProtectedRoute>
               <IssuePacks />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ai"
+          element={
+            <ProtectedRoute>
+              <AICommandCenter />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/ai/session/:id"
+          element={
+            <ProtectedRoute>
+              <AICommandCenter />
             </ProtectedRoute>
           }
         />

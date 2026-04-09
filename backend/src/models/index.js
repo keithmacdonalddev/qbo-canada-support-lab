@@ -8,6 +8,8 @@ const Checkpoint = require('./Checkpoint');
 const CheckpointEntity = require('./CheckpointEntity');
 const IssuePack = require('./IssuePack');
 const IssuePackRun = require('./IssuePackRun');
+const AISession = require('./AISession');
+const AIPlan = require('./AIPlan');
 
 module.exports = {
   User,
@@ -20,4 +22,6 @@ module.exports = {
   CheckpointEntity,
   IssuePack,
   IssuePackRun,
+  AISession,
+  AIPlan,
 };

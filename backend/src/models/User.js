@@ -22,12 +22,24 @@ const userSchema = new mongoose.Schema(
       enum: ['agent', 'supervisor'],
       default: 'agent',
     },
+    anthropicApiKey: {
+      type: String,
+    },
   },
   {
     timestamps: true,
     toJSON: {
       transform(_doc, ret) {
         delete ret.password;
+        // Mask API key — show only last 4 chars
+        if (ret.anthropicApiKey) {
+          ret.hasAnthropicKey = true;
+          ret.anthropicApiKeyMasked = '••••' + ret.anthropicApiKey.slice(-4);
+        } else {
+          ret.hasAnthropicKey = false;
+          ret.anthropicApiKeyMasked = null;
+        }
+        delete ret.anthropicApiKey;
         return ret;
       },
     },

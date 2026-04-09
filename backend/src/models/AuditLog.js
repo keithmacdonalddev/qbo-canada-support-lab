@@ -24,6 +24,9 @@ const auditLogSchema = new mongoose.Schema(
         'checkpoint',
         'issue_pack', 'issue_pack_entity',
         'manual', 'ai_executed', 'connection', 'auth',
+        'ai_read', 'ai_plan', 'ai_approve', 'ai_reject',
+        'ai_chat', 'ai_investigate', 'ai_plan_approve', 'ai_plan_reject',
+        'ai_plan_execute', 'ai_generate_note',
       ],
     },
     tool: {

@@ -3,6 +3,8 @@ import Layout from '../components/Layout'
 import client from '../api/client'
 import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 
 export default function Settings() {
@@ -10,6 +12,11 @@ export default function Settings() {
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
   const [message, setMessage] = useState(null)
+
+  // AI API key state
+  const [aiConfig, setAiConfig] = useState(null)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [savingKey, setSavingKey] = useState(false)
 
   const fetchCompany = () => {
     client
@@ -19,9 +26,51 @@ export default function Settings() {
       .finally(() => setLoading(false))
   }
 
+  const fetchAiConfig = () => {
+    client.get('/ai/config')
+      .then((res) => { if (res.data.success) setAiConfig(res.data.data) })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     fetchCompany()
+    fetchAiConfig()
   }, [])
+
+  const handleSaveApiKey = async () => {
+    if (!apiKeyInput.trim()) return
+    setSavingKey(true)
+    setMessage(null)
+    try {
+      const res = await client.put('/auth/api-key', { apiKey: apiKeyInput.trim() })
+      if (res.data.success) {
+        setMessage({ type: 'success', text: 'API key saved.' })
+        setApiKeyInput('')
+        fetchAiConfig()
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to save API key' })
+    } finally {
+      setSavingKey(false)
+    }
+  }
+
+  const handleClearApiKey = async () => {
+    if (!confirm('Remove your Anthropic API key?')) return
+    setSavingKey(true)
+    setMessage(null)
+    try {
+      const res = await client.put('/auth/api-key', { apiKey: null })
+      if (res.data.success) {
+        setMessage({ type: 'success', text: 'API key removed.' })
+        fetchAiConfig()
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to remove API key' })
+    } finally {
+      setSavingKey(false)
+    }
+  }
 
   const handleDisconnect = async () => {
     if (!confirm('Are you sure you want to disconnect this company?')) return
@@ -124,6 +173,89 @@ export default function Settings() {
                   {disconnecting ? 'Disconnecting...' : 'Disconnect'}
                 </Button>
               </CardFooter>
+            </Card>
+          )}
+        </div>
+        {/* AI API Key Section */}
+        <div className="mb-8">
+          <h2 className="text-base font-semibold text-[var(--text-heading)] mb-3">AI Assistant</h2>
+
+          {!aiConfig ? (
+            <p className="text-[var(--text-light)] mb-2">Loading AI configuration...</p>
+          ) : (
+            <Card className="max-w-[560px] shadow-sm">
+              <CardContent className="space-y-0">
+                {/* Status row */}
+                <div className="flex justify-between items-center py-2.5">
+                  <span className="text-[13px] text-[#6B7280]">AI Features</span>
+                  <Badge variant={aiConfig.available ? 'default' : 'secondary'}>
+                    {aiConfig.available ? 'Available' : 'Not configured'}
+                  </Badge>
+                </div>
+                <Separator />
+
+                {/* Global key info */}
+                <div className="flex justify-between items-center py-2.5">
+                  <span className="text-[13px] text-[#6B7280]">Shared API key</span>
+                  <span className="text-sm font-medium text-[var(--text-heading)]">
+                    {aiConfig.globalKeyEnabled
+                      ? (aiConfig.globalKeySet ? 'Active' : 'Enabled (not set)')
+                      : 'Disabled'}
+                  </span>
+                </div>
+                <Separator />
+
+                {/* Per-user key */}
+                <div className="flex justify-between items-center py-2.5">
+                  <span className="text-[13px] text-[#6B7280]">Your API key</span>
+                  <span className="text-sm font-medium text-[var(--text-heading)]">
+                    {!aiConfig.userKeysEnabled
+                      ? 'Disabled by admin'
+                      : aiConfig.hasUserKey
+                        ? `Set (${aiConfig.maskedKey || '••••'})`
+                        : 'Not set'}
+                  </span>
+                </div>
+
+                {/* Key input — only if user keys are enabled */}
+                {aiConfig.userKeysEnabled && (
+                  <>
+                    <Separator />
+                    <div className="py-3">
+                      <p className="text-xs text-[#6B7280] mb-2">
+                        Enter your Anthropic API key to use AI features. Get one at{' '}
+                        <span className="font-medium">console.anthropic.com</span>
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          type="password"
+                          placeholder="sk-ant-api03-..."
+                          value={apiKeyInput}
+                          onChange={(e) => setApiKeyInput(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+                          className="flex-1 font-mono text-sm"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={handleSaveApiKey}
+                          disabled={savingKey || !apiKeyInput.trim()}
+                        >
+                          {savingKey ? 'Saving...' : 'Save'}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+
+              {/* Clear key button */}
+              {aiConfig.userKeysEnabled && aiConfig.hasUserKey && (
+                <CardFooter>
+                  <Button variant="destructive" size="sm" onClick={handleClearApiKey} disabled={savingKey}>
+                    Remove API Key
+                  </Button>
+                </CardFooter>
+              )}
             </Card>
           )}
         </div>
