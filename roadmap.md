@@ -1,0 +1,256 @@
+# QBO Support Lab Roadmap
+
+**Status:** Working plan  
+**Source of truth:** `prd.md`
+
+---
+
+## 1. Planning assumptions
+
+- This product operates only on internal, support-owned QBO test companies.
+- `prd.md` remains the product contract; this file translates it into execution sequencing.
+- Phase 0 is a hard gate. If the API spike fails key assumptions, later phases must be re-scoped before implementation continues.
+- Phase 1 should be planned in moderate detail now.
+- Phases 2-4 should be documented as roadmap commitments with clear gates, not as fully locked implementation specs.
+- If time gets tight, defer the items already called out in `prd.md`: continuous activity, replay, raw API view, custom issue pack authoring, and AI guarded auto-execution.
+
+---
+
+## 2. Program goals
+
+- Give each support user one realistic QBO Canada flagship company they can use for reproduction work.
+- Reduce manual setup time for support investigations.
+- Make inspection, explanation, and evidence capture first-class workflows.
+- Introduce AI only after deterministic internal tools and investigation surfaces are reliable.
+
+---
+
+## 3. Phase summary
+
+| Phase | Duration | Primary goal | Key output |
+|------|----------|--------------|------------|
+| Phase 0 | 1-2 weeks | Validate API feasibility | Gap report, capability matrix, working scripts |
+| Phase 1 | 3-4 weeks | Ship the foundation | Login, QBO connect, company profile, seeding, dashboard, audit base |
+| Phase 2 | 4-5 weeks | Make the company feel real and inspectable | Historical generation, checkpoints, diff, entity explorer, issue packs |
+| Phase 3 | 3-4 weeks | Add controlled AI workflows | AI planning, confirmed execution, investigation support, support notes |
+| Phase 4 | 2-3 weeks | Harden for daily internal use | UX polish, performance tuning, supervisor features, optional freshness |
+| Future | Post-MVP | Expand breadth | Payroll, multi-company, training, sharing, packaging |
+
+---
+
+## 4. Phase gates
+
+### Gate A: Phase 0 -> Phase 1
+
+Phase 1 starts only if the team can prove:
+
+- AR and AP transaction chains can be created and read back with enough fidelity.
+- OAuth, realm targeting, and token refresh work reliably against internal test companies.
+- Required entity volume is practical within rate limits.
+- Sales-order and other Advanced-only assumptions are either validated or explicitly removed from MVP scope.
+- Change tracking direction is decided: webhooks, CDC, or both.
+
+**Required artifacts:**
+
+- `phase-0-api-validation-spike.md` execution results
+- capability matrix by entity/workflow
+- gap report with recommended product scope changes
+- demo scripts and sample logs
+
+### Gate B: Phase 1 -> Phase 2
+
+Phase 2 starts only if the team can prove:
+
+- A user can sign in, connect one company, assess it, seed it, and view status end to end.
+- Master data seeding is idempotent.
+- Audit events are recorded for all mutations.
+- The team can reliably target the right realm on every operation.
+
+**Required artifacts:**
+
+- working internal demo
+- seeded company examples
+- Phase 1 defect list and carryover decisions
+
+### Gate C: Phase 2 -> Phase 3
+
+Phase 3 starts only if the team can prove:
+
+- Investigation tools are already useful without AI.
+- At least 3 issue packs are stable and reproducible.
+- Checkpoints and diffs are trustworthy enough to support evidence-based explanations.
+
+### Gate D: Phase 3 -> Phase 4
+
+Phase 4 starts only if the team can prove:
+
+- AI plans map cleanly to deterministic tool contracts.
+- Confirmed execution is auditable and safe.
+- Support notes produced by the system are useful in real internal workflows.
+
+---
+
+## 5. Phase details
+
+### Phase 0: API validation spike
+
+**Objective**
+
+Validate the Intuit API assumptions that the product depends on before committing to full implementation.
+
+**In scope**
+
+- OAuth and realm targeting proof
+- transaction-chain creation and read-back
+- date backdating behavior
+- master data volume and throttling behavior
+- webhook and CDC validation
+- sales-order coverage validation
+
+**Out of scope**
+
+- production UI
+- full application auth
+- polished architecture
+- AI workflows
+
+**Exit criteria**
+
+- documented pass/fail result for every spike hypothesis
+- clear recommendation to proceed, re-scope, or stop
+
+### Phase 1: foundation
+
+**Objective**
+
+Ship the minimum end-to-end product slice that lets one internal user connect and prepare a flagship company.
+
+**In scope**
+
+- auth and role framework
+- per-user QBO connection
+- company profile and capability assessment
+- master data seeding
+- dashboard and onboarding basics
+- audit-log foundation
+
+**Out of scope**
+
+- realistic history generation beyond smoke coverage
+- checkpoints and diff
+- issue injection
+- AI orchestration
+- continuous activity
+
+**Exit criteria**
+
+- user can sign in, connect one internal support-owned company, seed baseline data, and see results
+
+### Phase 2: reality and inspection
+
+**Objective**
+
+Turn the seeded flagship company into a realistic and inspectable support lab.
+
+**In scope**
+
+- historical activity generation
+- checkpoint creation and diff
+- entity explorer
+- transaction-chain inspection
+- timeline view
+- initial issue packs and run history
+
+**Exit criteria**
+
+- user can generate realistic history, inject a known issue, and inspect the resulting discrepancy
+
+### Phase 3: AI layer
+
+**Objective**
+
+Add controlled AI assistance on top of deterministic tools.
+
+**In scope**
+
+- natural-language planning
+- confirmed execution flow
+- discrepancy explanation
+- support note generation
+- AI session logging
+
+**Exit criteria**
+
+- user can request a scenario in natural language, approve the plan, execute it, and receive evidence-based notes
+
+### Phase 4: polish and continuous activity
+
+**Objective**
+
+Make the product usable for repeated day-to-day internal support work.
+
+**In scope**
+
+- UX refinements from user feedback
+- performance tuning
+- supervisor-focused features
+- optional continuous activity engine
+
+**Exit criteria**
+
+- early internal users can rely on the tool without frequent engineering intervention
+
+### Future phases
+
+**Candidates**
+
+- payroll workflows
+- multi-company-per-user support
+- scenario sharing
+- training or challenge mode
+- QBOA-oriented workflows
+- commercial packaging
+
+---
+
+## 6. Cross-phase dependency map
+
+- OAuth, token handling, and company targeting are foundational for every phase.
+- The capability matrix from Phase 0 shapes seeding, issue packs, and investigation tooling.
+- Audit logging starts in Phase 1 and expands in every later phase.
+- Checkpoints and diff from Phase 2 are prerequisites for strong AI explanations in Phase 3.
+- Continuous activity should not ship until the team trusts seeding, inspection, and audit visibility.
+
+---
+
+## 7. Scope control rules
+
+- Do not expand beyond internal support-owned QBO test companies in MVP.
+- Do not build payroll in parallel with the core support-lab flows.
+- Do not let AI bypass deterministic internal tools.
+- Do not treat replay as true restore.
+- Do not add multi-company breadth before the single-company workflow is clearly useful.
+
+---
+
+## 8. Recommended planning artifacts
+
+- `prd.md` - product contract
+- `roadmap.md` - phase sequencing and gates
+- `phase-0-api-validation-spike.md` - execution plan for the hard gate
+- `phase-1-foundation-plan.md` - first implementation phase plan
+
+Optional later:
+
+- `phase-2-reality-and-inspection-plan.md`
+- `ai-tool-contracts.md`
+- `issue-pack-catalog.md`
+
+---
+
+## 9. Near-term next steps
+
+1. Execute the Phase 0 spike.
+2. Record pass/fail results and scope changes.
+3. Lock the Phase 1 backlog against the validated API surface.
+4. Staff implementation owners for backend, frontend, and product validation.
