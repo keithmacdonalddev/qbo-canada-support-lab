@@ -38,6 +38,14 @@ const companyProfileSchema = new mongoose.Schema(
     lastSeedDate: {
       type: Date,
     },
+    generationStatus: {
+      type: String,
+      enum: ['pending', 'in_progress', 'completed', 'failed'],
+      default: 'pending',
+    },
+    lastGenerationDate: {
+      type: Date,
+    },
     lastActivityAt: {
       type: Date,
     },

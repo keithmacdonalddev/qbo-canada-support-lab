@@ -28,6 +28,20 @@ const seedRunSchema = new mongoose.Schema(
       items: { type: Number, default: 0 },
       accounts: { type: Number, default: 0 },
     },
+    createdEntities: [
+      {
+        entity: { type: String },
+        qboId: { type: String },
+        name: { type: String },
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
+    skippedEntities: [
+      {
+        entity: { type: String },
+        name: { type: String },
+      },
+    ],
     seedErrors: [
       {
         entity: { type: String },

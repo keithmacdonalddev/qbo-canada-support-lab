@@ -19,6 +19,10 @@ app.use('/api/qbo', require('./routes/qbo'));
 app.use('/api/company', require('./routes/company'));
 app.use('/api/seed', require('./routes/seed'));
 app.use('/api/audit', require('./routes/audit'));
+app.use('/api/generate', require('./routes/generate'));
+app.use('/api/checkpoint', require('./routes/checkpoint'));
+app.use('/api/explore', require('./routes/explore'));
+app.use('/api/issuepacks', require('./routes/issuepacks'));
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -30,6 +34,11 @@ app.use(errorHandler);
 
 async function start() {
   await connectDB();
+
+  // Seed built-in issue packs
+  const { seedIssuePacks } = require('./modules/issuepack-seeder');
+  await seedIssuePacks();
+
   app.listen(config.port, () => {
     console.log(`Server running on port ${config.port}`);
   });

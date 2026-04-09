@@ -64,40 +64,10 @@ function generateServiceItems(count, incomeAccountId) {
  */
 async function findExisting(qbo, entity, nameField) {
   const result = await qbo.query(
-    `SELECT ${nameField} FROM ${entity} MAXRESULTS 1000`
+    `SELECT ${nameField}, Id FROM ${entity} MAXRESULTS 1000`
   );
   const records = result.QueryResponse?.[entity] || [];
-  return new Set(records.map(r => r[nameField]));
-}
-
-/**
- * Create entities one-by-one, skipping existing ones.
- * Returns { created, skipped, errors }.
- */
-async function createBatch(qbo, entity, items, nameField) {
-  const existing = await findExisting(qbo, entity, nameField);
-  let created = 0;
-  let skipped = 0;
-  const errors = [];
-
-  for (const item of items) {
-    if (existing.has(item[nameField])) {
-      skipped++;
-      continue;
-    }
-    try {
-      await qbo.create(entity.toLowerCase(), item);
-      created++;
-    } catch (err) {
-      errors.push({
-        entity: entity.toLowerCase(),
-        name: item[nameField],
-        error: err.message || String(err),
-      });
-    }
-  }
-
-  return { created, skipped, errors };
+  return new Map(records.map(r => [r[nameField], r.Id]));
 }
 
 /**
@@ -111,6 +81,7 @@ async function getActiveConnection(userId) {
 
 /**
  * Run seeding in the background, updating SeedRun progress as it goes.
+ * Logs every individual entity created, skipped, or errored.
  */
 async function runSeedingJob(userId, realmId, seedRunId, connection) {
   const seedRun = await SeedRun.findById(seedRunId);
@@ -131,19 +102,19 @@ async function runSeedingJob(userId, realmId, seedRunId, connection) {
     seedRun.progress = { phase: 'customers', detail: 'Seeding customers (0/50)...' };
     await seedRun.save();
     const custData = generateCustomers(50);
-    const custResult = await createBatchWithProgress(qbo, 'Customer', custData, 'DisplayName', seedRun, 'customers', 50);
+    const custResult = await createBatchWithLogging(qbo, 'Customer', custData, 'DisplayName', seedRun, 'customers', 50, userId, realmId);
 
     // --- Seed Vendors ---
     seedRun.progress = { phase: 'vendors', detail: 'Seeding vendors (0/30)...' };
     await seedRun.save();
     const vendData = generateVendors(30);
-    const vendResult = await createBatchWithProgress(qbo, 'Vendor', vendData, 'DisplayName', seedRun, 'vendors', 30);
+    const vendResult = await createBatchWithLogging(qbo, 'Vendor', vendData, 'DisplayName', seedRun, 'vendors', 30, userId, realmId);
 
     // --- Seed Items ---
     seedRun.progress = { phase: 'items', detail: 'Seeding items (0/50)...' };
     await seedRun.save();
     const itemData = generateServiceItems(50, incomeAccountId);
-    const itemResult = await createBatchWithProgress(qbo, 'Item', itemData, 'Name', seedRun, 'items', 50);
+    const itemResult = await createBatchWithLogging(qbo, 'Item', itemData, 'Name', seedRun, 'items', 50, userId, realmId);
 
     // Aggregate errors
     const allErrors = [
@@ -191,6 +162,8 @@ async function runSeedingJob(userId, realmId, seedRunId, connection) {
         vendors: vendResult.created,
         items: itemResult.created,
         errors: allErrors.length,
+        totalCreated: seedRun.createdEntities.length,
+        totalSkipped: seedRun.skippedEntities.length,
       },
     });
   } catch (err) {
@@ -219,27 +192,63 @@ async function runSeedingJob(userId, realmId, seedRunId, connection) {
 }
 
 /**
- * Like createBatch, but updates SeedRun progress after each entity.
+ * Create entities one-by-one, logging each individually.
  */
-async function createBatchWithProgress(qbo, entity, items, nameField, seedRun, phaseName, total) {
-  const existing = await findExisting(qbo, entity, nameField);
+async function createBatchWithLogging(qbo, entity, items, nameField, seedRun, phaseName, total, userId, realmId) {
+  const existingMap = await findExisting(qbo, entity, nameField);
   let created = 0;
   let skipped = 0;
   const errors = [];
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    if (existing.has(item[nameField])) {
+    const itemName = item[nameField];
+
+    if (existingMap.has(itemName)) {
       skipped++;
+      seedRun.skippedEntities.push({
+        entity: entity.toLowerCase(),
+        name: itemName,
+      });
+
+      await createAuditEntry(userId, realmId, `Seed skipped ${entity} "${itemName}" (already exists, QBO #${existingMap.get(itemName)})`, {
+        actionType: 'seed_entity',
+        outcome: 'skipped',
+        afterState: { entity, name: itemName, qboId: existingMap.get(itemName) },
+      });
     } else {
       try {
-        await qbo.create(entity.toLowerCase(), item);
+        const result = await qbo.create(entity.toLowerCase(), item);
         created++;
+
+        // Extract QBO ID from response
+        const record = result[entity];
+        const qboId = record?.Id || '';
+
+        seedRun.createdEntities.push({
+          entity: entity.toLowerCase(),
+          qboId,
+          name: itemName,
+          timestamp: new Date(),
+        });
+
+        await createAuditEntry(userId, realmId, `Seed created ${entity} "${itemName}" → QBO #${qboId}`, {
+          actionType: 'seed_entity',
+          outcome: 'success',
+          afterState: { entity, name: itemName, qboId },
+        });
       } catch (err) {
         errors.push({
           entity: entity.toLowerCase(),
-          name: item[nameField],
+          name: itemName,
           error: err.message || String(err),
+        });
+
+        await createAuditEntry(userId, realmId, `Seed failed ${entity} "${itemName}"`, {
+          actionType: 'seed_entity',
+          outcome: 'failure',
+          error: err.message || String(err),
+          afterState: { entity, name: itemName },
         });
       }
     }
@@ -362,6 +371,37 @@ router.get('/history', authenticate, async (req, res) => {
   } catch (err) {
     console.error('[seed/history]', err.message);
     return res.status(500).json({ error: 'Failed to fetch seed history' });
+  }
+});
+
+/**
+ * GET /log/:runId
+ * Returns the full entity log for a specific seed run.
+ */
+router.get('/log/:runId', authenticate, async (req, res) => {
+  try {
+    const seedRun = await SeedRun.findOne({
+      _id: req.params.runId,
+      userId: req.user.id,
+    });
+
+    if (!seedRun) {
+      return res.status(404).json({ error: 'Seed run not found' });
+    }
+
+    return res.json({
+      runId: seedRun._id,
+      status: seedRun.status,
+      createdEntities: seedRun.createdEntities,
+      skippedEntities: seedRun.skippedEntities,
+      errors: seedRun.seedErrors,
+      totalCreated: seedRun.createdEntities.length,
+      totalSkipped: seedRun.skippedEntities.length,
+      totalErrors: seedRun.seedErrors.length,
+    });
+  } catch (err) {
+    console.error('[seed/log]', err.message);
+    return res.status(500).json({ error: 'Failed to fetch seed log' });
   }
 });
 
