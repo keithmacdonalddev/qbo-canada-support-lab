@@ -17,7 +17,14 @@ const auditLogSchema = new mongoose.Schema(
     },
     actionType: {
       type: String,
-      enum: ['seed', 'generate', 'inject', 'manual', 'ai_executed', 'connection', 'auth'],
+      enum: [
+        'seed', 'seed_entity',
+        'generate', 'generate_txn',
+        'inject',
+        'checkpoint',
+        'issue_pack', 'issue_pack_entity',
+        'manual', 'ai_executed', 'connection', 'auth',
+      ],
     },
     tool: {
       type: String,
@@ -27,7 +34,7 @@ const auditLogSchema = new mongoose.Schema(
     },
     outcome: {
       type: String,
-      enum: ['success', 'failure', 'partial'],
+      enum: ['success', 'failure', 'partial', 'skipped'],
       default: 'success',
     },
     beforeState: {

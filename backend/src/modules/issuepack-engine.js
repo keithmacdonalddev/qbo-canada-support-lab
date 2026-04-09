@@ -127,6 +127,19 @@ async function executeDuplicatePayment(qbo, { vendors, expenseAccounts, bankAcco
 
 // --- Pack 3: Tax Code Inconsistency ---
 
+async function discoverTaxCodes(qbo) {
+  const result = await qbo.query("SELECT * FROM TaxCode MAXRESULTS 50");
+  const codes = result.QueryResponse?.TaxCode || [];
+  const taxable = codes.find((c) => c.Active && c.Name !== 'NON' && c.Name !== 'Exempt' && c.Name !== 'Out of scope');
+  const exempt = codes.find((c) => c.Active && (c.Name === 'NON' || c.Name === 'Exempt' || c.Name === 'Tax exempt'));
+  return {
+    taxableCode: taxable?.Id || taxable?.Name || 'TAX',
+    taxableName: taxable?.Name || 'TAX',
+    exemptCode: exempt?.Id || exempt?.Name || 'NON',
+    exemptName: exempt?.Name || 'NON',
+  };
+}
+
 async function executeTaxCodeInconsistency(qbo, { customers, items }) {
   const log = [];
   const createdEntities = [];
@@ -135,6 +148,9 @@ async function executeTaxCodeInconsistency(qbo, { customers, items }) {
   const item = pickRandom(items);
   const custRef = { value: customer.Id, name: customer.DisplayName };
   const itemRef = { value: item.Id, name: item.Name };
+
+  // Discover valid tax codes for this company
+  const taxCodes = await discoverTaxCodes(qbo);
 
   // Step 1: Create invoice with taxable line
   log.push({ step: 1, action: 'Create invoice with taxable items', outcome: 'pending', detail: '', timestamp: new Date() });
@@ -148,13 +164,13 @@ async function executeTaxCodeInconsistency(qbo, { customers, items }) {
         ItemRef: itemRef,
         UnitPrice: 800,
         Qty: 1,
-        TaxCodeRef: { value: 'TAX' },
+        TaxCodeRef: { value: taxCodes.taxableCode },
       },
     }],
   });
   const inv1 = inv1Result.Invoice;
   createdEntities.push({ entity: 'Invoice', qboId: inv1.Id, step: 1 });
-  log[0] = { ...log[0], outcome: 'success', detail: `Invoice #${inv1.DocNumber || inv1.Id} with TAX code` };
+  log[0] = { ...log[0], outcome: 'success', detail: `Invoice #${inv1.DocNumber || inv1.Id} with ${taxCodes.taxableName} tax code` };
 
   // Step 2: Create similar invoice with exempt line (same customer, same item)
   log.push({ step: 2, action: 'Create invoice with exempt items', outcome: 'pending', detail: '', timestamp: new Date() });
@@ -168,13 +184,13 @@ async function executeTaxCodeInconsistency(qbo, { customers, items }) {
         ItemRef: itemRef,
         UnitPrice: 800,
         Qty: 1,
-        TaxCodeRef: { value: 'NON' },
+        TaxCodeRef: { value: taxCodes.exemptCode },
       },
     }],
   });
   const inv2 = inv2Result.Invoice;
   createdEntities.push({ entity: 'Invoice', qboId: inv2.Id, step: 2 });
-  log[1] = { ...log[1], outcome: 'success', detail: `Invoice #${inv2.DocNumber || inv2.Id} with NON (exempt) code — same customer + item` };
+  log[1] = { ...log[1], outcome: 'success', detail: `Invoice #${inv2.DocNumber || inv2.Id} with ${taxCodes.exemptName} (exempt) code — same customer + item` };
 
   return { createdEntities, log };
 }

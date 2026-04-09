@@ -42,19 +42,21 @@ export default function IssuePacks() {
     if (!confirm('This will create entities in your QBO company. Continue?')) return
     setRunning(slug)
     try {
-      await client.post(`/issuepacks/${slug}/run`)
-      // Poll for completion
+      const startRes = await client.post(`/issuepacks/${slug}/run`)
+      const runId = startRes.data.run?._id
+      if (!runId) { setRunning(null); return }
+
+      // Poll for this specific run's completion by ID
       const poll = setInterval(async () => {
         try {
-          const res = await client.get('/issuepacks/runs')
-          const updatedRuns = res.data.runs || []
-          setRuns(updatedRuns)
-          const latestForSlug = updatedRuns.find(
-            (r) => r.issuePackId?.slug === slug && ['completed', 'failed'].includes(r.status)
-          )
-          if (latestForSlug) {
+          const res = await client.get(`/issuepacks/runs/${runId}`)
+          const run = res.data.run
+          if (run && ['completed', 'failed'].includes(run.status)) {
             clearInterval(poll)
             setRunning(null)
+            // Refresh full run list
+            const listRes = await client.get('/issuepacks/runs')
+            setRuns(listRes.data.runs || [])
           }
         } catch {
           clearInterval(poll)

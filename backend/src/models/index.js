@@ -5,6 +5,7 @@ const AuditLog = require('./AuditLog');
 const SeedRun = require('./SeedRun');
 const GenerationRun = require('./GenerationRun');
 const Checkpoint = require('./Checkpoint');
+const CheckpointEntity = require('./CheckpointEntity');
 const IssuePack = require('./IssuePack');
 const IssuePackRun = require('./IssuePackRun');
 
@@ -16,6 +17,7 @@ module.exports = {
   SeedRun,
   GenerationRun,
   Checkpoint,
+  CheckpointEntity,
   IssuePack,
   IssuePackRun,
 };

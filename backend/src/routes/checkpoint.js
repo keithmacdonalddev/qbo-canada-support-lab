@@ -1,6 +1,7 @@
 const express = require('express');
 const Connection = require('../models/Connection');
 const Checkpoint = require('../models/Checkpoint');
+const CheckpointEntity = require('../models/CheckpointEntity');
 const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
@@ -70,8 +71,7 @@ router.get('/', authenticate, async (req, res) => {
     }
 
     const checkpoints = await Checkpoint.find(
-      { userId: req.user.id, realmId: connection.realmId },
-      { entities: 0 } // exclude full entity data from listing
+      { userId: req.user.id, realmId: connection.realmId }
     ).sort({ createdAt: -1 });
 
     return res.json({ checkpoints });
@@ -88,8 +88,7 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const checkpoint = await Checkpoint.findOne(
-      { _id: req.params.id, userId: req.user.id },
-      { entities: 0 }
+      { _id: req.params.id, userId: req.user.id }
     );
 
     if (!checkpoint) {
@@ -118,7 +117,7 @@ router.get('/:id/diff/:compareId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'One or both checkpoints not found' });
     }
 
-    const diff = diffCheckpoints(cpA, cpB);
+    const diff = await diffCheckpoints(cpA, cpB);
 
     return res.json({
       diff,
@@ -145,6 +144,9 @@ router.delete('/:id', authenticate, async (req, res) => {
     if (!checkpoint) {
       return res.status(404).json({ error: 'Checkpoint not found' });
     }
+
+    // Clean up entity data in separate collection
+    await CheckpointEntity.deleteMany({ checkpointId: checkpoint._id });
 
     return res.json({ message: 'Checkpoint deleted' });
   } catch (err) {

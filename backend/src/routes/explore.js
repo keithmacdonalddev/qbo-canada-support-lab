@@ -37,13 +37,15 @@ router.get('/search', authenticate, async (req, res) => {
     let queryStr = `SELECT * FROM ${type}`;
 
     if (q) {
-      // Use DisplayName for most entities, Name for Item/Account
-      const nameField = ['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName';
-      // For transaction types, use DocNumber if it looks like a number
-      if (['Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment', 'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit'].includes(type)) {
-        queryStr += ` WHERE DocNumber LIKE '%${q}%'`;
-      } else {
-        queryStr += ` WHERE ${nameField} LIKE '%${q}%'`;
+      // Sanitize: strip single quotes, backslashes, and control chars
+      const sanitized = q.replace(/['\\\x00-\x1f]/g, '').trim();
+      if (sanitized) {
+        const nameField = ['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName';
+        if (['Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment', 'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit'].includes(type)) {
+          queryStr += ` WHERE DocNumber LIKE '%${sanitized}%'`;
+        } else {
+          queryStr += ` WHERE ${nameField} LIKE '%${sanitized}%'`;
+        }
       }
     }
 

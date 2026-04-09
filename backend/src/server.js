@@ -39,6 +39,27 @@ async function start() {
   const { seedIssuePacks } = require('./modules/issuepack-seeder');
   await seedIssuePacks();
 
+  // Recover stale in_progress jobs from prior crashes
+  const GenerationRun = require('./models/GenerationRun');
+  const SeedRun = require('./models/SeedRun');
+  const IssuePackRun = require('./models/IssuePackRun');
+  const staleGenRuns = await GenerationRun.updateMany(
+    { status: 'in_progress' },
+    { $set: { status: 'failed', completedAt: new Date(), 'progress.phase': 'error', 'progress.detail': 'Server restarted — job interrupted' } }
+  );
+  const staleSeedRuns = await SeedRun.updateMany(
+    { status: 'in_progress' },
+    { $set: { status: 'failed', completedAt: new Date(), 'progress.phase': 'error', 'progress.detail': 'Server restarted — job interrupted' } }
+  );
+  const stalePackRuns = await IssuePackRun.updateMany(
+    { status: 'in_progress' },
+    { $set: { status: 'failed', completedAt: new Date() } }
+  );
+  const recovered = staleGenRuns.modifiedCount + staleSeedRuns.modifiedCount + stalePackRuns.modifiedCount;
+  if (recovered > 0) {
+    console.log(`[startup] Recovered ${recovered} stale in_progress job(s)`);
+  }
+
   app.listen(config.port, () => {
     console.log(`Server running on port ${config.port}`);
   });

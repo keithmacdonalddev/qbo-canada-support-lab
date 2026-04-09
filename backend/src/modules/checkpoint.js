@@ -1,4 +1,5 @@
 const Checkpoint = require('../models/Checkpoint');
+const CheckpointEntity = require('../models/CheckpointEntity');
 
 /**
  * Entity types to snapshot and their QBO query entity names.
@@ -16,51 +17,110 @@ const ENTITY_TYPES = [
   { key: 'journalEntries', qboEntity: 'JournalEntry' },
 ];
 
+const PAGE_SIZE = 1000;
+
 /**
- * Query all records of a given QBO entity type (paging up to 1000).
+ * Query all records of a given QBO entity type with pagination.
  */
-async function queryAll(qbo, qboEntity) {
-  const result = await qbo.query(
-    `SELECT * FROM ${qboEntity} MAXRESULTS 1000`
-  );
-  return result.QueryResponse?.[qboEntity] || [];
+async function queryAllPaginated(qbo, qboEntity) {
+  const allRecords = [];
+  let startPos = 1;
+
+  while (true) {
+    const result = await qbo.query(
+      `SELECT * FROM ${qboEntity} STARTPOSITION ${startPos} MAXRESULTS ${PAGE_SIZE}`
+    );
+    const records = result.QueryResponse?.[qboEntity] || [];
+    allRecords.push(...records);
+
+    if (records.length < PAGE_SIZE) break; // no more pages
+    startPos += PAGE_SIZE;
+  }
+
+  return allRecords;
 }
 
 /**
  * Create a checkpoint by snapshotting all key entity types from QBO.
+ * Entities are stored in a separate collection to avoid document size limits.
  */
 async function createCheckpoint(qbo, { userId, realmId, name, description }) {
-  const entities = {};
   const entityCounts = {};
 
-  for (const { key, qboEntity } of ENTITY_TYPES) {
-    const records = await queryAll(qbo, qboEntity);
-    entities[key] = records.map((r) => ({ qboId: r.Id, data: r }));
-    entityCounts[key] = records.length;
-  }
-
+  // Create the checkpoint document first (without entity data)
   const checkpoint = await Checkpoint.create({
     userId,
     realmId,
     name,
     description: description || '',
-    entities,
-    entityCounts,
+    entityCounts: {},
   });
 
+  try {
+    for (const { key, qboEntity } of ENTITY_TYPES) {
+      const records = await queryAllPaginated(qbo, qboEntity);
+      entityCounts[key] = records.length;
+
+      // Bulk insert into separate collection
+      if (records.length > 0) {
+        const docs = records.map((r) => ({
+          checkpointId: checkpoint._id,
+          entityType: key,
+          qboId: r.Id,
+          data: r,
+        }));
+        await CheckpointEntity.insertMany(docs, { ordered: false });
+      }
+    }
+
+    checkpoint.entityCounts = entityCounts;
+    await checkpoint.save();
+  } catch (err) {
+    // Clean up on failure
+    await CheckpointEntity.deleteMany({ checkpointId: checkpoint._id });
+    await Checkpoint.findByIdAndDelete(checkpoint._id);
+    throw err;
+  }
+
   return checkpoint;
+}
+
+/**
+ * Load all entities for a checkpoint from the separate collection.
+ * Returns { [entityType]: [{ qboId, data }] }
+ */
+async function loadCheckpointEntities(checkpointId) {
+  const docs = await CheckpointEntity.find({ checkpointId }).lean();
+  const grouped = {};
+
+  for (const { key } of ENTITY_TYPES) {
+    grouped[key] = [];
+  }
+
+  for (const doc of docs) {
+    if (grouped[doc.entityType]) {
+      grouped[doc.entityType].push({ qboId: doc.qboId, data: doc.data });
+    }
+  }
+
+  return grouped;
 }
 
 /**
  * Compute a diff between two checkpoints.
  * Returns { [entityType]: { added: [], modified: [], deleted: [] } }
  */
-function diffCheckpoints(checkpointA, checkpointB) {
+async function diffCheckpoints(checkpointA, checkpointB) {
+  const [entitiesA, entitiesB] = await Promise.all([
+    loadCheckpointEntities(checkpointA._id),
+    loadCheckpointEntities(checkpointB._id),
+  ]);
+
   const diff = {};
 
   for (const { key } of ENTITY_TYPES) {
-    const listA = checkpointA.entities?.[key] || [];
-    const listB = checkpointB.entities?.[key] || [];
+    const listA = entitiesA[key] || [];
+    const listB = entitiesB[key] || [];
 
     const mapA = new Map(listA.map((e) => [e.qboId, e.data]));
     const mapB = new Map(listB.map((e) => [e.qboId, e.data]));
@@ -69,21 +129,18 @@ function diffCheckpoints(checkpointA, checkpointB) {
     const deleted = [];
     const modified = [];
 
-    // Entities in B but not in A = added
     for (const [id, dataB] of mapB) {
       if (!mapA.has(id)) {
         added.push({ qboId: id, data: dataB });
       }
     }
 
-    // Entities in A but not in B = deleted
     for (const [id, dataA] of mapA) {
       if (!mapB.has(id)) {
         deleted.push({ qboId: id, data: dataA });
       }
     }
 
-    // Entities in both = check for modifications
     for (const [id, dataA] of mapA) {
       if (mapB.has(id)) {
         const dataB = mapB.get(id);
@@ -111,7 +168,7 @@ function diffFields(objA, objB) {
   const allKeys = new Set([...Object.keys(objA || {}), ...Object.keys(objB || {})]);
 
   for (const field of allKeys) {
-    if (field === 'MetaData') continue; // skip noisy timestamp changes
+    if (field === 'MetaData') continue;
     const valA = objA?.[field];
     const valB = objB?.[field];
     if (JSON.stringify(valA) !== JSON.stringify(valB)) {
@@ -122,4 +179,4 @@ function diffFields(objA, objB) {
   return changes;
 }
 
-module.exports = { createCheckpoint, diffCheckpoints, ENTITY_TYPES };
+module.exports = { createCheckpoint, diffCheckpoints, loadCheckpointEntities, ENTITY_TYPES };

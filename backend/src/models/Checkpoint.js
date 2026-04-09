@@ -1,13 +1,5 @@
 const mongoose = require('mongoose');
 
-const entitySnapshotSchema = new mongoose.Schema(
-  {
-    qboId: { type: String, required: true },
-    data: { type: mongoose.Schema.Types.Mixed, required: true },
-  },
-  { _id: false }
-);
-
 const checkpointSchema = new mongoose.Schema(
   {
     userId: {
@@ -26,18 +18,6 @@ const checkpointSchema = new mongoose.Schema(
     description: {
       type: String,
       default: '',
-    },
-    entities: {
-      customers: [entitySnapshotSchema],
-      invoices: [entitySnapshotSchema],
-      payments: [entitySnapshotSchema],
-      creditMemos: [entitySnapshotSchema],
-      bills: [entitySnapshotSchema],
-      billPayments: [entitySnapshotSchema],
-      vendorCredits: [entitySnapshotSchema],
-      items: [entitySnapshotSchema],
-      accounts: [entitySnapshotSchema],
-      journalEntries: [entitySnapshotSchema],
     },
     entityCounts: {
       customers: { type: Number, default: 0 },
