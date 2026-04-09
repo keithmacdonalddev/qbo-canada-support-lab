@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import Layout from '../components/Layout'
 import client from '../api/client'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 
 const PAGE_SIZE = 25
 
@@ -31,169 +35,94 @@ export default function AuditLog() {
 
   return (
     <Layout>
-      <div style={styles.page}>
-        <div style={styles.header}>
-          <h1 style={styles.title}>Audit Log</h1>
-          <span style={styles.count}>{total} entries</span>
+      <div>
+        <div className="flex items-baseline gap-3 mb-5">
+          <h1 className="text-[22px] font-semibold text-[var(--text-heading)]">Audit Log</h1>
+          <span className="text-[13px] text-[var(--text-light)]">{total} entries</span>
         </div>
 
-        <div style={styles.tableWrap}>
-          <table>
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Action</th>
-                <th>Type</th>
-                <th>Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Timestamp</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Outcome</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {loading ? (
-                <tr>
-                  <td colSpan={4} style={styles.emptyCell}>
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center py-8 text-[var(--text-light)]">
                     Loading...
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ) : entries.length === 0 ? (
-                <tr>
-                  <td colSpan={4} style={styles.emptyCell}>
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center py-8 text-[var(--text-light)]">
                     No audit entries found.
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ) : (
                 entries.map((entry, i) => (
-                  <tr key={entry._id || entry.id || i}>
-                    <td style={styles.timestampCell}>
+                  <TableRow key={entry._id || entry.id || i}>
+                    <TableCell className="font-mono text-xs text-[var(--text-light)] whitespace-nowrap">
                       {entry.createdAt
                         ? new Date(entry.createdAt).toLocaleString()
                         : 'N/A'}
-                    </td>
-                    <td>{entry.action || 'N/A'}</td>
-                    <td>
-                      <span style={styles.typeBadge}>{entry.actionType || 'N/A'}</span>
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          ...styles.outcomeBadge,
-                          background:
-                            entry.outcome === 'success'
-                              ? 'var(--success-light)'
-                              : entry.outcome === 'failure'
-                              ? 'var(--danger-light)'
-                              : 'var(--primary-light)',
-                          color:
-                            entry.outcome === 'success'
-                              ? 'var(--success)'
-                              : entry.outcome === 'failure'
-                              ? 'var(--danger)'
-                              : 'var(--primary)',
-                        }}
+                    </TableCell>
+                    <TableCell>{entry.action || 'N/A'}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className="bg-blue-100 text-blue-600 hover:bg-blue-100">
+                        {entry.actionType || 'N/A'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="secondary"
+                        className={
+                          entry.outcome === 'success'
+                            ? 'bg-green-100 text-green-600 hover:bg-green-100'
+                            : entry.outcome === 'failure'
+                            ? 'bg-red-100 text-red-600 hover:bg-red-100'
+                            : 'bg-blue-100 text-blue-600 hover:bg-blue-100'
+                        }
                       >
                         {entry.outcome || 'N/A'}
-                      </span>
-                    </td>
-                  </tr>
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
                 ))
               )}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
 
         {totalPages > 1 && (
-          <div style={styles.pagination}>
-            <button
+          <div className="flex items-center justify-center gap-4 mt-5">
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1}
-              style={styles.pageBtn}
             >
               Previous
-            </button>
-            <span style={styles.pageInfo}>
+            </Button>
+            <span className="text-[13px] text-[var(--text-light)]">
               Page {page} of {totalPages}
             </span>
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
-              style={styles.pageBtn}
             >
               Next
-            </button>
+            </Button>
           </div>
         )}
       </div>
     </Layout>
   )
-}
-
-const styles = {
-  page: {},
-  header: {
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: 12,
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: 'var(--text-heading)',
-  },
-  count: {
-    fontSize: 13,
-    color: 'var(--text-light)',
-  },
-  tableWrap: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    overflow: 'hidden',
-  },
-  emptyCell: {
-    textAlign: 'center',
-    padding: '32px 14px',
-    color: 'var(--text-light)',
-  },
-  timestampCell: {
-    fontFamily: 'var(--mono)',
-    fontSize: 12,
-    color: 'var(--text-light)',
-    whiteSpace: 'nowrap',
-  },
-  typeBadge: {
-    background: 'var(--primary-light)',
-    color: 'var(--primary)',
-    padding: '2px 8px',
-    borderRadius: 12,
-    fontSize: 12,
-    fontWeight: 500,
-  },
-  outcomeBadge: {
-    padding: '2px 8px',
-    borderRadius: 12,
-    fontSize: 12,
-    fontWeight: 500,
-  },
-  toolCell: {
-    fontFamily: 'var(--mono)',
-    fontSize: 12,
-  },
-  pagination: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    marginTop: 20,
-  },
-  pageBtn: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border)',
-    color: 'var(--text)',
-    padding: '6px 16px',
-    fontSize: 13,
-  },
-  pageInfo: {
-    fontSize: 13,
-    color: 'var(--text-light)',
-  },
 }

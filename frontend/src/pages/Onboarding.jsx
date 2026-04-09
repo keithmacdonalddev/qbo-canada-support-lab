@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import client from '../api/client'
+import { Button } from '@/components/ui/button'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
 const STEPS = ['Connect QBO', 'Company Info', 'Assess', 'Readiness', 'Begin']
 
@@ -105,111 +108,139 @@ export default function Onboarding() {
     switch (step) {
       case 0:
         return (
-          <div style={styles.stepContent}>
-            <h2 style={styles.stepTitle}>Connect to QuickBooks Online</h2>
-            <p style={styles.stepDesc}>
-              Link your QBO sandbox account to get started. A new window will open to authorize the
-              connection.
-            </p>
-            <button onClick={handleConnect} disabled={loading} style={styles.primaryBtn}>
-              {loading ? 'Connecting...' : 'Connect QBO'}
-            </button>
-          </div>
+          <Card className="max-w-[560px]">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-[var(--text-heading)]">
+                Connect to QuickBooks Online
+              </CardTitle>
+              <CardDescription className="leading-relaxed">
+                Link your QBO sandbox account to get started. A new window will open to authorize the
+                connection.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={handleConnect} disabled={loading} size="lg">
+                {loading ? 'Connecting...' : 'Connect QBO'}
+              </Button>
+            </CardContent>
+          </Card>
         )
       case 1:
         return (
-          <div style={styles.stepContent}>
-            <h2 style={styles.stepTitle}>Company Connected</h2>
-            <div style={styles.infoGrid}>
-              <div style={styles.infoRow}>
-                <span style={styles.infoLabel}>Name</span>
-                <span style={styles.infoValue}>{company?.companyName || 'Sandbox Company'}</span>
+          <Card className="max-w-[560px]">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-[var(--text-heading)]">
+                Company Connected
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-0">
+              <div className="mb-5">
+                <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                  <span className="text-[13px] text-[var(--text-light)]">Name</span>
+                  <span className="text-[13px] font-medium text-[var(--text-heading)]">{company?.companyName || 'Sandbox Company'}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                  <span className="text-[13px] text-[var(--text-light)]">Realm ID</span>
+                  <span className="text-[13px] font-medium text-[var(--text-heading)]">{company?.realmId || 'N/A'}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                  <span className="text-[13px] text-[var(--text-light)]">Status</span>
+                  <span className="text-[13px] font-medium text-[var(--text-heading)]">{company?.status || 'active'}</span>
+                </div>
               </div>
-              <div style={styles.infoRow}>
-                <span style={styles.infoLabel}>Realm ID</span>
-                <span style={styles.infoValue}>{company?.realmId || 'N/A'}</span>
-              </div>
-              <div style={styles.infoRow}>
-                <span style={styles.infoLabel}>Status</span>
-                <span style={styles.infoValue}>{company?.status || 'active'}</span>
-              </div>
-            </div>
-            <button onClick={() => setStep(2)} style={styles.primaryBtn}>
-              Next
-            </button>
-          </div>
+              <Button onClick={() => setStep(2)} size="lg">
+                Next
+              </Button>
+            </CardContent>
+          </Card>
         )
       case 2:
         return (
-          <div style={styles.stepContent}>
-            <h2 style={styles.stepTitle}>Assess Company Readiness</h2>
-            <p style={styles.stepDesc}>
-              We will analyze the connected QBO company to determine setup readiness and identify any
-              existing configuration.
-            </p>
-            <button onClick={handleAssess} disabled={loading} style={styles.primaryBtn}>
-              {loading ? 'Assessing...' : 'Assess Company'}
-            </button>
-          </div>
+          <Card className="max-w-[560px]">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-[var(--text-heading)]">
+                Assess Company Readiness
+              </CardTitle>
+              <CardDescription className="leading-relaxed">
+                We will analyze the connected QBO company to determine setup readiness and identify any
+                existing configuration.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={handleAssess} disabled={loading} size="lg">
+                {loading ? 'Assessing...' : 'Assess Company'}
+              </Button>
+            </CardContent>
+          </Card>
         )
       case 3:
         return (
-          <div style={styles.stepContent}>
-            <h2 style={styles.stepTitle}>Readiness Summary</h2>
-            {assessment && (
-              <div style={styles.summaryCard}>
-                <div style={styles.infoRow}>
-                  <span style={styles.infoLabel}>Status</span>
-                  <span
-                    style={{
-                      ...styles.badge,
-                      background:
+          <Card className="max-w-[560px]">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-[var(--text-heading)]">
+                Readiness Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {assessment && (
+                <div className="mb-5">
+                  <div className="flex justify-between py-2 border-b border-[var(--border)]">
+                    <span className="text-[13px] text-[var(--text-light)]">Status</span>
+                    <Badge
+                      variant={assessment.status === 'ready' ? 'default' : 'secondary'}
+                      className={
                         assessment.status === 'ready'
-                          ? 'var(--success-light)'
-                          : 'var(--warning)',
-                      color:
-                        assessment.status === 'ready'
-                          ? 'var(--success)'
-                          : '#fff',
-                    }}
-                  >
-                    {assessment.status || 'Complete'}
-                  </span>
+                          ? 'bg-[var(--success)]/15 text-[var(--success)]'
+                          : 'bg-[var(--warning)] text-white'
+                      }
+                    >
+                      {assessment.status || 'Complete'}
+                    </Badge>
+                  </div>
+                  {assessment.summary && (
+                    <p className="text-sm text-[var(--text-light)] leading-relaxed mt-3">
+                      {assessment.summary}
+                    </p>
+                  )}
+                  {assessment.items && (
+                    <ul className="list-none p-0 mt-3">
+                      {assessment.items.map((item, i) => (
+                        <li key={i} className="flex items-center gap-2 py-1.5 text-[13px]">
+                          <span
+                            className={`size-2 rounded-full shrink-0 ${
+                              item.ok ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'
+                            }`}
+                          />
+                          {item.label}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                {assessment.summary && (
-                  <p style={styles.stepDesc}>{assessment.summary}</p>
-                )}
-                {assessment.items && (
-                  <ul style={styles.itemList}>
-                    {assessment.items.map((item, i) => (
-                      <li key={i} style={styles.item}>
-                        <span style={{
-                          ...styles.itemDot,
-                          background: item.ok ? 'var(--success)' : 'var(--warning)',
-                        }} />
-                        {item.label}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-            <button onClick={() => setStep(4)} style={styles.primaryBtn}>
-              Next
-            </button>
-          </div>
+              )}
+              <Button onClick={() => setStep(4)} size="lg">
+                Next
+              </Button>
+            </CardContent>
+          </Card>
         )
       case 4:
         return (
-          <div style={styles.stepContent}>
-            <h2 style={styles.stepTitle}>Ready to Go</h2>
-            <p style={styles.stepDesc}>
-              Setup is complete. Click below to head to your dashboard and start working.
-            </p>
-            <button onClick={handleBegin} style={styles.primaryBtn}>
-              Begin Setup
-            </button>
-          </div>
+          <Card className="max-w-[560px]">
+            <CardHeader>
+              <CardTitle className="text-lg font-semibold text-[var(--text-heading)]">
+                Ready to Go
+              </CardTitle>
+              <CardDescription className="leading-relaxed">
+                Setup is complete. Click below to head to your dashboard and start working.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={handleBegin} size="lg">
+                Begin Setup
+              </Button>
+            </CardContent>
+          </Card>
         )
       default:
         return null
@@ -218,158 +249,42 @@ export default function Onboarding() {
 
   return (
     <Layout>
-      <div style={styles.page}>
-        <h1 style={styles.title}>Onboarding</h1>
+      <div>
+        <h1 className="text-[22px] font-semibold text-[var(--text-heading)] mb-6">Onboarding</h1>
 
-        <div style={styles.stepper}>
+        <div className="flex items-center mb-8">
           {STEPS.map((label, i) => (
-            <div key={i} style={styles.stepItem}>
+            <div key={i} className="flex items-center gap-2">
               <div
-                style={{
-                  ...styles.stepCircle,
-                  background: i <= step ? 'var(--primary)' : 'var(--border)',
-                  color: i <= step ? '#fff' : 'var(--text-light)',
-                }}
+                className={`size-[30px] rounded-full flex items-center justify-center text-[13px] font-semibold shrink-0 ${
+                  i <= step
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'bg-[var(--border)] text-[var(--text-light)]'
+                }`}
               >
                 {i < step ? '\u2713' : i + 1}
               </div>
               <span
-                style={{
-                  ...styles.stepLabel,
-                  color: i <= step ? 'var(--text-heading)' : 'var(--text-light)',
-                  fontWeight: i === step ? 600 : 400,
-                }}
+                className={`text-[13px] whitespace-nowrap ${
+                  i <= step ? 'text-[var(--text-heading)]' : 'text-[var(--text-light)]'
+                } ${i === step ? 'font-semibold' : 'font-normal'}`}
               >
                 {label}
               </span>
-              {i < STEPS.length - 1 && <div style={styles.stepLine} />}
+              {i < STEPS.length - 1 && (
+                <div className="w-10 h-0.5 bg-[var(--border)] mx-2" />
+              )}
             </div>
           ))}
         </div>
 
-        {error && <div style={styles.error}>{error}</div>}
+        {error && (
+          <div className="bg-[var(--danger-light)] text-[var(--danger)] px-3.5 py-2.5 rounded-[var(--radius)] mb-4 text-[13px] max-w-[560px]">
+            {error}
+          </div>
+        )}
         {renderStep()}
       </div>
     </Layout>
   )
-}
-
-const styles = {
-  page: {},
-  title: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: 'var(--text-heading)',
-    marginBottom: 24,
-  },
-  stepper: {
-    display: 'flex',
-    alignItems: 'center',
-    marginBottom: 32,
-    gap: 0,
-  },
-  stepItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: '50%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 13,
-    fontWeight: 600,
-    flexShrink: 0,
-  },
-  stepLabel: {
-    fontSize: 13,
-    whiteSpace: 'nowrap',
-  },
-  stepLine: {
-    width: 40,
-    height: 2,
-    background: 'var(--border)',
-    margin: '0 8px',
-  },
-  stepContent: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    padding: '32px',
-    maxWidth: 560,
-  },
-  stepTitle: {
-    fontSize: 18,
-    fontWeight: 600,
-    color: 'var(--text-heading)',
-    marginBottom: 10,
-  },
-  stepDesc: {
-    color: 'var(--text-light)',
-    marginBottom: 20,
-    lineHeight: 1.6,
-  },
-  primaryBtn: {
-    background: 'var(--primary)',
-    color: '#fff',
-    padding: '10px 24px',
-    fontWeight: 500,
-  },
-  error: {
-    background: 'var(--danger-light)',
-    color: 'var(--danger)',
-    padding: '10px 14px',
-    borderRadius: 'var(--radius)',
-    marginBottom: 16,
-    fontSize: 13,
-    maxWidth: 560,
-  },
-  infoGrid: {
-    marginBottom: 20,
-  },
-  infoRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '8px 0',
-    borderBottom: '1px solid var(--border-light)',
-  },
-  infoLabel: {
-    color: 'var(--text-light)',
-    fontSize: 13,
-  },
-  infoValue: {
-    fontWeight: 500,
-    color: 'var(--text-heading)',
-    fontSize: 13,
-  },
-  summaryCard: {
-    marginBottom: 20,
-  },
-  badge: {
-    padding: '3px 10px',
-    borderRadius: 20,
-    fontSize: 12,
-    fontWeight: 600,
-  },
-  itemList: {
-    listStyle: 'none',
-    padding: 0,
-    marginTop: 12,
-  },
-  item: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '6px 0',
-    fontSize: 13,
-  },
-  itemDot: {
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
 }

@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
 
 export default function Login() {
   const { login, register } = useAuth()
@@ -31,135 +35,78 @@ export default function Login() {
   }
 
   return (
-    <div style={styles.wrapper}>
-      <div style={styles.card}>
-        <div style={styles.brand}>
-          <span style={styles.brandIcon}>Q</span>
-          <span style={styles.brandTitle}>QBO Support Lab</span>
-        </div>
-        <h1 style={styles.heading}>{isRegister ? 'Create account' : 'Sign in'}</h1>
-        {error && <div style={styles.error}>{error}</div>}
-        <form onSubmit={handleSubmit} style={styles.form}>
-          {isRegister && (
-            <input
-              type="text"
-              placeholder="Display name"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              style={styles.input}
-            />
+    <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
+      <Card className="w-[400px] px-5 py-6 shadow-md">
+        <CardHeader>
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="inline-flex size-9 items-center justify-center rounded-lg bg-primary text-white text-lg font-bold">
+              Q
+            </span>
+            <span className="text-[17px] font-semibold text-[var(--text-heading)]">
+              QBO Support Lab
+            </span>
+          </div>
+          <CardTitle className="text-[22px] font-semibold text-[var(--text-heading)]">
+            {isRegister ? 'Create account' : 'Sign in'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {error && (
+            <div className="mb-4 rounded-md bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive">
+              {error}
+            </div>
           )}
-          <input
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={styles.input}
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={styles.input}
-          />
-          <button type="submit" disabled={loading} style={styles.submitBtn}>
-            {loading ? 'Please wait...' : isRegister ? 'Create account' : 'Sign in'}
-          </button>
-        </form>
-        <div style={styles.toggle}>
-          {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
-          <button onClick={() => setIsRegister(!isRegister)} style={styles.toggleBtn}>
-            {isRegister ? 'Sign in' : 'Create one'}
-          </button>
-        </div>
-      </div>
+          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+            {isRegister && (
+              <div className="grid gap-1.5">
+                <Label htmlFor="displayName">Display name</Label>
+                <Input
+                  id="displayName"
+                  type="text"
+                  placeholder="Display name"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                />
+              </div>
+            )}
+            <div className="grid gap-1.5">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            <Button type="submit" disabled={loading} size="lg" className="mt-1 w-full">
+              {loading ? 'Please wait...' : isRegister ? 'Create account' : 'Sign in'}
+            </Button>
+          </form>
+          <div className="mt-5 text-center text-[13px] text-[var(--text-light)]">
+            {isRegister ? 'Already have an account?' : "Don't have an account?"}{' '}
+            <Button
+              variant="link"
+              onClick={() => setIsRegister(!isRegister)}
+              className="h-auto p-0 text-[13px] font-medium"
+            >
+              {isRegister ? 'Sign in' : 'Create one'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
-}
-
-const styles = {
-  wrapper: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '100vh',
-    background: 'var(--bg)',
-  },
-  card: {
-    width: 400,
-    background: 'var(--bg-surface)',
-    borderRadius: 'var(--radius-lg)',
-    border: '1px solid var(--border)',
-    padding: '40px 36px',
-    boxShadow: 'var(--shadow-md)',
-  },
-  brand: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 28,
-  },
-  brandIcon: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    background: 'var(--primary)',
-    color: '#fff',
-    fontWeight: 700,
-    fontSize: 18,
-  },
-  brandTitle: {
-    fontWeight: 600,
-    fontSize: 17,
-    color: 'var(--text-heading)',
-  },
-  heading: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: 'var(--text-heading)',
-    marginBottom: 20,
-  },
-  error: {
-    background: 'var(--danger-light)',
-    color: 'var(--danger)',
-    padding: '10px 14px',
-    borderRadius: 'var(--radius)',
-    marginBottom: 16,
-    fontSize: 13,
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-  },
-  input: {
-    width: '100%',
-  },
-  submitBtn: {
-    background: 'var(--primary)',
-    color: '#fff',
-    padding: '10px 0',
-    fontWeight: 500,
-    fontSize: 14,
-    marginTop: 4,
-  },
-  toggle: {
-    marginTop: 20,
-    fontSize: 13,
-    color: 'var(--text-light)',
-    textAlign: 'center',
-  },
-  toggleBtn: {
-    background: 'none',
-    color: 'var(--primary)',
-    padding: 0,
-    fontWeight: 500,
-    fontSize: 13,
-  },
 }

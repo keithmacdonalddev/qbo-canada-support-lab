@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI-Driven QBO Canada Support Lab — a web application where QBO Canada support agents each connect one QBO Advanced Canada company and the platform turns it into a realistic, continuously maintained support lab for reproducing customer issues, inspecting state, and generating support notes with AI assistance.
 
-**Status:** Phase 1 (Foundation) in progress. Phase 0 API spike complete — all critical API assumptions validated.
+**Status:** Phase 1 (Foundation) complete. Phase 0 API spike complete — all critical API assumptions validated. Phase 2 planning next.
 
 **Core mental model:** One user → one flagship QBO Advanced Canada company → generate, break, inspect, explain.
 
@@ -64,7 +64,7 @@ QBO/
 
 ## Tech Stack
 
-- **Frontend:** Vite + React 19, react-router-dom, axios
+- **Frontend:** Vite + React 19, react-router-dom, axios, shadcn/ui + Tailwind CSS
 - **Backend:** Node.js + Express, CommonJS modules
 - **Database:** MongoDB Atlas (cluster0.x8esl2a.mongodb.net) — requires DNS override (8.8.8.8)
 - **Auth:** JWT (jsonwebtoken + bcryptjs), two roles: agent, supervisor

@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import Layout from '../components/Layout'
 import client from '../api/client'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 
 export default function Dashboard() {
   const [company, setCompany] = useState(null)
@@ -74,70 +77,85 @@ export default function Dashboard() {
 
   return (
     <Layout>
-      <div style={styles.page}>
-        <h1 style={styles.title}>Dashboard</h1>
+      <div>
+        <h1 className="text-[22px] font-semibold text-[var(--text-heading)] mb-6">Dashboard</h1>
 
         {loading ? (
-          <p style={styles.loading}>Loading company data...</p>
+          <p className="text-[#6B7280]">Loading company data...</p>
         ) : !company ? (
-          <div style={styles.card}>
-            <p style={styles.emptyText}>No company connected yet.</p>
-            <a href="/onboarding" style={styles.link}>
-              Go to Onboarding
-            </a>
-          </div>
+          <Card className="shadow-sm">
+            <CardContent>
+              <p className="text-[#6B7280] mb-3">No company connected yet.</p>
+              <a href="/onboarding" className="text-[var(--primary)] font-medium">
+                Go to Onboarding
+              </a>
+            </CardContent>
+          </Card>
         ) : (
           <>
-            <div style={styles.grid}>
-              <div style={styles.card}>
-                <div style={styles.cardLabel}>Company</div>
-                <div style={styles.cardValue}>{company.companyName || 'N/A'}</div>
-              </div>
-              <div style={styles.card}>
-                <div style={styles.cardLabel}>Connection</div>
-                <div style={styles.cardValue}>
-                  <span
-                    style={{
-                      ...styles.dot,
-                      background: company.connectionStatus === 'active' ? 'var(--success)' : 'var(--danger)',
-                    }}
-                  />
-                  {company.connectionStatus === 'active' ? 'Connected' : company.connectionStatus}
-                </div>
-              </div>
-              <div style={styles.card}>
-                <div style={styles.cardLabel}>Seeding Status</div>
-                <div style={styles.cardValue}>{company.seedingStatus || 'Not started'}</div>
-              </div>
-              <div style={styles.card}>
-                <div style={styles.cardLabel}>Freshness</div>
-                <div style={styles.cardValue}>
-                  {company.freshnessScore != null
-                    ? `${company.freshnessScore}%`
-                    : 'N/A'}
-                </div>
-              </div>
+            <div className="grid grid-cols-4 gap-4 mb-6">
+              <Card className="shadow-sm py-0">
+                <CardContent className="py-5">
+                  <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Company</div>
+                  <div className="text-base font-medium text-[var(--text-heading)]">
+                    {company.companyName || 'N/A'}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm py-0">
+                <CardContent className="py-5">
+                  <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Connection</div>
+                  <div className="text-base font-medium text-[var(--text-heading)] flex items-center gap-2">
+                    <span
+                      className={`inline-block w-2.5 h-2.5 rounded-full ${
+                        company.connectionStatus === 'active'
+                          ? 'bg-[var(--success)]'
+                          : 'bg-[var(--danger)]'
+                      }`}
+                    />
+                    {company.connectionStatus === 'active' ? 'Connected' : company.connectionStatus}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm py-0">
+                <CardContent className="py-5">
+                  <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Seeding Status</div>
+                  <div className="text-base font-medium text-[var(--text-heading)]">
+                    {company.seedingStatus || 'Not started'}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="shadow-sm py-0">
+                <CardContent className="py-5">
+                  <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Freshness</div>
+                  <div className="text-base font-medium text-[var(--text-heading)]">
+                    {company.freshnessScore != null
+                      ? `${company.freshnessScore}%`
+                      : 'N/A'}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
-            <div style={styles.actionBar}>
-              <button onClick={handleSeed} disabled={seeding} style={styles.seedBtn}>
+            <div className="flex items-center gap-4">
+              <Button size="lg" onClick={handleSeed} disabled={seeding}>
                 {seeding ? 'Seeding...' : 'Seed Company'}
-              </button>
+              </Button>
               {seeding && seedProgress && (
-                <span style={styles.progressBadge}>
+                <Badge variant="secondary" className="px-3.5 py-1.5 text-[13px]">
                   {seedProgress.detail}
-                </span>
+                </Badge>
               )}
               {!seeding && seedResult && (
-                <span
-                  style={{
-                    ...styles.resultBadge,
-                    background: seedResult.success ? 'var(--success-light)' : 'var(--danger-light)',
-                    color: seedResult.success ? 'var(--success)' : 'var(--danger)',
-                  }}
+                <Badge
+                  variant={seedResult.success ? 'secondary' : 'destructive'}
+                  className="px-3.5 py-1.5 text-[13px]"
                 >
                   {seedResult.message}
-                </span>
+                </Badge>
               )}
             </div>
           </>
@@ -145,84 +163,4 @@ export default function Dashboard() {
       </div>
     </Layout>
   )
-}
-
-const styles = {
-  page: {},
-  title: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: 'var(--text-heading)',
-    marginBottom: 24,
-  },
-  loading: {
-    color: 'var(--text-light)',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: 16,
-    marginBottom: 24,
-  },
-  card: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    padding: '20px 22px',
-  },
-  cardLabel: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: 'var(--text-light)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 6,
-  },
-  cardValue: {
-    fontSize: 16,
-    fontWeight: 500,
-    color: 'var(--text-heading)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-  },
-  dot: {
-    display: 'inline-block',
-    width: 9,
-    height: 9,
-    borderRadius: '50%',
-  },
-  emptyText: {
-    color: 'var(--text-light)',
-    marginBottom: 12,
-  },
-  link: {
-    color: 'var(--primary)',
-    fontWeight: 500,
-  },
-  actionBar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-  },
-  seedBtn: {
-    background: 'var(--primary)',
-    color: '#fff',
-    padding: '10px 24px',
-    fontWeight: 500,
-  },
-  resultBadge: {
-    padding: '8px 14px',
-    borderRadius: 'var(--radius)',
-    fontSize: 13,
-    fontWeight: 500,
-  },
-  progressBadge: {
-    padding: '8px 14px',
-    borderRadius: 'var(--radius)',
-    fontSize: 13,
-    fontWeight: 500,
-    background: 'var(--primary-light, #e8f0fe)',
-    color: 'var(--primary)',
-  },
 }
