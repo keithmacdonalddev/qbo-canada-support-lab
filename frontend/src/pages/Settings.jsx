@@ -6,12 +6,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { Alert } from '@/components/ui/alert'
 
 export default function Settings() {
   const [company, setCompany] = useState(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
   const [message, setMessage] = useState(null)
+  const [companyError, setCompanyError] = useState(null)
+  const [aiConfigError, setAiConfigError] = useState(null)
 
   // AI API key state
   const [aiConfig, setAiConfig] = useState(null)
@@ -19,17 +22,20 @@ export default function Settings() {
   const [savingKey, setSavingKey] = useState(false)
 
   const fetchCompany = () => {
+    setLoading(true)
+    setCompanyError(null)
     client
       .get('/qbo/status')
       .then((res) => setCompany(res.data))
-      .catch(() => {})
+      .catch((err) => setCompanyError(err.response?.data?.error || 'Could not load QBO connection status.'))
       .finally(() => setLoading(false))
   }
 
   const fetchAiConfig = () => {
+    setAiConfigError(null)
     client.get('/ai/config')
       .then((res) => { if (res.data.success) setAiConfig(res.data.data) })
-      .catch(() => {})
+      .catch((err) => setAiConfigError(err.response?.data?.error || 'Could not load AI configuration.'))
   }
 
   useEffect(() => {
@@ -108,6 +114,10 @@ export default function Settings() {
           <h2 className="text-base font-semibold text-[var(--text-heading)] mb-3">QBO Connection</h2>
           {loading ? (
             <p className="text-[var(--text-light)] mb-2">Loading...</p>
+          ) : companyError ? (
+            <Alert variant="error" onRetry={fetchCompany} className="max-w-[560px]">
+              {companyError}
+            </Alert>
           ) : !company?.connected ? (
             <Card className="max-w-[560px]">
               <CardContent>
@@ -180,7 +190,11 @@ export default function Settings() {
         <div className="mb-8">
           <h2 className="text-base font-semibold text-[var(--text-heading)] mb-3">AI Assistant</h2>
 
-          {!aiConfig ? (
+          {aiConfigError ? (
+            <Alert variant="error" onRetry={fetchAiConfig} className="max-w-[560px]">
+              {aiConfigError}
+            </Alert>
+          ) : !aiConfig ? (
             <p className="text-[var(--text-light)] mb-2">Loading AI configuration...</p>
           ) : (
             <Card className="max-w-[560px] shadow-sm">

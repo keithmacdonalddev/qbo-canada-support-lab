@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Alert } from '@/components/ui/alert'
 import { Plus, MessageSquare } from 'lucide-react'
 
 const STATUS_STYLES = {
@@ -81,7 +82,7 @@ function SessionRow({ session, isActive, onSelect }) {
   )
 }
 
-export default function SessionHistory({ sessions, currentSessionId, onSelectSession, onNewSession }) {
+export default function SessionHistory({ sessions, currentSessionId, onSelectSession, onNewSession, onRefresh, error }) {
   const sorted = sessions
     ? [...sessions].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
     : []
@@ -96,7 +97,12 @@ export default function SessionHistory({ sessions, currentSessionId, onSelectSes
       </div>
 
       <div className="flex-1 overflow-y-auto px-1.5 py-2 space-y-0.5">
-        {sorted.length === 0 && (
+        {error && (
+          <Alert variant="error" onRetry={onRefresh} className="mb-2">
+            {error}
+          </Alert>
+        )}
+        {sorted.length === 0 && !error && (
           <p className="text-xs text-[#6B7280] text-center py-6">No sessions yet.</p>
         )}
         {sorted.map((session) => (

@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import ChatPanel from '../components/ai/ChatPanel'
 import PlanReview from '../components/ai/PlanReview'
@@ -18,10 +19,12 @@ export default function AICommandCenter() {
   const { id: routeSessionId } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const toast = useToast()
 
   // Core state
   const [sessionId, setSessionId] = useState(routeSessionId || null)
   const [sessions, setSessions] = useState([])
+  const [sessionsError, setSessionsError] = useState(null)
   const [messages, setMessages] = useState([])
   const [currentPlan, setCurrentPlan] = useState(null)
   const [supportNote, setSupportNote] = useState(null)
@@ -170,9 +173,9 @@ export default function AICommandCenter() {
       const { data } = await api.post(`/ai/plan/${planId}/approve`, { stepApprovals })
       if (data.success) setCurrentPlan(data.data.plan)
     } catch (err) {
-      console.error('Failed to approve plan:', err)
+      toast.error(err.response?.data?.error || 'Failed to approve plan.')
     }
-  }, [])
+  }, [toast])
 
   // API: Reject plan
   const rejectPlan = useCallback(async (planId) => {
@@ -180,29 +183,32 @@ export default function AICommandCenter() {
       const { data } = await api.post(`/ai/plan/${planId}/reject`)
       if (data.success) setCurrentPlan(data.data.plan)
     } catch (err) {
-      console.error('Failed to reject plan:', err)
+      toast.error(err.response?.data?.error || 'Failed to reject plan.')
     }
-  }, [])
+  }, [toast])
 
-  // API: Execute plan
+  // API: Execute plan — QBO write path; surface failures prominently
   const executePlan = useCallback(async (planId) => {
     setIsExecuting(true)
     try {
       const { data } = await api.post(`/ai/plan/${planId}/execute`)
       if (data.success) setCurrentPlan(data.data.plan)
     } catch (err) {
-      console.error('Failed to execute plan:', err)
+      toast.error(err.response?.data?.error || 'Plan execution failed. No changes may have been applied — review the plan before retrying.')
     } finally {
       setIsExecuting(false)
     }
-  }, [])
+  }, [toast])
 
   // API: Load sessions
   const loadSessions = useCallback(async () => {
+    setSessionsError(null)
     try {
       const { data } = await api.get('/ai/sessions')
       if (data.success) setSessions(data.data.sessions)
-    } catch { /* ignore */ }
+    } catch (err) {
+      setSessionsError(err.response?.data?.error || 'Could not load session history.')
+    }
   }, [])
 
   // API: Load specific session
@@ -252,9 +258,9 @@ export default function AICommandCenter() {
       const { data } = await api.post('/ai/generate-note', { sessionId, format })
       if (data.success) setSupportNote(data.data.note)
     } catch (err) {
-      console.error('Failed to generate note:', err)
+      toast.error(err.response?.data?.error || 'Failed to generate support note.')
     }
-  }, [sessionId])
+  }, [sessionId, toast])
 
   // Start new session
   const startNewSession = useCallback(() => {
@@ -322,6 +328,7 @@ export default function AICommandCenter() {
               onSelectSession={handleSelectSession}
               onNewSession={startNewSession}
               onRefresh={loadSessions}
+              error={sessionsError}
             />
           </div>
         )}

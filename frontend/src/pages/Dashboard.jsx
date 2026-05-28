@@ -5,6 +5,7 @@ import client from '../api/client'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Alert } from '@/components/ui/alert'
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from '@/components/ui/table'
@@ -31,33 +32,41 @@ export default function Dashboard() {
   const [expandedSeedRun, setExpandedSeedRun] = useState(null)
   const [seedLogCache, setSeedLogCache] = useState({})
   const [logLoading, setLogLoading] = useState(false)
+  // Inline load-error states for background fetches
+  const [healthError, setHealthError] = useState(null)
+  const [genHistoryError, setGenHistoryError] = useState(null)
+  const [seedHistoryError, setSeedHistoryError] = useState(null)
 
   const fetchHealth = () => {
+    setHealthError(null)
     client.get('/company/health')
       .then((res) => setCompany(res.data))
-      .catch(() => {})
+      .catch((err) => setHealthError(err.response?.data?.error || 'Could not load company status.'))
   }
 
   const fetchGenHistory = () => {
     setGenHistoryLoading(true)
+    setGenHistoryError(null)
     client.get('/generate/history')
       .then((res) => setGenHistory(res.data.genRuns || []))
-      .catch(() => {})
+      .catch((err) => setGenHistoryError(err.response?.data?.error || 'Could not load generation history.'))
       .finally(() => setGenHistoryLoading(false))
   }
 
   const fetchSeedHistory = () => {
     setSeedHistoryLoading(true)
+    setSeedHistoryError(null)
     client.get('/seed/history')
       .then((res) => setSeedHistory(res.data.seedRuns || []))
-      .catch(() => {})
+      .catch((err) => setSeedHistoryError(err.response?.data?.error || 'Could not load seed history.'))
       .finally(() => setSeedHistoryLoading(false))
   }
 
   useEffect(() => {
+    setHealthError(null)
     client.get('/company/health')
       .then((res) => setCompany(res.data))
-      .catch(() => {})
+      .catch((err) => setHealthError(err.response?.data?.error || 'Could not load company status.'))
       .finally(() => setLoading(false))
     fetchGenHistory()
     fetchSeedHistory()
@@ -67,7 +76,7 @@ export default function Dashboard() {
           setAiSessionCount(res.data.data?.sessions?.length ?? 0)
         }
       })
-      .catch(() => {})
+      .catch(() => { setAiSessionCount(0) })
   }, [])
 
   // Toggle generation run expansion — lazy-load log
@@ -209,6 +218,10 @@ export default function Dashboard() {
 
         {loading ? (
           <p className="text-[#6B7280]">Loading company data...</p>
+        ) : !company && healthError ? (
+          <Alert variant="error" onRetry={fetchHealth} className="max-w-[560px]">
+            {healthError}
+          </Alert>
         ) : !company ? (
           <Card className="shadow-sm">
             <CardContent>
@@ -298,10 +311,15 @@ export default function Dashboard() {
             <Card className="shadow-sm mb-6">
               <CardContent className="pt-5">
                 <h3 className="font-semibold text-[var(--text-heading)] mb-4">Seed History</h3>
+                {seedHistoryError && (
+                  <Alert variant="error" onRetry={fetchSeedHistory} className="mb-3">
+                    {seedHistoryError}
+                  </Alert>
+                )}
                 {seedHistoryLoading ? (
                   <p className="text-sm text-[#6B7280]">Loading history...</p>
                 ) : seedHistory.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">No seed runs yet.</p>
+                  !seedHistoryError && <p className="text-sm text-[#6B7280]">No seed runs yet.</p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -470,10 +488,15 @@ export default function Dashboard() {
             <Card className="shadow-sm">
               <CardContent className="pt-5">
                 <h3 className="font-semibold text-[var(--text-heading)] mb-4">Generation History</h3>
+                {genHistoryError && (
+                  <Alert variant="error" onRetry={fetchGenHistory} className="mb-3">
+                    {genHistoryError}
+                  </Alert>
+                )}
                 {genHistoryLoading ? (
                   <p className="text-sm text-[#6B7280]">Loading history...</p>
                 ) : genHistory.length === 0 ? (
-                  <p className="text-sm text-[#6B7280]">No generation runs yet.</p>
+                  !genHistoryError && <p className="text-sm text-[#6B7280]">No generation runs yet.</p>
                 ) : (
                   <Table>
                     <TableHeader>
