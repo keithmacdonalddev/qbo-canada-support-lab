@@ -4,6 +4,7 @@ const CompanyProfile = require('../models/CompanyProfile');
 const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
+const { respondQboError } = require('../modules/qbo-error');
 
 const router = express.Router();
 
@@ -113,6 +114,7 @@ router.post('/assess', authenticate, async (req, res) => {
     return res.json({ profile });
   } catch (err) {
     console.error('[company/assess]', err.message, err.stack);
+    if (respondQboError(res, err)) return;
     return res.status(500).json({ error: `Assessment failed: ${err.message}` });
   }
 });

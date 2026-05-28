@@ -3,6 +3,7 @@ const Connection = require('../models/Connection');
 const AuditLog = require('../models/AuditLog');
 const { authenticate } = require('../middleware/auth');
 const { createQBOClient } = require('../modules/qbo-client');
+const { respondQboError } = require('../modules/qbo-error');
 
 const router = express.Router();
 
@@ -57,6 +58,7 @@ router.get('/search', authenticate, async (req, res) => {
     return res.json({ type, records, count: records.length });
   } catch (err) {
     console.error('[explore/search]', err.message);
+    if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Search failed' });
   }
 });
@@ -120,6 +122,7 @@ router.get('/:entity/:id', authenticate, async (req, res) => {
     return res.json({ entity: entity.toLowerCase(), record });
   } catch (err) {
     console.error('[explore/read]', err.message);
+    if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Failed to read entity' });
   }
 });
@@ -198,6 +201,7 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
     return res.json({ nodes, edges });
   } catch (err) {
     console.error('[explore/chain]', err.message);
+    if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Failed to trace chain' });
   }
 });

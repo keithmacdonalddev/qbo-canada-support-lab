@@ -9,6 +9,7 @@ const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
+const { isQboError } = require('../modules/qbo-error');
 
 const router = express.Router();
 
@@ -25,6 +26,33 @@ router.use((req, res, next) => {
 
 // SSE connections map: sessionId -> Set of res objects
 const sseConnections = new Map();
+
+/**
+ * Map a QBO upstream error onto this router's { success: false, ... } envelope.
+ *
+ * The shared qbo-error helper detects QBO upstream errors (isQboError) and the
+ * other routes respond with { error, intuit_tid, qboStatus }; the AI routes
+ * additionally include a `success: false` flag that AI frontend pages check.
+ * This wrapper reuses that detector but preserves that flag while surfacing the
+ * Intuit trace id and mapping QBO upstream errors to 502 (or 429 for rate
+ * limits). Critically, it prevents a QBO-side 401 from being emitted as an
+ * app-level 401 (which the frontend treats as a session expiry / logout).
+ *
+ * @param {import('express').Response} res
+ * @param {*} err
+ * @returns {boolean} true if a QBO error response was sent
+ */
+function sendQboErrorJson(res, err) {
+  if (!isQboError(err)) return false;
+  const httpStatus = err.status === 429 ? 429 : 502;
+  res.status(httpStatus).json({
+    success: false,
+    error: err.message || 'QBO API error',
+    intuit_tid: err.intuit_tid || null,
+    qboStatus: typeof err.status === 'number' ? err.status : null,
+  });
+  return true;
+}
 
 /**
  * Helper -- find the user's active QBO Connection.
@@ -100,6 +128,7 @@ router.post('/chat', async (req, res) => {
     return res.json({ success: true, data: result });
   } catch (err) {
     console.error('[ai/chat]', err.message);
+    if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
@@ -126,6 +155,7 @@ router.post('/plan/:id/approve', async (req, res) => {
     return res.json({ success: true, data: { plan } });
   } catch (err) {
     console.error('[ai/plan/approve]', err.message);
+    if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
@@ -150,6 +180,7 @@ router.post('/plan/:id/reject', async (req, res) => {
     return res.json({ success: true, data: { plan } });
   } catch (err) {
     console.error('[ai/plan/reject]', err.message);
+    if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
@@ -179,6 +210,7 @@ router.post('/plan/:id/execute', async (req, res) => {
     return res.json({ success: true, data: { plan } });
   } catch (err) {
     console.error('[ai/plan/execute]', err.message);
+    if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
@@ -260,6 +292,7 @@ router.post('/investigate', async (req, res) => {
     return res.json({ success: true, data: result });
   } catch (err) {
     console.error('[ai/investigate]', err.message);
+    if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
