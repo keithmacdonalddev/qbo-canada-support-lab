@@ -139,8 +139,17 @@ class QBOClient {
       // Genuinely thrown exception: network failure, or refresh() rejecting
       // inside ensureFreshToken(). Extract a tid where one is present, log,
       // and rethrow. Do not log tokens, auth headers, or full bodies.
+      // intuit-oauth@4.2.2 only resolves on 2xx-4xx (validateStatus < 500); 5xx
+      // and network errors THROW an OAuthError carrying the HTTP status in
+      // err.code (a string like "503"), not err.status/.statusCode/.authResponse.
+      const codeStatus =
+        typeof err.code === 'string' && /^\d{3}$/.test(err.code) ? Number(err.code) : undefined;
       const status =
-        err.authResponse?.response?.status || err.statusCode || err.status || 'unknown';
+        err.authResponse?.response?.status || err.statusCode || err.status || codeStatus || 'unknown';
+      // Attach a numeric status so route-level QBO error mapping (-> 502) works.
+      if (typeof status === 'number' && typeof err.status !== 'number') {
+        err.status = status;
+      }
       const intuitTid = this._extractIntuitTid(
         err.authResponse?.response?.headers,
         err.intuitTid || err.intuit_tid
@@ -193,7 +202,9 @@ class QBOClient {
             headers['retry-After'])) ||
         '30';
       const retryAfter = parseInt(retryAfterRaw, 10) || 30;
-      const backoff = retryAfter * 1000 * Math.pow(2, _retryCount);
+      // Exponential backoff, clamped to 60s/attempt so one throttled call can't
+      // block the request handler (and the shared client) for many minutes.
+      const backoff = Math.min(retryAfter * 1000 * Math.pow(2, _retryCount), 60000);
       this._retryAfterUntil = Date.now() + backoff;
       await this._sleep(backoff);
       return this.apiCall(method, endpoint, body, _retryCount + 1);
