@@ -537,7 +537,7 @@ Intuit enforces per-app and per-company rate limits. The platform must:
 ## 18. Dependencies
 
 - Access for each early user to a flagship QBO Advanced Canada company.
-- Stable Intuit app registration.
+- Stable Intuit app registration. (Status, 2026-05-28: the Intuit Developer app passed the full App Assessment and is "IN PRODUCTION", so production API access is unlocked. No production company is connected yet — the app still runs against sandbox, and production OAuth needs a public HTTPS redirect URI via tunnel or deploy.)
 - OAuth and redirect setup.
 - Confirmed scope model.
 - Selected AI provider strategy.
@@ -587,6 +587,8 @@ Confirm the integration assumptions documented in Section 10. Produce a working 
 
 ### Phase 4 — Polish and continuous activity (2-3 weeks)
 
+Detailed current planning note: `phase-4-hardening-plan.md`.
+
 - Continuous activity engine (opt-in).
 - Supervisor-specific features (custom issue packs, broader audit visibility).
 - UX refinements based on early user feedback.
@@ -602,6 +604,7 @@ Confirm the integration assumptions documented in Section 10. Produce a working 
 - Scenario sharing between users.
 - QBOA-oriented workflows.
 - Commercial packaging.
+- Multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX). Planned, not built. The `multi-currency` feature flag in Section 12.3 is recorded for capability assessment only; no multicurrency generation, inspection, or issue-pack scenarios exist yet.
 
 ---
 

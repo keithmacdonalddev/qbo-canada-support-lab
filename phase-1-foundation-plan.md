@@ -1,8 +1,38 @@
 # Phase 1 Foundation Plan
 
-**Status:** Planned  
+**Status:** Implemented in source; fresh end-to-end verification needed
 **Duration:** 3-4 weeks  
 **Phase objective:** Ship the first end-to-end internal product slice after the API spike passes.
+
+---
+
+## Current Implementation Status
+
+Phase 1 source surfaces are present:
+
+- backend Express app, config, MongoDB connection, auth middleware, audit logger, error handler
+- models for user, connection, company profile, audit log, and seed runs
+- routes for auth, QBO connection, company profile/status, seeding, and audit
+- QBO client module with per-connection OAuth behavior
+- frontend routes/pages for login, onboarding, dashboard, settings, and audit log
+
+What still needs fresh verification after project revival:
+
+- full login -> QBO OAuth -> capability/profile -> seed -> dashboard flow
+- idempotent seed behavior against the intended sandbox/test company
+- audit log completeness for setup mutations
+- UI behavior for expired tokens and disconnected companies
+
+Update (2026-05-28): the connection layer's error surfacing (Epic 3) was hardened on branch `fix/qbo-client-error-handling` (committed, not yet merged). The QBO client now captures the Intuit `intuit_tid` trace id and throws status-bearing errors; `backend/src/modules/qbo-error.js` maps QBO upstream errors to HTTP 502 (429 passed through) without emitting a QBO-side 401 as an app-level session-expiry 401. This branch touches the company route used by setup; verify the full setup flow on it once merged.
+
+Production API access is now unlocked at the Intuit Developer portal (app "IN PRODUCTION"), but Phase 1 verification still targets a sandbox/test company. `.env` remains `QBO_ENVIRONMENT=sandbox`; connecting a production company additionally requires a public HTTPS redirect URI.
+
+Current non-mutating verification as of 2026-05-28:
+
+- frontend build passes
+- backend syntax check passes
+- frontend lint fails on AI UI lint debt outside the original Phase 1 scope
+- production dependency audit reports known vulnerabilities that need a dependency update pass
 
 ---
 

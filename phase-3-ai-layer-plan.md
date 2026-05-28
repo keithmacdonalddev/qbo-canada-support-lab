@@ -1,8 +1,45 @@
 # Phase 3 — AI Layer Plan
 
-**Status:** Planned
+**Status:** Implemented in source; acceptance testing and hardening needed
 **Depends on:** Phase 2 complete (Gate C passed)
 **Phase objective:** Add controlled AI assistance on top of the deterministic tools built in Phases 1-2.
+
+---
+
+## Current Implementation Status
+
+Phase 3 source surfaces are present:
+
+- `backend/src/modules/ai-provider.js`
+- `backend/src/modules/ai-orchestrator.js`
+- `backend/src/modules/ai-tools.js`
+- `backend/src/modules/ai-notes.js`
+- `backend/src/routes/ai.js`
+- `backend/src/models/AISession.js`
+- `backend/src/models/AIPlan.js`
+- `frontend/src/pages/AICommandCenter.jsx`
+- `frontend/src/components/ai/`
+
+Current non-mutating verification as of 2026-05-28:
+
+- frontend build passes
+- backend syntax check passes
+- frontend lint fails on current AI UI lint debt:
+  - unused variables/imports in AI UI files
+  - React hook dependency warnings in `AICommandCenter.jsx`
+- `npm audit --omit=dev` reports production vulnerabilities, including high-severity Axios advisories and a moderate Anthropic SDK advisory.
+
+Still needed before Phase 3 can be treated as product-complete:
+
+- AI key setup verification using the intended global/user-key mode
+- chat/session flow acceptance test
+- plan propose/approve/reject/execute acceptance test
+- SSE stream ticket/connection acceptance test
+- support note generation acceptance test
+- audit-log verification for every AI action
+- QBO safety review of all write-capable AI tools
+
+Update (2026-05-28): the AI route (`backend/src/routes/ai.js`) now surfaces QBO upstream errors hit while executing AI plan/tool steps through `backend/src/modules/qbo-error.js` (HTTP 502, 429 passed through, body carries `intuit_tid` and `qboStatus`), on branch `fix/qbo-client-error-handling` (committed, not yet merged). This complements the Claude API error handling in Section 5.10 — that section covers errors from the model; this covers errors from the QBO tools the model drives. Frontend plan approve/reject/execute failures now raise a toast (new `components/ui/toast.jsx`). Re-run the plan execution acceptance test on this branch once merged.
 
 ---
 
