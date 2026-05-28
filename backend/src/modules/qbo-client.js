@@ -101,12 +101,12 @@ class QBOClient {
    * Execute an API call against QBO with automatic token refresh,
    * rate-limit tracking, and 429 retry with exponential backoff.
    *
-   * IMPORTANT: intuit-oauth@4.2.x is axios-based. makeApiCall() RESOLVES on
-   * HTTP error statuses (401/4xx/5xx/429) instead of throwing, returning a
-   * plain object { status, statusText, headers, json, body }. Error handling
-   * is therefore status-based, not catch-based. A try/catch is still kept for
-   * genuine thrown exceptions (network errors; refresh() inside
-   * ensureFreshToken can also throw).
+   * IMPORTANT: intuit-oauth@4.2.x is axios-based with validateStatus < 500, so
+   * makeApiCall() RESOLVES on 2xx-4xx (including 401 and 429) instead of
+   * throwing, returning a plain object { status, statusText, headers, json,
+   * body }. Error handling for those is therefore status-based, not catch-based.
+   * 5xx and network failures REJECT (throw); the try/catch below handles those,
+   * plus any throw from refresh() inside ensureFreshToken.
    */
   async apiCall(method, endpoint, body, _retryCount = 0) {
     const MAX_RETRIES = 5;
@@ -114,6 +114,7 @@ class QBOClient {
     const url = `${this.apiBase}/${endpoint}`;
 
     let response;
+    let reachedApiCall = false;
     try {
       await this.ensureFreshToken();
 
@@ -134,6 +135,10 @@ class QBOClient {
       };
       if (body) opts.body = JSON.stringify(body);
 
+      // Past token refresh and setup: any throw from here is the API call
+      // itself (QBO 5xx or a network failure), which intuit-oauth rejects
+      // rather than resolves.
+      reachedApiCall = true;
       response = await this.oauthClient.makeApiCall(opts);
     } catch (err) {
       // Genuinely thrown exception: network failure, or refresh() rejecting
@@ -149,6 +154,12 @@ class QBOClient {
       // Attach a numeric status so route-level QBO error mapping (-> 502) works.
       if (typeof status === 'number' && typeof err.status !== 'number') {
         err.status = status;
+      } else if (status === 'unknown' && reachedApiCall && typeof err.status !== 'number') {
+        // intuit-oauth rejects QBO 5xx and network failures without a parseable
+        // HTTP status. Tag as 502 (Bad Gateway) so respondQboError surfaces a
+        // traceable upstream error instead of letting the route fall through to
+        // a generic HTTP 500.
+        err.status = 502;
       }
       const intuitTid = this._extractIntuitTid(
         err.authResponse?.response?.headers,
