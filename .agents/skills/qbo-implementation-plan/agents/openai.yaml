@@ -1,0 +1,4 @@
+interface:
+  display_name: "QBO Implementation Plan"
+  short_description: "Plan scoped QBO Support Lab work"
+  default_prompt: "Use $qbo-implementation-plan to plan a scoped QBO Support Lab change before implementation."

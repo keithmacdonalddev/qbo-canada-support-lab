@@ -1,8 +1,23 @@
 # Phase 2 — Reality + Inspection Plan
 
-**Status:** Planned
+**Status:** Superseded by `phase-2-plan.md` for implementation status
 **Depends on:** Phase 1 complete (Gate B passed)
 **Phase objective:** Turn the seeded flagship company into a realistic, inspectable support lab.
+
+---
+
+## Current Status Note
+
+This file is the detailed Phase 2 design plan. The current implementation summary lives in `phase-2-plan.md`.
+
+Source now contains Phase 2 surfaces for historical generation, checkpoints, diffs, entity explorer, issue packs, and run history. Treat this document as design rationale, not the current status tracker.
+
+Known divergence from this original plan:
+
+- The implementation uses `GenerationRun`, `generation-engine.js`, `checkpoint.js`, and `issuepack-engine.js` naming rather than every planned name in this document.
+- BullMQ is installed but the current visible route/module implementation still needs a separate verification pass before claiming durable queue behavior.
+- Phase 2 acceptance criteria still need fresh QBO-connected testing after revival.
+- Section 4.1 assumed `qbo-client.js` needed no changes. As of 2026-05-28 it was hardened on branch `fix/qbo-client-error-handling` (committed, not yet merged): it captures the Intuit `intuit_tid` trace id and throws status-bearing errors, and the Phase 2 checkpoint/explore routes surface them via `backend/src/modules/qbo-error.js`. See `phase-2-plan.md` for status detail.
 
 ---
 

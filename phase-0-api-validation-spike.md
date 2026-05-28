@@ -1,8 +1,28 @@
 # Phase 0 API Validation Spike
 
-**Status:** Planned  
+**Status:** Completed - historical API validation
 **Duration:** 1-2 weeks  
 **Source of truth:** `prd.md`
+
+---
+
+## Current Result
+
+Phase 0 is complete. The repo contains Phase 0 scripts under `scripts/phase-0/` and local result artifacts under `artifacts/phase-0/`.
+
+Summary from the completed spike:
+
+- Decision: proceed to Phase 1.
+- Tested 39 API hypotheses; 37 passed and 2 failed.
+- OAuth, token refresh, realm targeting, master data volume, backdating, AR chains, AP chains, read-back fidelity, and rate-limit assumptions passed.
+- Sustained mixed read/write throughput reached about 2.2 operations per second with zero 429 responses in the recorded test.
+- Purchase orders failed through the tested API path and should not be part of MVP AP chains.
+- Sales orders were not exposed as a QBO API entity in the tested environment; use estimates to invoices instead.
+- Webhook delivery reliability and CDC polling were not tested in Phase 0 and remain follow-up validation items.
+
+Important: `artifacts/` is gitignored in this repo, so tracked docs should preserve the essential Phase 0 conclusions.
+
+Follow-up (2026-05-28): the rate-limit and backoff findings validated here are now implemented in the production backend QBO client — 429 responses are retried with exponential backoff (clamped to 60s/attempt, max 5 retries) on branch `fix/qbo-client-error-handling`. Separately, production API access has since been unlocked at the Intuit Developer portal (app "IN PRODUCTION"); Phase 0 itself ran against sandbox/test companies and its conclusions are unchanged.
 
 ---
 

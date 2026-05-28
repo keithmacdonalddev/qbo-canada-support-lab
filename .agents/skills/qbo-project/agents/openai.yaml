@@ -1,0 +1,4 @@
+interface:
+  display_name: "QBO Project"
+  short_description: "QBO Support Lab project workflow"
+  default_prompt: "Use $qbo-project to orient on the QBO Support Lab before making repo changes."

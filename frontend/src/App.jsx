@@ -1,5 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import { ToastProvider } from './components/ui/toast'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -14,6 +15,7 @@ import AICommandCenter from './pages/AICommandCenter'
 export default function App() {
   return (
     <AuthProvider>
+      <ToastProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -89,6 +91,7 @@ export default function App() {
           }
         />
       </Routes>
+      </ToastProvider>
     </AuthProvider>
   )
 }

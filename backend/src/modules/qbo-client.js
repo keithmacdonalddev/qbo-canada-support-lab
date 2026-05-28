@@ -45,6 +45,9 @@ class QBOClient {
     this._requestLog = [];
     this._windowMs = 60000;
     this._retryAfterUntil = 0;
+
+    // intuit_tid from the most recent successful API call (support tracing)
+    this._lastIntuitTid = '';
   }
 
   /**
@@ -97,52 +100,150 @@ class QBOClient {
   /**
    * Execute an API call against QBO with automatic token refresh,
    * rate-limit tracking, and 429 retry with exponential backoff.
+   *
+   * IMPORTANT: intuit-oauth@4.2.x is axios-based with validateStatus < 500, so
+   * makeApiCall() RESOLVES on 2xx-4xx (including 401 and 429) instead of
+   * throwing, returning a plain object { status, statusText, headers, json,
+   * body }. Error handling for those is therefore status-based, not catch-based.
+   * 5xx and network failures REJECT (throw); the try/catch below handles those,
+   * plus any throw from refresh() inside ensureFreshToken.
    */
   async apiCall(method, endpoint, body, _retryCount = 0) {
-    await this.ensureFreshToken();
+    const MAX_RETRIES = 5;
 
     const url = `${this.apiBase}/${endpoint}`;
 
-    // Respect an active rate-limit wait
-    const now = Date.now();
-    if (now < this._retryAfterUntil) {
-      await this._sleep(this._retryAfterUntil - now);
-    }
-
-    // Track requests in rolling window
-    this._requestLog.push(Date.now());
-    this._requestLog = this._requestLog.filter(t => t > Date.now() - this._windowMs);
-
-    const opts = {
-      url,
-      method,
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    };
-    if (body) opts.body = JSON.stringify(body);
-
     let response;
+    let reachedApiCall = false;
     try {
+      await this.ensureFreshToken();
+
+      // Respect an active rate-limit wait
+      const now = Date.now();
+      if (now < this._retryAfterUntil) {
+        await this._sleep(this._retryAfterUntil - now);
+      }
+
+      // Track requests in rolling window
+      this._requestLog.push(Date.now());
+      this._requestLog = this._requestLog.filter(t => t > Date.now() - this._windowMs);
+
+      const opts = {
+        url,
+        method,
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      };
+      if (body) opts.body = JSON.stringify(body);
+
+      // Past token refresh and setup: any throw from here is the API call
+      // itself (QBO 5xx or a network failure), which intuit-oauth rejects
+      // rather than resolves.
+      reachedApiCall = true;
       response = await this.oauthClient.makeApiCall(opts);
     } catch (err) {
+      // Genuinely thrown exception: network failure, or refresh() rejecting
+      // inside ensureFreshToken(). Extract a tid where one is present, log,
+      // and rethrow. Do not log tokens, auth headers, or full bodies.
+      // intuit-oauth@4.2.2 only resolves on 2xx-4xx (validateStatus < 500); 5xx
+      // and network errors THROW an OAuthError carrying the HTTP status in
+      // err.code (a string like "503"), not err.status/.statusCode/.authResponse.
+      const codeStatus =
+        typeof err.code === 'string' && /^\d{3}$/.test(err.code) ? Number(err.code) : undefined;
       const status =
-        err.authResponse?.response?.status || err.statusCode || 'unknown';
-
-      // 429 – rate limited: back off and retry
-      if (status === 429) {
-        const retryAfter = parseInt(
-          err.authResponse?.response?.headers?.['retry-after'] || '30',
-          10
-        );
-        const backoff = retryAfter * 1000 * Math.pow(2, _retryCount);
-        this._retryAfterUntil = Date.now() + backoff;
-        await this._sleep(backoff);
-        return this.apiCall(method, endpoint, body, _retryCount + 1);
+        err.authResponse?.response?.status || err.statusCode || err.status || codeStatus || 'unknown';
+      // Attach a numeric status so route-level QBO error mapping (-> 502) works.
+      if (typeof status === 'number' && typeof err.status !== 'number') {
+        err.status = status;
+      } else if (status === 'unknown' && reachedApiCall && typeof err.status !== 'number') {
+        // intuit-oauth rejects QBO 5xx and network failures without a parseable
+        // HTTP status. Tag as 502 (Bad Gateway) so respondQboError surfaces a
+        // traceable upstream error instead of letting the route fall through to
+        // a generic HTTP 500.
+        err.status = 502;
       }
+      const intuitTid = this._extractIntuitTid(
+        err.authResponse?.response?.headers,
+        err.intuitTid || err.intuit_tid
+      );
+
+      console.error('[qbo-client] API call failed', {
+        method,
+        endpoint,
+        status,
+        intuit_tid: intuitTid || 'unknown',
+      });
+
+      if (intuitTid && !err.intuit_tid) {
+        err.intuit_tid = intuitTid;
+      }
+      throw err;
+    }
+
+    // makeApiCall resolved. Inspect the HTTP status to decide success vs error.
+    // axios lowercases header keys, so intuit_tid lives at headers.intuit_tid.
+    const headers =
+      (typeof response.headers === 'function' ? response.headers() : response.headers) ||
+      response.response?.headers;
+    const status = response.status;
+    const intuitTid = this._extractIntuitTid(headers, response.intuit_tid);
+
+    // ---- 429: rate limited -> existing backoff/retry mechanism ----
+    if (status === 429) {
+      if (_retryCount >= MAX_RETRIES) {
+        const err = new Error(
+          `QBO API rate limit exceeded after ${MAX_RETRIES} retries (HTTP 429)`
+        );
+        err.status = 429;
+        if (intuitTid) err.intuit_tid = intuitTid;
+        console.error('[qbo-client] API call failed', {
+          method,
+          endpoint,
+          status: 429,
+          intuit_tid: intuitTid || 'unknown',
+        });
+        throw err;
+      }
+
+      // Read retry-after case-insensitively (default 30s), apply exponential
+      // backoff, set the shared wait window, sleep, and retry.
+      const retryAfterRaw =
+        (headers &&
+          (headers['retry-after'] ||
+            headers['Retry-After'] ||
+            headers['retry-After'])) ||
+        '30';
+      const retryAfter = parseInt(retryAfterRaw, 10) || 30;
+      // Exponential backoff, clamped to 60s/attempt so one throttled call can't
+      // block the request handler (and the shared client) for many minutes.
+      const backoff = Math.min(retryAfter * 1000 * Math.pow(2, _retryCount), 60000);
+      this._retryAfterUntil = Date.now() + backoff;
+      await this._sleep(backoff);
+      return this.apiCall(method, endpoint, body, _retryCount + 1);
+    }
+
+    // ---- Other 4xx/5xx: throw a meaningful, traceable error ----
+    if (typeof status === 'number' && status >= 400) {
+      // Parse the body just enough to surface the QBO Fault message(s). Never
+      // log or attach the full body (may contain company/customer data).
+      const faultMessage = this._extractFaultMessage(response);
+      const err = new Error(
+        `QBO API error (HTTP ${status})${faultMessage ? `: ${faultMessage}` : ''}`
+      );
+      err.status = status;
+      if (intuitTid) err.intuit_tid = intuitTid;
+
+      console.error('[qbo-client] API call failed', {
+        method,
+        endpoint,
+        status,
+        intuit_tid: intuitTid || 'unknown',
+      });
 
       throw err;
     }
 
-    // Parse response — same fallback chain as Phase 0
+    // ---- 2xx (or status absent, defensively): parse and return the body ----
+    // Same fallback chain as Phase 0 (prefer .json, then JSON.parse(.body)).
     let parsed;
     try {
       parsed = typeof response.getJson === 'function' ? response.getJson() : null;
@@ -151,7 +252,77 @@ class QBOClient {
       parsed = response.json || JSON.parse(response.body || '{}');
     }
 
+    // Capture the intuit_tid for support tracing. Do NOT log on the success
+    // path (avoid spam). Reuse the tid already extracted above.
+    let successTid = intuitTid;
+    if (!successTid) {
+      try {
+        successTid =
+          (typeof response.getIntuitTid === 'function' ? response.getIntuitTid() : '') ||
+          response.intuit_tid ||
+          '';
+      } catch (_) { /* ignore */ }
+    }
+    this._lastIntuitTid = successTid || '';
+
     return parsed;
+  }
+
+  /**
+   * Pull the QBO Fault error message(s) out of a resolved error response so a
+   * failed call surfaces a meaningful reason. Reads defensively (json or body)
+   * and joins multiple Fault errors. Returns '' if none found. The full body
+   * is never logged or returned — only the human-readable message text.
+   * @param {object} response - resolved makeApiCall response object
+   * @returns {string}
+   */
+  _extractFaultMessage(response) {
+    let payload = response && response.json;
+    if (!payload && response && response.body) {
+      try {
+        payload = JSON.parse(response.body);
+      } catch (_) {
+        return '';
+      }
+    }
+    if (!payload || typeof payload !== 'object') return '';
+
+    // QBO error envelope: { Fault: { Error: [{ Message, Detail, code }] } }
+    const fault = payload.Fault || payload.fault;
+    const errors = fault && (fault.Error || fault.error);
+    if (Array.isArray(errors) && errors.length) {
+      const msgs = errors
+        .map(e => e && (e.Message || e.message || e.Detail || e.detail))
+        .filter(Boolean);
+      if (msgs.length) return msgs.join('; ');
+    }
+    return '';
+  }
+
+  /**
+   * Extract the intuit_tid value from a headers object case-insensitively,
+   * falling back to an already-extracted value. Returns '' if not found.
+   * @param {object} [headers] - response headers object
+   * @param {string} [fallback] - tid already pulled off an error object
+   * @returns {string}
+   */
+  _extractIntuitTid(headers, fallback) {
+    if (headers && typeof headers === 'object') {
+      const direct =
+        headers.intuit_tid ||
+        headers.Intuit_Tid ||
+        headers.intuit_TID ||
+        headers.INTUIT_TID;
+      if (direct) return String(direct);
+
+      // Case-insensitive scan as a last resort
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'intuit_tid') {
+          return String(headers[key]);
+        }
+      }
+    }
+    return fallback ? String(fallback) : '';
   }
 
   // ---------- Convenience methods ----------
@@ -178,6 +349,14 @@ class QBOClient {
    */
   getRequestCount() {
     return this._requestLog.length;
+  }
+
+  /**
+   * Return the intuit_tid from the most recent successful API call, or '' if
+   * none was captured. Useful for support tracing and troubleshooting logs.
+   */
+  getLastIntuitTid() {
+    return this._lastIntuitTid;
   }
 
   // ---------- Internal helpers ----------

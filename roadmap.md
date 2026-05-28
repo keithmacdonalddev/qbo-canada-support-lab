@@ -1,7 +1,41 @@
 # QBO Support Lab Roadmap
 
-**Status:** Working plan  
+**Status:** Revival status tracker
 **Source of truth:** `prd.md`
+
+---
+
+## Current Revival Snapshot
+
+Updated: 2026-05-28
+
+The source code is ahead of the original roadmap wording. Use this file as the current status index and the phase files for detail.
+
+**Milestone (2026-05-28): Production API access unlocked.** The Intuit Developer app passed the full App Assessment (App details + Compliance) and now shows "IN PRODUCTION" on the developer portal. Previously the app was sandbox-only. This removes the production-access gate but does not by itself connect a real company.
+
+Not yet done despite production access:
+
+- No production QBO company is connected. `.env` still uses `QBO_ENVIRONMENT=sandbox`. Production OAuth needs a public HTTPS redirect URI (via tunnel or deploy) before a real company can be linked.
+- Multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX) is planned, not built.
+
+The branch `fix/qbo-client-error-handling` (committed, not yet merged to main) hardens QBO upstream error handling: the QBO client captures the Intuit `intuit_tid` trace id and uses status-based error handling (429 retry with exponential backoff, errors carry status + tid + QBO Fault message). A new `backend/src/modules/qbo-error.js` maps QBO upstream errors to HTTP 502 (429 passed through), deliberately avoiding emitting a QBO-side 401 as an app-level 401. It is wired into the ai, checkpoint, company, and explore routes; seed/generate/issuepacks are intentionally unchanged because they run QBO in background jobs surfaced via status/log. Frontend error surfacing was hardened with new toast/alert UI. See `phase-4-hardening-plan.md` for hardening detail.
+
+| Phase | Current status | Evidence | Remaining work |
+|------|----------------|----------|----------------|
+| Phase 0 | Completed | `scripts/phase-0/`; tracked summary in `phase-0-api-validation-spike.md`; local artifacts in `artifacts/phase-0/` | Webhook/CDC validation remains deferred |
+| Phase 1 | Implemented in source | auth, QBO connection, company profile, seeding, dashboard, audit routes/pages are present | Fresh end-to-end QBO-connected verification |
+| Phase 2 | Implemented in source | generation, checkpoints, explorer, issue packs, run models/routes/pages are present | Fresh QBO-connected acceptance testing; clarify BullMQ strategy |
+| Phase 3 | Implemented in source | AI provider, orchestrator, tools, notes, sessions, plans, SSE route, AI command center are present | Acceptance testing, lint cleanup, dependency audit fixes, QBO safety review |
+| Phase 4 | Not implemented | no continuous activity/polish phase implementation identified; plan now documented in `phase-4-hardening-plan.md` | Build hardening backlog after Phase 1-3 verification |
+
+Current non-mutating checks:
+
+- `npm run build --workspace=frontend` passes.
+- Backend syntax check over `backend/src/**/*.js` passes.
+- `npm run lint --workspace=frontend` fails on current AI UI lint debt.
+- `npm audit --omit=dev --json` reports 14 production vulnerabilities: 2 high, 12 moderate.
+
+No backend server start, QBO OAuth flow, seeding, generation, issue pack run, checkpoint creation, or AI plan execution was performed during this review.
 
 ---
 
@@ -9,9 +43,9 @@
 
 - This product operates only on internal, support-owned QBO test companies.
 - `prd.md` remains the product contract; this file translates it into execution sequencing.
-- Phase 0 is a hard gate. If the API spike fails key assumptions, later phases must be re-scoped before implementation continues.
-- Phase 1 should be planned in moderate detail now.
-- Phases 2-4 should be documented as roadmap commitments with clear gates, not as fully locked implementation specs.
+- Phase 0 was the hard gate and has completed with a proceed decision plus scope changes.
+- Phase 1-3 have source code present, but product-complete status depends on fresh runtime and QBO-connected acceptance testing.
+- Phase 4 should remain a hardening backlog until the existing source surfaces are verified.
 - If time gets tight, defer the items already called out in `prd.md`: continuous activity, replay, raw API view, custom issue pack authoring, and AI guarded auto-execution.
 
 ---
@@ -27,13 +61,13 @@
 
 ## 3. Phase summary
 
-| Phase | Duration | Primary goal | Key output |
-|------|----------|--------------|------------|
-| Phase 0 | 1-2 weeks | Validate API feasibility | Gap report, capability matrix, working scripts |
-| Phase 1 | 3-4 weeks | Ship the foundation | Login, QBO connect, company profile, seeding, dashboard, audit base |
-| Phase 2 | 4-5 weeks | Make the company feel real and inspectable | Historical generation, checkpoints, diff, entity explorer, issue packs |
-| Phase 3 | 3-4 weeks | Add controlled AI workflows | AI planning, confirmed execution, investigation support, support notes |
-| Phase 4 | 2-3 weeks | Harden for daily internal use | UX polish, performance tuning, supervisor features, optional freshness |
+| Phase | Duration | Primary goal | Current status |
+|------|----------|--------------|----------------|
+| Phase 0 | 1-2 weeks | Validate API feasibility | Completed |
+| Phase 1 | 3-4 weeks | Ship the foundation | Implemented in source; needs fresh E2E verification |
+| Phase 2 | 4-5 weeks | Make the company feel real and inspectable | Implemented in source; needs QBO-connected acceptance testing |
+| Phase 3 | 3-4 weeks | Add controlled AI workflows | Implemented in source; needs acceptance testing and hardening |
+| Phase 4 | 2-3 weeks | Harden for daily internal use | Not implemented |
 | Future | Post-MVP | Expand breadth | Payroll, multi-company, training, sharing, packaging |
 
 ---
@@ -189,6 +223,8 @@ Add controlled AI assistance on top of deterministic tools.
 
 Make the product usable for repeated day-to-day internal support work.
 
+Detailed plan: `phase-4-hardening-plan.md`.
+
 **In scope**
 
 - UX refinements from user feedback
@@ -239,6 +275,7 @@ Make the product usable for repeated day-to-day internal support work.
 - `roadmap.md` - phase sequencing and gates
 - `phase-0-api-validation-spike.md` - execution plan for the hard gate
 - `phase-1-foundation-plan.md` - first implementation phase plan
+- `phase-4-hardening-plan.md` - gated hardening/polish plan for daily internal use
 
 Optional later:
 
@@ -250,7 +287,10 @@ Optional later:
 
 ## 9. Near-term next steps
 
-1. Execute the Phase 0 spike.
-2. Record pass/fail results and scope changes.
-3. Lock the Phase 1 backlog against the validated API surface.
-4. Staff implementation owners for backend, frontend, and product validation.
+1. Fix current frontend lint errors and warnings in the AI UI.
+2. Address production dependency audit findings, especially Axios and Anthropic SDK advisories.
+3. Run Phase 1 end-to-end verification against the intended sandbox/test company.
+4. Run Phase 2 acceptance tests: generation, checkpoint create/list/diff, explorer, issue packs, audit.
+5. Run Phase 3 acceptance tests: AI config, chat/session flow, plan approval/execution, SSE, support notes, audit.
+6. Build the Phase 4 hardening backlog from the verified defects rather than adding new scope first.
+7. With production API access now unlocked, decide the path to connecting a real company: set up a public HTTPS redirect URI (tunnel or deploy), then switch `QBO_ENVIRONMENT` to production for that connection. Sandbox remains the default until then.

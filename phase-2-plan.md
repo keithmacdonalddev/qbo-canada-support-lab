@@ -1,7 +1,27 @@
 # Phase 2: Reality + Inspection — Implementation Plan
 
-**Status:** Implemented  
+**Status:** Implemented in source; fresh QBO-connected acceptance testing needed
 **Date:** 2026-04-09
+
+## Current Verification Status
+
+As of 2026-05-28, the Phase 2 source files and routes are present. This file should be treated as the current Phase 2 implementation note, while `phase-2-reality-inspection-plan.md` is the older detailed design plan.
+
+Non-mutating verification:
+
+- frontend build passes
+- backend syntax check passes
+- frontend lint currently fails on AI UI lint debt
+
+Still needed:
+
+- live generation run against the intended sandbox/test company
+- checkpoint create/list/diff acceptance test
+- entity explorer search/detail/chain acceptance test
+- issue pack run and audit-log acceptance test
+- confirmation that installed BullMQ dependency is either intentionally unused or wired into the background job strategy
+
+Update (2026-05-28): the checkpoint and explore routes now surface QBO upstream errors through `backend/src/modules/qbo-error.js` (HTTP 502, 429 passed through, body carries `intuit_tid` and `qboStatus`) on branch `fix/qbo-client-error-handling` (committed, not yet merged). The generate and issuepacks routes were intentionally left unchanged because they run QBO in fire-and-forget background jobs surfaced via their own `/status` and `/log` endpoints. Re-run the explorer and checkpoint acceptance tests on this branch once merged.
 
 ## Scope
 

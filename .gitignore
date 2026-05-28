@@ -3,4 +3,9 @@
 node_modules/
 artifacts/
 logs/
-.claude/
+.claude/logs/
+.claude/memory/sessions/
+.claude/memory/.consolidation-state.json
+.claude/memory/.memory-agent.pid
+.claude/settings.local.json
+.claude/worktrees/

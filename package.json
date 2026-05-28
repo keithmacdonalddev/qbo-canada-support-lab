@@ -2,7 +2,7 @@
   "name": "qbo-support-lab",
   "version": "0.0.1",
   "private": true,
-  "description": "QBO Canada Support Lab - Phase 0 API Validation Spike",
+  "description": "QBO Canada Support Lab - connected-company support lab with seeding, inspection, issue packs, and AI-assisted workflows",
   "workspaces": [
     "backend",
     "frontend"

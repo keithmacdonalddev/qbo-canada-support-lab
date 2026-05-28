@@ -5,6 +5,7 @@ const CheckpointEntity = require('../models/CheckpointEntity');
 const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
+const { respondQboError } = require('../modules/qbo-error');
 const { createCheckpoint, diffCheckpoints } = require('../modules/checkpoint');
 
 const router = express.Router();
@@ -55,6 +56,7 @@ router.post('/', authenticate, async (req, res) => {
     });
   } catch (err) {
     console.error('[checkpoint/create]', err.message);
+    if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Failed to create checkpoint' });
   }
 });

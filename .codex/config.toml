@@ -1,0 +1,16 @@
+# Project-scoped Codex settings only. Keep provider auth, API keys, base URLs,
+# telemetry, and personal account settings in user-level Codex config.
+
+project_doc_max_bytes = 65536
+
+[features]
+multi_agent = true
+
+[agents.qbo_worker]
+description = "Implementation worker for scoped QBO Support Lab file changes. Use for bounded edits after the lead identifies task scope and safety constraints."
+
+[agents.qbo_implementation_reviewer]
+description = "Reviewer for QBO Support Lab diffs. Use for backend route/module changes, AI execution changes, auth/key handling, QBO integration, and broad frontend workflow changes."
+
+[agents.qbo_safety_reviewer]
+description = "Safety reviewer for QBO API, OAuth/token, database mutation, AI plan execution, stored key, audit logging, and backend startup risk."
