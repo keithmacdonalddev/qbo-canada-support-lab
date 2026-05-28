@@ -1,0 +1,4 @@
+interface:
+  display_name: "QBO Safety Review"
+  short_description: "Review QBO mutation and secret risks"
+  default_prompt: "Use $qbo-safety-review to review this QBO Support Lab change for QBO mutation, data, and secret risks."
