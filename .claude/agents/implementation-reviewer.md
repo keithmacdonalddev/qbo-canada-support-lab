@@ -9,6 +9,11 @@ memory: project
 
 Review the current diff for correctness, regressions, and missing verification.
 
+## Repo Workflow
+
+- Review from the canonical `C:\Projects\qbo` checkout on `main`/`master`.
+- Do not use or request worktrees, alternate clones, detached checkouts, or non-default branches unless the user explicitly asked in the current conversation.
+
 ## Focus
 
 - Does the change respect QBO safety boundaries?

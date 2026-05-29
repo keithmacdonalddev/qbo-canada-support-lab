@@ -39,7 +39,7 @@ Read only the files needed for the task. Use this routing before broad scanning.
 - AI layer: `phase-3-ai-layer-plan.md`, `backend/src/routes/ai.js`, `backend/src/modules/ai-provider.js`, `backend/src/modules/ai-orchestrator.js`, `backend/src/modules/ai-tools.js`, `backend/src/modules/ai-notes.js`, `frontend/src/pages/AICommandCenter.jsx`, `frontend/src/components/ai/`.
 - Frontend shell/routes: `frontend/src/App.jsx`, `frontend/src/components/Layout.jsx`, `frontend/src/api/client.js`, `frontend/src/context/AuthContext.jsx`, `frontend/src/index.css`.
 - Error surfacing (frontend): `frontend/src/components/ui/toast.jsx`, `frontend/src/components/ui/alert.jsx`.
-- Agent architecture: `.codex/memory/PROJECT_MEMORY.md`, `.codex/memory/AGENT_HANDOFF.md`, `.agents/rules/`, `.agents/skills/`.
+- Agent architecture: `CLAUDE.md`, `.codex/memory/PROJECT_MEMORY.md`, `.codex/memory/AGENT_HANDOFF.md`, `.agents/rules/`, `.agents/skills/`, `.claude/rules/`, `.claude/agents/`, `.claude/skills/`.
 
 ## Provider Architecture
 
@@ -56,6 +56,16 @@ This repo uses both OpenAI Codex and Claude Code.
 - Claude project skills live in `.claude/skills/`.
 
 Do not put provider login, API keys, base URLs, telemetry keys, or personal account settings in repo files. Keep those in user-level tool config or local environment.
+
+## Git And Branch Workflow
+
+This rule applies to Codex, Claude Code, Claude subagents, and any worker/reviewer agent invoked from this repo.
+
+- Default workspace is the canonical checkout at `C:\Projects\qbo`. Do not create, use, or continue work inside Git worktrees, `.claude/worktrees/`, alternate clones, temp checkouts, or detached worktrees unless the user explicitly asks for that in the current conversation.
+- Default branch target is this repo's normal default branch: `main` for this checkout, or `master` only if a future checkout is configured that way. Do not create, switch to, commit on, or push from feature branches without explicit user instruction.
+- Before committing or pushing, run `git status --short --branch` and confirm the current branch is `main` or `master`. If it is any other branch, a detached HEAD, or a worktree path, stop and ask the user before changing branch state.
+- When the user asks to commit or push without naming a branch, commit on the current `main`/`master` checkout and push to the matching upstream (`origin/main` or `origin/master`). Do not invent a PR branch, worktree branch, or alternate remote target.
+- If the user explicitly asks for a worktree or non-default branch, treat that permission as scoped to that task only; document the branch/worktree in the handoff and return future work to `main`/`master` unless instructed again.
 
 ## Safety Rules
 
@@ -99,6 +109,7 @@ Frontend:
 - Use existing modules before adding new abstractions.
 - Keep AI writes behind plan/approval flows. AI should use internal tool contracts, not raw QBO API calls.
 - Update docs or memory when a durable project fact changes.
+- Follow the Git And Branch Workflow above for all work, commits, and pushes.
 - Use project skills when their trigger matches:
   - `.agents/skills/qbo-project` for repo orientation and general changes.
   - `.agents/skills/qbo-safety-review` for QBO/API/database/secret risk review.
@@ -124,5 +135,6 @@ Before reporting completion:
 
 - Re-check the files changed in the current turn.
 - Run the relevant non-mutating verification.
+- For commit/push tasks, report the branch/upstream verified before the commit or push.
 - Report commands run and any commands skipped because they would start services or mutate QBO/database state.
 - Mention any repo state that remains local-only or intentionally untracked.

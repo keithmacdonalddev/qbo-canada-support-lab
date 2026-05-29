@@ -5,6 +5,7 @@ Use this file to orient future coding agents on current repo-specific workflow.
 ## Branch State (as of 2026-05-28)
 
 - The QBO error-handling + frontend-hardening work (status-based `qbo-client.js` `apiCall()`, `qbo-error.js` helper, `toast.jsx`/`alert.jsx`) is MERGED to `main` via PR #1 (merged 2026-05-28). Branch `fix/qbo-client-error-handling` is complete; `main` is now the active line of work.
+- Agent git workflow (2026-05-29): work in the canonical `C:\Projects\qbo` checkout on `main`; do not use `.claude/worktrees/`, Git worktrees, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation. Unqualified commit/push requests target `origin/main` for this checkout, or `origin/master` only if a future checkout is configured that way.
 - DONE (2026-05-28): Production wiring. A REAL QBO Advanced Canada company is connected. `.env` is `QBO_ENVIRONMENT=production` with production client id/secret and an ngrok reserved-domain redirect URI registered in Intuit "Support Lab" Production. The ngrok tunnel fronts the local backend (port 3001) for the OAuth callback only; frontend stays on localhost:5173 (no code change needed for backend-only tunneling). Tunnel only needed during connect/reconnect.
 - DONE (2026-05-28, uncommitted): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
 - Pending next steps:
@@ -17,9 +18,10 @@ Use this file to orient future coding agents on current repo-specific workflow.
 
 1. Read `AGENTS.md`.
 2. Read `.codex/memory/PROJECT_MEMORY.md`.
-3. Select the smallest relevant source files for the request.
-4. Avoid live server starts and QBO/database mutations unless the user explicitly asks.
-5. Run non-mutating verification before reporting completion.
+3. For commit/push or repo-state work, run `git status --short --branch`; continue only from the canonical checkout on `main`/`master` unless the user explicitly instructed a branch/worktree.
+4. Select the smallest relevant source files for the request.
+5. Avoid live server starts and QBO/database mutations unless the user explicitly asks.
+6. Run non-mutating verification before reporting completion.
 
 ## Risk Hotspots
 

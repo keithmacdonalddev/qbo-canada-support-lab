@@ -65,6 +65,12 @@ CLAUDE.md                Claude Code guidance, imports AGENTS.md
 .claude/                 Claude memory, rules, skills, and subagents
 ```
 
+## Agent Git Workflow
+
+Codex, Claude Code, Claude subagents, and worker/reviewer agents default to the canonical checkout at `C:\Projects\qbo` on `main`. They should not use Git worktrees, `.claude/worktrees/`, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation.
+
+Unqualified commit or push requests should stay on the current `main`/`master` checkout and push to the matching upstream (`origin/main` for this repo, or `origin/master` only if the repo default changes).
+
 ## Setup
 
 1. Install dependencies:

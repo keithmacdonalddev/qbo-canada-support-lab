@@ -5,9 +5,9 @@
 - `AGENTS.md`: Codex project guidance.
 - `CLAUDE.md`: Claude Code guidance, imports `AGENTS.md`.
 - `.codex/memory/`: Codex project memory and handoff notes.
-- `.agents/rules/`: Codex-readable scoped rules.
+- `.agents/rules/`: Codex-readable scoped rules, including `.agents/rules/git.md` for branch/worktree defaults.
 - `.agents/skills/`: Codex repo skills.
-- `.claude/`: Claude memory, rules, agents, and skills.
+- `.claude/`: Claude memory, rules, agents, and skills, including `.claude/rules/git.md`.
 - `prd.md`: product intent and AI/QBO safety principles.
 - `roadmap.md`: phase gates and sequencing.
 - `phase-*.md`: phase-specific plans; verify against source before treating status as current.
@@ -48,6 +48,7 @@ Do not run without explicit current user approval:
 
 ## Safer Commands
 
+- `git status --short --branch`
 - `git status --short`
 - `git diff --check`
 - `npm run build --workspace=frontend`

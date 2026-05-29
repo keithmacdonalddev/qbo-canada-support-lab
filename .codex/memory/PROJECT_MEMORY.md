@@ -29,6 +29,7 @@ It is not the app runtime's durable user memory. It is local project context for
 - Keep provider credentials and personal model/account settings out of repo files.
 - Treat AI as a controlled assistant that uses internal tools and approval flows, not raw QBO API access.
 - Use repo-local skills for repeatable QBO orientation, implementation planning, and safety review.
+- Git workflow: agents default to the canonical checkout at `C:\Projects\qbo` on `main`; do not create or use worktrees, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation. Unqualified commit/push requests target the current `main`/`master` checkout and matching `origin/main` or `origin/master` upstream.
 
 ## First Files To Read
 

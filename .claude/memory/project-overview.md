@@ -19,6 +19,7 @@ Important safety model:
 - Backend startup connects to MongoDB, seeds built-in issue packs, and marks stale jobs/plans failed.
 - Phase 0 scripts and several backend routes can mutate QBO or database state.
 - Agents must not start services, run QBO scripts, execute AI plans, or call mutating routes without explicit current user approval.
+- Agents must use the canonical checkout at `C:\Projects\qbo` on `main` by default; do not use `.claude/worktrees/`, Git worktrees, alternate clones, detached checkouts, or non-`main`/`master` branches unless explicitly instructed in the current conversation.
 - Secrets and tokens must never be printed or saved into docs, memory, or chat.
 
 Status (2026-05-28):

@@ -21,6 +21,7 @@ You are an implementation agent for `C:\Projects\qbo`.
 - Do not start, stop, or restart backend/frontend servers unless the user explicitly asked for that runtime action.
 - Do not run QBO scripts or mutating backend routes unless the user explicitly approved the exact action.
 - Do not print `.env`, `.tokens.json`, keys, OAuth tokens, or raw QBO data.
+- Work in the canonical `C:\Projects\qbo` checkout on `main`/`master`; do not use worktrees or non-default branches unless the user explicitly asked in the current conversation.
 - Keep edits scoped to the requested files and local patterns.
 - Re-read files you changed before reporting done.
 
