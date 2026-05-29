@@ -5,6 +5,7 @@ const config = require('../config');
 const Connection = require('../models/Connection');
 const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
+const { deriveTokenHealth, refreshTokenExpiryFrom } = require('../modules/connection-health');
 
 // In-memory nonce store (keyed by nonce → { userId, createdAt })
 // In production this should be Redis/DB with TTL
@@ -104,6 +105,7 @@ router.get('/callback', async (req, res) => {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token,
         tokenExpiresAt: new Date(Date.now() + (tokenData.expires_in || 3600) * 1000),
+        refreshTokenExpiresAt: refreshTokenExpiryFrom(tokenData),
         scope: tokenData.scope || '',
         status: 'active',
         lastRefreshedAt: new Date(),
@@ -183,6 +185,7 @@ router.post('/refresh', authenticate, async (req, res) => {
     connection.tokenExpiresAt = new Date(
       Date.now() + (tokenData.expires_in || 3600) * 1000
     );
+    connection.refreshTokenExpiresAt = refreshTokenExpiryFrom(tokenData);
     connection.lastRefreshedAt = new Date();
     connection.status = 'active';
     await connection.save();
@@ -214,25 +217,24 @@ router.get('/status', authenticate, async (req, res) => {
       .sort({ updatedAt: -1 });
 
     if (!connection) {
-      return res.json({ connected: false, status: 'none' });
+      return res.json({ connected: false, status: 'none', environment: config.qbo.environment });
     }
 
-    // Determine effective status
-    let effectiveStatus = connection.status;
-    if (
-      effectiveStatus === 'active' &&
-      connection.tokenExpiresAt &&
-      new Date() > connection.tokenExpiresAt
-    ) {
-      effectiveStatus = 'expired';
-    }
+    // "Connected" tracks the refresh token, not the access token: the access
+    // token is short-lived and auto-refreshes, so its expiry must not flip the
+    // connection to "disconnected". deriveTokenHealth encodes that rule, shared
+    // with /company/health so the header and dashboard agree.
+    const health = deriveTokenHealth(connection);
 
     return res.json({
-      connected: effectiveStatus === 'active',
-      status: effectiveStatus,
+      connected: health.usable,
+      status: health.effectiveStatus,
+      environment: config.qbo.environment,
       realmId: connection.realmId,
       companyName: connection.companyName,
       tokenExpiresAt: connection.tokenExpiresAt,
+      refreshTokenExpiresAt: health.refreshTokenExpiresAt,
+      refreshTokenExpiresInDays: health.refreshTokenExpiresInDays,
       lastRefreshedAt: connection.lastRefreshedAt,
     });
   } catch (err) {

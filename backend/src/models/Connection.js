@@ -25,6 +25,9 @@ const connectionSchema = new mongoose.Schema(
     tokenExpiresAt: {
       type: Date,
     },
+    refreshTokenExpiresAt: {
+      type: Date,
+    },
     scope: {
       type: String,
     },

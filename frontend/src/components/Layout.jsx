@@ -5,6 +5,7 @@ import client from '../api/client'
 
 const navItems = [
   { to: '/', label: 'Dashboard', icon: '\u25A3' },
+  { to: '/lab', label: 'Lab Tools', icon: '\u2692' },
   { to: '/ai', label: 'AI Assistant', icon: '\u2726' },
   { to: '/explorer', label: 'Entity Explorer', icon: '\u229E' },
   { to: '/checkpoints', label: 'Checkpoints', icon: '\u2299' },
@@ -32,6 +33,8 @@ export default function Layout({ children }) {
 
   const connectionStatus = company?.connected
   const companyName = company?.companyName || 'No Company'
+  const environment = company?.environment
+  const isProduction = environment === 'production'
 
   return (
     <div className="flex min-h-screen">
@@ -82,15 +85,28 @@ export default function Layout({ children }) {
               {companyName}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={`inline-block w-[9px] h-[9px] rounded-full ${
-                connectionStatus ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'
-              }`}
-            />
-            <span className="text-[13px] text-[var(--text-light)]">
-              {connectionStatus ? 'Connected' : 'Disconnected'}
-            </span>
+          <div className="flex items-center gap-3">
+            {environment && (
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
+                  isProduction
+                    ? 'bg-[var(--danger)] text-white'
+                    : 'bg-[var(--border)] text-[var(--text-heading)]'
+                }`}
+              >
+                {isProduction ? 'Production' : 'Sandbox'}
+              </span>
+            )}
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-block w-[9px] h-[9px] rounded-full ${
+                  connectionStatus ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'
+                }`}
+              />
+              <span className="text-[13px] text-[var(--text-light)]">
+                {connectionStatus ? 'Connected' : 'Disconnected'}
+              </span>
+            </div>
           </div>
         </header>
         <main className="flex-1 p-7 overflow-y-auto">{children}</main>

@@ -3,6 +3,7 @@ const Connection = require('../models/Connection');
 const CompanyProfile = require('../models/CompanyProfile');
 const SeedRun = require('../models/SeedRun');
 const { authenticate } = require('../middleware/auth');
+const { requireProductionConfirm } = require('../middleware/productionGuard');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
 
@@ -272,7 +273,7 @@ async function createBatchWithLogging(qbo, entity, items, nameField, seedRun, ph
  * POST /start
  * Kicks off master data seeding asynchronously.
  */
-router.post('/start', authenticate, async (req, res) => {
+router.post('/start', authenticate, requireProductionConfirm, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {

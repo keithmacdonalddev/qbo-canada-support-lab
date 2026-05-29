@@ -10,6 +10,7 @@ import AuditLog from './pages/AuditLog'
 import EntityExplorer from './pages/EntityExplorer'
 import Checkpoints from './pages/Checkpoints'
 import IssuePacks from './pages/IssuePacks'
+import LabTools from './pages/LabTools'
 import AICommandCenter from './pages/AICommandCenter'
 
 export default function App() {
@@ -55,6 +56,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <IssuePacks />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/lab"
+          element={
+            <ProtectedRoute>
+              <LabTools />
             </ProtectedRoute>
           }
         />

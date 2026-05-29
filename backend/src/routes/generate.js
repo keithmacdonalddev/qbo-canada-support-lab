@@ -3,6 +3,7 @@ const Connection = require('../models/Connection');
 const CompanyProfile = require('../models/CompanyProfile');
 const GenerationRun = require('../models/GenerationRun');
 const { authenticate } = require('../middleware/auth');
+const { requireProductionConfirm } = require('../middleware/productionGuard');
 const { runGenerationJob } = require('../modules/generation-engine');
 
 const router = express.Router();
@@ -18,7 +19,7 @@ async function getActiveConnection(userId) {
  * POST /start
  * Kicks off historical activity generation asynchronously.
  */
-router.post('/start', authenticate, async (req, res) => {
+router.post('/start', authenticate, requireProductionConfirm, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {

@@ -4,9 +4,12 @@ Use this file to orient future coding agents on current repo-specific workflow.
 
 ## Branch State (as of 2026-05-28)
 
-- Branch `fix/qbo-client-error-handling` holds the QBO error-handling + frontend-hardening work (status-based `qbo-client.js` `apiCall()`, `qbo-error.js` helper, `toast.jsx`/`alert.jsx`). 4 commits, NOT yet merged to main and NOT pushed.
+- The QBO error-handling + frontend-hardening work (status-based `qbo-client.js` `apiCall()`, `qbo-error.js` helper, `toast.jsx`/`alert.jsx`) is MERGED to `main` via PR #1 (merged 2026-05-28). Branch `fix/qbo-client-error-handling` is complete; `main` is now the active line of work.
+- DONE (2026-05-28): Production wiring. A REAL QBO Advanced Canada company is connected. `.env` is `QBO_ENVIRONMENT=production` with production client id/secret and an ngrok reserved-domain redirect URI registered in Intuit "Support Lab" Production. The ngrok tunnel fronts the local backend (port 3001) for the OAuth callback only; frontend stays on localhost:5173 (no code change needed for backend-only tunneling). Tunnel only needed during connect/reconnect.
+- DONE (2026-05-28, uncommitted): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
 - Pending next steps:
-  - Production wiring: tunnel/deploy a public HTTPS redirect URI, register it, and switch `.env` `QBO_ENVIRONMENT` from `sandbox` to production. Intuit production API access is already UNLOCKED; only the real-company connection remains.
+  - Commit the uncommitted dashboard-split + memory/doc changes (user's call) — currently all uncommitted on `main`.
+  - Optional: extend `requireProductionConfirm` to AI plan-execution writes (the one QBO-mutating path not yet behind the guard).
   - Planned-but-unbuilt: multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX).
 - App identity is an INDEPENDENT personal app; public/app names must NOT contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit registration "Support Lab"). Hosted legal pages exist at the project's GitHub Pages site; local `legal/` source is untracked.
 

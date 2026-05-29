@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import Layout from '../components/Layout'
 import client from '../api/client'
+import ProductionGuardDialog from '../components/ProductionGuardDialog'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Alert } from '@/components/ui/alert'
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from '@/components/ui/table'
@@ -28,6 +30,16 @@ export default function IssuePacks() {
   const [activeTab, setActiveTab] = useState('catalog')
   const [running, setRunning] = useState(null)
   const [expandedRun, setExpandedRun] = useState(null)
+  const [environment, setEnvironment] = useState(null)
+  const [runError, setRunError] = useState(null)
+  // Slug pending production confirmation (drives the guard dialog)
+  const [pendingSlug, setPendingSlug] = useState(null)
+  // Whether the confirm POST is in flight (keeps the dialog open + shows loading).
+  const [confirmBusy, setConfirmBusy] = useState(false)
+  // In-place dialog error (e.g. a 412 from the server) — keeps the dialog open.
+  const [guardError, setGuardError] = useState(null)
+
+  const isProduction = environment === 'production'
 
   useEffect(() => {
     Promise.all([
@@ -36,39 +48,76 @@ export default function IssuePacks() {
     ])
       .catch(() => {})
       .finally(() => setLoading(false))
+    client.get('/qbo/status')
+      .then((r) => setEnvironment(r.data?.environment || null))
+      .catch(() => {})
   }, [])
 
-  const handleRun = async (slug) => {
-    if (!confirm('This will create entities in your QBO company. Continue?')) return
-    setRunning(slug)
-    try {
-      const startRes = await client.post(`/issuepacks/${slug}/run`)
-      const runId = startRes.data.run?._id
-      if (!runId) { setRunning(null); return }
+  // Open the guard dialog instead of running immediately.
+  const handleRun = (slug) => {
+    setRunError(null)
+    setPendingSlug(slug)
+  }
 
-      // Poll for this specific run's completion by ID
-      const poll = setInterval(async () => {
-        try {
-          const res = await client.get(`/issuepacks/runs/${runId}`)
-          const run = res.data.run
-          if (run && ['completed', 'failed'].includes(run.status)) {
-            clearInterval(poll)
-            setRunning(null)
-            // Refresh full run list
-            const listRes = await client.get('/issuepacks/runs')
-            setRuns(listRes.data.runs || [])
-          }
-        } catch {
+  // Poll a specific run to completion (started only after the POST succeeds).
+  const startRunPolling = (runId, slug) => {
+    setRunning(slug)
+    const poll = setInterval(async () => {
+      try {
+        const res = await client.get(`/issuepacks/runs/${runId}`)
+        const run = res.data.run
+        if (run && ['completed', 'failed'].includes(run.status)) {
           clearInterval(poll)
           setRunning(null)
+          // Refresh full run list
+          const listRes = await client.get('/issuepacks/runs')
+          setRuns(listRes.data.runs || [])
         }
-      }, 2000)
-      // Safety timeout
-      setTimeout(() => { clearInterval(poll); setRunning(null) }, 60000)
-    } catch {
-      setRunning(null)
+      } catch {
+        clearInterval(poll)
+        setRunning(null)
+      }
+    }, 2000)
+    // Safety timeout
+    setTimeout(() => { clearInterval(poll); setRunning(null) }, 60000)
+  }
+
+  // Confirm handler driven from ProductionGuardDialog. The POST happens here
+  // and the dialog stays open until it resolves so a 412 (or any error) can be
+  // surfaced in-place. Run polling is only started AFTER the POST succeeds,
+  // avoiding a stray status poll for a run that never started.
+  const handleGuardConfirm = async () => {
+    const slug = pendingSlug
+    if (!slug) return
+    setConfirmBusy(true)
+    setGuardError(null)
+
+    // Treat unknown environment as production (high friction).
+    const effectiveEnv = environment ?? 'production'
+    const body = effectiveEnv === 'production' ? { confirmProduction: true } : {}
+
+    try {
+      const startRes = await client.post(`/issuepacks/${slug}/run`, body)
+      setPendingSlug(null)
+      setRunError(null)
+      const runId = startRes.data.run?._id
+      if (runId) startRunPolling(runId, slug)
+    } catch (err) {
+      if (err.response?.status === 412) {
+        setGuardError(
+          err.response.data?.error ||
+            'Confirmation required to run against a real company.',
+        )
+      } else {
+        setGuardError(err.response?.data?.error || 'Action failed. Please try again.')
+      }
+      // Keep the dialog open (do not clear pendingSlug) so the user sees why.
+    } finally {
+      setConfirmBusy(false)
     }
   }
+
+  const pendingPack = pendingSlug ? packs.find((p) => p.slug === pendingSlug) : null
 
   const handleExpandRun = async (runId) => {
     if (expandedRun?._id === runId) {
@@ -96,6 +145,18 @@ export default function IssuePacks() {
         <p className="text-sm text-[#6B7280] mb-6">
           Issue packs create known problems in your QBO company on purpose — so you can practice finding and diagnosing them. For example, "AR Payment Mismatch" creates an invoice and a payment that's off by a penny, which is a common real-world support issue. Each pack tells you what symptoms to expect and gives hints on where to look. The workflow: create a checkpoint first, run a pack, then use the Entity Explorer to find the bad data and Checkpoints to diff what changed. Every record created is fully logged.
         </p>
+
+        {isProduction && (
+          <Alert variant="error" className="mb-6 items-start">
+            <span>
+              You are connected to a <strong>REAL production QuickBooks company</strong>. Running a pack writes live records into the connected books. You will be asked to confirm first.
+            </span>
+          </Alert>
+        )}
+
+        {runError && (
+          <Alert variant="error" className="mb-6">{runError}</Alert>
+        )}
 
         <div className="flex gap-2 mb-6">
           <Button
@@ -181,8 +242,8 @@ export default function IssuePacks() {
                   </TableHeader>
                   <TableBody>
                     {runs.map((run) => (
-                      <>
-                        <TableRow key={run._id}>
+                      <Fragment key={run._id}>
+                        <TableRow>
                           <TableCell className="font-medium">
                             {run.issuePackId?.name || 'Unknown'}
                           </TableCell>
@@ -200,7 +261,7 @@ export default function IssuePacks() {
                           </TableCell>
                         </TableRow>
                         {expandedRun?._id === run._id && (
-                          <TableRow key={`${run._id}-detail`}>
+                          <TableRow>
                             <TableCell colSpan={5}>
                               <div className="p-3 bg-muted/30 rounded">
                                 <p className="text-xs font-medium mb-2">Execution Log:</p>
@@ -234,7 +295,7 @@ export default function IssuePacks() {
                             </TableCell>
                           </TableRow>
                         )}
-                      </>
+                      </Fragment>
                     ))}
                   </TableBody>
                 </Table>
@@ -243,6 +304,24 @@ export default function IssuePacks() {
           </Card>
         )}
       </div>
+
+      <ProductionGuardDialog
+        key={pendingSlug || 'none'}
+        open={!!pendingSlug}
+        loading={confirmBusy}
+        error={guardError}
+        environment={environment ?? 'production'}
+        title={pendingPack ? `Run "${pendingPack.name}"` : 'Run Issue Pack'}
+        actionLabel="Run Pack"
+        description="This deliberately creates problematic records in the connected company so you can practice diagnosing them."
+        onConfirm={handleGuardConfirm}
+        onCancel={() => {
+          if (!confirmBusy) {
+            setPendingSlug(null)
+            setGuardError(null)
+          }
+        }}
+      />
     </Layout>
   )
 }

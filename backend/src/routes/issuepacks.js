@@ -3,6 +3,7 @@ const Connection = require('../models/Connection');
 const IssuePack = require('../models/IssuePack');
 const IssuePackRun = require('../models/IssuePackRun');
 const { authenticate } = require('../middleware/auth');
+const { requireProductionConfirm } = require('../middleware/productionGuard');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
 const { executePack } = require('../modules/issuepack-engine');
@@ -116,7 +117,7 @@ router.get('/:slug', authenticate, async (req, res) => {
  * POST /:slug/run
  * Execute an issue pack (background).
  */
-router.post('/:slug/run', authenticate, async (req, res) => {
+router.post('/:slug/run', authenticate, requireProductionConfirm, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {

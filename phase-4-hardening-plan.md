@@ -194,8 +194,7 @@ Current non-mutating verification from 2026-05-28:
 
 Milestones and in-flight work as of 2026-05-28:
 
-- Production API access is unlocked: the Intuit Developer app passed the full App Assessment and shows "IN PRODUCTION". Connecting a real production company is still not done — `.env` remains `QBO_ENVIRONMENT=sandbox`, and production OAuth needs a public HTTPS redirect URI (tunnel or deploy).
-- QBO upstream error-handling hardening is committed on branch `fix/qbo-client-error-handling` (not yet merged) — see section 3.1.
+- Production API access is unlocked AND a REAL production QBO Advanced Canada company is now CONNECTED (2026-05-28). `.env` is `QBO_ENVIRONMENT=production`; the production OAuth redirect URI is an ngrok reserved domain fronting the local backend (port 3001) for the callback only — frontend stays on localhost:5173, no code change. Tunnel only needed during connect/reconnect.
+- QBO upstream error-handling hardening is MERGED to `main` via PR #1 (2026-05-28) — see section 3.1.
+- Dashboard split (2026-05-28, uncommitted): the do-everything Dashboard is now read-only "awareness" (identity + PRODUCTION/SANDBOX badge, live read-only snapshot counts via `GET /company/snapshot`, lab footprint, jump-offs). Write actions (seed/generate/issue-pack run) moved to a new `/lab` "Lab Tools" page. A production guard (`backend/src/middleware/productionGuard.js` `requireProductionConfirm`) sits before those three write handlers and returns HTTP 412 unless the request body carries `confirmProduction: true`; the frontend `ProductionGuardDialog` collects that intent (checkbox + typed "PRODUCTION") only when `environment === 'production'`. Guard is a no-op in sandbox. Reviewed by both safety + implementation reviewers. Known follow-ups: the guard is NOT applied to AI plan-execution writes (they have their own approval flow — consider extending), and it fails open if `QBO_ENVIRONMENT` is misconfigured to non-production while a real company is connected.
 - Multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX) is planned, not built. It remains a candidate for a future phase, not Phase 4 scope.
-
-Other than the in-flight error-handling branch above, no broader Phase 4 implementation has been identified in source.

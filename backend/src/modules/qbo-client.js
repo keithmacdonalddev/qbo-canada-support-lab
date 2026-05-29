@@ -1,6 +1,7 @@
 const OAuthClient = require('intuit-oauth');
 const config = require('../config');
 const Connection = require('../models/Connection');
+const { refreshTokenExpiryFrom } = require('./connection-health');
 
 /**
  * QBOClient – per-connection wrapper around the Intuit OAuth SDK.
@@ -86,6 +87,9 @@ class QBOClient {
       this.connection.tokenExpiresAt = new Date(
         Date.now() + (tokenData.expires_in || 3600) * 1000
       );
+      // Intuit returns x_refresh_token_expires_in on refresh too; keep the
+      // refresh-token lifetime fresh (it rolls forward as the token is used).
+      this.connection.refreshTokenExpiresAt = refreshTokenExpiryFrom(tokenData);
       this.connection.lastRefreshedAt = new Date();
       this.connection.status = 'active';
       await this.connection.save();

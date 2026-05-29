@@ -1,0 +1,4 @@
+- [Production write-guard contract](project-production-guard.md) — productionGuard middleware gates the 3 QBO write routes (seed/generate/issuepacks) in production; the safety-critical control.
+- [401 passthrough is force-logout footgun](feedback-401-passthrough.md) — frontend force-logs-out on ANY 401; QBO-side 401 must never surface as app-level 401. Use respondQboError.
+- [Live env is REAL production QBO](project-live-production-company.md) — app is connected to a real production QuickBooks company; QBO writes are not hypothetical.
+- [Snapshot totalCount read path](project-snapshot-totalcount.md) — company/snapshot is read-only COUNT(*) via respondQboError; reads QueryResponse.totalCount, silently nulls on mismatch.
