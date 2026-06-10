@@ -6,6 +6,7 @@ const Connection = require('../models/Connection');
 const AISession = require('../models/AISession');
 const AIPlan = require('../models/AIPlan');
 const { authenticate } = require('../middleware/auth');
+const { requireProductionConfirm } = require('../middleware/productionGuard');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
@@ -188,8 +189,12 @@ router.post('/plan/:id/reject', async (req, res) => {
 /**
  * POST /plan/:id/execute
  * Execute an approved plan.
+ *
+ * This is the AI write path into the connected QBO company. In production it is
+ * gated by requireProductionConfirm (server-side backstop): the request body
+ * must carry `confirmProduction: true` or it returns 412. No-op in sandbox.
  */
-router.post('/plan/:id/execute', async (req, res) => {
+router.post('/plan/:id/execute', requireProductionConfirm, async (req, res) => {
   try {
     const plan = await orchestrator.executePlan(req.params.id, req.user.id);
 

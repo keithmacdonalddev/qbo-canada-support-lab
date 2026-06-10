@@ -33,44 +33,65 @@ export default function Onboarding() {
       const res = await client.get('/qbo/connect')
       const { authUri } = res.data
       const popup = window.open(authUri, 'qbo_connect', 'width=600,height=700')
+      if (!popup) {
+        setError('The QuickBooks authorization window was blocked. Allow popups and try again.')
+        setLoading(false)
+        return
+      }
+
+      let interval
+      let finished = false
+
+      const cleanup = () => {
+        window.removeEventListener('message', onMessage)
+        if (interval) clearInterval(interval)
+      }
+
+      const checkConnection = async () => {
+        const statusRes = await client.get('/qbo/status')
+        if (statusRes.data.connected) {
+          setCompany(statusRes.data)
+          setStep(1)
+          return true
+        }
+        return false
+      }
+
+      const finish = async (fallbackError) => {
+        if (finished) return
+        finished = true
+        cleanup()
+        try {
+          const connected = await checkConnection()
+          if (!connected && fallbackError) {
+            setError(fallbackError)
+          }
+        } catch (err) {
+          setError(err.response?.data?.error || fallbackError || 'Connection status could not be checked.')
+        } finally {
+          setLoading(false)
+        }
+      }
 
       // Listen for postMessage from callback popup
       const onMessage = async (event) => {
-        if (event.origin !== window.location.origin) return
+        if (event.source !== popup) return
         if (event.data?.type === 'qbo_connected') {
-          window.removeEventListener('message', onMessage)
-          clearInterval(interval)
-          const statusRes = await client.get('/qbo/status')
-          if (statusRes.data.connected) {
-            setCompany(statusRes.data)
-            setStep(1)
-          }
-          setLoading(false)
+          await finish('QuickBooks did not finish connecting. Please try again.')
         } else if (event.data?.type === 'qbo_error') {
-          window.removeEventListener('message', onMessage)
-          clearInterval(interval)
-          setError(event.data.error || 'Connection failed')
-          setLoading(false)
+          await finish(event.data.error || 'Connection failed')
         }
       }
       window.addEventListener('message', onMessage)
 
       // Fallback: poll for popup close
-      const interval = setInterval(async () => {
+      interval = setInterval(async () => {
         try {
           if (popup?.closed) {
-            clearInterval(interval)
-            window.removeEventListener('message', onMessage)
-            const statusRes = await client.get('/qbo/status')
-            if (statusRes.data.connected) {
-              setCompany(statusRes.data)
-              setStep(1)
-            }
-            setLoading(false)
+            await finish('Connection was not completed. Check that the QuickBooks callback URL is reachable, then try again.')
           }
         } catch {
-          clearInterval(interval)
-          setLoading(false)
+          await finish('Connection was not completed. Please try again.')
         }
       }, 1000)
     } catch (err) {

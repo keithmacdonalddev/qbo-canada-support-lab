@@ -121,7 +121,7 @@ function ThinkingIndicator() {
   )
 }
 
-export default function ChatPanel({ sessionId, messages, onSendMessage, isLoading, streamingText }) {
+export default function ChatPanel({ messages, onSendMessage, isLoading, streamingText }) {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
   const textareaRef = useRef(null)

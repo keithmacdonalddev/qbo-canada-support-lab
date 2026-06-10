@@ -5,7 +5,13 @@ metadata:
   type: project
 ---
 
-`backend/src/middleware/productionGuard.js` exports `requireProductionConfirm`. It is the safety-critical heart of the Dashboard/Lab-Tools split: it gates the three QBO write routes so that writes against a real company require explicit `confirmProduction: true` in the request body.
+`backend/src/middleware/productionGuard.js` exports `requireProductionConfirm`. It is the safety-critical heart of the Dashboard/Lab-Tools split: it gates the QBO write routes so that writes against a real company require explicit `confirmProduction: true` in the request body.
+
+As of 2026-05-29 there are FOUR guarded write paths (the AI plan-execution path was added, closing the last unguarded QBO mutation route):
+- seed.js POST /start — `authenticate, requireProductionConfirm` inline
+- generate.js POST /start — `authenticate, requireProductionConfirm` inline
+- issuepacks.js POST /:slug/run — `authenticate, requireProductionConfirm` inline
+- ai.js POST /plan/:id/execute — `requireProductionConfirm` applied at route level; `authenticate` comes from the router-level `router.use` that runs for every path EXCEPT `/stream/`. Functionally auth still precedes the guard. `orchestrator.executePlan` has exactly one caller (this route); the agentic loop queues write tools as plan steps rather than executing them, and investigate mode blocks write tools — so there is no auto-execution or SSE-triggered bypass.
 
 Contract:
 - When `config.qbo.environment === 'production'` AND `req.body?.confirmProduction !== true` (strict boolean), respond HTTP 412 `{ error, environment:'production', requiresConfirmation:true }` and do NOT call next().

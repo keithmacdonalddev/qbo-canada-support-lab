@@ -8,12 +8,12 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/toast'
-import { cn } from '@/lib/utils'
 import ChatPanel from '../components/ai/ChatPanel'
 import PlanReview from '../components/ai/PlanReview'
 import ExecutionLog from '../components/ai/ExecutionLog'
 import SupportNote from '../components/ai/SupportNote'
 import SessionHistory from '../components/ai/SessionHistory'
+import ProductionGuardDialog from '../components/ProductionGuardDialog'
 
 export default function AICommandCenter() {
   const { id: routeSessionId } = useParams()
@@ -33,6 +33,12 @@ export default function AICommandCenter() {
   const [streamingText, setStreamingText] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
   const [companyInfo, setCompanyInfo] = useState(null)
+  const [environment, setEnvironment] = useState(null)
+
+  // Production guard for the AI write path (plan execution)
+  const [pendingExecutePlanId, setPendingExecutePlanId] = useState(null)
+  const [executeBusy, setExecuteBusy] = useState(false)
+  const [executeGuardError, setExecuteGuardError] = useState(null)
 
   // Quick action prompts
   const [showInvestigatePrompt, setShowInvestigatePrompt] = useState(false)
@@ -48,6 +54,9 @@ export default function AICommandCenter() {
       .then(({ data }) => {
         if (data) setCompanyInfo(data)
       })
+      .catch(() => {})
+    api.get('/qbo/status')
+      .then(({ data }) => setEnvironment(data?.environment || null))
       .catch(() => {})
     loadSessions()
   }, [])
@@ -187,18 +196,43 @@ export default function AICommandCenter() {
     }
   }, [toast])
 
-  // API: Execute plan — QBO write path; surface failures prominently
-  const executePlan = useCallback(async (planId) => {
+  // API: Execute plan — QBO write path. The click opens the production guard
+  // dialog (which collects explicit confirmation); the actual write happens in
+  // runExecutePlan after the user confirms. The backend enforces the same gate
+  // via requireProductionConfirm (412 without confirmProduction in production).
+  const executePlan = useCallback((planId) => {
+    setExecuteGuardError(null)
+    setPendingExecutePlanId(planId)
+  }, [])
+
+  // Performs the actual execute POST, driven from the production guard dialog.
+  // Keeps the dialog open on a 412 (or any error) so the reason is shown
+  // in-place; closes it only on success.
+  const runExecutePlan = useCallback(async () => {
+    const planId = pendingExecutePlanId
+    if (!planId) return
+    setExecuteBusy(true)
+    setExecuteGuardError(null)
     setIsExecuting(true)
+    // Treat unknown environment as production (high friction).
+    const effectiveEnv = environment ?? 'production'
+    const confirmFlag = effectiveEnv === 'production' ? { confirmProduction: true } : {}
     try {
-      const { data } = await api.post(`/ai/plan/${planId}/execute`)
+      const { data } = await api.post(`/ai/plan/${planId}/execute`, confirmFlag)
       if (data.success) setCurrentPlan(data.data.plan)
+      setPendingExecutePlanId(null)
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Plan execution failed. No changes may have been applied — review the plan before retrying.')
+      if (err.response?.status === 412) {
+        setExecuteGuardError(err.response.data?.error || 'Confirmation required to run against a real company.')
+      } else {
+        setExecuteGuardError(err.response?.data?.error || 'Plan execution failed. No changes may have been applied — review the plan before retrying.')
+      }
+      // Keep the dialog open (do not clear pendingExecutePlanId) so the user sees why.
     } finally {
+      setExecuteBusy(false)
       setIsExecuting(false)
     }
-  }, [toast])
+  }, [pendingExecutePlanId, environment])
 
   // API: Load sessions
   const loadSessions = useCallback(async () => {
@@ -514,6 +548,24 @@ export default function AICommandCenter() {
           </div>
         </div>
       </div>
+
+      <ProductionGuardDialog
+        key={pendingExecutePlanId || 'none'}
+        open={!!pendingExecutePlanId}
+        loading={executeBusy}
+        error={executeGuardError}
+        environment={environment ?? 'production'}
+        title="Execute AI Plan"
+        actionLabel={executeBusy ? 'Executing...' : 'Execute Plan'}
+        description="Runs the approved plan's write steps against the connected QuickBooks company using the app's internal tools."
+        onConfirm={runExecutePlan}
+        onCancel={() => {
+          if (!executeBusy) {
+            setPendingExecutePlanId(null)
+            setExecuteGuardError(null)
+          }
+        }}
+      />
     </Layout>
   )
 }
