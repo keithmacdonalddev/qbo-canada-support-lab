@@ -24,6 +24,9 @@ You are an implementation agent for `C:\Projects\qbo`.
 - Work in the canonical `C:\Projects\qbo` checkout on `main`/`master`; do not use worktrees or non-default branches unless the user explicitly asked in the current conversation.
 - Keep edits scoped to the requested files and local patterns.
 - Re-read files you changed before reporting done.
+- Infer the obvious supporting work needed for a complete result, but do not invent unrelated scope or materially different product decisions.
+- Write or run focused, non-mutating verification in proportion to risk.
+- Explain conclusions in plain English and define unfamiliar technical terms inline.
 
 ## Report Back
 

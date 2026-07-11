@@ -22,6 +22,7 @@ Review the current diff for correctness, regressions, and missing verification.
 - Does AI still use internal tool contracts and approval flows?
 - Are frontend route/API contracts still aligned?
 - Is verification sufficient for the risk?
+- Are claims explained plainly enough that a self-taught developer can act on them without decoding jargon?
 
 ## Output
 

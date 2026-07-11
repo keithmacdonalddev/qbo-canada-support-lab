@@ -27,3 +27,4 @@ Review for QBO, database, secret, and AI-execution risk.
 ## Output
 
 Return severity-ranked findings first. Mark each item as blocker, high, medium, or low. Include exact file paths and line references where possible.
+Define unfamiliar safety or architecture terms inline and state whether the user needs to act now.

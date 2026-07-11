@@ -24,6 +24,6 @@ Important safety model:
 
 Status (2026-05-28):
 
-- Intuit production API access is UNLOCKED (passed App Assessment; app "IN PRODUCTION"). Connecting a real company is NOT done — `.env` still uses `QBO_ENVIRONMENT=sandbox`; production OAuth needs a public HTTPS redirect URI (tunnel/deploy).
+- Production status (verified 2026-07-11): Intuit production API access is unlocked and a real QBO Advanced Canada company is connected. The local `.env` uses `QBO_ENVIRONMENT=production`; the ngrok reserved-domain tunnel is needed only for connect/reconnect OAuth callbacks. Treat live QBO actions as real-company operations.
 - App identity is an INDEPENDENT personal application; public/app names must NOT contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit registration "Support Lab").
 - Frontend error surfacing uses `frontend/src/components/ui/toast.jsx` (`ToastProvider`/`useToast`) and `alert.jsx` (mounted in `App.jsx`); prefer these over silent catches.

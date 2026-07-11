@@ -3,6 +3,14 @@
 
 project_doc_max_bytes = 65536
 
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "powershell -NoProfile -ExecutionPolicy Bypass -File .codex/hooks/pm-rules.ps1"
+timeout = 5
+statusMessage = "Codex PM rules loaded"
+
 [features]
 multi_agent = true
 

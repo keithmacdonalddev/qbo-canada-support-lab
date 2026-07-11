@@ -12,6 +12,23 @@ The practical mental model is:
 
 `one user -> one connected QBO company -> generate, break, inspect, explain`
 
+## User Communication
+
+- Lead with the practical answer in plain English.
+- Define unfamiliar technical terms inline and explain what they mean in this project.
+- Separate what exists now from what is missing or optional, and say whether the user needs to do anything.
+- The user is a self-taught solo developer. Technical language is useful when it teaches; unexplained jargon and long abstract framing are not.
+
+## Concurrent Sessions
+
+Multiple coding-agent sessions may work in this checkout at the same time.
+
+- Check `git status --short --branch` before editing.
+- Re-read a file immediately before modifying it.
+- Preserve unrelated changes and never revert or clean up work you did not create unless explicitly asked.
+- If overlapping edits make the task ambiguous or risky, stop and ask before overwriting them.
+- Base final code-state claims on fresh checks from the current turn.
+
 ## Current Implementation Snapshot
 
 Treat docs as useful but potentially stale. Re-check source before making status claims.
@@ -24,7 +41,7 @@ Treat docs as useful but potentially stale. Re-check source before making status
 - QBO error handling is status-based. `backend/src/modules/qbo-client.js` `apiCall()` captures Intuit `intuit_tid` from response headers (`getLastIntuitTid()`), retries 429 with clamped exponential backoff (60s/attempt cap, max 5 attempts), and throws errors carrying `err.status`, `err.intuit_tid`, and the QBO Fault message on 4xx/5xx. Helper `backend/src/modules/qbo-error.js` (`isQboError`/`respondQboError`) maps QBO upstream errors to HTTP 502 (429 passthrough) with `{ error, intuit_tid, qboStatus }`. Routes must NOT surface a QBO-side 401 as an app-level 401: the frontend treats any 401 as session expiry and force-logs-out the user. Wired into `ai`, `checkpoint`, `company`, `explore` routes; `seed`/`generate`/`issuepacks` are intentionally unchanged (fire-and-forget background jobs surfaced via `/status` and `/log`).
 - SDK gotcha: installed `intuit-oauth@4.2.2` is axios-based. `makeApiCall` RESOLVES on 2xx-4xx (`validateStatus < 500`) and THROWS an OAuthError on 5xx/network failures with the HTTP status in `err.code` (a string), not `err.status`/`.statusCode`/`.authResponse`.
 - Frontend error-surfacing primitives: `frontend/src/components/ui/toast.jsx` (`ToastProvider` + `useToast`) and `frontend/src/components/ui/alert.jsx`, mounted in `frontend/src/App.jsx`. Prefer these over silent catches when surfacing errors.
-- Production status (2026-05-28): Intuit Developer production API access is UNLOCKED (passed full App Assessment; app "IN PRODUCTION"). Connecting a real company is NOT done — `.env` still uses `QBO_ENVIRONMENT=sandbox`; production OAuth needs a public HTTPS redirect URI (tunnel/deploy). App identity is an INDEPENDENT personal application; public/app names must NOT contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit dashboard registration "Support Lab").
+- Production status (verified 2026-07-11): Intuit Developer production API access is unlocked and a real QBO Advanced Canada company is connected. The local `.env` uses `QBO_ENVIRONMENT=production`; an ngrok reserved-domain tunnel is needed only for connect/reconnect OAuth callbacks. Treat all live QBO actions as real-company operations. App identity is an independent personal application; public/app names must not contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit dashboard registration "Support Lab").
 
 ## First Files To Read
 
@@ -109,6 +126,9 @@ Frontend:
 - Use existing modules before adding new abstractions.
 - Keep AI writes behind plan/approval flows. AI should use internal tool contracts, not raw QBO API calls.
 - Update docs or memory when a durable project fact changes.
+- Infer the complete practical outcome when the request omits obvious supporting work. Deliver a polished result without inventing unrelated scope or making materially different product decisions without approval.
+- Write or run tests in proportion to risk. Do not forbid testing, and do not use broad live tests where a focused non-mutating check is enough.
+- When changing provider/model names or recommendations, verify current official provider documentation. Prefer the newest supported model unless the repo records a tested compatibility reason not to.
 - Follow the Git And Branch Workflow above for all work, commits, and pushes.
 - Use project skills when their trigger matches:
   - `.agents/skills/qbo-project` for repo orientation and general changes.
@@ -138,3 +158,4 @@ Before reporting completion:
 - For commit/push tasks, report the branch/upstream verified before the commit or push.
 - Report commands run and any commands skipped because they would start services or mutate QBO/database state.
 - Mention any repo state that remains local-only or intentionally untracked.
+- Commit and push completed requested changes unless the user explicitly says not to or the branch/safety checks prevent it.

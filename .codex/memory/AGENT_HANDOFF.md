@@ -1,5 +1,7 @@
 # Codex Agent Handoff
 
+> Status refresh (2026-07-11): the older note below that labels dashboard work as uncommitted is obsolete. Use fresh `git status` and the current checkout as the authority for pending work.
+
 Use this file to orient future coding agents on current repo-specific workflow.
 
 ## Branch State (as of 2026-05-28)
@@ -7,9 +9,8 @@ Use this file to orient future coding agents on current repo-specific workflow.
 - The QBO error-handling + frontend-hardening work (status-based `qbo-client.js` `apiCall()`, `qbo-error.js` helper, `toast.jsx`/`alert.jsx`) is MERGED to `main` via PR #1 (merged 2026-05-28). Branch `fix/qbo-client-error-handling` is complete; `main` is now the active line of work.
 - Agent git workflow (2026-05-29): work in the canonical `C:\Projects\qbo` checkout on `main`; do not use `.claude/worktrees/`, Git worktrees, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation. Unqualified commit/push requests target `origin/main` for this checkout, or `origin/master` only if a future checkout is configured that way.
 - DONE (2026-05-28): Production wiring. A REAL QBO Advanced Canada company is connected. `.env` is `QBO_ENVIRONMENT=production` with production client id/secret and an ngrok reserved-domain redirect URI registered in Intuit "Support Lab" Production. The ngrok tunnel fronts the local backend (port 3001) for the OAuth callback only; frontend stays on localhost:5173 (no code change needed for backend-only tunneling). Tunnel only needed during connect/reconnect.
-- DONE (2026-05-28, uncommitted): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
+- DONE (2026-05-28): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
 - Pending next steps:
-  - Commit the uncommitted dashboard-split + memory/doc changes (user's call) — currently all uncommitted on `main`.
   - Optional: extend `requireProductionConfirm` to AI plan-execution writes (the one QBO-mutating path not yet behind the guard).
   - Planned-but-unbuilt: multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX).
 - App identity is an INDEPENDENT personal app; public/app names must NOT contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit registration "Support Lab"). Hosted legal pages exist at the project's GitHub Pages site; local `legal/` source is untracked.

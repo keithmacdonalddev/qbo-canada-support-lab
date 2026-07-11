@@ -1,0 +1,19 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || cd \"$(git rev-parse --show-toplevel)\" 2>/dev/null; bash .claude/hooks/pm-rules.sh",
+            "timeout": 5,
+            "statusMessage": "PM rules loaded"
+          }
+        ]
+      }
+    ]
+  }
+}
