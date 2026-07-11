@@ -1,5 +1,7 @@
 # Codex Project Memory
 
+Last verified: 2026-07-11. Authority: `AGENTS.md`, `CLAUDE.md`, current source, and the live environment state verified without printing secrets.
+
 This memory is for coding agents working on `C:\Projects\qbo`.
 
 It is not the app runtime's durable user memory. It is local project context for future coding sessions.

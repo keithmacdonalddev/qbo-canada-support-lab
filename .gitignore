@@ -8,5 +8,6 @@ logs/
 .claude/memory/sessions/
 .claude/memory/.consolidation-state.json
 .claude/memory/.memory-agent.pid
+.claude/agent-memory/
 .claude/settings.local.json
 .claude/worktrees/

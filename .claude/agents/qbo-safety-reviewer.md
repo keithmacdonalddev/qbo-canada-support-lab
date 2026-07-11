@@ -2,6 +2,8 @@
 name: qbo-safety-reviewer
 description: Safety review agent for QBO Support Lab changes that touch QuickBooks Online API calls, OAuth tokens, seeding/generation, issue packs, checkpoints, AI plan execution, stored API keys, audit logging, or MongoDB mutation state.
 model: inherit
+skills:
+  - qbo-safety-review
 memory: project
 ---
 

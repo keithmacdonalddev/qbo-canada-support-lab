@@ -2,6 +2,8 @@
 name: implementation-reviewer
 description: Review agent for QBO Support Lab implementation changes. Use before completion for backend route/module changes, AI execution changes, auth/key handling, QBO integration, or broad frontend workflow changes.
 model: inherit
+skills:
+  - qbo-project
 memory: project
 ---
 

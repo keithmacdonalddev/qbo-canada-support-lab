@@ -2,6 +2,8 @@
 name: worker
 description: Implementation agent for QBO Support Lab changes. Use for scoped feature work, bug fixes, docs updates, and repo-local agent architecture edits after the lead has identified the task boundaries.
 model: inherit
+skills:
+  - qbo-project
 memory: project
 ---
 

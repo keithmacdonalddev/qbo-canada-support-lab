@@ -57,6 +57,7 @@ Read only the files needed for the task. Use this routing before broad scanning.
 - Frontend shell/routes: `frontend/src/App.jsx`, `frontend/src/components/Layout.jsx`, `frontend/src/api/client.js`, `frontend/src/context/AuthContext.jsx`, `frontend/src/index.css`.
 - Error surfacing (frontend): `frontend/src/components/ui/toast.jsx`, `frontend/src/components/ui/alert.jsx`.
 - Agent architecture: `CLAUDE.md`, `.codex/memory/PROJECT_MEMORY.md`, `.codex/memory/AGENT_HANDOFF.md`, `.agents/rules/`, `.agents/skills/`, `.claude/rules/`, `.claude/agents/`, `.claude/skills/`.
+- Harness architecture and memory boundaries: `AGENT_HARNESS.md`.
 
 ## Provider Architecture
 

@@ -2,6 +2,8 @@
 name: Project Overview
 description: QBO Support Lab architecture, stack, and safety model summary
 type: project
+last_verified: 2026-07-11
+authority: AGENTS.md and CLAUDE.md
 ---
 
 QBO Canada Support Lab is a local web app for QuickBooks Online Canada support workflows. A user connects one QBO Advanced Canada company, then uses deterministic app tools to seed data, generate business history, create checkpoints, run issue packs, inspect entities, and use AI-assisted investigation/support-note workflows.
