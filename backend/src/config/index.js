@@ -3,6 +3,12 @@ const config = {
   mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/qbo-support-lab',
   jwtSecret: process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  devAccess: {
+    enabled: process.env.NODE_ENV !== 'production',
+    email: 'tester@testdatalab.local',
+    password: 'test-data-lab',
+    displayName: 'Local Tester',
+  },
   qbo: {
     clientId: process.env.QBO_CLIENT_ID || '',
     clientSecret: process.env.QBO_CLIENT_SECRET || '',

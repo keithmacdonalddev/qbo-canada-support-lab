@@ -17,6 +17,26 @@ function signToken(user) {
   );
 }
 
+function isDevAccessEmail(email) {
+  return config.devAccess.enabled && email.toLowerCase() === config.devAccess.email;
+}
+
+/**
+ * GET /dev-access
+ * Returns the intentionally public shared tester credentials in local development.
+ */
+router.get('/dev-access', (_req, res) => {
+  if (!config.devAccess.enabled) {
+    return res.json({ enabled: false });
+  }
+
+  return res.json({
+    enabled: true,
+    email: config.devAccess.email,
+    password: config.devAccess.password,
+  });
+});
+
 /**
  * POST /register
  * Body: { email, password, displayName, role? }
@@ -27,6 +47,10 @@ router.post('/register', async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    if (isDevAccessEmail(email)) {
+      return res.status(409).json({ error: 'Use the tester credentials shown on the sign-in page' });
     }
 
     const existing = await User.findOne({ email: email.toLowerCase() });
@@ -65,8 +89,34 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    // Explicitly select password since toJSON transform strips it
-    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+    const normalizedEmail = email.toLowerCase();
+    const isDevAccessAttempt = isDevAccessEmail(normalizedEmail)
+      && password === config.devAccess.password;
+
+    // Explicitly select password since toJSON transform strips it.
+    let user = await User.findOne({ email: normalizedEmail }).select('+password');
+
+    if (isDevAccessAttempt) {
+      if (!user) {
+        user = await User.create({
+          email: config.devAccess.email,
+          password: config.devAccess.password,
+          displayName: config.devAccess.displayName,
+          role: 'supervisor',
+        });
+      } else {
+        const passwordMatches = await user.comparePassword(config.devAccess.password);
+        const needsSave = !passwordMatches
+          || user.displayName !== config.devAccess.displayName
+          || user.role !== 'supervisor';
+
+        if (!passwordMatches) user.password = config.devAccess.password;
+        user.displayName = config.devAccess.displayName;
+        user.role = 'supervisor';
+        if (needsSave) await user.save();
+      }
+    }
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
