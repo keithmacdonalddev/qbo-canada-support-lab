@@ -1,0 +1,246 @@
+{
+  "manifestVersion": "1.0.0",
+  "planSection": "13.2",
+  "reports": [
+    {
+      "key": "report.balance-sheet",
+      "planFamily": "financial position",
+      "reason": "Plan requires Balance Sheet."
+    },
+    {
+      "key": "report.profit-and-loss",
+      "planFamily": "financial performance",
+      "reason": "Plan requires Profit and Loss."
+    },
+    {
+      "key": "report.profit-and-loss-detail",
+      "planFamily": "financial performance detail",
+      "reason": "Detail supports section and relationship assertions."
+    },
+    {
+      "key": "report.trial-balance",
+      "planFamily": "financial controls",
+      "reason": "Plan requires Trial Balance."
+    },
+    {
+      "key": "report.general-ledger",
+      "planFamily": "financial detail",
+      "reason": "Plan requires General Ledger."
+    },
+    {
+      "key": "report.account-list-detail",
+      "planFamily": "account lists",
+      "reason": "Plan requires account lists."
+    },
+    {
+      "key": "report.journal",
+      "planFamily": "journal",
+      "reason": "Plan requires Journal."
+    },
+    {
+      "key": "report.cash-flow",
+      "planFamily": "cash flow",
+      "reason": "Plan requires Statement of Cash Flows."
+    },
+    {
+      "key": "report.cash-summary",
+      "planFamily": "cash summaries",
+      "reason": "Plan requires cash summaries."
+    },
+    {
+      "key": "report.ar-aging",
+      "planFamily": "receivables aging",
+      "reason": "Plan requires A/R aging."
+    },
+    {
+      "key": "report.ar-aging-detail",
+      "planFamily": "receivables aging detail",
+      "reason": "Detail supports aging assertions."
+    },
+    {
+      "key": "report.customer-balance",
+      "planFamily": "customer balances",
+      "reason": "Plan requires customer balances."
+    },
+    {
+      "key": "report.customer-balance-detail",
+      "planFamily": "customer balance detail",
+      "reason": "Detail supports balance assertions."
+    },
+    {
+      "key": "report.invoice-list",
+      "planFamily": "invoice lists",
+      "reason": "Plan requires invoice lists."
+    },
+    {
+      "key": "report.collections",
+      "planFamily": "collections",
+      "reason": "Plan requires collections."
+    },
+    {
+      "key": "report.customer-statements",
+      "planFamily": "customer statements",
+      "reason": "Plan requires customer statements."
+    },
+    {
+      "key": "report.customer-sales",
+      "planFamily": "sales by customer",
+      "reason": "Plan requires sales by customer."
+    },
+    {
+      "key": "report.customer-income",
+      "planFamily": "income by customer",
+      "reason": "Supports customer profitability evidence."
+    },
+    {
+      "key": "report.item-sales",
+      "planFamily": "sales by product",
+      "reason": "Plan requires sales by product."
+    },
+    {
+      "key": "report.class-sales",
+      "planFamily": "sales by class",
+      "reason": "Plan requires sales by class."
+    },
+    {
+      "key": "report.department-sales",
+      "planFamily": "sales by location",
+      "reason": "Plan requires sales by location; product/API terminology must be verified."
+    },
+    {
+      "key": "report.ap-aging",
+      "planFamily": "payables aging",
+      "reason": "Plan requires A/P aging."
+    },
+    {
+      "key": "report.ap-aging-detail",
+      "planFamily": "payables aging detail",
+      "reason": "Detail supports aging assertions."
+    },
+    {
+      "key": "report.vendor-balance",
+      "planFamily": "vendor balances",
+      "reason": "Plan requires vendor balances."
+    },
+    {
+      "key": "report.vendor-balance-detail",
+      "planFamily": "vendor balance detail",
+      "reason": "Detail supports balance assertions."
+    },
+    {
+      "key": "report.unpaid-bills",
+      "planFamily": "unpaid bills",
+      "reason": "Plan requires unpaid bills."
+    },
+    {
+      "key": "report.vendor-expenses",
+      "planFamily": "expenses by vendor",
+      "reason": "Plan requires expenses and vendor analysis."
+    },
+    {
+      "key": "report.purchases-by-vendor",
+      "planFamily": "purchases by vendor",
+      "reason": "Plan requires purchases by vendor."
+    },
+    {
+      "key": "report.purchases-by-product",
+      "planFamily": "purchases by product",
+      "reason": "Plan requires purchases by product."
+    },
+    {
+      "key": "report.purchases-by-class",
+      "planFamily": "purchases by class",
+      "reason": "Plan requires purchases by class."
+    },
+    {
+      "key": "report.purchases-by-location",
+      "planFamily": "purchases by location",
+      "reason": "Plan requires purchases by location."
+    },
+    {
+      "key": "report.inventory-valuation-summary",
+      "planFamily": "inventory valuation",
+      "reason": "Plan requires inventory valuation."
+    },
+    {
+      "key": "report.inventory-valuation-detail",
+      "planFamily": "inventory valuation detail",
+      "reason": "Detail supports valuation assertions."
+    },
+    {
+      "key": "report.inventory-quantity-on-hand",
+      "planFamily": "inventory quantity",
+      "reason": "Plan requires quantity on hand."
+    },
+    {
+      "key": "report.inventory-purchases",
+      "planFamily": "inventory purchases",
+      "reason": "Plan requires inventory purchases."
+    },
+    {
+      "key": "report.inventory-adjustments",
+      "planFamily": "inventory adjustments",
+      "reason": "Plan requires adjustment reports."
+    },
+    {
+      "key": "report.project-profitability",
+      "planFamily": "project profitability",
+      "reason": "Plan requires project profitability where available."
+    },
+    {
+      "key": "report.project-time-cost",
+      "planFamily": "project time and cost",
+      "reason": "Plan requires project time/cost where available."
+    },
+    {
+      "key": "report.project-unbilled-activity",
+      "planFamily": "project unbilled activity",
+      "reason": "Plan requires unbilled project activity where available."
+    },
+    {
+      "key": "report.tax-liability",
+      "planFamily": "Canadian tax liability",
+      "reason": "Plan requires sales-tax liability."
+    },
+    {
+      "key": "report.tax-detail",
+      "planFamily": "Canadian tax detail",
+      "reason": "Plan requires sales-tax detail and Canadian tax reports."
+    },
+    {
+      "key": "report.budget-vs-actual",
+      "planFamily": "budget comparison",
+      "reason": "Plan requires Budget versus Actual."
+    },
+    {
+      "key": "report.management-comparison",
+      "planFamily": "management comparisons",
+      "reason": "Plan requires management comparisons."
+    },
+    {
+      "key": "report.reconciliation-summary",
+      "planFamily": "reconciliation",
+      "reason": "Plan requires reconciliation evidence."
+    },
+    {
+      "key": "report.cleared-uncleared",
+      "planFamily": "cleared and uncleared",
+      "reason": "Plan requires cleared/uncleared evidence."
+    },
+    {
+      "key": "report.account-history",
+      "planFamily": "account history",
+      "reason": "Plan requires account-history evidence."
+    },
+    {
+      "key": "report.audit-log",
+      "planFamily": "audit",
+      "reason": "Plan requires product audit reports."
+    },
+    {
+      "key": "report.transaction-exceptions",
+      "planFamily": "exceptions",
+      "reason": "Plan requires exception-oriented reports."
+    }
+  ]
+}

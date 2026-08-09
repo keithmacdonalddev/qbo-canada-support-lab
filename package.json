@@ -15,7 +15,11 @@
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend -- --strictPort",
     "test:launcher": "node --test scripts/dev-launcher.test.js",
+    "render:discovery": "node scripts/render-discovery-catalog.js",
     "validate:discovery": "node scripts/validate-discovery-catalog.js",
+    "validate:design": "node scripts/validate-rebuild-design.js",
+    "validate:design:contrast": "node scripts/validate-rebuild-contrast.js",
+    "verify:design:browser": "node scripts/audit-rebuild-design.js",
     "connect": "node scripts/phase-0/01-connect-company.js",
     "seed": "node scripts/phase-0/02-seed-master-data.js",
     "ar-chain": "node scripts/phase-0/03-create-ar-chain.js",
@@ -29,5 +33,10 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "intuit-oauth": "^4.0.0"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "playwright-core": "^1.62.1"
   }
 }

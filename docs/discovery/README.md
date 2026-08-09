@@ -6,15 +6,21 @@ This folder starts rebuild Phase 1. It is a static research and review surface; 
 
 - `registry.schema.v1.json` — versioned JSON Schema for capabilities, reports, evidence, sources, and release-state rules.
 - `catalog.v1.json` — machine-readable starter catalog. It is intentionally in `discovery` status.
-- `catalog.v1.md` — plain-English review of the starter catalog, confirmed official facts, conflicts, and next decisions.
+- `required-report-manifest.v1.json` — the complete plan section 13.2 report inventory; every row must resolve to a catalog key even when classification remains `unknown`.
+- `catalog.v1.md` — generated plain-English review of the catalog, confirmed official facts, conflicts, and next decisions.
+- `official-surface-classification.v1.md` — official-source classification for entities, reports, users/roles, reconciliation, Canadian tax, budgets, recurring transactions, projects, and limits.
+- `report-dependency-map.v1.md` — report prerequisites, relationships, assertions, and evidence method.
+- `flagship-business-profile.v1.json` — proposed Harbour & Pine operating shape and Tier 1 coverage contract.
+- `volume-profiles.v1.json` — bounded Development, Flagship, and Scale volume proposals; Production scheduling remains off.
 
 Run the local structural checks with:
 
 ```powershell
 npm run validate:discovery
+npm run render:discovery
 ```
 
-The current validator checks JSON parsing, required fields, unique keys, source/report references, supported-report endpoints, evidence dates, and the rule that an approved catalog cannot contain release-blocking unknowns. It is not a full JSON Schema engine; adopting one is a later dependency decision.
+The renderer regenerates the review Markdown from the JSON catalog. The validator compiles `registry.schema.v1.json` with Ajv's Draft 2020 engine and validates the complete catalog. It also checks unique keys, source/report/dependency references, the required-report manifest, supported-report endpoints, evidence dates, Tier 1 static classification, release-blocking evidence gaps, and the rule that an approved catalog cannot contain release-blocking unknowns.
 
 ## How to read the catalog
 

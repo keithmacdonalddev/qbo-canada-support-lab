@@ -6,6 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "$schema",
     "catalogVersion",
     "status",
     "asOfDate",
@@ -15,6 +16,9 @@
     "reports"
   ],
   "properties": {
+    "$schema": {
+      "const": "./registry.schema.v1.json"
+    },
     "catalogVersion": {
       "type": "string",
       "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$"
@@ -70,7 +74,8 @@
       "enum": ["unknown", "available", "unavailable", "conditional", "not-applicable"]
     },
     "operationSupport": {
-      "enum": ["unknown", "supported", "unsupported", "manual-only", "not-applicable"]
+      "description": "Conditional means the operation varies by entity, entitlement, company preference, locale, or record state and those conditions are recorded in the capability.",
+      "enum": ["unknown", "supported", "conditional", "unsupported", "manual-only", "not-applicable"]
     },
     "coverageState": {
       "enum": ["unknown", "covered", "partially-covered", "manual-only", "unavailable", "deferred"]

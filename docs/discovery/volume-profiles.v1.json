@@ -1,0 +1,54 @@
+{
+  "proposalVersion": "1.0.0",
+  "status": "proposal",
+  "asOfDate": "2026-08-08",
+  "sharedRules": {
+    "businessRules": "All profiles use the same blueprint and accounting invariants.",
+    "reportRequestRangeMonths": 6,
+    "queryPageSizeMax": 1000,
+    "provisionalRestRequestsPerSecond": 6,
+    "provisionalRestRequestsPerMinute": 300,
+    "provisionalBatchPayloads": 10,
+    "productionSchedulingEnabled": false,
+    "notes": [
+      "The request budgets are deliberately below published ceilings and are not runtime authorization.",
+      "Ten batch payloads is the defensive proposal while the official batch guide and limits page conflict.",
+      "Exact scale counts remain deferred until sandbox measurements are separately approved."
+    ]
+  },
+  "profiles": [
+    {
+      "key": "development",
+      "purpose": "Fast fixture, UI, and contract verification with a complete graph.",
+      "historicalMonths": 6,
+      "customers": 12,
+      "vendors": 8,
+      "items": 24,
+      "projects": 6,
+      "targetTransactionsPerMonth": 70,
+      "approximateHistoricalTransactions": 420,
+      "environmentPolicy": "Fixtures first; sandbox only for separately approved uncertain operations."
+    },
+    {
+      "key": "flagship",
+      "purpose": "Long-lived support company with two complete fiscal years plus the current year.",
+      "historicalMonths": 36,
+      "customers": 120,
+      "vendors": 45,
+      "items": 90,
+      "projects": 36,
+      "targetTransactionsPerMonth": 260,
+      "approximateHistoricalTransactions": 9360,
+      "environmentPolicy": "Plan and validate with fixtures/sandbox; Production execution remains separately gated and manual."
+    },
+    {
+      "key": "scale",
+      "purpose": "Performance and recovery validation without changing business rules.",
+      "historicalMonths": 36,
+      "multiplierFromFlagship": 5,
+      "approximateHistoricalTransactions": 46800,
+      "exactCounts": null,
+      "environmentPolicy": "Sandbox-only after a separate workload, cost, stop-condition, and cleanup approval."
+    }
+  ]
+}

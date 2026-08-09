@@ -21,8 +21,8 @@
 | Phase | Status | Owner | Required acceptance evidence | Current evidence |
 | --- | --- | --- | --- | --- |
 | 0. Product reset | Accepted | Lab owner | Approved mission, name, priorities, owners, non-goals, roadmap, evidence contract | `prd.md`; `roadmap.md`; plan section 35; historical phase status notes; public app name |
-| 1. Capability/report discovery | In progress | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | `docs/discovery/` starter artifacts; no live spikes |
-| 2. Design system/prototypes | Not started | Lab owner | `DESIGN.md`, `DESIGN.html`, six workflows, desktop/narrow renders, accessibility and reachability review | None |
+| 1. Capability/report discovery | In progress | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | Draft 2020 schema-valid catalog: 23 sources, 24 capabilities, 48 plan-required reports; two Tier 1 operation matrices and 21 report classifications remain unknown; no live spikes |
+| 2. Design system/prototypes | Fixture verified | Lab owner | `DESIGN.md`, `DESIGN.HTML`, six workflows, light/dark desktop/narrow renders, accessibility and reachability review | Six workflows; 28 renders; 70 responsive browser checks; 26 contrast pairs; owner/NVDA acceptance pending |
 | 3. Server foundation | Not started | Lab owner | Authorization/context contracts, invariant tests, migration dry run, startup decision | None |
 | 4. Shell/read-only coverage | Not started | Lab owner | New shell and Overview/Coverage states, fixture and browser evidence | None |
 | 5. Blueprint/master data | Not started | Lab owner | Published blueprint, sandbox idempotency, accounting fixtures, preview/audit evidence | None |
@@ -70,8 +70,8 @@
 - [x] Product applicability, API operations, app implementation, dataset coverage, and evidence are separate fields.
 - [x] `unknown` is a valid discovery state and a release failure.
 - [x] Stable capability/report keys and link validation exist.
-- [ ] Every candidate Tier 1 capability is classified.
-- [ ] Every critical report is classified with prerequisites and assertions.
+- [ ] Every candidate Tier 1 capability is statically classified — receivables and payables still need individual-entity update/delete/void matrices.
+- [ ] Every critical report is statically classified with prerequisites and assertions — all required rows exist, but 21 classifications remain `unknown`.
 
 ### Official-source research
 
@@ -80,11 +80,13 @@
 - [x] Query pagination and published rate limits are recorded.
 - [x] Reports API and initial endpoint names are recorded.
 - [x] Project API product and partner-tier conditions are separated.
-- [ ] Users/roles surface classified.
-- [ ] Reconciliation surface classified.
-- [ ] Canadian tax create/read/update boundaries classified.
-- [ ] Budget and recurring-transaction boundaries classified.
-- [ ] Full report endpoint/manual-only inventory completed.
+- [x] Users/roles surface classified as manual-only in the reviewed API surface.
+- [x] Reconciliation surface classified as manual-only in the reviewed API surface.
+- [x] Canadian tax create/read/update boundaries classified without claiming unsupported automation.
+- [x] Budget and recurring-transaction boundaries classified; unresolved lower-tier operations remain explicit unknowns.
+- [x] All 48 plan section 13.2 report rows are represented and validated against the required-report manifest.
+- [x] Current official pass records 23 documented report endpoints and four initial product/manual classifications.
+- [ ] Twenty-one plan-required report rows still need exact API, product/manual, unsupported, or approved-exclusion classification.
 
 ### Live evidence
 
@@ -92,6 +94,50 @@
 - [ ] Rate/latency benchmark — requires an explicit target and approval.
 - [ ] Sandbox-only uncertain-write spikes — require separate approval per spike.
 - [x] Production mutation remains disabled for discovery.
+
+### Static discovery result
+
+- [x] `npm run render:discovery`
+- [x] `npm run validate:discovery` compiles the Draft 2020 schema with Ajv and validates the complete catalog plus required-report manifest.
+- [ ] Two Tier 1 static operation classifications remain unresolved.
+- [ ] Twenty-one report static classifications remain unresolved.
+- [ ] Company-specific dataset evidence and freshness remain release blockers until separately approved observation.
+- [ ] Lab-owner approval of the catalog, flagship profile, and volume proposal remains open.
+
+## Phase 2 design evidence
+
+### Design contract and fixtures
+
+- [x] `DESIGN.md` and standalone `DESIGN.HTML` exist.
+- [x] Semantic token proposal and light/dark theme contract exist.
+- [x] Component/state matrix, screen briefs, route/migration map, content rules, and research decision record exist.
+- [x] Six critical fixture workflows exist: Overview, Blueprint, Coverage, Operation, Records, and Reconciliation/Close.
+- [x] Fixtures contain no external runtime dependency or network-capable code.
+- [x] Production execution and saved changes remain disabled or explicitly unavailable in fixtures.
+
+### Rendered and accessibility evidence
+
+- [x] Twenty-eight exact-size PNGs: seven surfaces in light and dark themes at 1440×1000 and 390×844.
+- [x] Seventy responsive browser checks pass across two themes and five CSS viewports from 1440×1000 through 320×800.
+- [x] No page-level horizontal overflow or undersized active target in the tested target-size contract.
+- [x] First Tab reaches a visible skip link on all seven surfaces.
+- [x] Narrow navigation opens from the Menu button, moves focus into the rail, closes with Escape, and returns focus; role and active-work scope remain visible at 390px and 320px.
+- [x] Twenty-six light/dark semantic text pairs, including disabled controls, pass 4.5:1.
+- [x] Reduced-motion and forced-colour CSS contracts pass static validation.
+- [x] `npm run verify:design:browser` deterministically regenerates evidence using a local-only fixture server, rejects external requests, and records source/screenshot hashes plus tool and environment versions in `browser-review.json`.
+- [x] Evidence and limitations are recorded in `docs/design/rendered-review.md` and `artifacts/rebuild/design-evidence/browser-review.json`.
+- [ ] Manual NVDA and Windows forced-colours workflow acceptance — deferred until React focus/interaction behaviour exists.
+- [ ] Component interaction tests — deferred until fixtures become real components.
+- [ ] Lab-owner visual approval of the six workflows and design direction.
+
+### Static verification
+
+- [x] `npm run validate:design`
+- [x] `npm run validate:design:contrast`
+- [x] `npm run build --workspace=frontend`
+- [x] `npm run lint --workspace=frontend` (zero errors; three pre-existing React hook dependency warnings in `AICommandCenter.jsx`)
+
+Phase 2 remains `Fixture verified`, not `Accepted`. The package is ready for owner review but does not authorize Phase 3, app runtime startup, QBO calls, database writes, or Production scheduling.
 
 ## Evidence record template
 

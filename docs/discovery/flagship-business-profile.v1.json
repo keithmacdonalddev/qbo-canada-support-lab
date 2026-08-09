@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "profileVersion": "1.0.0",
+  "status": "proposal",
+  "asOfDate": "2026-08-08",
+  "publicSafeIdentity": {
+    "displayName": "Harbour & Pine Operations Inc.",
+    "legalName": "Harbour & Pine Operations Inc.",
+    "homeProvince": "Nova Scotia",
+    "locale": "CA",
+    "baseCurrency": "CAD"
+  },
+  "calendar": {
+    "openingDate": "2023-09-01",
+    "fiscalYearStartMonth": 9,
+    "historicalPlanThrough": "2026-08-31",
+    "historicalMonths": 36,
+    "initialReadyThrough": "2026-07-31",
+    "nextPlannedPeriod": "2026-08"
+  },
+  "divisions": [
+    {
+      "key": "field-advisory",
+      "name": "Field & Advisory Services",
+      "story": "Project-oriented estimates, time, reimbursable costs, deposits, invoices, retainers, and profitability."
+    },
+    {
+      "key": "supply-workshop",
+      "name": "Supply & Workshop",
+      "story": "Small wholesale inventory with purchase orders, receipts, sales, FIFO cost, returns, and adjustments."
+    },
+    {
+      "key": "care-plans",
+      "name": "Care Plans",
+      "story": "Recurring service with scheduled billing, late/partial payments, credits, and customer statements."
+    }
+  ],
+  "operatingDimensions": {
+    "classes": ["Field & Advisory", "Supply & Workshop", "Care Plans"],
+    "locations": ["Halifax", "Dartmouth"],
+    "projects": "Named client projects under service customers",
+    "customFields": ["Support scenario", "Service region", "Project lead"]
+  },
+  "partySegments": {
+    "customers": ["Local project clients", "Regional business clients", "Wholesale buyers", "Care-plan subscribers", "Late/partial payer cohort"],
+    "vendors": ["Inventory suppliers", "Subcontractors", "Facilities", "Software/services", "Professional services"]
+  },
+  "accountingSpine": {
+    "requiredFamilies": ["Cash and credit card", "Receivables", "Inventory asset", "Prepaids", "Fixed assets", "Payables", "Sales tax", "Loans", "Equity", "Revenue by division", "COGS", "Operating expense", "Payroll summary and clearing", "Suspense/clearing"],
+    "closeCadence": "Monthly with quarter-end and fiscal-year overlays",
+    "reconciliationCadence": "Monthly bank and credit-card statement cycles",
+    "taxPolicy": "Canada fixtures require current authoritative rates, province rules, and accounting review before implementation; no tax rate is frozen in this profile."
+  },
+  "staffPersonas": [
+    "Owner / primary administrator",
+    "Finance manager",
+    "Project coordinator",
+    "Inventory lead",
+    "Support analyst"
+  ],
+  "realismRules": [
+    "All randomness is deterministic from the blueprint seed.",
+    "Parties, items, accounts, tax codes, dimensions, and transaction dates must be compatible.",
+    "Credits, refunds, deposits, payments, inventory movement, and journals have explainable source lifecycles.",
+    "Closed periods are not silently rewritten.",
+    "Intentional exceptions are tagged and remain distinguishable from drift."
+  ],
+  "generationSeed": "harbour-pine-v1",
+  "approvalNeeded": [
+    "Business identity and fiscal calendar",
+    "Tax jurisdictions and reviewed fixtures",
+    "Exact chart of accounts",
+    "Entity volumes",
+    "Multicurrency activation",
+    "Connected-company entitlement and preference observations"
+  ]
+}

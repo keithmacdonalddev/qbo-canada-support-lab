@@ -1,0 +1,4019 @@
+{
+  "schemaVersion": "2.0.0",
+  "generatedAt": "2026-08-09T03:31:11.523Z",
+  "command": "npm run verify:design:browser",
+  "scope": "Fixture-only deterministic browser audit; not NVDA, forced-colours, or live React acceptance.",
+  "environment": {
+    "node": "v25.5.0",
+    "playwrightCore": "1.62.1",
+    "browser": "150.0.7871.187",
+    "platform": "win32-x64",
+    "gitHead": "bdc283b5861c6783fa08bb0d86af1bc657ab1dc3",
+    "sourceTreeHash": "a6b8d9da920ba53ac8de290c9910004cabb70575efb4cad6a37574d73f8560a3"
+  },
+  "sourceHashes": {
+    "DESIGN.HTML": "57d309b72238f1286f08fee2a9654d06ec91f5b2daf8a86f7a55c40a348c9992",
+    "frontend/src/styles/rebuild-tokens.css": "11cf01bbeb888113e95f6e4dba4f1bd652ee4e698309f39e08b75f714eb938b0",
+    "prototypes/rebuild/blueprint.html": "c5b9cde8f5af5dbd4309f846c74d2a965d3de8c9039929144293c8b9bc060807",
+    "prototypes/rebuild/close.html": "6b19864d1063f8e4b354d2acc76c54ce8426e87b7568a88336688d300996fd28",
+    "prototypes/rebuild/coverage.html": "06740df7cc5054064e477998e3a6cbc664a9871b3dc525cc9d73d82396f193af",
+    "prototypes/rebuild/operation.html": "d48a488d18c3b81caa7464f3948c1a25dc970f79b25466b04898932efffbf276",
+    "prototypes/rebuild/overview.html": "2d1fd489526442f086d8ffc3a75805c26132719d0c5ec1b5c70d397f9d7c559a",
+    "prototypes/rebuild/prototype.css": "1e30ac43dde85007f124b50283d0e880e8562fa155b637a40d5c82375019ba65",
+    "prototypes/rebuild/prototype.js": "6fc599e76e94977aa287516b62c3aa926218fe871abf416c0d3568b0c5aeabea",
+    "prototypes/rebuild/records.html": "9e1e8f85e69420fb07faa86b17e41fa9017697576b9c727d220ab965de5dac09",
+    "scripts/audit-rebuild-design.js": "3f7ed1111c8dd3da87c4ae107cba594ede48b51595367410c67850bfb85a325b"
+  },
+  "screenshotHashes": {
+    "blueprint-1440x1000.png": "053d151da5378e92d66b646c82fc5bf95d39aa6439ec415bce8364cd54e1fc8a",
+    "blueprint-390x844.png": "1669bcb3f8fd5e242c5c1dad80754c31832cfb70f43abea48424e2dc5d74e29e",
+    "blueprint-dark-1440x1000.png": "bac77fbc2828b29ee664c490948cd34aeff01d82a235a895487de9dbf84ab89b",
+    "blueprint-dark-390x844.png": "4425e1e19d685db665074cd730354526f48843fb28b86bf8f5797eacf31ffcf0",
+    "close-1440x1000.png": "695d8fd3fdd45e79dfd32f3f807d7040518f6fcb819606ad1aca3ddcfd10e0bc",
+    "close-390x844.png": "1e69ff3c7cc28c66948d946898f54e399e6c6c4ab7c36bec2ff8eb54a99d291d",
+    "close-dark-1440x1000.png": "1cc143ac2c395bda1b61087c5398c38a112f9475b5142a40a3af15693313effa",
+    "close-dark-390x844.png": "66aae7a7fd769f26f988d99499b0a738acd9e6c0bc913c28366d81203bb0d6e7",
+    "coverage-1440x1000.png": "566eddc44e25cc0b3b930673cae06719042e80107662431117f2d52d26f70360",
+    "coverage-390x844.png": "d585187a389e22e4ba21273991978cfc8ae8fbbcd1d5ca7c1d38f854c04798a8",
+    "coverage-dark-1440x1000.png": "599bb1f0823945fae70daf4b7a89b6cd56b5053d33071f6a49869a29ec9db667",
+    "coverage-dark-390x844.png": "e95dd6f81351f1a486c9738a5216b0073db1ae2bad48aeadb2028205a56bc588",
+    "design-guide-1440x1000.png": "2171f40a74d36343ff76da1c01721571e6d0af22afac200510e5a3389cbc9c3b",
+    "design-guide-390x844.png": "f31f8b3eefd2d81f919ee8a25f0359b8e3d5d499a9d748e3ed0ec1850bec7833",
+    "design-guide-dark-1440x1000.png": "01a60a47f67cff45dfdda7c1de180f860ed7ce3145b2b03ca23261691f1341be",
+    "design-guide-dark-390x844.png": "9c43e9ef339940f202be839cab78748bf0a9d594334c4df7466f7dc2164a8069",
+    "operation-1440x1000.png": "dee78080940ee8880f3ecc2a38f1c214cd9acb7c5e5ab6ba93fbaebaaa3fff38",
+    "operation-390x844.png": "dc9503659d4eac2e92a6f09a4919da119c6b2c2033f86e52283a2fe4f1966224",
+    "operation-dark-1440x1000.png": "e26a521822e6a06140e05ea529d3750e3b44725accea020e8bbded1348e91e96",
+    "operation-dark-390x844.png": "20eec315e7face119db2728babefe8b947269c72fc18b199ab48be66527f93b6",
+    "overview-1440x1000.png": "0f3e207650546232a4620762122cc704a0d4744b60e92d9a9a58f1e97ccae52f",
+    "overview-390x844.png": "959da4de90c67bd6f7249e5bceae89c7d4f58ab22911eec033a14d21002209fe",
+    "overview-dark-1440x1000.png": "da55ecb8d3804262bb9bbbd051a5c53eb94df244de35948eddf7479a4b868bd8",
+    "overview-dark-390x844.png": "d19d746f4fea9c258a520dcc8054f428f99e25b7475648573adc41e0fbe1a9c0",
+    "records-1440x1000.png": "934eb33088de23ea7c61b1cabcb6419eafae3ecd5e9c2de120ad129668053493",
+    "records-390x844.png": "7678bea245db9ace48f12a9d97bd4d172abc05f97c22481c5195ff13e9b667e0",
+    "records-dark-1440x1000.png": "2882305080ef12214edc3123cb00e814d2319292025c3ad5e4912d5377983c67",
+    "records-dark-390x844.png": "16c4de639fcb68621c70b93260db958855fe1a2f2fd7555af461739165704260"
+  },
+  "pages": [
+    "overview",
+    "blueprint",
+    "coverage",
+    "operation",
+    "records",
+    "close",
+    "design-guide"
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "viewports": [
+    {
+      "name": "desktop-1440",
+      "width": 1440,
+      "height": 1000,
+      "minTarget": 24
+    },
+    {
+      "name": "laptop-1280",
+      "width": 1280,
+      "height": 720,
+      "minTarget": 24
+    },
+    {
+      "name": "tablet-768",
+      "width": 768,
+      "height": 1024,
+      "minTarget": 24
+    },
+    {
+      "name": "mobile-390",
+      "width": 390,
+      "height": 844,
+      "minTarget": 44
+    },
+    {
+      "name": "mobile-320",
+      "width": 320,
+      "height": 800,
+      "minTarget": 44
+    }
+  ],
+  "assertions": [
+    "one language, main landmark, and h1",
+    "unique ids and sequential headings",
+    "named controls and labelled form fields",
+    "24px desktop/tablet and 44px narrow target size",
+    "first Tab reveals visible skip link",
+    "no page horizontal overflow",
+    "role and active-work scope visible at every workflow viewport",
+    "narrow menu opens, moves focus, closes with Escape, and restores focus",
+    "disabled controls use effective opacity 1 and at least 4.5:1 contrast",
+    "requested light/dark theme applied",
+    "no external request, console error, or page error"
+  ],
+  "result": "pass",
+  "checks": [
+    {
+      "page": "overview",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(29, 78, 216, 0.28) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "light",
+      "expectedTheme": "light",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(89, 101, 121)",
+          "background": "rgb(237, 240, 244)",
+          "effectiveOpacity": 1,
+          "ratio": 5.157084267485696
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "desktop-1440",
+      "expected": {
+        "width": 1440,
+        "height": 1000
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1440,
+      "innerHeight": 1000,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "laptop-1280",
+      "expected": {
+        "width": 1280,
+        "height": 720
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 1280,
+      "innerHeight": 720,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 1280,
+      "viewportWidth": 1280,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "tablet-768",
+      "expected": {
+        "width": 768,
+        "height": 1024
+      },
+      "minTarget": 24,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 768,
+      "innerHeight": 1024,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "mobile-390",
+      "expected": {
+        "width": 390,
+        "height": 844
+      },
+      "minTarget": 44,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 390,
+      "innerHeight": 844,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "overview",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Overview — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Overview",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "blueprint",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Company Blueprint — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Company Blueprint",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Add line",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "coverage",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Capability Coverage — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Capability Coverage",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "operation",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Operation Lifecycle — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Operation Lifecycle",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Lookup, adopt, then resume",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Mark for manual review",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        },
+        {
+          "name": "Abandon unstarted work",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "records",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Records — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Records",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Continue to confirmation",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "close",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Reconciliation and Close — Test Data Lab prototype",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to Reconciliation and Close",
+        "href": "#main",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": {
+        "activeWorkVisible": true,
+        "activeWorkLabel": "Active work",
+        "roleVisible": true,
+        "roleLabel": "Role"
+      },
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "rgba(139, 184, 255, 0.38) 0px 0px 0px 3px"
+      },
+      "disabledContrast": [
+        {
+          "name": "Attach evidence",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": {
+        "opened": true,
+        "focusMovedIntoNavigation": true,
+        "closedWithEscape": true,
+        "focusReturned": true
+      },
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    },
+    {
+      "page": "design-guide",
+      "viewport": "mobile-320",
+      "expected": {
+        "width": 320,
+        "height": 800
+      },
+      "minTarget": 44,
+      "title": "Test Data Lab — Design System",
+      "lang": "en",
+      "theme": "dark",
+      "expectedTheme": "dark",
+      "innerWidth": 320,
+      "innerHeight": 800,
+      "mainCount": 1,
+      "h1Count": 1,
+      "duplicateIds": [],
+      "unnamedControls": [],
+      "unlabelledInputs": [],
+      "smallTargets": [],
+      "headingJumps": [],
+      "skipLink": {
+        "text": "Skip to design guide",
+        "href": "#content",
+        "targetExists": true
+      },
+      "horizontalOverflow": false,
+      "documentWidth": 320,
+      "viewportWidth": 320,
+      "scope": null,
+      "firstTab": {
+        "isSkipLink": true,
+        "visible": true,
+        "outline": "solid",
+        "boxShadow": "none"
+      },
+      "disabledContrast": [
+        {
+          "name": "Start Production run",
+          "foreground": "rgb(176, 186, 200)",
+          "background": "rgb(40, 50, 64)",
+          "effectiveOpacity": 1,
+          "ratio": 6.605139298302675
+        }
+      ],
+      "menu": null,
+      "externalRequests": [],
+      "consoleErrors": [],
+      "pageErrors": []
+    }
+  ],
+  "failures": []
+}

@@ -2,10 +2,65 @@
 
 const fs = require('fs')
 const path = require('path')
+const Ajv2020 = require('ajv/dist/2020')
+const addFormats = require('ajv-formats')
 
 const repoRoot = path.resolve(__dirname, '..')
 const schemaPath = path.join(repoRoot, 'docs', 'discovery', 'registry.schema.v1.json')
 const catalogPath = path.join(repoRoot, 'docs', 'discovery', 'catalog.v1.json')
+const profilePath = path.join(repoRoot, 'docs', 'discovery', 'flagship-business-profile.v1.json')
+const volumePath = path.join(repoRoot, 'docs', 'discovery', 'volume-profiles.v1.json')
+const requiredReportManifestPath = path.join(repoRoot, 'docs', 'discovery', 'required-report-manifest.v1.json')
+const expectedPlanReportKeys = [
+  'report.balance-sheet',
+  'report.profit-and-loss',
+  'report.profit-and-loss-detail',
+  'report.trial-balance',
+  'report.general-ledger',
+  'report.account-list-detail',
+  'report.journal',
+  'report.cash-flow',
+  'report.cash-summary',
+  'report.ar-aging',
+  'report.ar-aging-detail',
+  'report.customer-balance',
+  'report.customer-balance-detail',
+  'report.invoice-list',
+  'report.collections',
+  'report.customer-statements',
+  'report.customer-sales',
+  'report.customer-income',
+  'report.item-sales',
+  'report.class-sales',
+  'report.department-sales',
+  'report.ap-aging',
+  'report.ap-aging-detail',
+  'report.vendor-balance',
+  'report.vendor-balance-detail',
+  'report.unpaid-bills',
+  'report.vendor-expenses',
+  'report.purchases-by-vendor',
+  'report.purchases-by-product',
+  'report.purchases-by-class',
+  'report.purchases-by-location',
+  'report.inventory-valuation-summary',
+  'report.inventory-valuation-detail',
+  'report.inventory-quantity-on-hand',
+  'report.inventory-purchases',
+  'report.inventory-adjustments',
+  'report.project-profitability',
+  'report.project-time-cost',
+  'report.project-unbilled-activity',
+  'report.tax-liability',
+  'report.tax-detail',
+  'report.budget-vs-actual',
+  'report.management-comparison',
+  'report.reconciliation-summary',
+  'report.cleared-uncleared',
+  'report.account-history',
+  'report.audit-log',
+  'report.transaction-exceptions'
+]
 
 function readJson(filePath) {
   try {
@@ -46,12 +101,31 @@ function assertReferences(values, validKeys, label) {
   }
 }
 
+function assertEnum(value, allowed, label) {
+  if (!allowed.includes(value)) {
+    throw new Error(`${label} has unsupported value "${value}"`)
+  }
+}
+
 function main() {
   const schema = readJson(schemaPath)
   const catalog = readJson(catalogPath)
+  const profile = readJson(profilePath)
+  const volumeProposal = readJson(volumePath)
+  const requiredReportManifest = readJson(requiredReportManifestPath)
 
   if (!schema.$id || !schema.$defs?.capability || !schema.$defs?.report) {
     throw new Error('registry.schema.v1.json is missing its versioned id or core definitions')
+  }
+
+  const ajv = new Ajv2020({ allErrors: true, strict: true })
+  addFormats(ajv)
+  const validateSchema = ajv.compile(schema)
+  if (!validateSchema(catalog)) {
+    const details = validateSchema.errors
+      .map((error) => `${error.instancePath || '/'} ${error.message}`)
+      .join('; ')
+    throw new Error(`catalog.v1.json does not satisfy registry.schema.v1.json: ${details}`)
   }
 
   requireFields(
@@ -79,6 +153,25 @@ function main() {
   const sourceKeys = uniqueKeys(catalog.sources, 'sources')
   const capabilityKeys = uniqueKeys(catalog.capabilities, 'capabilities')
   const reportKeys = uniqueKeys(catalog.reports, 'reports')
+  requireFields(requiredReportManifest, ['manifestVersion', 'planSection', 'reports'], 'required report manifest')
+  const requiredReportKeys = uniqueKeys(requiredReportManifest.reports, 'required report manifest')
+  if (requiredReportManifest.planSection !== '13.2') {
+    throw new Error('required report manifest must identify rebuild plan section 13.2')
+  }
+  const missingPlanReports = expectedPlanReportKeys.filter((key) => !requiredReportKeys.has(key))
+  const unexpectedPlanReports = [...requiredReportKeys].filter((key) => !expectedPlanReportKeys.includes(key))
+  if (missingPlanReports.length || unexpectedPlanReports.length) {
+    throw new Error(`required report manifest does not exactly match the plan: missing [${missingPlanReports.join(', ')}]; unexpected [${unexpectedPlanReports.join(', ')}]`)
+  }
+  assertReferences(requiredReportKeys, reportKeys, 'required report manifest')
+  for (const requiredReport of requiredReportManifest.reports) {
+    requireFields(requiredReport, ['key', 'planFamily', 'reason'], `required report ${requiredReport.key}`)
+  }
+  const operationStatuses = schema.$defs.operationSupport.enum
+  const availabilityStatuses = schema.$defs.availability.enum
+  const coverageStatuses = schema.$defs.coverageState.enum
+  const evidenceStatuses = schema.$defs.evidenceStatus.enum
+  const keyPattern = new RegExp(schema.$defs.key.pattern)
 
   const capabilityFields = [
     'key',
@@ -112,6 +205,22 @@ function main() {
     )
     assertReferences(capability.sourceIds, sourceKeys, `capability ${capability.key}.sourceIds`)
     assertReferences(capability.linkedReports, reportKeys, `capability ${capability.key}.linkedReports`)
+    if (!keyPattern.test(capability.key)) {
+      throw new Error(`capability key "${capability.key}" does not match the schema key pattern`)
+    }
+    assertEnum(capability.applicability.status, availabilityStatuses, `capability ${capability.key}.applicability.status`)
+    assertEnum(capability.coverageState, coverageStatuses, `capability ${capability.key}.coverageState`)
+    assertEnum(capability.evidenceStatus, evidenceStatuses, `capability ${capability.key}.evidenceStatus`)
+    for (const [operation, status] of Object.entries(capability.apiOperations)) {
+      assertEnum(status, operationStatuses, `capability ${capability.key}.apiOperations.${operation}`)
+    }
+
+    if (
+      capability.apiSurface === 'none' &&
+      Object.values(capability.apiOperations).some((status) => status === 'supported')
+    ) {
+      throw new Error(`capability ${capability.key} has no API surface but claims a supported operation`)
+    }
 
     if (capability.evidenceStatus !== 'unverified' && capability.sourceIds.length === 0) {
       throw new Error(`capability ${capability.key} claims evidence without a source`)
@@ -144,15 +253,56 @@ function main() {
   for (const report of catalog.reports) {
     requireFields(report, reportFields, `report ${report.key}`)
     assertReferences(report.sourceIds, sourceKeys, `report ${report.key}.sourceIds`)
+    if (!keyPattern.test(report.key)) {
+      throw new Error(`report key "${report.key}" does not match the schema key pattern`)
+    }
+    assertEnum(report.applicability.status, availabilityStatuses, `report ${report.key}.applicability.status`)
+    assertEnum(report.coverageState, coverageStatuses, `report ${report.key}.coverageState`)
+    assertEnum(report.evidenceStatus, evidenceStatuses, `report ${report.key}.evidenceStatus`)
+    assertEnum(report.api.status, operationStatuses, `report ${report.key}.api.status`)
 
     if (report.api.status === 'supported' && !report.api.endpoint) {
       throw new Error(`report ${report.key} is API-supported but has no endpoint`)
+    }
+    if (report.api.status === 'manual-only' && !report.uiNavigation) {
+      throw new Error(`report ${report.key} is manual-only but has no QBO UI navigation guidance`)
     }
     if (report.evidenceStatus !== 'unverified' && report.sourceIds.length === 0) {
       throw new Error(`report ${report.key} claims evidence without a source`)
     }
     if (report.evidenceStatus !== 'unverified' && !report.lastVerified) {
       throw new Error(`report ${report.key} claims evidence without lastVerified`)
+    }
+  }
+
+  requireFields(profile, ['profileVersion', 'status', 'publicSafeIdentity', 'calendar', 'divisions', 'realismRules', 'approvalNeeded'], 'flagship profile')
+  if (profile.status !== 'proposal') {
+    throw new Error('flagship profile must remain a proposal until the lab owner approves it')
+  }
+  if (profile.calendar.historicalMonths !== 36) {
+    throw new Error('flagship profile must preserve the accepted 36-month planning horizon')
+  }
+  if (!Array.isArray(profile.divisions) || profile.divisions.length !== 3) {
+    throw new Error('flagship profile must define the three accepted operating lines')
+  }
+  if (!Array.isArray(profile.approvalNeeded) || profile.approvalNeeded.length === 0) {
+    throw new Error('flagship profile must keep unresolved owner decisions explicit')
+  }
+
+  requireFields(volumeProposal, ['proposalVersion', 'status', 'sharedRules', 'profiles'], 'volume proposal')
+  if (volumeProposal.status !== 'proposal') {
+    throw new Error('volume profiles must remain proposals until benchmark evidence is approved')
+  }
+  if (volumeProposal.sharedRules.productionSchedulingEnabled !== false) {
+    throw new Error('volume proposal must keep Production scheduling disabled')
+  }
+  if (volumeProposal.sharedRules.provisionalBatchPayloads > 10) {
+    throw new Error('provisional batch payload budget must use the stricter published value of 10')
+  }
+  const volumeKeys = uniqueKeys(volumeProposal.profiles, 'volume profiles')
+  for (const requiredKey of ['development', 'flagship', 'scale']) {
+    if (!volumeKeys.has(requiredKey)) {
+      throw new Error(`volume proposal is missing the ${requiredKey} profile`)
     }
   }
 
@@ -168,6 +318,22 @@ function main() {
       entry.applicability.status === 'unknown' ||
       entry.api.status === 'unknown'
   )
+  const staticUnknownCapabilities = catalog.capabilities.filter(
+    (entry) =>
+      entry.applicability.status === 'unknown' ||
+      entry.apiSurface === 'unknown' ||
+      Object.values(entry.apiOperations).includes('unknown')
+  )
+  const staticUnknownReports = catalog.reports.filter(
+    (entry) => entry.applicability.status === 'unknown' || entry.api.status === 'unknown'
+  )
+  const tierOneStaticUnknown = catalog.capabilities.filter(
+    (entry) =>
+      entry.tier === 'tier-1' &&
+      (entry.applicability.status === 'unknown' ||
+        entry.apiSurface === 'unknown' ||
+        Object.values(entry.apiOperations).includes('unknown'))
+  )
 
   if (catalog.status === 'approved' && (unknownCapabilities.length > 0 || unknownReports.length > 0)) {
     throw new Error('an approved catalog cannot contain release-blocking unknowns')
@@ -175,8 +341,12 @@ function main() {
 
   console.log(`Discovery catalog ${catalog.catalogVersion} is structurally valid.`)
   console.log(`Sources: ${sourceKeys.size}`)
-  console.log(`Capabilities: ${capabilityKeys.size} (${unknownCapabilities.length} still require classification)`)
-  console.log(`Reports: ${reportKeys.size} (${unknownReports.length} still require classification)`)
+  console.log(`Capabilities: ${capabilityKeys.size} (${staticUnknownCapabilities.length} static classification unknown; ${unknownCapabilities.length} release blockers including dataset evidence)`)
+  console.log(`Tier 1 static classification unknown: ${tierOneStaticUnknown.length}`)
+  console.log(`Reports: ${reportKeys.size} (${staticUnknownReports.length} static classification unknown; ${unknownReports.length} release blockers including dataset evidence)`)
+  console.log(`Plan-required report manifest: ${requiredReportKeys.size} linked rows`)
+  console.log(`Flagship profile: ${profile.profileVersion} (${profile.status})`)
+  console.log(`Volume profiles: ${volumeKeys.size} (${volumeProposal.status})`)
 }
 
 try {
