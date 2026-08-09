@@ -1,20 +1,22 @@
-# QBO Support Lab Frontend
+# Test Data Lab Frontend
 
-This is the Vite/React frontend for the QBO Canada Support Lab.
+This is the Vite/React frontend for Test Data Lab.
 
 ## Purpose
 
-The frontend provides the protected product surfaces for one connected QBO company:
+The current frontend provides protected legacy/baseline surfaces for one connected QBO company while the continual-company rebuild proceeds:
 
 - dashboard and company status
 - onboarding and QBO connection flow
 - entity explorer
-- checkpoints and diffs
-- issue pack catalog and run history
-- AI command center
+- checkpoints and diffs (deferred in the rebuild)
+- issue pack catalog and run history (legacy/experimental)
+- AI command center (future/experimental)
 - settings and audit log
 
 Failed loads and QBO/AI errors surface to the user through toast and inline-alert components rather than being swallowed; failed loads expose retry affordances, and AI plan approve/reject/execute failures are reported inline.
+
+The visible public product name is Test Data Lab. QBO/QuickBooks wording is reserved for descriptive integration actions and company data. The new shell and information architecture wait for the Phase 2 fixture-driven design gate; the Phase 0 rename is not presented as the completed UI overhaul.
 
 ## Stack
 

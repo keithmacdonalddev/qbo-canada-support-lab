@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://test-data-lab.local/schemas/capability-report-registry/v1",
+  "title": "Test Data Lab capability and report registry",
+  "description": "Discovery contract that keeps product availability, API support, application implementation, dataset coverage, and evidence separate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "catalogVersion",
+    "status",
+    "asOfDate",
+    "releasePolicy",
+    "sources",
+    "capabilities",
+    "reports"
+  ],
+  "properties": {
+    "catalogVersion": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$"
+    },
+    "status": {
+      "enum": ["discovery", "review", "approved", "retired"]
+    },
+    "asOfDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "releasePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unknownAllowedDuringDiscovery", "unknownAllowedAtRelease"],
+      "properties": {
+        "unknownAllowedDuringDiscovery": { "const": true },
+        "unknownAllowedAtRelease": { "const": false }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "reports": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/report" }
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "publisher", "url", "accessedOn"],
+      "properties": {
+        "id": { "$ref": "#/$defs/key" },
+        "title": { "type": "string", "minLength": 1 },
+        "publisher": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "accessedOn": { "type": "string", "format": "date" },
+        "notes": { "type": "string" }
+      }
+    },
+    "availability": {
+      "enum": ["unknown", "available", "unavailable", "conditional", "not-applicable"]
+    },
+    "operationSupport": {
+      "enum": ["unknown", "supported", "unsupported", "manual-only", "not-applicable"]
+    },
+    "coverageState": {
+      "enum": ["unknown", "covered", "partially-covered", "manual-only", "unavailable", "deferred"]
+    },
+    "evidenceStatus": {
+      "enum": ["unverified", "documented", "static-verified", "sandbox-verified", "production-verified", "manually-verified"]
+    },
+    "applicability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "locale", "status", "notes"],
+      "properties": {
+        "product": { "const": "QuickBooks Online Advanced" },
+        "locale": { "const": "CA" },
+        "status": { "$ref": "#/$defs/availability" },
+        "notes": { "type": "string" }
+      }
+    },
+    "apiOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read", "create", "update", "delete", "void"],
+      "properties": {
+        "read": { "$ref": "#/$defs/operationSupport" },
+        "create": { "$ref": "#/$defs/operationSupport" },
+        "update": { "$ref": "#/$defs/operationSupport" },
+        "delete": { "$ref": "#/$defs/operationSupport" },
+        "void": { "$ref": "#/$defs/operationSupport" }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preferences", "entitlements", "masterData", "transactions"],
+      "properties": {
+        "preferences": { "type": "array", "items": { "type": "string" } },
+        "entitlements": { "type": "array", "items": { "type": "string" } },
+        "masterData": { "type": "array", "items": { "type": "string" } },
+        "transactions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "purpose",
+        "domain",
+        "tier",
+        "tierRationale",
+        "applicability",
+        "apiSurface",
+        "apiOperations",
+        "currentAppStatus",
+        "coverageState",
+        "requirements",
+        "variants",
+        "linkedReports",
+        "evidenceMethod",
+        "evidenceStatus",
+        "lastVerified",
+        "sourceIds",
+        "limitations",
+        "approvedExclusions"
+      ],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "name": { "type": "string", "minLength": 1 },
+        "purpose": { "type": "string", "minLength": 1 },
+        "domain": {
+          "enum": ["company", "sales", "expenses", "banking", "inventory", "projects", "tax", "accounting", "reporting", "users", "administration"]
+        },
+        "tier": { "enum": ["tier-1", "tier-2", "tier-3", "manual-only-critical", "deferred"] },
+        "tierRationale": { "type": "string", "minLength": 1 },
+        "applicability": { "$ref": "#/$defs/applicability" },
+        "apiSurface": { "enum": ["unknown", "rest", "graphql", "rest-and-graphql", "none"] },
+        "apiOperations": { "$ref": "#/$defs/apiOperations" },
+        "currentAppStatus": { "enum": ["unknown", "not-implemented", "partial", "implemented", "legacy", "experimental"] },
+        "coverageState": { "$ref": "#/$defs/coverageState" },
+        "requirements": { "$ref": "#/$defs/requirements" },
+        "variants": { "type": "array", "items": { "type": "string" } },
+        "linkedReports": { "type": "array", "items": { "$ref": "#/$defs/key" } },
+        "evidenceMethod": { "type": "string", "minLength": 1 },
+        "evidenceStatus": { "$ref": "#/$defs/evidenceStatus" },
+        "lastVerified": { "type": ["string", "null"], "format": "date" },
+        "sourceIds": { "type": "array", "items": { "$ref": "#/$defs/key" } },
+        "limitations": { "type": "array", "items": { "type": "string" } },
+        "approvedExclusions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "reportPrerequisites": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accounts", "dimensions", "entities", "transactions"],
+      "properties": {
+        "accounts": { "type": "array", "items": { "type": "string" } },
+        "dimensions": { "type": "array", "items": { "type": "string" } },
+        "entities": { "type": "array", "items": { "type": "string" } },
+        "transactions": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "reportApi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "endpoint", "parameters"],
+      "properties": {
+        "status": { "$ref": "#/$defs/operationSupport" },
+        "endpoint": { "type": ["string", "null"] },
+        "parameters": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "family",
+        "businessQuestion",
+        "tier",
+        "applicability",
+        "api",
+        "prerequisites",
+        "periods",
+        "expectedNonZero",
+        "assertions",
+        "uiNavigation",
+        "coverageState",
+        "evidenceStatus",
+        "lastVerified",
+        "sourceIds",
+        "knownDiscrepancies"
+      ],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "name": { "type": "string", "minLength": 1 },
+        "family": { "enum": ["financial", "cash", "receivables", "sales", "payables", "expenses", "inventory", "projects", "tax", "budget", "reconciliation", "audit"] },
+        "businessQuestion": { "type": "string", "minLength": 1 },
+        "tier": { "enum": ["critical", "supporting", "edge", "deferred"] },
+        "applicability": { "$ref": "#/$defs/applicability" },
+        "api": { "$ref": "#/$defs/reportApi" },
+        "prerequisites": { "$ref": "#/$defs/reportPrerequisites" },
+        "periods": { "type": "array", "items": { "type": "string" } },
+        "expectedNonZero": { "type": "array", "items": { "type": "string" } },
+        "assertions": { "type": "array", "items": { "type": "string" } },
+        "uiNavigation": { "type": ["string", "null"] },
+        "coverageState": { "$ref": "#/$defs/coverageState" },
+        "evidenceStatus": { "$ref": "#/$defs/evidenceStatus" },
+        "lastVerified": { "type": ["string", "null"], "format": "date" },
+        "sourceIds": { "type": "array", "items": { "$ref": "#/$defs/key" } },
+        "knownDiscrepancies": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

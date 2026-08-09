@@ -4,13 +4,13 @@
 
 ## Project Identity
 
-This repository is `C:\Projects\qbo`, the QBO Canada Support Lab.
+This repository is `C:\Projects\qbo`, Test Data Lab (the internal checkout and integration code still use `qbo`).
 
-The product is a local web application for QuickBooks Online Canada support work. A user connects one QBO Advanced Canada company, then uses the app to seed realistic support data, generate history, create checkpoints, inject issue packs, inspect QBO state, and use AI-assisted investigation and support-note workflows.
+The product is a local control and visibility application for maintaining one flagship QuickBooks Online Advanced Canada company as a believable, continually evolving business. It defines the intended business, measures feature and report coverage, prepares coherent history, advances activity on a governed business calendar, and supports inspection, administration, reconciliation evidence, and manual support reproduction.
 
 The practical mental model is:
 
-`one user -> one connected QBO company -> generate, break, inspect, explain`
+`business blueprint -> coverage requirements -> controlled operations -> QBO records -> report and reconciliation evidence`
 
 ## User Communication
 
@@ -33,10 +33,13 @@ Multiple coding-agent sessions may work in this checkout at the same time.
 
 Treat docs as useful but potentially stale. Re-check source before making status claims.
 
-- Root docs: `prd.md`, `roadmap.md`, `phase-0-api-validation-spike.md`, `phase-1-foundation-plan.md`, `phase-2-plan.md`, `phase-2-reality-inspection-plan.md`, `phase-3-ai-layer-plan.md`.
+- Rebuild authority: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, and `REBUILD_RELEASE_EVIDENCE.md`.
+- Rebuild status (2026-08-08): Phase 0 product reset is complete; Phase 1 static capability/report discovery has started under `docs/discovery/`; no new rebuild mutation path exists yet.
+- Historical phase docs remain useful implementation evidence but no longer set product priority: `phase-0-api-validation-spike.md`, `phase-1-foundation-plan.md`, `phase-2-plan.md`, `phase-2-reality-inspection-plan.md`, `phase-3-ai-layer-plan.md`, and `phase-4-hardening-plan.md`.
 - Phase 0 scripts exist under `scripts/phase-0/`.
 - Backend code exists under `backend/src/` with Express, Mongoose, QBO OAuth/client modules, seeding, generation, checkpoints, issue packs, audit, and AI routes.
 - Frontend code exists under `frontend/src/` with Vite, React, protected routes, dashboard, onboarding, explorer, checkpoints, issue packs, settings, audit, and AI command center pages.
+- Checkpoints are deferred; current issue packs and AI are preserved as legacy/experimental during the rebuild. Their presence in source is not rebuild completion evidence.
 - The old `CLAUDE.md` claimed Phase 1/Phase 2 status and should not be treated as current source of truth after this architecture update.
 - QBO error handling is status-based. `backend/src/modules/qbo-client.js` `apiCall()` captures Intuit `intuit_tid` from response headers (`getLastIntuitTid()`), retries 429 with clamped exponential backoff (60s/attempt cap, max 5 attempts), and throws errors carrying `err.status`, `err.intuit_tid`, and the QBO Fault message on 4xx/5xx. Helper `backend/src/modules/qbo-error.js` (`isQboError`/`respondQboError`) maps QBO upstream errors to HTTP 502 (429 passthrough) with `{ error, intuit_tid, qboStatus }`. Routes must NOT surface a QBO-side 401 as an app-level 401: the frontend treats any 401 as session expiry and force-logs-out the user. Wired into `ai`, `checkpoint`, `company`, `explore` routes; `seed`/`generate`/`issuepacks` are intentionally unchanged (fire-and-forget background jobs surfaced via `/status` and `/log`).
 - SDK gotcha: installed `intuit-oauth@4.2.2` is axios-based. `makeApiCall` RESOLVES on 2xx-4xx (`validateStatus < 500`) and THROWS an OAuthError on 5xx/network failures with the HTTP status in `err.code` (a string), not `err.status`/`.statusCode`/`.authResponse`.
@@ -47,7 +50,8 @@ Treat docs as useful but potentially stale. Re-check source before making status
 
 Read only the files needed for the task. Use this routing before broad scanning.
 
-- Project orientation: `prd.md`, `roadmap.md`, `package.json`, `backend/package.json`, `frontend/package.json`.
+- Project orientation: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, `REBUILD_RELEASE_EVIDENCE.md`, `package.json`, `backend/package.json`, `frontend/package.json`.
+- Capability/report discovery: `docs/discovery/README.md`, `docs/discovery/registry.schema.v1.json`, `docs/discovery/catalog.v1.json`, `docs/discovery/catalog.v1.md`.
 - Backend startup and side effects: `backend/src/server.js`, `backend/src/config/index.js`, `backend/src/config/database.js`.
 - QBO auth/client work: `backend/src/routes/qbo.js`, `backend/src/modules/qbo-client.js`, `backend/src/modules/qbo-error.js`, `scripts/phase-0/lib/qbo-client.js`.
 - Seeding/generation: `backend/src/routes/seed.js`, `backend/src/routes/generate.js`, `backend/src/modules/generation-engine.js`.

@@ -1,14 +1,15 @@
 {
-  "name": "qbo-support-lab",
+  "name": "test-data-lab",
   "version": "0.0.1",
   "private": true,
-  "description": "QBO Canada Support Lab - connected-company support lab with seeding, inspection, issue packs, and AI-assisted workflows",
+  "description": "Local control and visibility app for a realistic, continually evolving QuickBooks Online test company",
   "workspaces": [
     "backend",
     "frontend"
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "validate:discovery": "node scripts/validate-discovery-catalog.js",
     "connect": "node scripts/phase-0/01-connect-company.js",
     "seed": "node scripts/phase-0/02-seed-master-data.js",
     "ar-chain": "node scripts/phase-0/03-create-ar-chain.js",

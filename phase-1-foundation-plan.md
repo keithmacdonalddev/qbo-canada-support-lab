@@ -1,6 +1,7 @@
 # Phase 1 Foundation Plan
 
-**Status:** Implemented in source; fresh end-to-end verification needed
+**Status:** Historical implementation note — source remains, but this is not rebuild Phase 1
+**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
 **Duration:** 3-4 weeks  
 **Phase objective:** Ship the first end-to-end internal product slice after the API spike passes.
 

@@ -1,6 +1,7 @@
 # Phase 3 — AI Layer Plan
 
-**Status:** Implemented in source; acceptance testing and hardening needed
+**Status:** Historical implementation note — AI source remains behind a future/experimental rebuild boundary
+**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
 **Depends on:** Phase 2 complete (Gate C passed)
 **Phase objective:** Add controlled AI assistance on top of the deterministic tools built in Phases 1-2.
 

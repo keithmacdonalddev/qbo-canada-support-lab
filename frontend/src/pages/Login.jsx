@@ -40,10 +40,10 @@ export default function Login() {
         <CardHeader>
           <div className="flex items-center gap-2.5 mb-3">
             <span className="inline-flex size-9 items-center justify-center rounded-lg bg-primary text-white text-lg font-bold">
-              Q
+              T
             </span>
             <span className="text-[17px] font-semibold text-[var(--text-heading)]">
-              QBO Support Lab
+              Test Data Lab
             </span>
           </div>
           <CardTitle className="text-[22px] font-semibold text-[var(--text-heading)]">

@@ -1,8 +1,8 @@
 {
-  "name": "qbo-support-lab-backend",
+  "name": "test-data-lab-backend",
   "version": "0.0.1",
   "private": true,
-  "description": "QBO Canada Support Lab - Backend API",
+  "description": "Backend API for Test Data Lab",
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js"

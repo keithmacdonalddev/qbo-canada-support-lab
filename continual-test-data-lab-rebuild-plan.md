@@ -1,7 +1,7 @@
 # Continual Test Data Lab Rebuild Plan
 
-> - **Status:** Draft for rigorous product, safety, and design review
-> - **Decision state:** Pending approval; this document does not authorize implementation or live QBO changes
+> - **Status:** Approved for phased implementation; Phase 0 complete and Phase 1 discovery started
+> - **Decision state:** Product direction approved 2026-08-08; live QBO, database, runtime, and Production automation gates remain separate
 > - **Prepared:** 2026-08-08
 > - **Target repository:** `C:\Projects\qbo` on `main`
 > - **Product context:** One connected QuickBooks Online Advanced Canada company
@@ -39,16 +39,16 @@ The rebuild must be real product work, not a reskin. The UI/UX overhaul is part 
 
 ## 2. What this plan supersedes
 
-Once approved, this plan becomes the product-priority source of truth for the rebuild. Existing PRD and phase documents remain useful historical material, but any statement that makes issue packs, checkpoints, diffs, or AI the near-term centre of the application is superseded.
+This approved plan is the product-priority source of truth for the rebuild. Existing PRD and phase documents remain useful historical material, but any statement that makes issue packs, checkpoints, diffs, or AI the near-term centre of the application is superseded.
 
-Approval of this plan would authorize a later documentation-alignment change to:
+Approval authorized the Phase 0 documentation alignment completed on 2026-08-08:
 
 - update `prd.md` and `roadmap.md`;
 - revise the repository description and product-facing terminology;
 - mark earlier phase plans as historical where they conflict;
 - keep implementation details that remain technically useful without retaining their former priority.
 
-Those documentation changes are not included in this draft-plan change.
+The aligned product contract, status, terminology, and evidence checklist now live in `prd.md`, `roadmap.md`, repository/package descriptions, historical phase status notes, and `REBUILD_RELEASE_EVIDENCE.md`.
 
 ## 3. Authority and safety boundary
 
@@ -1990,25 +1990,27 @@ No automated test suite should point at production by default.
 | Canadian tax/business assumptions are wrong or stale | Critical | Current authoritative research during implementation and reviewed fixtures | Phases 1, 5, 6, 8 |
 | Visual polish hides poor task performance | Medium | Workflow timing/errors, state walkthroughs, reachability/overflow evidence | Phase 2 onward |
 
-## 35. Decisions required before implementation
+## 35. Recorded implementation decisions
 
-### 35.1 Approval decisions
+The user authorized implementation of this plan on 2026-08-08. The recommended directions below are accepted as the basis for gated discovery and design. Acceptance does not resolve the evidence-dependent decisions in section 35.2 and does not authorize live QBO, database, OAuth, runtime, or Production-scheduling actions.
 
-| Decision | Recommendation | Needed by |
-|---|---|---|
-| Product mission | Approve continual realistic flagship-company operations as P0 | Phase 0 |
-| Public product name | Use “Test Data Lab”; reserve QBO terminology for descriptive integration text | Phase 0 |
-| Legacy priorities | Move checkpoints, current issue packs, and AI under Experimental; no core expansion | Phase 0 |
-| Flagship business shape | Approve one company with service/project, inventory/wholesale, and recurring-service lines, then refine in blueprint workshops | Phase 1/5 |
-| Historical horizon | Start planning around 36 coherent months; change only from rate/performance/report evidence | Phase 1 |
-| Coverage gate | Approve 100% Tier 1 and critical reports, 85% API-addressable, 80% remaining in-scope reports with reviewed exceptions | Phase 1 |
-| Unsupported features | Track as manual-only with evidence rather than fabricate automation | Phase 1 |
-| UI direction | Approve calm, dense, desktop-first operational UI with adaptive narrow workflows and restrained materials | Phase 2 |
-| Design approval | Require `DESIGN.md`, `DESIGN.html`, six prototypes, desktop/mobile evidence, and accessibility review before broad build | Phase 2 |
-| Application authorization | Replace two coarse roles with realm memberships and server-enforced permissions | Phase 3 |
-| Connection ownership | Prefer one realm-owned flagship connection with members, subject to security/migration design | Phase 3 |
-| Automatic production schedule | Keep off by default; separate approval only after stable manual evidence | Phase 7 |
-| Destructive QBO management | Entity-specific policies only; no generic delete/editor | Phase 9 |
+### 35.1 Accepted direction
+
+| Decision | Accepted direction | Owner | Delivery gate |
+|---|---|---|---|
+| Product mission | Continual realistic flagship-company operations are P0 | Lab owner | Phase 0 |
+| Public product name | Use “Test Data Lab”; reserve QBO terminology for descriptive integration text | Lab owner | Phase 0 |
+| Legacy priorities | Checkpoints are deferred; current issue packs and AI are Experimental; no core expansion | Lab owner | Phase 0 |
+| Flagship business shape | One company with service/project, inventory/wholesale, and recurring-service lines, refined through blueprint review | Lab owner | Phase 1/5 |
+| Historical horizon | Plan around 36 coherent months; change only from rate/performance/report evidence | Lab owner | Phase 1 |
+| Coverage gate | 100% Tier 1 and critical reports, 85% API-addressable, and 80% remaining in-scope reports with reviewed exceptions | Lab owner | Phase 1 |
+| Unsupported features | Track as manual-only with evidence instead of fabricating automation | Lab owner | Phase 1 |
+| UI direction | Calm, dense, desktop-first operational UI with adaptive narrow workflows and restrained materials | Lab owner | Phase 2 |
+| Design approval | Require `DESIGN.md`, `DESIGN.html`, six prototypes, desktop/mobile evidence, and accessibility review before broad build | Lab owner | Phase 2 |
+| Application authorization | Replace two coarse roles with realm memberships and server-enforced permissions | Lab owner | Phase 3 |
+| Connection ownership | Prefer one realm-owned flagship connection with members, subject to security/migration design | Lab owner | Phase 3 |
+| Automatic production schedule | Keep off by default; require separate approval after stable manual evidence | Lab owner | Phase 7 |
+| Destructive QBO management | Use entity-specific policies; no generic delete/editor | Lab owner | Phase 9 |
 
 ### 35.2 Decisions deliberately deferred
 
@@ -2110,6 +2112,8 @@ Reviewers should fail this plan or a later phase if any answer is “no.”
 - Are tests proportional to accounting, authorization, and production risk?
 
 ## 38. First implementation slice after approval
+
+**Current state (2026-08-08):** Steps 1–3 are complete. Step 4 has started with a current official-source pass and an explicit unknown queue. Step 5 has an approved business direction and starter Tier 1 list but still needs Phase 1 evidence. Steps 6–7 have not started.
 
 The shortest safe first slice is documentation and discovery, not generation code:
 

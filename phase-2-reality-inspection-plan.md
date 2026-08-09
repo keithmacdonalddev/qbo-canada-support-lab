@@ -1,6 +1,7 @@
 # Phase 2 — Reality + Inspection Plan
 
-**Status:** Superseded by `phase-2-plan.md` for implementation status
+**Status:** Historical design — superseded by `phase-2-plan.md`, then by the Test Data Lab rebuild for product priority
+**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
 **Depends on:** Phase 1 complete (Gate B passed)
 **Phase objective:** Turn the seeded flagship company into a realistic, inspectable support lab.
 

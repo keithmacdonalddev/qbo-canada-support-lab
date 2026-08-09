@@ -1,75 +1,65 @@
-# QBO Canada Support Lab
+# Test Data Lab
 
-Local web application for QuickBooks Online Canada support workflows.
+Test Data Lab is a local control and visibility application for maintaining one flagship QuickBooks Online Advanced Canada company as a believable, continually evolving business.
 
-The app lets a support user connect one QBO Advanced Canada company, seed realistic master data, generate business history, create checkpoints, run predefined issue packs, inspect QBO state, and use AI-assisted investigation/support-note workflows.
+The app is being rebuilt around business definition, capability and report coverage, controlled historical and forward operations, complete data inspection, reconciliation evidence, and governed administration. Support agents reproduce customer problems manually in the resulting company.
 
-## Current Status
+## Rebuild status
 
-Updated: 2026-05-28
+Updated: 2026-08-08
 
-This project was revived after being on hold. The source code is ahead of several older planning docs.
+- Phase 0 product reset is complete.
+- Phase 1 capability/report discovery is in progress using static artifacts and official-source research.
+- No new rebuild mutation path, scheduler, database model, or live operation has been implemented yet.
+- Existing seeding, generation, explorer, checkpoints, issue packs, audit, and AI surfaces remain in source during migration.
+- Checkpoints are deferred; current issue packs and AI are legacy/experimental, not core rebuild requirements.
 
-| Area | Current state |
-| --- | --- |
-| Phase 0 API validation | Completed. Core QBO API assumptions passed; purchase orders and sales orders are not available through the API path tested. |
-| Phase 1 foundation | Code present for auth, QBO connection, company profile, seeding, dashboard, and audit surfaces. Needs fresh end-to-end runtime verification. |
-| Phase 2 reality and inspection | Code present for generation, checkpoints, diffs, entity explorer, issue packs, and run history. Needs fresh QBO-connected acceptance testing. |
-| Phase 3 AI layer | Code present for Anthropic provider, AI tools, orchestration, sessions, plans, SSE, notes, and frontend AI command center. Needs acceptance testing and hardening. |
-| Phase 4 hardening/polish/continuous activity | Not implemented. Documented in `phase-4-hardening-plan.md`. |
+Start with:
 
-## Production Access
+- `prd.md` — approved product contract;
+- `roadmap.md` — current phase status and next gate;
+- `continual-test-data-lab-rebuild-plan.md` — detailed architecture, UI, safety, and delivery plan;
+- `REBUILD_RELEASE_EVIDENCE.md` — evidence required to pass each rebuild gate;
+- `docs/discovery/` — versioned capability/report discovery artifacts.
 
-Production API access is now unlocked on the Intuit Developer portal: the app passed Intuit's full App Assessment.
+## Production safety
 
-Connecting a real production company is not yet wired up. `.env` still sets `QBO_ENVIRONMENT=sandbox`, and production OAuth additionally requires a public HTTPS redirect URI (Intuit production rejects `http`/`localhost` callbacks). The path to enabling production is:
+Production API access is unlocked and a real QBO Advanced Canada company is connected. The local environment uses Production. An HTTPS tunnel is needed only when the OAuth connect/reconnect callback must be reachable; ordinary backend-to-Intuit API calls do not require it.
 
-1. Expose the local backend over a public HTTPS endpoint, either through an HTTPS tunnel (e.g. ngrok) or a deploy (e.g. Render).
-2. Register that HTTPS redirect URI in the Intuit Developer portal.
-3. Switch `QBO_ENVIRONMENT` to `production` and point the OAuth config at production credentials.
+Treat every live QBO operation as a real-company operation. Do not run OAuth, seed, generation, issue-pack, checkpoint, AI-execution, or other mutating actions without explicit approval for the exact target and action. Automatic Production scheduling is not approved.
 
-None of these steps are done yet; production remains pending.
+Backend startup is also not neutral: it connects to MongoDB, seeds built-in issue-pack definitions, and marks stale jobs and AI plans failed. Do not start, stop, or restart app services unless explicitly requested.
 
-## Verified On 2026-05-28
+## Current implementation baseline
 
-Non-mutating checks only:
+| Area | Present now | Rebuild status |
+| --- | --- | --- |
+| Authentication and connection | Email/password auth, protected routes, QBO OAuth and token handling | Will move to realm memberships and server-enforced capability permissions in Phase 3 |
+| QBO client | Status-based errors, `intuit_tid`, 429 backoff, Production guard on selected write routes | Preserved foundation; new writes wait for the operation-safety gates |
+| Data preparation | Fixed seeding and randomized historical generation | Legacy implementation; replaced later by blueprint-driven lifecycle operations |
+| Inspection | Dashboard snapshot and 13-type explorer with bounded results | Preserved; Phase 4/9 add truthful overview and fully paginated catalog |
+| Checkpoints and issue packs | Existing routes, models, and pages | Deferred or legacy/experimental |
+| AI | Existing provider, sessions, plans, tools, SSE, notes, and command center | Experimental; no new core dependency or write authority |
+| UI | React/Vite shell and local primitives | Phase 2 designs the new system before broad shell migration |
 
-- `npm run build --workspace=frontend` passes.
-- Backend syntax check over `backend/src/**/*.js` passes.
-- `npm run lint --workspace=frontend` fails with current AI UI lint debt.
-- `npm audit --omit=dev --json` reports 14 production vulnerabilities: 2 high, 12 moderate.
-
-No backend server was started and no QBO/database mutation was performed during this documentation update.
-
-## Error Handling and Observability
-
-Recent work on the `fix/qbo-client-error-handling` branch makes QBO upstream failures visible instead of silently swallowed:
-
-- The QBO client captures Intuit's `intuit_tid` trace id from QBO responses (`backend/src/modules/qbo-client.js`) for support tracing.
-- QBO upstream errors are mapped to HTTP `502` with an `intuit_tid` in the response body via the shared `backend/src/modules/qbo-error.js` helper; QBO `429` rate-limit responses are passed through as `429`.
-- The frontend surfaces these failures with toast and inline-alert errors (`frontend/src/components/ui/toast.jsx`, `frontend/src/components/ui/alert.jsx`) and retry affordances on failed loads, including AI plan approve/reject/execute failures.
-
-## Project Layout
+## Project layout
 
 ```text
 backend/                 Express/Mongoose backend
 frontend/                Vite/React frontend
+docs/discovery/          Versioned rebuild discovery artifacts
 scripts/phase-0/         Historical QBO API validation scripts
-prd.md                   Product contract
-roadmap.md               Current phase roadmap/status
-phase-*.md               Phase plans and implementation notes
+prd.md                   Approved product contract
+roadmap.md               Current rebuild status and gates
+continual-*.md           Detailed rebuild plan
+REBUILD_RELEASE_EVIDENCE.md
+phase-*.md               Historical implementation plans and notes
 AGENTS.md                OpenAI Codex project guidance
-CLAUDE.md                Claude Code guidance, imports AGENTS.md
+CLAUDE.md                Claude Code guidance
 .agents/                 Codex repo rules and skills
 .codex/                  Codex project config and memory
 .claude/                 Claude memory, rules, skills, and subagents
 ```
-
-## Agent Git Workflow
-
-Codex, Claude Code, Claude subagents, and worker/reviewer agents default to the canonical checkout at `C:\Projects\qbo` on `main`. They should not use Git worktrees, `.claude/worktrees/`, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation.
-
-Unqualified commit or push requests should stay on the current `main`/`master` checkout and push to the matching upstream (`origin/main` for this repo, or `origin/master` only if the repo default changes).
 
 ## Setup
 
@@ -81,24 +71,22 @@ npm install
 
 2. Create `.env` from `.env.example`.
 
-3. Fill in local values for MongoDB, JWT, QBO OAuth, and optional Anthropic AI settings. Use placeholders here; do not paste real client IDs, client secrets, or API keys into tracked files.
+3. Fill in local MongoDB, JWT, QBO OAuth, and optional AI-provider settings. Never commit `.env`, `.tokens.json`, credentials, tokens, or keys.
 
-QBO OAuth uses the official `intuit-oauth@4.2.2` (axios-based) SDK.
-
-Do not commit `.env` or `.tokens.json`.
+QBO OAuth currently uses `intuit-oauth@4.2.2`.
 
 ## Commands
 
 Safe non-mutating checks:
 
 ```powershell
+npm run validate:discovery
 npm run build --workspace=frontend
 npm run lint --workspace=frontend
 Get-ChildItem backend\src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
-npm audit --omit=dev
 ```
 
-Long-running local servers:
+Long-running servers—explicit request required:
 
 ```powershell
 npm run dev
@@ -106,7 +94,7 @@ npm run dev --workspace=backend
 npm run dev --workspace=frontend
 ```
 
-QBO-facing scripts that can authenticate or mutate a company:
+QBO-facing historical scripts—explicit target/action approval required:
 
 ```powershell
 npm run connect
@@ -118,29 +106,13 @@ npm run rate-limits
 npm run sales-order
 ```
 
-Only run QBO-facing scripts against an intended sandbox/test company.
+## Git workflow
 
-## Documentation Map
+The canonical checkout is `C:\Projects\qbo` on `main`. Agents do not create or use worktrees, alternate clones, detached checkouts, or non-default branches unless explicitly requested. Unqualified commit and push requests target `main` and `origin/main`.
 
-- `roadmap.md` is the current status index.
-- `phase-0-api-validation-spike.md` now records the completed API spike outcome.
-- `phase-1-foundation-plan.md` records Phase 1 plan plus current implementation status.
-- `phase-2-plan.md` is the current Phase 2 implementation note.
-- `phase-2-reality-inspection-plan.md` is the older detailed Phase 2 design plan and is superseded by `phase-2-plan.md` for implementation status.
-- `phase-3-ai-layer-plan.md` records Phase 3 plan plus current code-present and verification status.
-- `phase-4-hardening-plan.md` defines the gated hardening/polish plan. It is not implemented.
+## Branding and legal
 
-## Legal and Branding
-
-This is an independent application, not affiliated with or endorsed by Intuit. Its public name must not contain "QBO", "QuickBooks", "Intuit", or "QB"; the public name in use is "Test Data Lab".
+The public product name is **Test Data Lab**. QBO and QuickBooks may be used only as descriptive integration terms, not as the application name. This independent application is not affiliated with or endorsed by Intuit.
 
 - EULA: https://keithmacdonalddev.github.io/test-data-lab/eula.html
-- Privacy Policy: https://keithmacdonalddev.github.io/test-data-lab/privacy.html
-
-Local source for these documents lives in the untracked `legal/` folder. The privacy policy discloses that relevant QuickBooks data may be sent to the configured AI provider (Anthropic or OpenAI) when AI features are used.
-
-## Safety Notes
-
-Backend startup is not neutral: `backend/src/server.js` connects to MongoDB, seeds built-in issue packs, and marks stale jobs/plans failed.
-
-Treat QBO calls as potentially mutating unless proven otherwise. Do not print secrets, OAuth tokens, QBO payloads containing company data, or stored user AI keys.
+- Privacy policy: https://keithmacdonalddev.github.io/test-data-lab/privacy.html

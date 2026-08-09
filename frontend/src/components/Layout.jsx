@@ -41,9 +41,9 @@ export default function Layout({ children }) {
       <aside className="w-60 min-w-60 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] flex flex-col p-0">
         <div className="flex items-center gap-2.5 px-5 pt-5 pb-6">
           <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--primary)] text-white font-bold text-base">
-            Q
+            T
           </span>
-          <span className="text-white font-semibold text-[15px]">QBO Support Lab</span>
+          <span className="text-white font-semibold text-[15px]">Test Data Lab</span>
         </div>
         <nav className="flex flex-col gap-0.5 px-2.5 flex-1">
           {navItems.map((item) => (

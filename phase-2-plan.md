@@ -1,6 +1,7 @@
 # Phase 2: Reality + Inspection — Implementation Plan
 
-**Status:** Implemented in source; fresh QBO-connected acceptance testing needed
+**Status:** Historical implementation note — generation/explorer source remains; checkpoints and issue packs are not core rebuild priorities
+**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
 **Date:** 2026-04-09
 
 ## Current Verification Status

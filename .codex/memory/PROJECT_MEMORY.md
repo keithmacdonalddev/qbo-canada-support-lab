@@ -1,6 +1,6 @@
 # Codex Project Memory
 
-Last verified: 2026-07-11. Authority: `AGENTS.md`, `CLAUDE.md`, current source, and the live environment state verified without printing secrets.
+Last verified: 2026-08-08. Authority: `AGENTS.md`, `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, current source, and the live environment state verified without printing secrets.
 
 This memory is for coding agents working on `C:\Projects\qbo`.
 
@@ -8,15 +8,17 @@ It is not the app runtime's durable user memory. It is local project context for
 
 ## Current State
 
-- Project: QBO Canada Support Lab.
+- Project: Test Data Lab (internal checkout `C:\Projects\qbo`).
 - Root: `C:\Projects\qbo`.
-- Product purpose: connect one QBO Advanced Canada company per user, then support realistic lab data generation, issue reproduction, inspection, checkpoints, and AI-assisted explanation.
+- Product purpose: maintain one flagship QBO Advanced Canada company as a believable, continually evolving business with blueprint, capability/report coverage, controlled operations, data management, reconciliation evidence, and manual support reproduction.
+- Rebuild status (2026-08-08): Phase 0 product reset is complete and Phase 1 static capability/report discovery has started. `docs/discovery/` contains the first versioned registry artifacts. No new rebuild QBO mutation path, database model, scheduler, or runtime flow exists yet.
+- Legacy priority: checkpoints are deferred; current issue packs and AI are preserved as legacy/experimental and are not normal rebuild workflow requirements.
 - Backend: Node/Express CommonJS under `backend/src/`.
 - Frontend: Vite/React under `frontend/src/`.
 - Database: MongoDB via Mongoose.
 - QBO integration: Intuit OAuth and QBO client modules.
 - AI integration: Anthropic SDK in `backend/src/modules/ai-provider.js`; user keys can be stored per user, and a global key can be enabled by environment.
-- Current source includes Phase 2 surfaces and Phase 3 AI surfaces, but roadmap/status docs may be stale. Verify from source before claiming completion.
+- Current source includes the old Phase 1-3 surfaces, but those historical phases do not map to the rebuild phases. Verify current source and the rebuild evidence checklist before claiming completion.
 - Backend startup has side effects: MongoDB connection, built-in issue pack seeding, and stale job/AI plan recovery.
 - QBO error handling is status-based (as of 2026-05-28). `backend/src/modules/qbo-client.js` `apiCall()` captures Intuit `intuit_tid` via `getLastIntuitTid()`, retries 429 with clamped exponential backoff (60s/attempt cap, max 5), and throws errors carrying `err.status` + `err.intuit_tid` + QBO Fault message on 4xx/5xx. Helper `backend/src/modules/qbo-error.js` (`isQboError`/`respondQboError`) maps QBO upstream errors to HTTP 502 (429 passthrough) with `{ error, intuit_tid, qboStatus }`. Wired into `ai`, `checkpoint`, `company`, `explore` routes; `seed`/`generate`/`issuepacks` intentionally unchanged (fire-and-forget jobs surfaced via `/status` and `/log`). Routes must NOT return a QBO-side 401 as an app-level 401 — the frontend treats any 401 as session expiry and force-logs-out the user.
 - SDK gotcha: `intuit-oauth@4.2.2` is axios-based. `makeApiCall` RESOLVES on 2xx-4xx (`validateStatus < 500`) and THROWS on 5xx/network with the HTTP status in `err.code` (string), not `err.status`/`.statusCode`/`.authResponse`.
@@ -26,6 +28,9 @@ It is not the app runtime's durable user memory. It is local project context for
 
 ## Durable Decisions
 
+- Public name is Test Data Lab. Use QBO/QuickBooks only as descriptive integration terms, not as the application name.
+- The continual rebuild plan is the detailed product-priority authority; capability/report discovery and fixture-driven design gate new QBO mutation architecture.
+- Automatic Production scheduling remains off until separate approval after stable manual evidence.
 - Do not run QBO mutation scripts or mutating backend routes without explicit current user approval.
 - Do not start or restart long-running app services without explicit current user approval.
 - Keep provider credentials and personal model/account settings out of repo files.
