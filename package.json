@@ -8,7 +8,13 @@
     "frontend"
   ],
   "scripts": {
-    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "dev": "node scripts/dev-launcher.js",
+    "dev:check": "node scripts/dev-launcher.js --check",
+    "dev:preview": "node scripts/dev-launcher.js --preview",
+    "dev:raw": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend -- --strictPort",
+    "test:launcher": "node --test scripts/dev-launcher.test.js",
     "validate:discovery": "node scripts/validate-discovery-catalog.js",
     "connect": "node scripts/phase-0/01-connect-company.js",
     "seed": "node scripts/phase-0/02-seed-master-data.js",
