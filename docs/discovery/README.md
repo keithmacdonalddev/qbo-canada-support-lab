@@ -7,6 +7,7 @@ This folder starts rebuild Phase 1. It is a static research and review surface; 
 - `registry.schema.v1.json` — versioned JSON Schema for capabilities, reports, evidence, sources, and release-state rules.
 - `catalog.v1.json` — machine-readable starter catalog. It is intentionally in `discovery` status.
 - `required-report-manifest.v1.json` — the complete plan section 13.2 report inventory; every row must resolve to a catalog key even when classification remains `unknown`.
+- `entity-operation-matrix.schema.v1.json` and `entity-operation-matrix.v1.json` — exact, versioned AR/AP entity operation classifications. These are official-document evidence, not write authorization.
 - `catalog.v1.md` — generated plain-English review of the catalog, confirmed official facts, conflicts, and next decisions.
 - `official-surface-classification.v1.md` — official-source classification for entities, reports, users/roles, reconciliation, Canadian tax, budgets, recurring transactions, projects, and limits.
 - `report-dependency-map.v1.md` — report prerequisites, relationships, assertions, and evidence method.
@@ -20,7 +21,7 @@ npm run validate:discovery
 npm run render:discovery
 ```
 
-The renderer regenerates the review Markdown from the JSON catalog. The validator compiles `registry.schema.v1.json` with Ajv's Draft 2020 engine and validates the complete catalog. It also checks unique keys, source/report/dependency references, the required-report manifest, supported-report endpoints, evidence dates, Tier 1 static classification, release-blocking evidence gaps, and the rule that an approved catalog cannot contain release-blocking unknowns.
+The renderer regenerates the review Markdown from the JSON catalog. The validator compiles both Draft 2020 schemas with Ajv and validates the complete catalog and entity-operation matrix. It also checks unique keys, source/report/dependency references, the required-report manifest, the exact AR/AP entity sets, composite operation values against their entity rows, supported-report endpoints, evidence dates, unsupported dataset-coverage claims, release-blocking evidence gaps, and the rule that an approved catalog cannot contain release-blocking unknowns.
 
 ## How to read the catalog
 

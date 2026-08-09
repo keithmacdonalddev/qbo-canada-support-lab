@@ -1,3 +1,8 @@
+function enabled(name, defaultValue = false) {
+  if (process.env[name] === undefined) return defaultValue
+  return process.env[name] === 'true'
+}
+
 const config = {
   port: process.env.PORT || 3001,
   mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/qbo-support-lab',
@@ -27,6 +32,14 @@ const config = {
     // Both can be enabled simultaneously (user key takes priority).
     globalKeyEnabled: process.env.AI_GLOBAL_KEY_ENABLED === 'true',
     userKeysEnabled: process.env.AI_USER_KEYS_ENABLED !== 'false', // default true
+  },
+  features: {
+    rebuildReadOnly: enabled('REBUILD_READ_ONLY_ENABLED', true),
+    experimental: {
+      aiMutations: enabled('LEGACY_AI_MUTATIONS_ENABLED', false),
+      issuePackMutations: enabled('LEGACY_ISSUEPACK_MUTATIONS_ENABLED', false),
+    },
+    legacyStartupMaintenance: enabled('LEGACY_STARTUP_MAINTENANCE_ENABLED', false),
   },
 };
 

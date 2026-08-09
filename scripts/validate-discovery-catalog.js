@@ -11,6 +11,8 @@ const catalogPath = path.join(repoRoot, 'docs', 'discovery', 'catalog.v1.json')
 const profilePath = path.join(repoRoot, 'docs', 'discovery', 'flagship-business-profile.v1.json')
 const volumePath = path.join(repoRoot, 'docs', 'discovery', 'volume-profiles.v1.json')
 const requiredReportManifestPath = path.join(repoRoot, 'docs', 'discovery', 'required-report-manifest.v1.json')
+const operationMatrixSchemaPath = path.join(repoRoot, 'docs', 'discovery', 'entity-operation-matrix.schema.v1.json')
+const operationMatrixPath = path.join(repoRoot, 'docs', 'discovery', 'entity-operation-matrix.v1.json')
 const expectedPlanReportKeys = [
   'report.balance-sheet',
   'report.profit-and-loss',
@@ -113,6 +115,8 @@ function main() {
   const profile = readJson(profilePath)
   const volumeProposal = readJson(volumePath)
   const requiredReportManifest = readJson(requiredReportManifestPath)
+  const operationMatrixSchema = readJson(operationMatrixSchemaPath)
+  const operationMatrix = readJson(operationMatrixPath)
 
   if (!schema.$id || !schema.$defs?.capability || !schema.$defs?.report) {
     throw new Error('registry.schema.v1.json is missing its versioned id or core definitions')
@@ -126,6 +130,13 @@ function main() {
       .map((error) => `${error.instancePath || '/'} ${error.message}`)
       .join('; ')
     throw new Error(`catalog.v1.json does not satisfy registry.schema.v1.json: ${details}`)
+  }
+  const validateOperationMatrix = ajv.compile(operationMatrixSchema)
+  if (!validateOperationMatrix(operationMatrix)) {
+    const details = validateOperationMatrix.errors
+      .map((error) => `${error.instancePath || '/'} ${error.message}`)
+      .join('; ')
+    throw new Error(`entity-operation-matrix.v1.json does not satisfy its schema: ${details}`)
   }
 
   requireFields(
@@ -153,6 +164,54 @@ function main() {
   const sourceKeys = uniqueKeys(catalog.sources, 'sources')
   const capabilityKeys = uniqueKeys(catalog.capabilities, 'capabilities')
   const reportKeys = uniqueKeys(catalog.reports, 'reports')
+  assertReferences(operationMatrix.sourceIds, sourceKeys, 'entity operation matrix sourceIds')
+  const expectedOperationEntities = {
+    'sales.receivables-lifecycle': ['Estimate', 'Invoice', 'SalesReceipt', 'Payment', 'CreditMemo', 'RefundReceipt', 'Deposit'],
+    'expenses.payables-lifecycle': ['PurchaseOrder', 'Purchase', 'Bill', 'BillPayment', 'VendorCredit']
+  }
+  const operationCapabilityKeys = new Set()
+  for (const lifecycle of operationMatrix.lifecycles) {
+    if (operationCapabilityKeys.has(lifecycle.capabilityKey)) {
+      throw new Error(`entity operation matrix contains duplicate lifecycle "${lifecycle.capabilityKey}"`)
+    }
+    operationCapabilityKeys.add(lifecycle.capabilityKey)
+    if (!capabilityKeys.has(lifecycle.capabilityKey)) {
+      throw new Error(`entity operation matrix references unknown capability "${lifecycle.capabilityKey}"`)
+    }
+    const expectedEntities = expectedOperationEntities[lifecycle.capabilityKey]
+    if (!expectedEntities) {
+      throw new Error(`entity operation matrix contains unexpected lifecycle "${lifecycle.capabilityKey}"`)
+    }
+    const entityNames = lifecycle.entities.map((entry) => entry.entity)
+    if (new Set(entityNames).size !== entityNames.length) {
+      throw new Error(`entity operation matrix ${lifecycle.capabilityKey} contains duplicate entities`)
+    }
+    const missingEntities = expectedEntities.filter((entity) => !entityNames.includes(entity))
+    const unexpectedEntities = entityNames.filter((entity) => !expectedEntities.includes(entity))
+    if (missingEntities.length || unexpectedEntities.length) {
+      throw new Error(`entity operation matrix ${lifecycle.capabilityKey} is incomplete: missing [${missingEntities.join(', ')}]; unexpected [${unexpectedEntities.join(', ')}]`)
+    }
+    for (const entity of lifecycle.entities) {
+      assertReferences(entity.sourceIds, sourceKeys, `entity operation matrix ${lifecycle.capabilityKey}.${entity.entity}.sourceIds`)
+    }
+    const capability = catalog.capabilities.find((entry) => entry.key === lifecycle.capabilityKey)
+    for (const operation of ['read', 'create', 'update', 'delete', 'void']) {
+      const classifications = new Set(lifecycle.entities.map((entry) => entry.operations[operation]))
+      const expectedComposite = classifications.has('unknown')
+        ? 'unknown'
+        : classifications.size === 1 && classifications.has('supported')
+          ? 'supported'
+          : 'conditional'
+      if (capability.apiOperations[operation] !== expectedComposite) {
+        throw new Error(`capability ${lifecycle.capabilityKey}.apiOperations.${operation} must be ${expectedComposite} to match the entity operation matrix`)
+      }
+    }
+  }
+  for (const capabilityKey of Object.keys(expectedOperationEntities)) {
+    if (!operationCapabilityKeys.has(capabilityKey)) {
+      throw new Error(`entity operation matrix is missing lifecycle "${capabilityKey}"`)
+    }
+  }
   requireFields(requiredReportManifest, ['manifestVersion', 'planSection', 'reports'], 'required report manifest')
   const requiredReportKeys = uniqueKeys(requiredReportManifest.reports, 'required report manifest')
   if (requiredReportManifest.planSection !== '13.2') {
@@ -228,6 +287,12 @@ function main() {
     if (capability.evidenceStatus !== 'unverified' && !capability.lastVerified) {
       throw new Error(`capability ${capability.key} claims evidence without lastVerified`)
     }
+    if (
+      capability.coverageState !== 'unknown' &&
+      ['unverified', 'documented', 'static-verified'].includes(capability.evidenceStatus)
+    ) {
+      throw new Error(`capability ${capability.key} claims dataset coverage without observed or manually verified evidence`)
+    }
   }
 
   const reportFields = [
@@ -272,6 +337,12 @@ function main() {
     }
     if (report.evidenceStatus !== 'unverified' && !report.lastVerified) {
       throw new Error(`report ${report.key} claims evidence without lastVerified`)
+    }
+    if (
+      report.coverageState !== 'unknown' &&
+      ['unverified', 'documented', 'static-verified'].includes(report.evidenceStatus)
+    ) {
+      throw new Error(`report ${report.key} claims dataset coverage without observed or manually verified evidence`)
     }
   }
 
@@ -334,6 +405,13 @@ function main() {
         entry.apiSurface === 'unknown' ||
         Object.values(entry.apiOperations).includes('unknown'))
   )
+  const operationMatrixUnknown = operationMatrix.lifecycles.reduce(
+    (total, lifecycle) => total + lifecycle.entities.reduce(
+      (entityTotal, entity) => entityTotal + Object.values(entity.operations).filter((status) => status === 'unknown').length,
+      0
+    ),
+    0
+  )
 
   if (catalog.status === 'approved' && (unknownCapabilities.length > 0 || unknownReports.length > 0)) {
     throw new Error('an approved catalog cannot contain release-blocking unknowns')
@@ -343,6 +421,7 @@ function main() {
   console.log(`Sources: ${sourceKeys.size}`)
   console.log(`Capabilities: ${capabilityKeys.size} (${staticUnknownCapabilities.length} static classification unknown; ${unknownCapabilities.length} release blockers including dataset evidence)`)
   console.log(`Tier 1 static classification unknown: ${tierOneStaticUnknown.length}`)
+  console.log(`Tier 1 entity operation matrix: ${operationMatrix.lifecycles.reduce((total, lifecycle) => total + lifecycle.entities.length, 0)} exact entities; ${operationMatrixUnknown} operation questions remain (${operationMatrix.status})`)
   console.log(`Reports: ${reportKeys.size} (${staticUnknownReports.length} static classification unknown; ${unknownReports.length} release blockers including dataset evidence)`)
   console.log(`Plan-required report manifest: ${requiredReportKeys.size} linked rows`)
   console.log(`Flagship profile: ${profile.profileVersion} (${profile.status})`)

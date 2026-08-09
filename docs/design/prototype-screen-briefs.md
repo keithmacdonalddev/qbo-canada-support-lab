@@ -29,7 +29,7 @@ Every screen includes the same rail, public Test Data Lab identity, Production s
 
 - **Question:** Which product or report claim lacks current evidence?
 - **Primary action:** Open the highest-priority gap.
-- **Fixture story:** The current static inventory is visible: two Tier 1 entity-operation matrices and 21 report classifications remain Unknown; reconciliation is Manual only; company evidence is still absent.
+- **Fixture story:** The 12 Tier 1 entities and all 48 report rows are inventoried; 30 exact Tier 1 operations, two lower-tier API questions, and all connected-company/dataset evidence remain open; reconciliation is Manual only.
 - **States:** Covered, Partial, Manual only, Unknown, Stale, Permission denied.
 - **Narrow priority:** Status, tier, capability, and gap action; API detail moves into disclosure.
 

@@ -15,6 +15,7 @@
     "dev:backend": "npm run dev --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend -- --strictPort",
     "test:launcher": "node --test scripts/dev-launcher.test.js",
+    "test:backend": "npm run test --workspace=backend",
     "render:discovery": "node scripts/render-discovery-catalog.js",
     "validate:discovery": "node scripts/validate-discovery-catalog.js",
     "validate:design": "node scripts/validate-rebuild-design.js",

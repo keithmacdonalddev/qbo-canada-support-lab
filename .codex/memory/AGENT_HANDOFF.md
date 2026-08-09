@@ -1,6 +1,6 @@
 # Codex Agent Handoff
 
-> Status refresh (2026-07-11): the older note below that labels dashboard work as uncommitted is obsolete. Use fresh `git status` and the current checkout as the authority for pending work.
+> Status refresh (2026-08-09): the older dashboard branch notes below are historical. The rebuild now has a complete catalog, a draft 12-entity matrix with 30 explicit Tier 1 operation unknowns, complete report static classification, fixture-verified Phase 2 designs, and an initial read-only Phase 3 foundation. Use fresh `git status`, `roadmap.md`, and `REBUILD_RELEASE_EVIDENCE.md` as current authority.
 
 Use this file to orient future coding agents on current repo-specific workflow.
 
@@ -10,9 +10,11 @@ Use this file to orient future coding agents on current repo-specific workflow.
 - Agent git workflow (2026-05-29): work in the canonical `C:\Projects\qbo` checkout on `main`; do not use `.claude/worktrees/`, Git worktrees, alternate clones, detached checkouts, or non-`main`/`master` branches unless the user explicitly asks in the current conversation. Unqualified commit/push requests target `origin/main` for this checkout, or `origin/master` only if a future checkout is configured that way.
 - DONE (2026-05-28): Production wiring. A REAL QBO Advanced Canada company is connected. `.env` is `QBO_ENVIRONMENT=production` with production client id/secret and an ngrok reserved-domain redirect URI registered in Intuit "Support Lab" Production. The ngrok tunnel fronts the local backend (port 3001) for the OAuth callback only; frontend stays on localhost:5173 (no code change needed for backend-only tunneling). Tunnel only needed during connect/reconnect.
 - DONE (2026-05-28): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
-- Pending next steps:
-  - Optional: extend `requireProductionConfirm` to AI plan-execution writes (the one QBO-mutating path not yet behind the guard).
-  - Planned-but-unbuilt: multicurrency support (foreign-currency accounts, revaluation, balance-sheet FX).
+- Current next steps:
+  - Obtain the four owner decisions in `docs/rebuild-owner-approval.md`.
+  - Complete the Phase 3 membership dry run and encrypted realm-owned connection design without running a migration.
+  - Expand server authorization tests across every mutation route.
+  - Keep multicurrency activation and fixtures separately gated.
 - App identity is an INDEPENDENT personal app; public/app names must NOT contain "QBO"/"QuickBooks"/"Intuit"/"QB" (public name "Test Data Lab"; Intuit registration "Support Lab"). Hosted legal pages exist at the project's GitHub Pages site; local `legal/` source is untracked.
 
 ## Default Workflow
@@ -27,7 +29,8 @@ Use this file to orient future coding agents on current repo-specific workflow.
 ## Risk Hotspots
 
 - `scripts/phase-0/`: direct QBO OAuth and validation scripts using `.tokens.json`.
-- `backend/src/server.js`: startup side effects.
+- `backend/src/server.js` and `backend/src/app.js`: explicit startup versus import-safe app construction. MongoDB connection still requires startup permission; legacy startup writes are default-off.
+- `backend/src/routes/rebuild.js`, `modules/rebuild-context.js`, and `modules/rebuild-permissions.js`: server-owned realm and permission boundaries.
 - `backend/src/routes/seed.js`, `generate.js`, `issuepacks.js`, `checkpoint.js`, `ai.js`: mutation and approval boundaries.
 - `backend/src/modules/qbo-client.js`: OAuth token refresh, status-based QBO API calls, 429 backoff, thrown errors with `err.status`/`err.intuit_tid`.
 - `backend/src/modules/qbo-error.js`: maps QBO upstream errors to HTTP 502 (429 passthrough). Never let a QBO-side 401 reach the client as an app-level 401 (forces logout).

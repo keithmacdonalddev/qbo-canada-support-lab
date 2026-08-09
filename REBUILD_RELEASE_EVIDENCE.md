@@ -21,9 +21,9 @@
 | Phase | Status | Owner | Required acceptance evidence | Current evidence |
 | --- | --- | --- | --- | --- |
 | 0. Product reset | Accepted | Lab owner | Approved mission, name, priorities, owners, non-goals, roadmap, evidence contract | `prd.md`; `roadmap.md`; plan section 35; historical phase status notes; public app name |
-| 1. Capability/report discovery | In progress | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | Draft 2020 schema-valid catalog: 23 sources, 24 capabilities, 48 plan-required reports; two Tier 1 operation matrices and 21 report classifications remain unknown; no live spikes |
-| 2. Design system/prototypes | Fixture verified | Lab owner | `DESIGN.md`, `DESIGN.HTML`, six workflows, light/dark desktop/narrow renders, accessibility and reachability review | Six workflows; 28 renders; 70 responsive browser checks; 26 contrast pairs; owner/NVDA acceptance pending |
-| 3. Server foundation | Not started | Lab owner | Authorization/context contracts, invariant tests, migration dry run, startup decision | None |
+| 1. Capability/report discovery | In progress; static gaps and owner/live evidence pending | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | Draft 2020 schema-valid catalog: 41 sources, 24 capabilities, a 12-entity draft operation matrix, and 48 statically classified reports; 30 exact Tier 1 operations, connected-company evidence, and owner approval pending |
+| 2. Design system/prototypes | Fixture verified | Lab owner | `DESIGN.md`, `DESIGN.HTML`, six workflows, light/dark desktop/narrow renders, accessibility and reachability review | Six workflows; 28 renders; 70 responsive browser checks; 26 contrast pairs; owner visual approval pending; React/NVDA/forced-colours checks are Phase 4 |
+| 3. Server foundation | Static verified; in progress | Lab owner | Authorization/context contracts, invariant tests, migration dry run, startup decision | Read-only context/definition routes; additive membership/blueprint models; default-off experimental mutations/startup writes; ten backend contract tests; migration/encryption/audit gate open |
 | 4. Shell/read-only coverage | Not started | Lab owner | New shell and Overview/Coverage states, fixture and browser evidence | None |
 | 5. Blueprint/master data | Not started | Lab owner | Published blueprint, sandbox idempotency, accounting fixtures, preview/audit evidence | None |
 | 6. Historical lifecycles | Not started | Lab owner | Approved horizon, linked lifecycle fixtures, no gaps/duplicates, critical report plausibility | None |
@@ -70,8 +70,8 @@
 - [x] Product applicability, API operations, app implementation, dataset coverage, and evidence are separate fields.
 - [x] `unknown` is a valid discovery state and a release failure.
 - [x] Stable capability/report keys and link validation exist.
-- [ ] Every candidate Tier 1 capability is statically classified — receivables and payables still need individual-entity update/delete/void matrices.
-- [ ] Every critical report is statically classified with prerequisites and assertions — all required rows exist, but 21 classifications remain `unknown`.
+- [ ] Every candidate Tier 1 operation is statically classified. The seven-entity receivables and five-entity payables draft matrix is schema valid, but 24 create/update cells and six void operations remain explicitly unknown.
+- [x] Every critical report is statically classified with prerequisites, assertions, source, and manual navigation where no endpoint exists.
 
 ### Official-source research
 
@@ -85,8 +85,8 @@
 - [x] Canadian tax create/read/update boundaries classified without claiming unsupported automation.
 - [x] Budget and recurring-transaction boundaries classified; unresolved lower-tier operations remain explicit unknowns.
 - [x] All 48 plan section 13.2 report rows are represented and validated against the required-report manifest.
-- [x] Current official pass records 23 documented report endpoints and four initial product/manual classifications.
-- [ ] Twenty-one plan-required report rows still need exact API, product/manual, unsupported, or approved-exclusion classification.
+- [x] Current official pass records 23 documented report endpoints and 25 exact product/manual or conditional classifications.
+- [x] All 21 formerly unresolved plan-required rows now have exact product/API/manual classification and discrepancies.
 
 ### Live evidence
 
@@ -98,9 +98,9 @@
 ### Static discovery result
 
 - [x] `npm run render:discovery`
-- [x] `npm run validate:discovery` compiles the Draft 2020 schema with Ajv and validates the complete catalog plus required-report manifest.
-- [ ] Two Tier 1 static operation classifications remain unresolved.
-- [ ] Twenty-one report static classifications remain unresolved.
+- [x] `npm run validate:discovery` compiles both Draft 2020 schemas with Ajv and validates the complete catalog, draft entity-operation matrix, required-report manifest, and dataset-evidence guardrails.
+- [ ] Candidate Tier 1 static operation classification has no unknown; 30 exact create/update/void operation references are still open.
+- [x] Required report static classification has no unknown.
 - [ ] Company-specific dataset evidence and freshness remain release blockers until separately approved observation.
 - [ ] Lab-owner approval of the catalog, flagship profile, and volume proposal remains open.
 
@@ -126,8 +126,8 @@
 - [x] Reduced-motion and forced-colour CSS contracts pass static validation.
 - [x] `npm run verify:design:browser` deterministically regenerates evidence using a local-only fixture server, rejects external requests, and records source/screenshot hashes plus tool and environment versions in `browser-review.json`.
 - [x] Evidence and limitations are recorded in `docs/design/rendered-review.md` and `artifacts/rebuild/design-evidence/browser-review.json`.
-- [ ] Manual NVDA and Windows forced-colours workflow acceptance — deferred until React focus/interaction behaviour exists.
-- [ ] Component interaction tests — deferred until fixtures become real components.
+- [ ] Manual NVDA and Windows forced-colours workflow acceptance — Phase 4 gate after React focus/interaction behaviour exists.
+- [ ] React component interaction tests — Phase 4 gate after fixtures become real components.
 - [ ] Lab-owner visual approval of the six workflows and design direction.
 
 ### Static verification
@@ -137,7 +137,31 @@
 - [x] `npm run build --workspace=frontend`
 - [x] `npm run lint --workspace=frontend` (zero errors; three pre-existing React hook dependency warnings in `AICommandCenter.jsx`)
 
-Phase 2 remains `Fixture verified`, not `Accepted`. The package is ready for owner review but does not authorize Phase 3, app runtime startup, QBO calls, database writes, or Production scheduling.
+Phase 2 remains `Fixture verified`, not `Accepted`. The package is ready for owner review. The user's 2026-08-09 instruction separately authorizes the non-live Phase 3 foundation now recorded below; it does not authorize app runtime startup, QBO calls, database writes, or Production scheduling.
+
+## Phase 3 initial foundation evidence
+
+### Implemented static contracts
+
+- [x] `GET /api/context` resolves realm/company from the authenticated user's server-side active connection and returns safe metadata only.
+- [x] Client-supplied realm/company/environment overrides are rejected across the new route family.
+- [x] Authenticated, permission-checked capability, operation-matrix, report, blueprint-proposal, and volume-profile read endpoints exist.
+- [x] Additive `CompanyMembership` and `BlueprintVersion` models plus a pure blueprint validator exist; no migration/write route ran.
+- [x] Legacy-role compatibility grants read permissions only until explicit memberships exist.
+- [x] Request IDs and the new validation/error envelope are covered by contract tests.
+- [x] Legacy AI plan execution and issue-pack execution are off by default before the QBO handler boundary.
+- [x] Importing `server.js` does not start it; legacy startup seeding and stale-run rewrites are default-off.
+- [x] `npm run test:backend` passes ten non-live tests, including public health reachability, route-level denial checks, sanitized failures, derived blueprint validation, and read-only legacy-role migration behavior.
+- [x] Connection/membership/encryption/startup decisions and remaining Phase 3 gates are documented in `docs/architecture/rebuild-phase-3-foundation.md`.
+
+### Open Phase 3 gate work
+
+- [ ] Membership migration dry run and owner review.
+- [ ] Realm-owned encrypted connection model and reversible migration.
+- [ ] Authorization matrix tests for every mutation route.
+- [ ] Full sanitized audit/correlation and consistent legacy-route validation contracts.
+- [ ] Blueprint write/version workflow with permission and audit evidence.
+- [ ] Owner acceptance of migration, encryption, and startup decisions.
 
 ## Evidence record template
 

@@ -34,7 +34,9 @@ Multiple coding-agent sessions may work in this checkout at the same time.
 Treat docs as useful but potentially stale. Re-check source before making status claims.
 
 - Rebuild authority: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, and `REBUILD_RELEASE_EVIDENCE.md`.
-- Rebuild status (2026-08-08): Phase 0 product reset is complete; Phase 1 static capability/report discovery has started under `docs/discovery/`; no new rebuild mutation path exists yet.
+- Rebuild status (2026-08-09): Phase 0 is complete; Phase 1 has a complete catalog and all 48 report rows are statically classified, while 24 create/update cells, six void operations, dataset evidence, and owner approval remain open; Phase 2 is fixture verified pending owner visual approval; an initial non-live Phase 3 read-only server foundation exists. No new rebuild QBO mutation path exists.
+- Phase 3 read-only foundation: `backend/src/routes/rebuild.js` serves server-owned `/api/context`, capability/report definitions, the operation matrix, and proposal reads. `CompanyMembership` and `BlueprintVersion` are additive models only; no migration has run. See `docs/architecture/rebuild-phase-3-foundation.md`.
+- Server-owned flags default legacy AI plan execution, issue-pack execution, and legacy startup database maintenance off. Importing `backend/src/server.js` does not start the server. Explicit backend startup still connects MongoDB; do not run it without permission.
 - Historical phase docs remain useful implementation evidence but no longer set product priority: `phase-0-api-validation-spike.md`, `phase-1-foundation-plan.md`, `phase-2-plan.md`, `phase-2-reality-inspection-plan.md`, `phase-3-ai-layer-plan.md`, and `phase-4-hardening-plan.md`.
 - Phase 0 scripts exist under `scripts/phase-0/`.
 - Backend code exists under `backend/src/` with Express, Mongoose, QBO OAuth/client modules, seeding, generation, checkpoints, issue packs, audit, and AI routes.
@@ -52,7 +54,8 @@ Read only the files needed for the task. Use this routing before broad scanning.
 
 - Project orientation: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, `REBUILD_RELEASE_EVIDENCE.md`, `package.json`, `backend/package.json`, `frontend/package.json`.
 - Capability/report discovery: `docs/discovery/README.md`, `docs/discovery/registry.schema.v1.json`, `docs/discovery/catalog.v1.json`, `docs/discovery/catalog.v1.md`.
-- Backend startup and side effects: `backend/src/server.js`, `backend/src/config/index.js`, `backend/src/config/database.js`.
+- Backend startup and side effects: `backend/src/server.js`, `backend/src/app.js`, `backend/src/config/index.js`, `backend/src/config/database.js`.
+- Rebuild context/definitions: `backend/src/routes/rebuild.js`, `backend/src/modules/rebuild-context.js`, `backend/src/modules/rebuild-definitions.js`, `backend/src/modules/rebuild-permissions.js`, `backend/src/models/CompanyMembership.js`, `backend/src/models/BlueprintVersion.js`.
 - QBO auth/client work: `backend/src/routes/qbo.js`, `backend/src/modules/qbo-client.js`, `backend/src/modules/qbo-error.js`, `scripts/phase-0/lib/qbo-client.js`.
 - Seeding/generation: `backend/src/routes/seed.js`, `backend/src/routes/generate.js`, `backend/src/modules/generation-engine.js`.
 - Inspection/checkpoints: `backend/src/routes/explore.js`, `backend/src/routes/checkpoint.js`, `backend/src/modules/checkpoint.js`.
@@ -96,7 +99,7 @@ This project can mutate a real or sandbox QBO company and a local/Atlas MongoDB 
 - Never print `.env`, `.tokens.json`, OAuth tokens, JWT secrets, QBO client secrets, API keys, raw Authorization headers, or user-supplied AI keys.
 - Do not run Phase 0 QBO scripts unless explicitly asked in the current conversation: `npm run connect`, `npm run seed`, `npm run ar-chain`, `npm run ap-chain`, `npm run read-chains`, `npm run rate-limits`, `npm run sales-order`.
 - Do not call backend routes that mutate QBO or database state unless explicitly requested. This includes seeding, generation, issue pack execution, plan execution, QBO OAuth flows, checkpoint creation/deletion, and settings changes that save keys.
-- Do not start, stop, restart, or replace long-running backend/frontend servers unless explicitly asked. Backend startup connects to MongoDB, seeds built-in issue packs, and marks stale jobs/plans failed.
+- Do not start, stop, restart, or replace long-running backend/frontend servers unless explicitly asked. Backend startup connects to MongoDB. Legacy issue-pack seeding and stale job/plan rewrites are default-off, but may be re-enabled by local server configuration.
 - It is OK to inspect code, read logs, check `git status`, run static checks, and explain what command the user should run.
 - If live verification requires a running app or QBO-connected company, say so and ask before starting or mutating anything.
 
@@ -113,7 +116,7 @@ Backend:
 
 - `npm run dev --workspace=backend` - starts nodemon. Explicit request only.
 - `npm run start --workspace=backend` - starts server. Explicit request only.
-- No backend test script is currently defined.
+- `npm run test --workspace=backend` - safe non-live backend unit/contract tests.
 - Safe default syntax check: `Get-ChildItem backend/src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }`
 
 Frontend:

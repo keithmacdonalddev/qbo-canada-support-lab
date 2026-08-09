@@ -1,0 +1,103 @@
+{
+  "$schema": "./entity-operation-matrix.schema.v1.json",
+  "matrixVersion": "1.0.0",
+  "status": "review",
+  "asOfDate": "2026-08-09",
+  "evidenceStatus": "documented",
+  "sourceIds": [
+    "intuit.api-overview",
+    "intuit.api-explorer-guide",
+    "intuit.linked-transactions",
+    "intuit.webhook-operations"
+  ],
+  "lifecycles": [
+    {
+      "capabilityKey": "sales.receivables-lifecycle",
+      "entities": [
+        {
+          "entity": "Estimate",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "not-documented" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent transaction deletion and the webhook table establishes notification events. Exact create/update API operations are not recorded from the entity reference and remain unknown; no Void event is documented."
+        },
+        {
+          "entity": "Invoice",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "supported" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.linked-transactions", "intuit.webhook-operations"],
+          "notes": "The overview uses Invoice examples, documents simplified deletion, and the linked-transaction guidance documents API void behavior. Exact create/update operation sections are not recorded from the entity reference and remain unknown."
+        },
+        {
+          "entity": "SalesReceipt",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections are not recorded from the entity reference; the webhook Void event proves notification availability only."
+        },
+        {
+          "entity": "Payment",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections and linked/settled-state constraints are not recorded from the entity reference; the webhook event is notification evidence only."
+        },
+        {
+          "entity": "CreditMemo",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections are not recorded from the entity reference; the webhook Void event proves notification availability only."
+        },
+        {
+          "entity": "RefundReceipt",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections are not recorded from the entity reference; the webhook Void event proves notification availability only."
+        },
+        {
+          "entity": "Deposit",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "not-documented" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes transaction deletion using the full-payload form. Exact create/update operation sections are not recorded from the entity reference and remain unknown; no Void event is documented."
+        }
+      ]
+    },
+    {
+      "capabilityKey": "expenses.payables-lifecycle",
+      "entities": [
+        {
+          "entity": "PurchaseOrder",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "not-documented" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion, while the webhook table establishes notification events only. Exact create/update operation sections are not recorded from the entity reference; a historical Phase 0 sandbox create also returned a Fault."
+        },
+        {
+          "entity": "Purchase",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections are not recorded from the entity reference; the webhook Void event proves notification availability only."
+        },
+        {
+          "entity": "Bill",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "not-documented" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update operation sections are not recorded from the entity reference and remain unknown; no Void event is documented and linked payments constrain safety."
+        },
+        {
+          "entity": "BillPayment",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "unknown" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes permanent deletion. Exact create/update/void operation sections and account/linked-bill constraints are not recorded from the entity reference; the webhook event is notification evidence only."
+        },
+        {
+          "entity": "VendorCredit",
+          "operations": { "read": "supported", "create": "unknown", "update": "unknown", "delete": "supported", "void": "not-documented" },
+          "sourceIds": ["intuit.api-overview", "intuit.api-explorer-guide", "intuit.webhook-operations"],
+          "notes": "The overview establishes simplified permanent deletion. Exact create/update operation sections are not recorded from the entity reference and remain unknown; no Void event is documented."
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "This is static official-document classification, not sandbox or Production mutation evidence.",
+    "A webhook lifecycle event establishes notification availability only; it does not establish that an API client can invoke the corresponding mutation. Unknown operations require an exact current entity reference or separately approved sandbox evidence. Not-documented means the reviewed official sources do not establish a Void operation; it is not a claim that every future Intuit surface will reject one.",
+    "Supported does not mean universally safe: linked transactions, record state, accounting periods, preferences, entitlements, and locale can still reject or make a mutation inappropriate.",
+    "No new write path may use this matrix without server-owned permissions, exact realm context, preview, idempotency, budgets, audit, and separately approved sandbox evidence."
+  ]
+}

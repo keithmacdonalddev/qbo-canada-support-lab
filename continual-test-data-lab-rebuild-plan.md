@@ -1,6 +1,6 @@
 # Continual Test Data Lab Rebuild Plan
 
-> - **Status:** Approved for phased implementation; Phase 0 complete and Phase 1 discovery started
+> - **Status:** Approved for phased implementation; Phase 0 complete, Phase 1 static classification and Phase 2 fixtures implemented, initial Phase 3 foundation started
 > - **Decision state:** Product direction approved 2026-08-08; live QBO, database, runtime, and Production automation gates remain separate
 > - **Prepared:** 2026-08-08
 > - **Target repository:** `C:\Projects\qbo` on `main`
@@ -82,7 +82,7 @@ This plan is based on direct inspection of the current implementation. The most 
 | `backend/src/routes/company.js` and `frontend/src/pages/Dashboard.jsx` | The primary snapshot is a small set of counts and connection health | The UI cannot explain business realism, coverage, continuity, or report health |
 | `backend/src/server.js` route registration | No report, reconciliation, capability-registry, business-calendar, or general app-data administration route exists | The core operational model is not implemented yet |
 | `backend/src/models/User.js`, `backend/src/routes/auth.js`, and `backend/src/middleware/auth.js` | Local roles are only `agent` and `supervisor`; registration always creates `agent`; role middleware exists but is not broadly applied | Neither local authorization nor QBO-company user/role coverage is complete |
-| `backend/src/server.js` | Startup seeds issue-pack definitions and marks interrupted jobs/plans failed | Startup currently performs database writes and long operations are not resumable |
+| `backend/src/server.js` and `backend/src/app.js` | App construction/import is side-effect-free; explicit startup still connects MongoDB, while legacy issue-pack seeding and interrupted job/plan rewrites are default-off | Startup is safer but not neutral; durable recovery and an approved migration/startup policy remain Phase 3 gates |
 | `frontend/src/App.jsx` and `frontend/src/components/Layout.jsx` | AI, checkpoints, and issue packs remain first-class routes; the shell is fixed desktop navigation | Information architecture still expresses the displaced product intent |
 | `frontend/src/index.css` and `frontend/src/components/ui/` | Tailwind/shadcn-era tokens and basic primitives exist, but old and new token families coexist and the system lacks a comprehensive responsive/state/accessibility specification | Reuse the viable foundation, but consolidate it into a governed design system |
 
@@ -1581,8 +1581,10 @@ Each phase has a passing gate. Later phases do not start simply because code exi
 
 - static frontend build/lint;
 - component interaction tests;
-- automated accessibility scan plus manual keyboard/NVDA checks;
+- automated structural accessibility checks plus manual keyboard review for the standalone fixtures;
 - rendered screenshot comparison.
+
+React-specific component interaction, live route/focus behavior, manual NVDA, and Windows forced-colours walkthroughs are Phase 4 acceptance evidence. Phase 2 approves the visual and workflow contract; it does not claim assistive-technology behavior for components that do not exist yet.
 
 **Live impact:** none; use fixtures, not a running production backend.
 
@@ -1642,6 +1644,7 @@ Each phase has a passing gate. Later phases do not start simply because code exi
 **Verification**
 
 - frontend build/lint/unit/accessibility/visual tests;
+- React component interaction tests plus manual keyboard, NVDA, and Windows forced-colours workflow acceptance;
 - mocked/server-fixture integration;
 - browser verification only if the user authorizes app startup or it is already running.
 
@@ -1877,7 +1880,7 @@ Use the target organization in section 25.1, plus:
 
 ### 32.4 Tests and tooling
 
-The backend currently has no defined test script. Phase 3 should add the smallest maintained test stack that supports CommonJS unit tests, HTTP contract tests, fixtures, and deterministic fake timers/random seeds. The frontend should add component and browser testing only with a clear maintenance plan.
+Phase 3 now has a maintained Node test script with ten non-live unit/HTTP contract tests covering the initial read-only foundation, public health reachability, authority boundaries, feature gates, and import safety. Expand it with deterministic fake timers/random seeds and broader authorization coverage as later slices add behavior. The frontend should add component and browser testing only with a clear maintenance plan.
 
 Dependencies are approved one at a time. Every added package needs a purpose, current maintenance/security check, bundle/runtime impact review, and removal of superseded code where safe.
 
@@ -2113,7 +2116,7 @@ Reviewers should fail this plan or a later phase if any answer is “no.”
 
 ## 38. First implementation slice after approval
 
-**Current state (2026-08-09):** Steps 1–6 are implemented at the static/fixture boundary. Phase 1 has a Draft 2020 schema-valid catalog, a manifest containing all 48 plan-required report rows, a dependency map, a flagship proposal, and three bounded volume profiles. It remains in progress because two Tier 1 composite operation matrices and 21 report classifications are explicitly unresolved. Phase 2 has the design contract, component/state matrix, six fixture workflows, 28 exact light/dark desktop/narrow renders, and 70 reproducible responsive/interaction checks with hashed local sources. Step 7 is the current gate: the unresolved discovery classifications, company-specific evidence, lab-owner approval, and React-migration assistive-technology checks remain open. No live QBO, database, OAuth, app-runtime, or Production-scheduling action was authorized or performed.
+**Current state (2026-08-09):** Steps 1–6 are implemented at the static/fixture boundary. Phase 1 has a Draft 2020 schema-valid catalog, a manifest containing all 48 plan-required report rows, a dependency map, a flagship proposal, and three bounded volume profiles. All 48 report rows have static retrieval classifications; the Tier 1 entity inventory is complete, but 24 exact create/update references and six void operations remain explicitly unknown. Two lower-tier API questions, all connected-company/dataset evidence, and lab-owner approval also remain open. Phase 2 has the design contract, component/state matrix, six fixture workflows, 28 exact light/dark desktop/narrow renders, and 70 reproducible responsive/interaction checks with hashed local sources. Step 7 remains the owner decision gate for the catalog/profile/volumes and visual direction. React-specific component, NVDA, and Windows forced-colours acceptance is explicitly a Phase 4 gate. The lab owner separately authorized beginning the non-live, read-only Phase 3 server foundation on 2026-08-09; that authorization does not accept Phase 1 or Phase 2 and does not authorize QBO, OAuth, database, runtime, or Production-scheduling operations.
 
 The shortest safe first slice is documentation and discovery, not generation code:
 

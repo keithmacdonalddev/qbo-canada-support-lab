@@ -7,6 +7,7 @@ const AISession = require('../models/AISession');
 const AIPlan = require('../models/AIPlan');
 const { authenticate } = require('../middleware/auth');
 const { requireProductionConfirm } = require('../middleware/productionGuard');
+const { requireFeatureFlag, publicFeatureFlags } = require('../middleware/featureGate');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
@@ -88,6 +89,7 @@ router.get('/config', authenticate, async (req, res) => {
     success: true,
     data: {
       ...keyConfig,
+      featureFlags: publicFeatureFlags().experimental,
       hasUserKey,
       maskedKey,
       available,
@@ -194,8 +196,12 @@ router.post('/plan/:id/reject', async (req, res) => {
  * gated by requireProductionConfirm (server-side backstop): the request body
  * must carry `confirmProduction: true` or it returns 412. No-op in sandbox.
  */
-router.post('/plan/:id/execute', requireProductionConfirm, async (req, res) => {
-  try {
+router.post(
+  '/plan/:id/execute',
+  requireFeatureFlag('experimental.aiMutations', { message: 'Legacy AI mutations are disabled by server policy' }),
+  requireProductionConfirm,
+  async (req, res) => {
+    try {
     const plan = await orchestrator.executePlan(req.params.id, req.user.id);
 
     const connection = await getActiveConnection(req.user.id);
@@ -213,12 +219,13 @@ router.post('/plan/:id/execute', requireProductionConfirm, async (req, res) => {
     }
 
     return res.json({ success: true, data: { plan } });
-  } catch (err) {
+    } catch (err) {
     console.error('[ai/plan/execute]', err.message);
     if (sendQboErrorJson(res, err)) return;
     return res.status(err.status || 500).json({ success: false, error: err.message });
+    }
   }
-});
+);
 
 /**
  * GET /sessions

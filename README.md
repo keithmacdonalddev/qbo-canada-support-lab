@@ -6,11 +6,12 @@ The app is being rebuilt around business definition, capability and report cover
 
 ## Rebuild status
 
-Updated: 2026-08-08
+Updated: 2026-08-09
 
 - Phase 0 product reset is complete.
-- Phase 1 capability/report discovery is in progress using static artifacts and official-source research.
-- No new rebuild mutation path, scheduler, database model, or live operation has been implemented yet.
+- Phase 1 has a complete catalog and all 48 report rows are statically classified; 30 exact Tier 1 operations, dataset evidence, and owner approval remain open.
+- Phase 2 is fixture verified with six rendered workflows; owner visual approval remains open.
+- An initial Phase 3 read-only foundation adds server-owned context/definition routes and additive membership/blueprint models. No migration, scheduler, new QBO mutation path, or live operation has been run.
 - Existing seeding, generation, explorer, checkpoints, issue packs, audit, and AI surfaces remain in source during migration.
 - Checkpoints are deferred; current issue packs and AI are legacy/experimental, not core rebuild requirements.
 
@@ -28,19 +29,19 @@ Production API access is unlocked and a real QBO Advanced Canada company is conn
 
 Treat every live QBO operation as a real-company operation. Do not run OAuth, seed, generation, issue-pack, checkpoint, AI-execution, or other mutating actions without explicit approval for the exact target and action. Automatic Production scheduling is not approved.
 
-Backend startup is also not neutral: it connects to MongoDB, seeds built-in issue-pack definitions, and marks stale jobs and AI plans failed. Do not start, stop, or restart app services unless explicitly requested.
+Backend startup is still not neutral because it connects to MongoDB. Legacy issue-pack seeding and stale job/plan rewrites are now off by default behind a server flag, but do not start, stop, or restart app services unless explicitly requested.
 
 ## Current implementation baseline
 
 | Area | Present now | Rebuild status |
 | --- | --- | --- |
-| Authentication and connection | Email/password auth, protected routes, QBO OAuth and token handling | Will move to realm memberships and server-enforced capability permissions in Phase 3 |
+| Authentication and connection | Email/password auth, protected routes, QBO OAuth and token handling; initial realm membership/context contracts | Phase 3 migration and encrypted realm-owned connection decision remain open |
 | QBO client | Status-based errors, `intuit_tid`, 429 backoff, Production guard on selected write routes | Preserved foundation; new writes wait for the operation-safety gates |
 | Data preparation | Fixed seeding and randomized historical generation | Legacy implementation; replaced later by blueprint-driven lifecycle operations |
 | Inspection | Dashboard snapshot and 13-type explorer with bounded results | Preserved; Phase 4/9 add truthful overview and fully paginated catalog |
-| Checkpoints and issue packs | Existing routes, models, and pages | Deferred or legacy/experimental |
-| AI | Existing provider, sessions, plans, tools, SSE, notes, and command center | Experimental; no new core dependency or write authority |
-| UI | React/Vite shell and local primitives | Phase 2 designs the new system before broad shell migration |
+| Checkpoints and issue packs | Existing routes, models, and pages; issue-pack execution default-off | Deferred or legacy/experimental |
+| AI | Existing provider, sessions, plans, tools, SSE, notes, and command center; plan execution default-off | Experimental; no new core dependency or write authority |
+| UI | React/Vite shell and local primitives | Phase 2 fixture contract complete; Phase 4 React migration waits for visual approval |
 
 ## Project layout
 
@@ -81,6 +82,7 @@ Safe non-mutating checks:
 
 ```powershell
 npm run validate:discovery
+npm run test:backend
 npm run build --workspace=frontend
 npm run lint --workspace=frontend
 Get-ChildItem backend\src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }

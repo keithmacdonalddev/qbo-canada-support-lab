@@ -4,6 +4,7 @@ const IssuePack = require('../models/IssuePack');
 const IssuePackRun = require('../models/IssuePackRun');
 const { authenticate } = require('../middleware/auth');
 const { requireProductionConfirm } = require('../middleware/productionGuard');
+const { requireFeatureFlag } = require('../middleware/featureGate');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
 const { executePack } = require('../modules/issuepack-engine');
@@ -117,8 +118,13 @@ router.get('/:slug', authenticate, async (req, res) => {
  * POST /:slug/run
  * Execute an issue pack (background).
  */
-router.post('/:slug/run', authenticate, requireProductionConfirm, async (req, res) => {
-  try {
+router.post(
+  '/:slug/run',
+  authenticate,
+  requireFeatureFlag('experimental.issuePackMutations', { message: 'Legacy issue-pack mutations are disabled by server policy' }),
+  requireProductionConfirm,
+  async (req, res) => {
+    try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {
       return res.status(404).json({ error: 'No active QBO connection' });
@@ -215,10 +221,11 @@ router.post('/:slug/run', authenticate, requireProductionConfirm, async (req, re
     });
 
     return res.json({ run, message: 'Issue pack execution started' });
-  } catch (err) {
+    } catch (err) {
     console.error('[issuepacks/run]', err.message);
     return res.status(500).json({ error: 'Failed to start issue pack' });
+    }
   }
-});
+);
 
 module.exports = router;

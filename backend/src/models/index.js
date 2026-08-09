@@ -10,6 +10,8 @@ const IssuePack = require('./IssuePack');
 const IssuePackRun = require('./IssuePackRun');
 const AISession = require('./AISession');
 const AIPlan = require('./AIPlan');
+const CompanyMembership = require('./CompanyMembership');
+const BlueprintVersion = require('./BlueprintVersion');
 
 module.exports = {
   User,
@@ -24,4 +26,6 @@ module.exports = {
   IssuePackRun,
   AISession,
   AIPlan,
+  CompanyMembership,
+  BlueprintVersion,
 };

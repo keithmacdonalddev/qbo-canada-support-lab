@@ -8,6 +8,7 @@ function errorHandler(err, req, res, _next) {
     status: 'error',
     statusCode,
     message,
+    requestId: req.context?.requestId || null,
   };
 
   if (process.env.NODE_ENV === 'development') {

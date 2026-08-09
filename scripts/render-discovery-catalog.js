@@ -88,7 +88,7 @@ function render() {
 
   lines.push(
     '',
-    'Operation abbreviations are Read, Create, Update, Delete, and Void. `Conditional` means the operation varies by entity, entitlement, preference, locale, or record state and must be resolved at the operation boundary.',
+    'Operation abbreviations are Read, Create, Update, Delete, and Void. `Unknown` means the reviewed sources do not establish the exact operation yet. `Conditional` means support is established but varies by entity, entitlement, preference, locale, or record state and must be resolved at the operation boundary.',
     '',
     '## Reports',
     '',
@@ -136,6 +136,7 @@ function render() {
     '## Related artifacts',
     '',
     '- `official-surface-classification.v1.md` — product/API/manual conclusions and remaining unknowns.',
+    '- `entity-operation-matrix.v1.json` — exact AR/AP entity operation classifications and safety limitations.',
     '- `report-dependency-map.v1.md` — report prerequisites and relationship assertions.',
     '- `flagship-business-profile.v1.json` — proposed coherent business identity and rules.',
     '- `volume-profiles.v1.json` — Development, Flagship, and Scale proposals.',

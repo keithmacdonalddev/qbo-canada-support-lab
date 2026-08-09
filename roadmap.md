@@ -1,13 +1,13 @@
 # Test Data Lab Rebuild Roadmap
 
 **Status:** Rebuild underway
-**Updated:** 2026-08-08
+**Updated:** 2026-08-09
 **Product contract:** `prd.md`
 **Detailed plan and phase gates:** `continual-test-data-lab-rebuild-plan.md`
 
 ## Current position
 
-Phase 0 is complete and Phase 1 discovery has started. This means the product direction and terminology are approved, the older AI/issue-pack/checkpoint emphasis is no longer the roadmap, and the first capability/report catalog artifacts now exist. It does **not** mean any new generation, scheduling, QBO mutation, or database architecture is implemented.
+Phase 0 is complete. Phase 1 now has a complete 24-capability/48-report inventory and a schema-valid 12-entity operation matrix. All reports have static retrieval classifications, while 30 exact Tier 1 create/update/void references, two lower-tier API questions, all dataset evidence, and owner approval remain open. Phase 2 is fixture verified with six rendered workflows and remains open for owner visual approval. The user authorized an initial non-live Phase 3 slice: authenticated server-owned context, static definition reads, additive membership/blueprint models, off-by-default experimental mutation gates, and safer startup defaults now exist. No new generation, scheduling, QBO mutation, or database migration has been implemented or run.
 
 The current application remains usable as an implementation baseline while the rebuild proceeds by gated vertical slices. Existing OAuth, QBO client handling, production confirmation, auth, audit, seeding, generation, explorer, checkpoint, issue-pack, and AI code is preserved. Source presence is not evidence that a rebuild phase is complete.
 
@@ -19,8 +19,8 @@ The connected company is a real Production QBO Advanced Canada company. No rebui
 | --- | --- | --- | --- |
 | 0. Product reset | Establish the mission, public name, legacy status, and evidence contract | **Complete — 2026-08-08** | Product statement, outcomes, non-goals, owners, and legacy priorities are unambiguous |
 | 1. Capability and report discovery | Replace assumptions with a verified Advanced Canada catalog | **In progress** | Tier 1 candidates classified; report definitions approved; no unsupported automation claims |
-| 2. Design system and prototypes | Prove the operating model in fixture-driven desktop and narrow workflows | Not started | Visual direction, six workflows, accessibility, and reachability approved |
-| 3. Server foundation | Add realm context, memberships, permissions, feature flags, durable operations, and safe startup behavior | Not started | Server-owned authority and invariant tests pass; no legacy data loss |
+| 2. Design system and prototypes | Prove the operating model in fixture-driven desktop and narrow workflows | **Fixture verified; owner approval pending** | Visual direction, six workflows, accessibility, and reachability approved |
+| 3. Server foundation | Add realm context, memberships, permissions, feature flags, durable operations, and safe startup behavior | **In progress — initial read-only foundation** | Server-owned authority and invariant tests pass; no legacy data loss |
 | 4. Shell and read-only coverage | Ship the new shell, Overview, and truthful coverage views | Not started | Scope, status, freshness, errors, and legacy placement are clear without mutation |
 | 5. Blueprint and master data | Publish the business definition and build coherent master-data operations | Not started | Sandbox idempotency, accounting fixtures, preview, and audit pass |
 | 6. Historical lifecycles | Backfill linked, realistic history across the approved horizon | Not started | No gaps/duplicates; critical reports populate plausibly and reconcile |
@@ -46,19 +46,27 @@ Delivered by the first rebuild slice:
 
 Current work is deliberately static and read-only:
 
-- versioned registry contract and starter catalog under `docs/discovery/`;
-- official-source research notes with confirmed facts separated from unknowns;
-- initial Tier 1 candidates and report families;
-- a local catalog validation command.
+- versioned catalog and draft 12-entity Tier 1 operation matrix under `docs/discovery/`;
+- official-source classification for all 48 required report rows;
+- a proposed flagship profile and bounded Development, Flagship, and Scale volumes;
+- Draft 2020 schema and cross-reference validation.
 
 Still required to pass Phase 1:
 
-- review every candidate entity and operation in the current official API Explorer;
-- finish Canada/Advanced product applicability and current-app entitlement checks;
-- classify users/roles, reconciliation, budgets, tax, projects, custom fields, attachments, and other Advanced features;
-- complete exact report names, endpoints or manual navigation, prerequisites, assertions, and evidence methods;
-- propose Development, Flagship, and Scale volumes from evidence;
+- observe Canada/Advanced connected-company applicability and entitlements only after an approved read target;
+- resolve 24 entity create/update cells and six void operations from exact current entity references or separately approved sandbox evidence;
+- resolve general Budget create/update/delete and RecurringTransaction update support without guessing;
+- collect company-specific dataset/report population, parity, plausibility, and freshness evidence;
+- obtain lab-owner approval of the catalog direction, flagship profile, and volume proposal;
 - obtain separate authorization for any read benchmark or sandbox mutation spike.
+
+### Phase 2 — fixture verified
+
+The design contract, six workflows, 28 light/dark desktop/narrow renders, and reproducible interaction/contrast checks are implemented. Owner visual approval remains open. Manual NVDA, Windows forced-colours, and real component interaction acceptance move with the React implementation into Phase 4.
+
+### Phase 3 — initial foundation in progress
+
+The first slice is documented in `docs/architecture/rebuild-phase-3-foundation.md`. It adds read-only context/definition contracts, additive membership and blueprint-version models, request correlation, server feature flags, off-by-default legacy AI/issue-pack execution, import-safe server construction, and default-off legacy startup writes. No migration or live runtime check was performed.
 
 ## Non-negotiable dependencies
 
@@ -75,7 +83,7 @@ Report prerequisites ───────────────────�
 Sandbox and manual evidence ────────────────> Any bounded Production canary
 ```
 
-Phase 1 discovery and Phase 2 design may proceed in parallel using documents and fixtures. New mutation infrastructure waits for both gates.
+Phase 1 discovery, Phase 2 design, and non-live Phase 3 foundation work may proceed in parallel using documents, fixtures, and mocked contracts. New QBO mutation infrastructure waits for the owner gates and the server authorization/safety gate.
 
 ## Approval boundaries
 
@@ -101,9 +109,9 @@ No historical plan should be deleted until the rebuild's retention and migration
 
 ## Next gate work
 
-1. Review and expand the starter catalog until all candidate Tier 1 capabilities are classified.
-2. Complete the official QBO Advanced Canada product/API/manual-only evidence pass.
-3. Define the report dependency map and critical-report assertions.
-4. Propose the flagship business blueprint and evidence-backed scale profiles.
-5. Create and render the Phase 2 design system and six critical workflow prototypes using fixtures.
-6. Return for approval of the Phase 1 and Phase 2 gates before implementing new QBO mutation paths.
+1. Lab owner reviews the four decisions in `docs/rebuild-owner-approval.md`.
+2. Complete the Phase 3 membership migration dry run and realm-owned encrypted connection decision without running a migration.
+3. Expand authorization/correlation tests across every legacy mutation route.
+4. Resolve the 30 Tier 1 operation gaps and two lower-tier API questions, then seek separate approval for any connected-company read or sandbox spike.
+5. Begin Phase 4 only after visual direction is approved; keep React/NVDA/forced-colours acceptance in that phase.
+6. Do not implement a new QBO mutation path until its server-owned authority, preview, idempotency, budget, audit, sandbox, and owner gates pass.

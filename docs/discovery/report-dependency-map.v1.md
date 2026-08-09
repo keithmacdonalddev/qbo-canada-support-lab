@@ -1,16 +1,16 @@
 # Report Dependency Map v1
 
 **Status:** Static proposal
-**As of:** 2026-08-08
+**As of:** 2026-08-09
 **Authority:** `catalog.v1.json` and rebuild plan section 13
 
 A report is not “covered” because its endpoint returns HTTP 200. It moves independently through availability, populated, plausible, reconciled, and manual-verification evidence.
 
 ## Required inventory boundary
 
-`required-report-manifest.v1.json` maps all 48 report rows required by plan section 13.2 to stable catalog keys. Twenty-three rows currently map to published Reports API endpoints, four have an initial manual/conditional product classification, and 21 remain explicit `unknown` rows. Those unresolved rows are present so they cannot disappear from review; they are not release evidence.
+`required-report-manifest.v1.json` maps all 48 report rows required by plan section 13.2 to stable catalog keys. Twenty-three rows map to published Reports API endpoints. The remaining 25 are classified product/manual or conditional with dated product sources and exact navigation; none remains statically `unknown`.
 
-The unresolved queue covers Journal, Cash Summary, Invoice List, Collections, Customer Statements, Unpaid Bills, purchases by vendor/product/class/location, inventory quantity/purchases/adjustments, project time/cost/unbilled activity, Tax Detail, management comparison, cleared/uncleared activity, account history, audit log, and transaction exceptions. Each needs an exact API, product/manual, unsupported, or approved-exclusion decision plus the same prerequisite and assertion review used below.
+Static completion is not report coverage. Forty-seven rows still have `coverageState: unknown` because no approved connected-company observation proves availability, population, plausibility, parity, or freshness. The catalog also records where a stable plan-family key maps to a customized view or close equivalent instead of an identically named native report.
 
 ## Critical release reports
 
@@ -45,6 +45,12 @@ The unresolved queue covers Journal, Cash Summary, Invoice List, Collections, Cu
 | --- | --- | --- |
 | Project Profitability | Projects are conditional and no endpoint is named in the current Reports API table | QBO UI availability, entitlement, project income/cost/time fixture, screenshot/reference |
 | Budget vs Actual | Canada product supports budgets, but no endpoint is named in the current table | Budget setup evidence, actual comparison, UI path, scoped totals |
+| Journal, receivables, and payables lists | Named Canada product reports or statements; no exact endpoint is named | Exact product navigation, scoped source transactions, totals/aging relationships, manual evidence |
+| Purchase dimensions | Supplier/product reports are named; class/location variants depend on tracking and customization | Enabled dimensions, assigned/unassigned completeness, product render |
+| Inventory quantity/purchases/adjustments | Product inventory views, filtered purchase reports, or Advanced transaction search | Inventory preference, item-line coverage, quantity/value roll-forward, manual evidence |
+| Project time/cost/unbilled | Projects and related settings are conditional; no exact endpoint is named | Entitlement, selected cost basis, per-project completeness, manual evidence |
+| Canadian tax detail/exceptions | Canada product provides GST/HST/provincial and Exception Detail workflows; `TaxSummary` is not a Canada substitute | Province/filing basis, tax controls, exceptions, reviewed manual evidence |
+| Management, cleared/account-history, and audit | Product compositions or account/admin views rather than published report endpoints | Exact scope, permissions, filters, retention/freshness, manual evidence |
 
 ## Invalidation rules
 

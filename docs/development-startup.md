@@ -67,4 +67,4 @@ npm run test:launcher
 npm run dev:preview
 ```
 
-Do not run `npm run dev` merely to verify terminal formatting: backend startup connects to MongoDB, seeds built-in issue-pack definitions, and marks interrupted jobs or plans failed. Live QuickBooks OAuth and mutation workflows remain separate and require explicit intent.
+Do not run `npm run dev` merely to verify terminal formatting: backend startup connects to MongoDB. Built-in issue-pack seeding and interrupted-run rewrites are now off by default behind `LEGACY_STARTUP_MAINTENANCE_ENABLED`, but an explicit service-start request is still required. Live QuickBooks OAuth and mutation workflows remain separate and require explicit intent.
