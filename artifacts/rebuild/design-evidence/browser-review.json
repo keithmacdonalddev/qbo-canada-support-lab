@@ -1,6 +1,6 @@
 {
   "schemaVersion": "2.0.0",
-  "generatedAt": "2026-08-09T22:22:53.104Z",
+  "generatedAt": "2026-08-09T22:53:02.138Z",
   "command": "npm run verify:design:browser",
   "scope": "Fixture-only deterministic browser audit; not NVDA, forced-colours, or live React acceptance.",
   "environment": {
@@ -8,11 +8,11 @@
     "playwrightCore": "1.62.1",
     "browser": "150.0.7871.187",
     "platform": "win32-x64",
-    "gitHead": "46b8354719c9a0ffa846dd82da449ba0df264a41",
-    "sourceTreeHash": "ba5c99ef9ef119ef28b601d2c5366b7d1641fa25ec3bb59b8b3b530413193c0b"
+    "gitHead": "9f9559aca9ffe4dabf7ada996e658823237233b4",
+    "sourceTreeHash": "c127d203659b6ca4e9007e0a911413c0342c180e4aa596ff1163915c950305e1"
   },
   "sourceHashes": {
-    "DESIGN.HTML": "57d309b72238f1286f08fee2a9654d06ec91f5b2daf8a86f7a55c40a348c9992",
+    "DESIGN.HTML": "02122fa446345764b325e61c9157bb9974e88ee0d205241e32e354a0625faa93",
     "frontend/src/styles/rebuild-tokens.css": "11cf01bbeb888113e95f6e4dba4f1bd652ee4e698309f39e08b75f714eb938b0",
     "prototypes/rebuild/blueprint.html": "c5b9cde8f5af5dbd4309f846c74d2a965d3de8c9039929144293c8b9bc060807",
     "prototypes/rebuild/close.html": "6b19864d1063f8e4b354d2acc76c54ce8426e87b7568a88336688d300996fd28",
@@ -37,10 +37,10 @@
     "coverage-390x844.png": "ff90b60bd8cfcec69493043f35c6e3fe7be3f1193ada53163c48f8dd45bf87b9",
     "coverage-dark-1440x1000.png": "f4aae4f3f13739807aa27ce0f985d421dfb49f7a887e858853024e092b3fa9f1",
     "coverage-dark-390x844.png": "7f5960fadd0c5c2d322af1154e6eaae848f2e1c4586f1f76d2ed0b71dafb7fa1",
-    "design-guide-1440x1000.png": "2171f40a74d36343ff76da1c01721571e6d0af22afac200510e5a3389cbc9c3b",
-    "design-guide-390x844.png": "f31f8b3eefd2d81f919ee8a25f0359b8e3d5d499a9d748e3ed0ec1850bec7833",
-    "design-guide-dark-1440x1000.png": "01a60a47f67cff45dfdda7c1de180f860ed7ce3145b2b03ca23261691f1341be",
-    "design-guide-dark-390x844.png": "9c43e9ef339940f202be839cab78748bf0a9d594334c4df7466f7dc2164a8069",
+    "design-guide-1440x1000.png": "0ed1fa079b9da7b20a785217037fe0e090b8c9f70e9d43bfb47ecc94e2575665",
+    "design-guide-390x844.png": "04216ae85c5b15e5956d5cfdc76b1188029efe63124e4de02e283771f3e8acf3",
+    "design-guide-dark-1440x1000.png": "f40f002b2daa40c14fff9b20a18729fa8b771b9ad0b4861cd0937e7298f2a928",
+    "design-guide-dark-390x844.png": "ca966f3a497270bec10455f2588cd4f10b9e2e7d586840232d2aca10e77f0c03",
     "operation-1440x1000.png": "dee78080940ee8880f3ecc2a38f1c214cd9acb7c5e5ab6ba93fbaebaaa3fff38",
     "operation-390x844.png": "dc9503659d4eac2e92a6f09a4919da119c6b2c2033f86e52283a2fe4f1966224",
     "operation-dark-1440x1000.png": "e26a521822e6a06140e05ea529d3750e3b44725accea020e8bbded1348e91e96",

@@ -1,7 +1,7 @@
 # Test Data Lab Design Decision Record
 
 **Decision:** Apply the research principles to Test Data Lab without imitating Apple products
-**Status:** Proposed for Phase 2 owner acceptance
+**Status:** Accepted by the lab owner for Phase 2 on 2026-08-09
 **Date:** 2026-08-08
 **Sources:** rebuild plan section 18 and `C:\Projects\qbo-escalations\docs\research\apple-design-systems\apple-design-systems-research.md`
 
@@ -55,6 +55,6 @@ The governing phrase is **unified, not uniform**: company scope, status semantic
 - `DESIGN.HTML` teaches the system without a build step and is the canonical standalone visual-guide filename.
 - `frontend/src/styles/rebuild-tokens.css` contains the proposed semantic tokens but is intentionally not imported by the current app.
 - `prototypes/rebuild/` contains fixture-only workflow designs and component states.
-- Desktop and narrow evidence must be rendered before acceptance.
-- Owner acceptance is required before production React migration.
+- Desktop and narrow fixture evidence was rendered and accepted on 2026-08-09.
+- React migration proceeds in bounded Phase 4 slices; this acceptance does not authorize Production operations.
 - NVDA, forced-colour, and live-route review remain future acceptance steps; fixture rendering cannot substitute for them.

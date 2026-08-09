@@ -81,6 +81,27 @@ test('definition service exposes honest static classifications without secrets',
     30
   )
   assert.equal(validateBlueprintDefinition(definitions.getFlagshipProfile()).valid, true)
+  assert.equal(definitions.getFlagshipProfile().status, 'proposal')
+  assert.equal(definitions.getFlagshipProfile().ownerDecision.status, 'direction-approved')
+  assert.deepEqual(definitions.getFlagshipProfile().ownerDecision.approvedScope, [
+    'Harbour & Pine Operations Inc. public-safe fixture identity',
+    '36-month Flagship planning horizon',
+    'Three operating divisions: Field & Advisory Services, Supply & Workshop, and Care Plans',
+  ])
+  assert.equal(definitions.getFlagshipProfile().publicSafeIdentity.displayName, 'Harbour & Pine Operations Inc.')
+  assert.deepEqual(definitions.getFlagshipProfile().divisions.map((entry) => entry.name), [
+    'Field & Advisory Services',
+    'Supply & Workshop',
+    'Care Plans',
+  ])
+  assert.equal(definitions.getFlagshipProfile().approvalNeeded.includes('Fiscal-year start and exact fiscal calendar'), true)
+  assert.deepEqual(definitions.getVolumeProfiles().ownerDecision.approvedPlanningTargets, ['development', 'flagship'])
+  assert.deepEqual(definitions.getVolumeProfiles().ownerDecision.provisionalProfiles, ['scale'])
+  assert.equal(definitions.getVolumeProfiles().ownerDecision.productionSchedulingAuthorized, false)
+  const developmentVolume = definitions.getVolumeProfiles().profiles.find((entry) => entry.key === 'development')
+  const flagshipVolume = definitions.getVolumeProfiles().profiles.find((entry) => entry.key === 'flagship')
+  assert.deepEqual([developmentVolume.historicalMonths, developmentVolume.approximateHistoricalTransactions], [6, 420])
+  assert.deepEqual([flagshipVolume.historicalMonths, flagshipVolume.approximateHistoricalTransactions], [36, 9360])
 
   const forbiddenKeys = new Set(['accessToken', 'refreshToken', 'clientSecret', 'anthropicApiKey', 'authorization'])
   function inspect(value) {

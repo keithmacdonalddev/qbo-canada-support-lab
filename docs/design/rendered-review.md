@@ -1,6 +1,6 @@
 # Rendered design review
 
-**Status:** Fixture verified; owner visual approval and React-migration assistive-technology acceptance remain open
+**Status:** Accepted at the Phase 2 fixture-design gate; React-migration assistive-technology acceptance remains open
 **Reviewed:** 2026-08-09
 **Scope:** Standalone Phase 2 fixtures only. No application server, QBO request, OAuth flow, or database operation was used.
 
@@ -55,9 +55,8 @@ Static validation confirms reduced-motion and forced-colour contracts. Both them
 
 ## Open acceptance work
 
-- Lab-owner visual approval of the direction and all six workflows.
 - Manual NVDA and Windows forced-colours walkthroughs after React migration.
 - Application component and route interaction tests after real components replace static fixtures.
 - Live-route error, loading, permission, and focus-return checks without QBO mutation.
 
-These open items prevent an `Accepted` claim; they do not block using the package as the Phase 2 implementation contract.
+The lab owner accepted the visual direction and all six workflows on 2026-08-09. The remaining items are Phase 4 implementation gates; they do not reverse the Phase 2 fixture-design acceptance or imply that live React accessibility has already passed.

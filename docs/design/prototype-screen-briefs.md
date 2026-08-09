@@ -1,6 +1,6 @@
 # Phase 2 Prototype Screen Briefs
 
-**Status:** Fixture proposal for owner review
+**Status:** Fixture contract accepted by the lab owner on 2026-08-09
 **Business fixture:** Harbour & Pine Operations Inc., Nova Scotia, CAD
 **Data horizon:** September 2023 through August 2026; ready through July 2026
 **Safety:** No prototype calls an API, saves application data, or starts a QBO operation.
@@ -68,7 +68,7 @@ Every screen includes the same rail, public Test Data Lab identity, Production s
 - Confirm reduced-motion media rules remove nonessential duration.
 - Confirm no action can reach a backend or external origin.
 
-## Proposed React slices after owner approval
+## Planned Phase 4 React slices
 
 1. Tokens, shell, scope strip, page header, status, alert, button, and state primitives.
 2. Read-only Overview with fixture-to-route adapter.

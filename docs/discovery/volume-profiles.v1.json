@@ -2,6 +2,18 @@
   "proposalVersion": "1.0.0",
   "status": "proposal",
   "asOfDate": "2026-08-08",
+  "ownerDecision": {
+    "status": "approved-with-conditions",
+    "approvedOn": "2026-08-09",
+    "approvedPlanningTargets": ["development", "flagship"],
+    "provisionalProfiles": ["scale"],
+    "productionSchedulingAuthorized": false,
+    "limitations": [
+      "Scale remains sandbox-only and requires separate workload approval.",
+      "Counts may change from approved sandbox performance evidence.",
+      "Planning targets do not authorize runtime, QBO, database, or Production operations."
+    ]
+  },
   "sharedRules": {
     "businessRules": "All profiles use the same blueprint and accounting invariants.",
     "reportRequestRangeMonths": 6,

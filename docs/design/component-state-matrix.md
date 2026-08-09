@@ -1,6 +1,6 @@
 # Component and State Matrix
 
-**Status:** Phase 2 proposal
+**Status:** Phase 2 fixture contract accepted 2026-08-09
 **Target:** Rebuild component contracts; not a claim about current legacy routes
 
 Every component communicates state with text plus structure or icon. Colour is supporting evidence only.

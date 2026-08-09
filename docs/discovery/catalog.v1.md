@@ -163,7 +163,7 @@ Operation abbreviations are Read, Create, Update, Delete, and Void. `Unknown` me
 - `official-surface-classification.v1.md` — product/API/manual conclusions and remaining unknowns.
 - `entity-operation-matrix.v1.json` — exact AR/AP entity operation classifications and safety limitations.
 - `report-dependency-map.v1.md` — report prerequisites and relationship assertions.
-- `flagship-business-profile.v1.json` — proposed coherent business identity and rules.
-- `volume-profiles.v1.json` — Development, Flagship, and Scale proposals.
+- `flagship-business-profile.v1.json` — owner-approved identity, horizon, and operating direction; unresolved implementation details remain a non-activated proposal.
+- `volume-profiles.v1.json` — approved Development/Flagship planning targets; Scale and runtime limits remain provisional.
 
 No live QBO call, OAuth flow, database write, or server startup is required to render this summary.

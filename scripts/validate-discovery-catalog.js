@@ -346,23 +346,64 @@ function main() {
     }
   }
 
-  requireFields(profile, ['profileVersion', 'status', 'publicSafeIdentity', 'calendar', 'divisions', 'realismRules', 'approvalNeeded'], 'flagship profile')
+  requireFields(profile, ['profileVersion', 'status', 'ownerDecision', 'publicSafeIdentity', 'calendar', 'divisions', 'realismRules', 'approvalNeeded'], 'flagship profile')
   if (profile.status !== 'proposal') {
-    throw new Error('flagship profile must remain a proposal until the lab owner approves it')
+    throw new Error('flagship profile must remain a proposal while implementation details are unresolved')
+  }
+  requireFields(profile.ownerDecision, ['status', 'approvedOn', 'approvedScope', 'limitations'], 'flagship profile owner decision')
+  if (profile.ownerDecision.status !== 'direction-approved' || profile.ownerDecision.approvedOn !== '2026-08-09') {
+    throw new Error('flagship profile must record the 2026-08-09 owner direction approval')
+  }
+  const expectedProfileApprovalScope = [
+    'Harbour & Pine Operations Inc. public-safe fixture identity',
+    '36-month Flagship planning horizon',
+    'Three operating divisions: Field & Advisory Services, Supply & Workshop, and Care Plans'
+  ]
+  if (!Array.isArray(profile.ownerDecision.approvedScope) || JSON.stringify(profile.ownerDecision.approvedScope) !== JSON.stringify(expectedProfileApprovalScope)) {
+    throw new Error('flagship profile owner decision must record only the exact approved identity, horizon, and operating shape')
+  }
+  if (!Array.isArray(profile.ownerDecision.limitations) || profile.ownerDecision.limitations.length === 0) {
+    throw new Error('flagship profile owner decision must retain its non-live limitations')
+  }
+  if (!profile.ownerDecision.limitations.some((entry) => entry.includes('fiscal-year start and exact calendar'))) {
+    throw new Error('flagship profile owner decision must state that the fiscal calendar remains unresolved')
+  }
+  if (profile.publicSafeIdentity.displayName !== 'Harbour & Pine Operations Inc.' || profile.publicSafeIdentity.legalName !== 'Harbour & Pine Operations Inc.') {
+    throw new Error('flagship profile must preserve the approved public-safe business identity')
   }
   if (profile.calendar.historicalMonths !== 36) {
     throw new Error('flagship profile must preserve the accepted 36-month planning horizon')
   }
-  if (!Array.isArray(profile.divisions) || profile.divisions.length !== 3) {
+  const expectedDivisionNames = ['Field & Advisory Services', 'Supply & Workshop', 'Care Plans']
+  if (!Array.isArray(profile.divisions) || JSON.stringify(profile.divisions.map((entry) => entry.name)) !== JSON.stringify(expectedDivisionNames)) {
     throw new Error('flagship profile must define the three accepted operating lines')
   }
   if (!Array.isArray(profile.approvalNeeded) || profile.approvalNeeded.length === 0) {
-    throw new Error('flagship profile must keep unresolved owner decisions explicit')
+    throw new Error('flagship profile must keep unresolved implementation decisions explicit')
+  }
+  if (!profile.approvalNeeded.includes('Fiscal-year start and exact fiscal calendar')) {
+    throw new Error('flagship profile must keep the unapproved fiscal calendar explicit')
   }
 
-  requireFields(volumeProposal, ['proposalVersion', 'status', 'sharedRules', 'profiles'], 'volume proposal')
+  requireFields(volumeProposal, ['proposalVersion', 'status', 'ownerDecision', 'sharedRules', 'profiles'], 'volume proposal')
   if (volumeProposal.status !== 'proposal') {
-    throw new Error('volume profiles must remain proposals until benchmark evidence is approved')
+    throw new Error('volume profiles must remain proposals until benchmark evidence resolves the provisional limits')
+  }
+  requireFields(volumeProposal.ownerDecision, ['status', 'approvedOn', 'approvedPlanningTargets', 'provisionalProfiles', 'productionSchedulingAuthorized', 'limitations'], 'volume proposal owner decision')
+  if (volumeProposal.ownerDecision.status !== 'approved-with-conditions' || volumeProposal.ownerDecision.approvedOn !== '2026-08-09') {
+    throw new Error('volume proposal must record the 2026-08-09 conditional owner approval')
+  }
+  if (!Array.isArray(volumeProposal.ownerDecision.approvedPlanningTargets) || volumeProposal.ownerDecision.approvedPlanningTargets.join(',') !== 'development,flagship') {
+    throw new Error('only Development and Flagship are approved planning targets')
+  }
+  if (!Array.isArray(volumeProposal.ownerDecision.provisionalProfiles) || volumeProposal.ownerDecision.provisionalProfiles.join(',') !== 'scale') {
+    throw new Error('Scale must remain the only provisional volume profile')
+  }
+  if (!Array.isArray(volumeProposal.ownerDecision.limitations) || volumeProposal.ownerDecision.limitations.length === 0) {
+    throw new Error('volume proposal owner decision must retain its non-live limitations')
+  }
+  if (volumeProposal.ownerDecision.productionSchedulingAuthorized !== false) {
+    throw new Error('owner approval must not authorize Production scheduling')
   }
   if (volumeProposal.sharedRules.productionSchedulingEnabled !== false) {
     throw new Error('volume proposal must keep Production scheduling disabled')
@@ -375,6 +416,14 @@ function main() {
     if (!volumeKeys.has(requiredKey)) {
       throw new Error(`volume proposal is missing the ${requiredKey} profile`)
     }
+  }
+  const developmentProfile = volumeProposal.profiles.find((entry) => entry.key === 'development')
+  const flagshipVolumeProfile = volumeProposal.profiles.find((entry) => entry.key === 'flagship')
+  if (developmentProfile.historicalMonths !== 6 || developmentProfile.approximateHistoricalTransactions !== 420) {
+    throw new Error('Development must preserve the approved 6-month, 420-transaction planning target')
+  }
+  if (flagshipVolumeProfile.historicalMonths !== 36 || flagshipVolumeProfile.approximateHistoricalTransactions !== 9360) {
+    throw new Error('Flagship must preserve the approved 36-month, 9,360-transaction planning target')
   }
 
   const unknownCapabilities = catalog.capabilities.filter(

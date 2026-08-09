@@ -21,8 +21,8 @@
 | Phase | Status | Owner | Required acceptance evidence | Current evidence |
 | --- | --- | --- | --- | --- |
 | 0. Product reset | Accepted | Lab owner | Approved mission, name, priorities, owners, non-goals, roadmap, evidence contract | `prd.md`; `roadmap.md`; plan section 35; historical phase status notes; public app name |
-| 1. Capability/report discovery | In progress; static gaps and owner/live evidence pending | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | Draft 2020 schema-valid catalog: 41 sources, 24 capabilities, a 12-entity draft operation matrix, and 48 statically classified reports; 30 exact Tier 1 operations, connected-company evidence, and owner approval pending |
-| 2. Design system/prototypes | Fixture verified | Lab owner | `DESIGN.md`, `DESIGN.HTML`, six workflows, light/dark desktop/narrow renders, accessibility and reachability review | Six workflows; 28 renders; 70 responsive browser checks; 26 contrast pairs; owner visual approval pending; React/NVDA/forced-colours checks are Phase 4 |
+| 1. Capability/report discovery | In progress; static and connected-company evidence pending | Lab owner | Tier 1 classification, report catalog, sources, dependency map, volume proposal, recorded live spikes if any | Owner-approved catalog/profile/volume direction; Draft 2020 schema-valid catalog with 41 sources, 24 capabilities, a 12-entity draft operation matrix, and 48 statically classified reports; 30 exact Tier 1 operations and connected-company evidence pending |
+| 2. Design system/prototypes | Accepted — 2026-08-09 | Lab owner | `DESIGN.md`, `DESIGN.HTML`, six workflows, light/dark desktop/narrow renders, accessibility and reachability review | Owner-approved visual direction and six workflows; 28 renders; 70 responsive browser checks; 26 contrast pairs; React/NVDA/forced-colours checks are Phase 4 |
 | 3. Server foundation | Static verified; in progress | Lab owner | Authorization/context contracts, invariant tests, migration dry run, startup decision | Read-only context/definition routes; additive membership/blueprint models; default-off experimental mutations/startup writes; ten backend contract tests; migration/encryption/audit gate open |
 | 4. Shell/read-only coverage | Not started | Lab owner | New shell and Overview/Coverage states, fixture and browser evidence | None |
 | 5. Blueprint/master data | Not started | Lab owner | Published blueprint, sandbox idempotency, accounting fixtures, preview/audit evidence | None |
@@ -102,7 +102,7 @@
 - [ ] Candidate Tier 1 static operation classification has no unknown; 30 exact create/update/void operation references are still open.
 - [x] Required report static classification has no unknown.
 - [ ] Company-specific dataset evidence and freshness remain release blockers until separately approved observation.
-- [ ] Lab-owner approval of the catalog, flagship profile, and volume proposal remains open.
+- [x] Lab owner approved the catalog direction, public-safe flagship identity/operating shape, and Development/Flagship planning targets on 2026-08-09; unresolved implementation and evidence gaps remain explicit.
 
 ## Phase 2 design evidence
 
@@ -128,7 +128,7 @@
 - [x] Evidence and limitations are recorded in `docs/design/rendered-review.md` and `artifacts/rebuild/design-evidence/browser-review.json`.
 - [ ] Manual NVDA and Windows forced-colours workflow acceptance — Phase 4 gate after React focus/interaction behaviour exists.
 - [ ] React component interaction tests — Phase 4 gate after fixtures become real components.
-- [ ] Lab-owner visual approval of the six workflows and design direction.
+- [x] Lab owner approved the six workflows and design direction on 2026-08-09.
 
 ### Static verification
 
@@ -137,7 +137,7 @@
 - [x] `npm run build --workspace=frontend`
 - [x] `npm run lint --workspace=frontend` (zero errors; three pre-existing React hook dependency warnings in `AICommandCenter.jsx`)
 
-Phase 2 remains `Fixture verified`, not `Accepted`. The package is ready for owner review. The user's 2026-08-09 instruction separately authorizes the non-live Phase 3 foundation now recorded below; it does not authorize app runtime startup, QBO calls, database writes, or Production scheduling.
+Phase 2 is `Accepted` at the fixture-design gate. Manual NVDA, Windows forced-colours, React component interaction, and live-route checks remain Phase 4 gates and are not implied by this acceptance. The user's 2026-08-09 instructions separately authorize the non-live Phase 3 foundation and record the four owner decisions; they do not authorize app runtime startup, QBO calls, database writes, sandbox work, mutations, or Production scheduling.
 
 ## Phase 3 initial foundation evidence
 

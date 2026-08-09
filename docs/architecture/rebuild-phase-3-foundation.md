@@ -10,7 +10,7 @@ The first Phase 3 slice establishes server-owned context and definition contract
 
 - `GET /api/context` derives the active realm and company from the authenticated user's server-side connection. Client-supplied realm, company, or environment fields are rejected.
 - `GET /api/capabilities`, `GET /api/capabilities/operation-matrix`, and `GET /api/reports` expose the validated static catalog with bounded filters and pagination.
-- `GET /api/blueprints/proposal` and `GET /api/volume-profiles` expose proposals as proposals; neither endpoint saves or activates anything.
+- `GET /api/blueprints/proposal` and `GET /api/volume-profiles` expose the owner-approved direction/planning targets together with their unresolved proposal limits; neither endpoint saves, publishes, schedules, or activates anything.
 - `CompanyMembership` is an additive realm-membership model with four proposed roles and known permission names.
 - `BlueprintVersion` is an additive draft/version model with a pure validation foundation. There is no blueprint write route yet.
 - Every new endpoint requires authentication and a server-evaluated read permission. Legacy `agent` and `supervisor` users receive read-only compatibility permissions until an explicit membership exists.

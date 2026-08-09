@@ -1,6 +1,6 @@
 # Codex Agent Handoff
 
-> Status refresh (2026-08-09): the older dashboard branch notes below are historical. The rebuild now has a complete catalog, a draft 12-entity matrix with 30 explicit Tier 1 operation unknowns, complete report static classification, fixture-verified Phase 2 designs, and an initial read-only Phase 3 foundation. Use fresh `git status`, `roadmap.md`, and `REBUILD_RELEASE_EVIDENCE.md` as current authority.
+> Status refresh (2026-08-09): the older dashboard branch notes below are historical. The rebuild now has an owner-approved catalog/profile/volume direction, a draft 12-entity matrix with 30 explicit Tier 1 operation unknowns, complete report static classification, an accepted Phase 2 fixture-design gate, and an initial read-only Phase 3 foundation. Use fresh `git status`, `roadmap.md`, and `REBUILD_RELEASE_EVIDENCE.md` as current authority.
 
 Use this file to orient future coding agents on current repo-specific workflow.
 
@@ -11,7 +11,7 @@ Use this file to orient future coding agents on current repo-specific workflow.
 - DONE (2026-05-28): Production wiring. A REAL QBO Advanced Canada company is connected. `.env` is `QBO_ENVIRONMENT=production` with production client id/secret and an ngrok reserved-domain redirect URI registered in Intuit "Support Lab" Production. The ngrok tunnel fronts the local backend (port 3001) for the OAuth callback only; frontend stays on localhost:5173 (no code change needed for backend-only tunneling). Tunnel only needed during connect/reconnect.
 - DONE (2026-05-28): Dashboard split into a read-only "awareness" Dashboard + a guarded `/lab` "Lab Tools" page, with a production write guard (`backend/src/middleware/productionGuard.js`). Reviewed by both safety + implementation reviewers (blocker fixed). See `PROJECT_MEMORY.md` and `phase-4-hardening-plan.md`.
 - Current next steps:
-  - Obtain the four owner decisions in `docs/rebuild-owner-approval.md`.
+  - Begin the Phase 4 React shell/read-only coverage slice using the accepted fixture contract; retain React interaction/NVDA/forced-colours as Phase 4 gates.
   - Complete the Phase 3 membership dry run and encrypted realm-owned connection design without running a migration.
   - Expand server authorization tests across every mutation route.
   - Keep multicurrency activation and fixtures separately gated.

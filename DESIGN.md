@@ -1,6 +1,6 @@
 # Test Data Lab Design System
 
-**Status:** Phase 2 fixture proposal; not imported by the current React application
+**Status:** Phase 2 fixture contract accepted 2026-08-09; not imported by the current React application
 **Version:** 0.1.0
 **Date:** 2026-08-08
 **Owner:** Lab owner
@@ -240,7 +240,7 @@ Decision: can the period be signed off, and which steps require official-product
 
 ## 13. Migration map
 
-No broad React restyle should precede owner acceptance of the fixture gate.
+The owner accepted the fixture gate on 2026-08-09. React migration now proceeds in bounded Phase 4 slices, with real interaction and assistive-technology evidence retained as release gates.
 
 1. Extract semantic tokens into the existing CSS pipeline; add token contrast and reduced-motion tests.
 2. Build shell, scope strip, page header, status, alert, button, and state primitives behind a rebuild feature flag.

@@ -3,6 +3,20 @@
   "profileVersion": "1.0.0",
   "status": "proposal",
   "asOfDate": "2026-08-08",
+  "ownerDecision": {
+    "status": "direction-approved",
+    "approvedOn": "2026-08-09",
+    "approvedScope": [
+      "Harbour & Pine Operations Inc. public-safe fixture identity",
+      "36-month Flagship planning horizon",
+      "Three operating divisions: Field & Advisory Services, Supply & Workshop, and Care Plans"
+    ],
+    "limitations": [
+      "This remains a non-activated proposal, not a published business blueprint.",
+      "The fiscal-year start and exact calendar, tax fixtures, exact chart of accounts, multicurrency activation, and connected-company entitlement and preference observations remain unresolved.",
+      "No live build, QBO call, database write, Production operation, or scheduling is authorized."
+    ]
+  },
   "publicSafeIdentity": {
     "displayName": "Harbour & Pine Operations Inc.",
     "legalName": "Harbour & Pine Operations Inc.",
@@ -67,10 +81,9 @@
   ],
   "generationSeed": "harbour-pine-v1",
   "approvalNeeded": [
-    "Business identity and fiscal calendar",
+    "Fiscal-year start and exact fiscal calendar",
     "Tax jurisdictions and reviewed fixtures",
     "Exact chart of accounts",
-    "Entity volumes",
     "Multicurrency activation",
     "Connected-company entitlement and preference observations"
   ]

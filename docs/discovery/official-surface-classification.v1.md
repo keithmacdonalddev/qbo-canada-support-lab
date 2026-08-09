@@ -55,7 +55,7 @@ The same table marks `TaxSummary` as France-only. Test Data Lab therefore treats
 
 The other 25 rows are classified as product/manual or conditional workflows because no exact endpoint is named in the current Reports API table. This includes the four initial manual rows plus the 21 rows completed on 2026-08-09. Several stable catalog keys intentionally map a plan family to an exact product view or customized report rather than pretending an identically named API report exists—for example Cash Summary, Purchases by Location, Inventory Adjustments, and Transaction Exceptions.
 
-All 48 required rows now have a static API/product decision, prerequisites, assertions, navigation when manual, dated sources, and explicit discrepancies. That completes static classification only. Connected-company availability, populated output, accounting plausibility, report parity, freshness, and owner approval remain release-blocking evidence.
+All 48 required rows now have a static API/product decision, prerequisites, assertions, navigation when manual, dated sources, and explicit discrepancies. That completes static classification only. The lab owner approved the catalog direction on 2026-08-09; connected-company availability, populated output, accounting plausibility, report parity, and freshness remain release-blocking evidence.
 
 ## Tier 1 entity operation matrices
 

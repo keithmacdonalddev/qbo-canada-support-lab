@@ -9,8 +9,8 @@ The app is being rebuilt around business definition, capability and report cover
 Updated: 2026-08-09
 
 - Phase 0 product reset is complete.
-- Phase 1 has a complete catalog and all 48 report rows are statically classified; 30 exact Tier 1 operations, dataset evidence, and owner approval remain open.
-- Phase 2 is fixture verified with six rendered workflows; owner visual approval remains open.
+- Phase 1 has an owner-approved catalog/profile/volume direction and all 48 report rows are statically classified; 30 exact Tier 1 operations and dataset evidence remain open.
+- Phase 2's fixture design and six rendered workflows were owner-accepted on 2026-08-09; React interaction, NVDA, and Windows forced-colours checks remain Phase 4 gates.
 - An initial Phase 3 read-only foundation adds server-owned context/definition routes and additive membership/blueprint models. No migration, scheduler, new QBO mutation path, or live operation has been run.
 - Existing seeding, generation, explorer, checkpoints, issue packs, audit, and AI surfaces remain in source during migration.
 - Checkpoints are deferred; current issue packs and AI are legacy/experimental, not core rebuild requirements.
@@ -41,7 +41,7 @@ Backend startup is still not neutral because it connects to MongoDB. Legacy issu
 | Inspection | Dashboard snapshot and 13-type explorer with bounded results | Preserved; Phase 4/9 add truthful overview and fully paginated catalog |
 | Checkpoints and issue packs | Existing routes, models, and pages; issue-pack execution default-off | Deferred or legacy/experimental |
 | AI | Existing provider, sessions, plans, tools, SSE, notes, and command center; plan execution default-off | Experimental; no new core dependency or write authority |
-| UI | React/Vite shell and local primitives | Phase 2 fixture contract complete; Phase 4 React migration waits for visual approval |
+| UI | React/Vite shell and local primitives | Phase 2 fixture contract accepted; Phase 4 React migration and assistive-technology acceptance are next |
 
 ## Project layout
 
