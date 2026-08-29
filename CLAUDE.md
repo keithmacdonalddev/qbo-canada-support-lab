@@ -31,9 +31,11 @@ Claude Code, subagents, and workers inherit the shared `AGENTS.md` Git And Branc
 
 ## Runtime Rule
 
-Do not start, stop, or restart the backend, frontend, OAuth script, QBO validation scripts, or preview server unless the user explicitly asks for that runtime action in the current conversation.
+The user owns local runtime control. Do not start, stop, restart, reload, or replace the backend, frontend, OAuth script, QBO validation scripts, or preview server unless the user explicitly asks for that runtime action in the current conversation. This covers `npm run dev`, `npm run dev --workspace=backend`, `npm run dev --workspace=frontend`, `npm run start --workspace=backend`, `npm run preview --workspace=frontend`, and the Phase 0 scripts.
 
 Backend startup is not neutral in this repo: it connects to MongoDB, seeds built-in issue packs, and marks stale jobs/plans failed.
+
+Never free a port with `Stop-Process`, `taskkill`, or any other kill of the port owner. Identify the owner, leave it untouched, and tell the user. Inspecting ports, process owners, logs, and health endpoints is always allowed. When a change requires a restart, make the change and say exactly what to restart — do not perform the restart.
 
 ## Secret Rule
 
