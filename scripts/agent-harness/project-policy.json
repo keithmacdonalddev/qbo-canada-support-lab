@@ -1,0 +1,16 @@
+{
+  "project": "Test Data Lab application",
+  "safety_focus": "Treat QBO actions as potentially real-company operations. Preserve company/environment scope, OAuth/token privacy, AI plan approval, database boundaries, canonical checkout and main/master branch rules. No live mutation or OAuth flow is authorized by an ordinary coding request.",
+  "runtime_entrypoints": [
+    "backend/src/server.js",
+    "scripts/dev-launcher.js"
+  ],
+  "external_operation_routes": [
+    "/api/qbo",
+    "/api/seed",
+    "/api/generate",
+    "/api/issuepacks",
+    "/api/checkpoint",
+    "/api/ai/plans"
+  ]
+}

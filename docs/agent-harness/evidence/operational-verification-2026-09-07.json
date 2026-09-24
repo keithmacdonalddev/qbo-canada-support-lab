@@ -1,0 +1,75 @@
+{
+  "date": "2026-09-07",
+  "project": "Test Data Lab application",
+  "helperTests": 52,
+  "wiringChecks": 25,
+  "codexClient": "0.153.4",
+  "codexHooks": {
+    "cwd": "C:\\Projects\\qbo",
+    "coreHooks": [
+      {
+        "eventName": "preToolUse",
+        "enabled": true,
+        "source": "project",
+        "sourcePath": "C:\\Projects\\qbo\\.codex\\hooks.json",
+        "trustStatus": "untrusted",
+        "statusMessage": null
+      },
+      {
+        "eventName": "sessionStart",
+        "enabled": true,
+        "source": "project",
+        "sourcePath": "C:\\Projects\\qbo\\.codex\\hooks.json",
+        "trustStatus": "untrusted",
+        "statusMessage": null
+      },
+      {
+        "eventName": "userPromptSubmit",
+        "enabled": true,
+        "source": "project",
+        "sourcePath": "C:\\Projects\\qbo\\.codex\\hooks.json",
+        "trustStatus": "untrusted",
+        "statusMessage": null
+      }
+    ],
+    "errors": [],
+    "warnings": []
+  },
+  "codexConfigLayers": [
+    {
+      "name": {
+        "type": "project",
+        "dotCodexFolder": "C:\\Projects\\qbo\\.codex"
+      },
+      "disabledReason": null
+    },
+    {
+      "name": {
+        "type": "user",
+        "file": "C:\\Users\\NewAdmin\\.codex\\config.toml",
+        "profile": null
+      },
+      "disabledReason": null
+    },
+    {
+      "name": {
+        "type": "system",
+        "file": "C:\\ProgramData\\OpenAI\\Codex\\config.toml"
+      },
+      "disabledReason": null
+    }
+  ],
+  "sharedHashes": {
+    "AGENT_WORKFLOW.md": "920d3ce58fe1012b2274942a5775dc47fadaedecc5210a6309dd7d2838f96ec3",
+    "docs/agent-harness/OPERATIONAL_CONTRACT.md": "12965814b19a01dc02ddda5ef9c207de5723924a4aa113ac81fd704064cdd45f",
+    "docs/agent-harness/PROMPT_REMINDER.md": "cb78eaeaf58d647e57cc15331e822ebfc66185b031d230bc03f04b407edc9b04",
+    "scripts/agent-harness/workflow.cjs": "b1692331ab3f7ef2434fdad306f4f5c02b080afc2096a04c746fb743bdbe6091",
+    "scripts/agent-harness/workflow.test.cjs": "eedc71e2d84adcbc813512edab57549430a43d2a5b13570909cb7bddddf74525",
+    "scripts/agent-harness/verify.cjs": "1164268c5934cec64ada53979f4ddc03b3b223119bfa4d572678daa48e26c590"
+  },
+  "limits": [
+    "No native PreToolUse tool call",
+    "No Codex specialist invocation",
+    "No product runtime test"
+  ]
+}

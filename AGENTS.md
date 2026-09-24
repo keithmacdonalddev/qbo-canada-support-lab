@@ -1,6 +1,23 @@
 # AGENTS.md
 
-> FOR OPENAI CODEX ONLY. Claude Code sessions should read `CLAUDE.md`, which imports this file and adds Claude-specific guidance.
+## Shared workflow and project routing
+
+Git closeout is explicit-request only: commit and push when the user asks, using existing authorization without repeated confirmation. Project branch, PR, DCO and upstream restrictions still apply. Both tools have optional `harness-worker`, `harness-reviewer`, and `harness-security-reviewer` roles; see [the operational contract](docs/agent-harness/OPERATIONAL_CONTRACT.md).
+
+For code or Git work, explicitly read the applicable file under `.agents/rules/` before editing. These reference files are not automatically loaded as Codex instructions.
+
+Read [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) at task start. It defines the common Codex/Claude working contract. Use [the project profile](docs/agent-harness/PROJECT_PROFILE.md) for task-specific instructions, commands, safeguards, and actual harness availability. Detailed project safety and release rules below remain in force.
+
+## Coding-agent models and deterministic checks
+
+Select the coding-agent model for the task under [MODEL_SELECTION.md](docs/agent-harness/MODEL_SELECTION.md). GPT-6 Sol is the starting choice for substantial routine coding, GPT-6 Astra for the hardest cross-cutting reasoning, and Claude Opus 5.5 for demanding Claude Code work when available. These are starting choices, not repository model pins; respect an explicit user choice and verify the effective model and effort. This policy does not change the application's AI provider settings.
+
+Only `gpt-6-luna` executes existing deterministic test, build/compile, lint/type/syntax, formatting-check and validator commands, including reruns. Use low reasoning for exact execution and results; medium only for test selection or ambiguous-output triage. This standing direction authorizes a narrow Luna test subagent even when the plan otherwise uses main-thread work. A main agent already on Luna may run directly. Builders may design tests, inspect source, diagnose failures and make fixes; execution goes to Luna. If Luna or an authorized route is unavailable, report the blocked check without substituting another model. Follow [the execution contract](docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md); later explicit user restrictions and project safety boundaries still apply.
+
+
+For substantial rebuild outcomes and high-risk code changes, follow [the outcome and review gates](docs/agent-harness/ACCEPTANCE_AND_REVIEW.md). They require direct QBO/report evidence when that is part of the requested outcome, independent implementation and safety review for sensitive paths, and rendered inspection for material UI changes. They do not authorize live verification.
+
+> Shared project rules for Codex and Claude Code. Codex loads this file; Claude imports it from `CLAUDE.md`.
 
 ## Project Identity
 
@@ -117,7 +134,7 @@ Backend:
 - `npm run dev --workspace=backend` - starts nodemon. Explicit request only.
 - `npm run start --workspace=backend` - starts server. Explicit request only.
 - `npm run test --workspace=backend` - safe non-live backend unit/contract tests.
-- Safe default syntax check: `Get-ChildItem backend/src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }`
+- Safe default syntax check: `node scripts/agent-harness/check-backend-syntax.mjs` (also supported by the Luna bridge).
 
 Frontend:
 
@@ -166,4 +183,4 @@ Before reporting completion:
 - For commit/push tasks, report the branch/upstream verified before the commit or push.
 - Report commands run and any commands skipped because they would start services or mutate QBO/database state.
 - Mention any repo state that remains local-only or intentionally untracked.
-- Commit and push completed requested changes unless the user explicitly says not to or the branch/safety checks prevent it.
+- Commit and push only when explicitly requested; preserve existing authorization, project branch/upstream rules, and unrelated work.

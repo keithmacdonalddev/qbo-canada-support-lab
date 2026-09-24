@@ -1,0 +1,42 @@
+{
+  "description": "Shared coding-agent workflow, bounded command checks and startup validation. Review new/changed hooks in /hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/workflow.cjs\" session-start",
+            "commandWindows": "powershell -NoProfile -Command \"& node (Join-Path (git rev-parse --show-toplevel) 'scripts/agent-harness/workflow.cjs') session-start\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/workflow.cjs\" prompt",
+            "commandWindows": "powershell -NoProfile -Command \"& node (Join-Path (git rev-parse --show-toplevel) 'scripts/agent-harness/workflow.cjs') prompt\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/workflow.cjs\" pre-tool-use",
+            "commandWindows": "powershell -NoProfile -Command \"& node (Join-Path (git rev-parse --show-toplevel) 'scripts/agent-harness/workflow.cjs') pre-tool-use\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Bash|PowerShell|exec_command|Read|mcp__.*__read_file"
+      }
+    ]
+  }
+}
