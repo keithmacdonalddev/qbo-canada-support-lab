@@ -43,10 +43,10 @@ else{
  if(process.env.FAKE_SESSION!=='missing')rows.push({timestamp:new Date().toISOString(),type:'session_meta',payload:{id,session_id:id,cwd:process.env.FAKE_CWD,originator:'codex_exec',source:'exec',model_provider:'openai',base_instructions:{provenance:{model:process.env.FAKE_MODEL}}}});
  if(process.env.FAKE_TURN!=='missing')rows.push({timestamp:new Date().toISOString(),type:'turn_context',payload:{turn_id:'turn-1',cwd:process.env.FAKE_CWD,model:process.env.FAKE_MODEL,effort:process.env.FAKE_EFFORT,collaboration_mode:{settings:{model:process.env.FAKE_MODEL,reasoning_effort:process.env.FAKE_EFFORT}}}});
  const commands=JSON.parse(process.env.FAKE_COMMANDS||'[]');
- const timing=JSON.parse(process.env.FAKE_TIMING||'null');
- const order=timing?timing.map((_,index)=>index).sort((l,r)=>timing[l].end-timing[r].end):commands.map((_,index)=>index);
+ const timing=JSON.parse(process.env.FAKE_TIMING||'null')||commands.map((_,index)=>({start:index*2,end:index*2+1}));
+ const order=timing.map((_,index)=>index).sort((l,r)=>timing[l].end-timing[r].end);
  const base=Date.parse('2026-09-21T10:00:00Z');
- for(const index of order)rows.push({timestamp:timing?new Date(base+timing[index].end*1000).toISOString():new Date().toISOString(),type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:'turn-1',item:{type:'CommandExecution',id:'exec-'+index,command:['pwsh.exe','-Command',commands[index]],cwd:pathToFileURL(process.env.FAKE_CWD).href,status:process.env.FAKE_STATUS||'completed',stdout:'ok '+index,exit_code:index===Number(process.env.FAKE_FAIL_INDEX)?1:0,...(timing?{duration:{secs:timing[index].end-timing[index].start,nanos:0}}:{})}}});
+ for(const index of order)rows.push({timestamp:new Date(base+timing[index].end*1000).toISOString(),type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:'turn-1',item:{type:'CommandExecution',id:'exec-'+index,command:['pwsh.exe','-Command',commands[index]],cwd:pathToFileURL(process.env.FAKE_CWD).href,status:process.env.FAKE_STATUS||'completed',stdout:'ok '+index,exit_code:index===Number(process.env.FAKE_FAIL_INDEX)?1:0,...(process.env.FAKE_NO_DURATION?{}:{duration:{secs:timing[index].end-timing[index].start,nanos:0}})}}});
  if(process.env.FAKE_EXTRA_ITEM_TYPE)rows.push({timestamp:new Date().toISOString(),type:'event_msg',payload:{type:'item_completed',thread_id:id,turn_id:'turn-1',item:{type:process.env.FAKE_EXTRA_ITEM_TYPE,id:'extra-action'}}});
  const dir=join(process.env.FAKE_SESSIONS_ROOT,'2026','09','21');mkdirSync(dir,{recursive:true});
  writeFileSync(join(dir,'rollout-'+id+'.jsonl'),rows.map(row=>JSON.stringify(row)).join('\\n')+'\\n');
@@ -144,7 +144,50 @@ test('launches with fixed Luna argv plus stdin and accepts exact transcript evid
   const prompt = readFileSync(promptPath, 'utf8');
   assert.match(prompt, /Run each commands entry exactly once, separately, in order/);
   assert.match(prompt, /Never launch commands concurrently/);
+  assert.match(prompt, /If project instructions require file reads first/);
+  assert.match(prompt, /at most 3 guidance-read command invocations/);
   assert.match(prompt, /node --test scripts\/agent-harness\/focused\.test\.mjs/);
+});
+
+test('accepts bounded project-guidance reads before the exact requested command', async t => {
+  const f = fixture(t);
+  const guidance = 'Get-Content AGENT_WORKFLOW.md; Get-Content docs/agent-harness/PROJECT_PROFILE.md; Get-Content docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md';
+  const requested = 'node scripts/agent-harness/verify.cjs';
+  const receipt = await runLunaRequest(request(f.root, [requested]), options(f, {
+    commands: [guidance, requested],
+    threadId: '33333333-3333-7333-8333-333333333334',
+  }));
+  assert.equal(receipt.status, 'passed', JSON.stringify(receipt, null, 2));
+  assert.equal(receipt.guidanceReads.length, 1);
+  assert.equal(receipt.guidanceReads[0].command, guidance);
+  assert.equal(receipt.commands.length, 1);
+  assert.equal(receipt.commands[0].observed.command, requested);
+  assert.equal(receipt.commands[0].observed.exitCode, 0);
+  assert.deepEqual(receipt.evidenceProblems, []);
+});
+
+test('rejects unrelated, late, and failed guidance reads', async t => {
+  const f = fixture(t);
+  const requested = 'node scripts/agent-harness/verify.cjs';
+  const guidance = 'Get-Content AGENT_WORKFLOW.md';
+  const cases = [
+    { commands: ['Get-Content .env', requested] },
+    { commands: [requested, guidance] },
+    { commands: [guidance, requested], env: { FAKE_FAIL_INDEX: '0' } },
+    { commands: [guidance, requested], env: { FAKE_NO_DURATION: '1' }, problem: 'command-order-unverified' },
+    { commands: [requested, guidance], env: { FAKE_TIMING: JSON.stringify([{ start: 0, end: 30 }, { start: 1, end: 2 }]), FAKE_NO_DURATION: '1' }, problem: 'command-order-unverified' },
+    { commands: [guidance, guidance, guidance, guidance, requested] },
+  ];
+  for (const [index, testCase] of cases.entries()) {
+    const receipt = await runLunaRequest(request(f.root, [requested]), options(f, {
+      commands: testCase.commands,
+      threadId: `33333333-3333-7333-8333-33333333333${index + 5}`,
+      env: testCase.env,
+    }));
+    assert.equal(receipt.status, testCase.problem ? 'blocked' : 'failed', JSON.stringify(receipt, null, 2));
+    assert.equal(receipt.reason, testCase.problem || 'command-evidence-failed');
+    if (testCase.problem) assert.ok(receipt.evidenceProblems.includes(testCase.problem), JSON.stringify(receipt.evidenceProblems));
+  }
 });
 
 test('fails closed for wrong or missing runtime metadata', async t => {
@@ -165,6 +208,7 @@ test('rejects combined, extra, missing, and failing command executions', async t
     ['extra', [...requested, 'git status --short'], {}],
     ['missing', [requested[0]], {}],
     ['failed', requested, { FAKE_FAIL_INDEX: '1' }],
+    ['missing-timing', requested, { FAKE_NO_DURATION: '1' }],
   ];
   for (let index = 0; index < cases.length; index += 1) {
     const [name, observed, env] = cases[index];
@@ -173,8 +217,8 @@ test('rejects combined, extra, missing, and failing command executions', async t
       threadId: `44444444-4444-7444-8444-44444444444${index}`,
       env,
     }));
-    assert.equal(receipt.status, 'failed', `${name}: ${JSON.stringify(receipt, null, 2)}`);
-    assert.equal(receipt.reason, 'command-evidence-failed');
+    assert.equal(receipt.status, name === 'missing-timing' ? 'blocked' : 'failed', `${name}: ${JSON.stringify(receipt, null, 2)}`);
+    assert.equal(receipt.reason, name === 'missing-timing' ? 'command-order-unverified' : 'command-evidence-failed');
   }
 });
 
