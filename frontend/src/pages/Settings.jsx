@@ -12,6 +12,8 @@ export default function Settings() {
   const [company, setCompany] = useState(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshRejected, setRefreshRejected] = useState(false)
   const [message, setMessage] = useState(null)
   const [companyError, setCompanyError] = useState(null)
   const [aiConfigError, setAiConfigError] = useState(null)
@@ -86,10 +88,31 @@ export default function Settings() {
       await client.post('/qbo/disconnect')
       setMessage({ type: 'success', text: 'Company disconnected successfully.' })
       setCompany(null)
+      window.dispatchEvent(new Event('qbo-connection-changed'))
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.error || 'Disconnect failed' })
     } finally {
       setDisconnecting(false)
+    }
+  }
+
+  const handleRefreshConnection = async () => {
+    setRefreshing(true)
+    setMessage(null)
+    try {
+      await client.post('/qbo/refresh')
+      setRefreshRejected(false)
+      setMessage({ type: 'success', text: 'The saved QuickBooks authorization worked. The connection is active again.' })
+      fetchCompany()
+      window.dispatchEvent(new Event('qbo-connection-changed'))
+    } catch (err) {
+      const failure = err.response?.data
+      setRefreshRejected(failure?.code === 'QBO_RECONNECT_REQUIRED')
+      const reference = failure?.intuit_tid ? ` Intuit reference: ${failure.intuit_tid}.` : ''
+      setMessage({ type: 'error', text: `${failure?.error || 'Could not check the saved QuickBooks authorization. Check the local API log.'}${reference}` })
+      fetchCompany()
+    } finally {
+      setRefreshing(false)
     }
   }
 
@@ -118,10 +141,33 @@ export default function Settings() {
             <Alert variant="error" onRetry={fetchCompany} className="max-w-[560px]">
               {companyError}
             </Alert>
+          ) : company?.status === 'expired' ? (
+            <Card className="max-w-[560px]">
+              <CardContent className="space-y-3">
+                <p className={`font-medium ${refreshRejected ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}>
+                  {refreshRejected ? 'QuickBooks reconnect required' : 'Saved QuickBooks connection needs a check'}
+                </p>
+                <p className="text-sm text-[var(--text-light)]">
+                  {refreshRejected
+                    ? 'QuickBooks declined the saved authorization. Reconnect your company to continue.'
+                    : `${company.companyName || 'Your company'} is still saved. Try the saved authorization first. If QuickBooks rejects it, reconnect in QuickBooks.`}
+                </p>
+                <div className="flex flex-wrap items-center gap-3">
+                  {!refreshRejected && (
+                    <Button onClick={handleRefreshConnection} disabled={refreshing}>
+                      {refreshing ? 'Checking saved connection…' : 'Try saved connection'}
+                    </Button>
+                  )}
+                  <a href="/onboarding" className="text-sm font-medium text-[var(--primary)]">Reconnect in QuickBooks</a>
+                </div>
+              </CardContent>
+            </Card>
           ) : !company?.connected ? (
             <Card className="max-w-[560px]">
               <CardContent>
-                <p className="text-[var(--text-light)] mb-2">No company connected.</p>
+                <p className="text-[var(--text-light)] mb-2">
+                  {company?.status === 'revoked' ? 'This company was disconnected.' : 'No company connected.'}
+                </p>
                 <a href="/onboarding" className="text-[var(--primary)] font-medium text-[13px]">
                   Set up a connection
                 </a>
@@ -152,16 +198,25 @@ export default function Settings() {
                         company.connected ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'
                       }`}
                     />
-                    {company.connected ? 'Connected' : 'Disconnected'}
+                    Connected · saved
                   </span>
                 </div>
                 <Separator />
                 <div className="flex justify-between items-center py-2.5">
-                  <span className="text-[13px] text-[#6B7280]">Token Expires</span>
+                  <span className="text-[13px] text-[#6B7280]">Access token (renews automatically)</span>
                   <span className="text-sm font-medium text-[var(--text-heading)] flex items-center gap-2">
                     {company.tokenExpiresAt
                       ? new Date(company.tokenExpiresAt).toLocaleString()
                       : 'N/A'}
+                  </span>
+                </div>
+                <Separator />
+                <div className="flex justify-between items-center py-2.5">
+                  <span className="text-[13px] text-[#6B7280]">Refresh authorization</span>
+                  <span className="text-[13px] font-medium text-[var(--text-heading)]">
+                    {company.refreshTokenExpiresAt
+                      ? new Date(company.refreshTokenExpiresAt).toLocaleString()
+                      : 'Expiry not reported'}
                   </span>
                 </div>
                 <Separator />

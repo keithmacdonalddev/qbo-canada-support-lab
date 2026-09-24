@@ -5,7 +5,8 @@ const { authenticate } = require('../middleware/auth');
 const { createAuditEntry } = require('../middleware/auditLogger');
 const { createQBOClient } = require('../modules/qbo-client');
 const { respondQboError } = require('../modules/qbo-error');
-const { deriveTokenHealth, isAuthFailure } = require('../modules/connection-health');
+const { deriveTokenHealth, isAuthFailure, expireRejectedConnection, describeProbeFailure } = require('../modules/connection-health');
+const { redactLogSecrets } = require('../modules/log-diagnostic');
 
 const router = express.Router();
 
@@ -98,8 +99,10 @@ router.post('/assess', authenticate, async (req, res) => {
 
     // Update connection with company name if available
     if (info.CompanyName && info.CompanyName !== connection.companyName) {
-      connection.companyName = info.CompanyName;
-      await connection.save();
+      await Connection.updateOne(
+        { _id: connection._id, userId: req.user.id, status: 'active' },
+        { $set: { companyName: info.CompanyName } },
+      );
     }
 
     await createAuditEntry(req.user.id, connection.realmId, 'Company assessed', {
@@ -135,25 +138,22 @@ router.get('/snapshot', authenticate, async (req, res) => {
 
     const qbo = await createQBOClient(connection);
 
-    const [
-      customers,
-      vendors,
-      items,
-      accounts,
-      openInvoices,
-      openBills,
-    ] = await Promise.all([
-      countOf(qbo, 'SELECT COUNT(*) FROM Customer'),
-      countOf(qbo, 'SELECT COUNT(*) FROM Vendor'),
-      countOf(qbo, 'SELECT COUNT(*) FROM Item'),
-      countOf(qbo, 'SELECT COUNT(*) FROM Account'),
-      countOf(qbo, "SELECT COUNT(*) FROM Invoice WHERE Balance > '0'"),
-      countOf(qbo, "SELECT COUNT(*) FROM Bill WHERE Balance > '0'"),
-    ]);
-
-    return res.json({
-      counts: { customers, vendors, items, accounts, openInvoices, openBills },
-    });
+    const queries = {
+      customers: 'SELECT COUNT(*) FROM Customer',
+      vendors: 'SELECT COUNT(*) FROM Vendor',
+      items: 'SELECT COUNT(*) FROM Item',
+      accounts: 'SELECT COUNT(*) FROM Account',
+      openInvoices: "SELECT COUNT(*) FROM Invoice WHERE Balance > '0'",
+      openBills: "SELECT COUNT(*) FROM Bill WHERE Balance > '0'",
+    };
+    const results = await Promise.all(Object.entries(queries).map(async ([key, query]) =>
+      [key, await countOf(qbo, query, key)]));
+    const counts = Object.fromEntries(results.map(([key, result]) => [key, result.count]));
+    const failures = results.filter(([, result]) => result.failed).map(([key]) => key);
+    if (failures.length === results.length) {
+      return res.status(502).json({ error: 'QuickBooks could not load any snapshot counts. Retry shortly.', failures });
+    }
+    return res.json({ counts, failures });
   } catch (err) {
     console.error('[company/snapshot]', err.message);
     if (respondQboError(res, err)) return;
@@ -180,15 +180,12 @@ router.get('/snapshot', authenticate, async (req, res) => {
  */
 router.get('/health', authenticate, async (req, res) => {
   try {
-    const connection = await getActiveConnection(req.user.id);
+    let connection = await getActiveConnection(req.user.id)
+      || await Connection.findOne({ userId: req.user.id, status: 'expired' }).sort({ updatedAt: -1 })
+      || await Connection.findOne({ userId: req.user.id, status: 'revoked' }).sort({ updatedAt: -1 });
     if (!connection) {
       return res.status(404).json({ error: 'No active QBO connection' });
     }
-
-    const profile = await CompanyProfile.findOne({
-      userId: req.user.id,
-      realmId: connection.realmId,
-    });
 
     const now = new Date();
 
@@ -197,44 +194,62 @@ router.get('/health', authenticate, async (req, res) => {
     let verifiedAt;
     let needsReconnect = false;
     let probeError = false;
+    let probeFailure = null;
     if (req.query.probe === 'true' && deriveTokenHealth(connection, now).usable) {
+      let qbo;
       try {
-        const qbo = await createQBOClient(connection);
+        qbo = await createQBOClient(connection);
         // Cheap, read-only round-trip. Also refreshes the access token via the
-        // client when stale, persisting new tokens onto `connection`.
+        // client when stale, persisting new tokens onto its own document.
         await qbo.query('SELECT * FROM CompanyInfo');
+        connection = qbo.connection;
         verified = true;
         verifiedAt = new Date();
       } catch (err) {
+        // The client may have loaded newer stored tokens before the failure.
+        // Expire only the authorization that was actually sent to Intuit.
+        if (qbo?.connection) connection = qbo.connection;
         verified = false;
-        if (isAuthFailure(err)) {
-          // Refresh token / authorization rejected -> user must reconnect.
-          // Audit the lifecycle transition: this GET auto-fires from the
-          // dashboard and silently flips connection state, so it needs a trail.
-          const beforeStatus = connection.status;
-          connection.status = 'expired';
-          await connection.save();
-          needsReconnect = true;
-          await createAuditEntry(req.user.id, connection.realmId, 'QBO connection expired', {
-            actionType: 'connection',
-            outcome: 'failure',
-            beforeState: { status: beforeStatus },
-            afterState: { status: 'expired' },
-          });
-        } else {
-          // Transient upstream error (5xx/429/network) -> do not downgrade.
-          probeError = true;
+        probeFailure = describeProbeFailure(err);
+        // A GET probe may expire a connection only after an explicit token
+        // refresh rejection. Record the transition in the audit trail.
+        needsReconnect = await expireRejectedConnection(
+          connection, err, req.user.id, createAuditEntry,
+        );
+        if (isAuthFailure(err) && !needsReconnect) {
+          // Another refresh or OAuth grant superseded the rejected token.
+          // Report a retryable verification failure for the current company.
+          connection = await getActiveConnection(req.user.id) || connection;
+          probeFailure = {
+            code: 'QBO_CONNECTION_CHANGED',
+            message: 'Saved QuickBooks authorization changed during verification. Check again.',
+            qboStatus: null,
+            intuit_tid: probeFailure.intuit_tid,
+          };
         }
+        probeError = !needsReconnect;
         console.error('[company/health] live probe failed', {
+          stage: err.qboStage || 'unknown',
           status: err.status || 'unknown',
-          intuit_tid: err.intuit_tid || 'unknown',
+          code: typeof err.code === 'string' ? redactLogSecrets(err.code) : 'unknown',
+          errorType: err.name || 'Error',
+          oauthError: typeof err.error === 'string' ? redactLogSecrets(err.error) : 'unknown',
+          providerDescription: redactLogSecrets(err.description || err.error_description),
+          message: redactLogSecrets(err.message),
+          intuit_tid: probeFailure.intuit_tid || 'unknown',
           needsReconnect,
+          probeError,
         });
       }
     }
 
     // Recompute health AFTER any probe-driven token refresh / status change.
     const health = deriveTokenHealth(connection, now);
+    needsReconnect ||= health.effectiveStatus === 'expired';
+    const profile = await CompanyProfile.findOne({
+      userId: req.user.id,
+      realmId: connection.realmId,
+    });
 
     // Freshness score: 100 = just assessed, decays over 7 days to 0
     const FRESHNESS_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -265,29 +280,35 @@ router.get('/health', authenticate, async (req, res) => {
       verifiedAt,
       needsReconnect,
       probeError,
+      probeFailure,
       lastRefreshedAt: connection.lastRefreshedAt,
       freshnessScore,
       seedingStatus: profile ? profile.seedingStatus : 'pending',
       companyName: profile ? profile.companyName : connection.companyName,
     });
   } catch (err) {
-    console.error('[company/health]', err.message);
-    return res.status(500).json({ error: 'Health check failed' });
+    console.error('[company/health] failed', redactLogSecrets(err.stack || err.message));
+    return res.status(503).json({ error: 'Company connection status could not be loaded. Retry the check.', code: 'CONNECTION_STATUS_UNAVAILABLE' });
   }
 });
 
 // --- Internal helpers ---
 
 /**
- * Run a COUNT(*) query and return the integer count, or null on any failure.
- * Used by GET /snapshot so a single failing count does not fail the request.
+ * Run a COUNT(*) query while identifying partial failures for the dashboard.
  */
-async function countOf(qbo, q) {
+async function countOf(qbo, q, key) {
   try {
     const r = await qbo.query(q);
-    return r.QueryResponse?.totalCount ?? null;
-  } catch {
-    return null;
+    const count = r.QueryResponse?.totalCount;
+    if (count == null) throw new Error('QuickBooks returned no count');
+    return { count, failed: false };
+  } catch (err) {
+    console.error('[company/snapshot] count failed', {
+      count: key, stage: err.qboStage || 'response', status: err.status || 'unknown',
+      message: redactLogSecrets(err.message), intuit_tid: err.intuit_tid || 'unknown',
+    });
+    return { count: null, failed: true };
   }
 }
 

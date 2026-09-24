@@ -11,6 +11,8 @@ Inspected: 2026-09-24. This is the project-specific companion to [the shared wor
 
 A local control and visibility app for a governed, evolving QuickBooks Online test business. This checkout is the application; the sibling test-data-lab checkout contains its public information pages.
 
+The owner currently uses the app on desktop. Inspect material UI changes at desktop size. Do not run mobile or 390px viewport checks unless the owner explicitly asks; responsive improvements are optional. This project-specific direction supersedes the shared workflow's generic responsive check.
+
 ## Read only what the task needs
 
 Paths in the following tables are relative to the repository root. Wildcards mean select the relevant existing file; they are not automatically loaded imports.

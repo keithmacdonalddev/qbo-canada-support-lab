@@ -20,7 +20,7 @@ Claude Code may use its `implementation-reviewer` and `qbo-safety-reviewer`; Cod
 
 ## Rendered frontend review
 
-For a material change to a task flow, primary screen, navigation, or shared component, inspect the rendered app on the real affected workflow. Cover relevant initial, loading, empty, success, error, recovery, focus, overflow, and motion states. Check desktop and exactly 390px when responsive web behavior is affected. Use sanitized data and preserve the project's accepted visual direction. Record what was actually observed; a build or screenshot fixture alone is not rendered acceptance.
+For a material change to a task flow, primary screen, navigation, or shared component, inspect the rendered app on the real affected workflow. Cover relevant initial, loading, empty, success, error, recovery, focus, overflow, and motion states at desktop size. The owner currently uses this app on desktop; do not run mobile or 390px viewport checks unless explicitly requested. Responsive improvements may be made without adding a mobile verification step. Use sanitized data and preserve the project's accepted visual direction. Record what was actually observed; a build or screenshot fixture alone is not rendered acceptance.
 
 For a major new visible direction, follow the existing smallest-slice user-acceptance gate before broad adoption. Seek a distinct visual review when a vision-capable reviewer is available; identify that review as unverified when it is not. Respect the rebuild's explicit React interaction, NVDA, and forced-colours release gates rather than silently treating a static build as their completion. A minor localized correction can use focused rendered inspection without a separate design ceremony.
 

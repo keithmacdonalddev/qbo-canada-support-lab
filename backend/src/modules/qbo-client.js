@@ -2,6 +2,18 @@ const OAuthClient = require('intuit-oauth');
 const config = require('../config');
 const Connection = require('../models/Connection');
 const { refreshTokenExpiryFrom } = require('./connection-health');
+const { redactLogSecrets } = require('./log-diagnostic');
+
+const refreshFlights = new Map();
+// Keep a rotated refresh token in memory until MongoDB confirms it was saved.
+// Retrying with the old stored token after a failed save can invalidate recovery.
+const pendingRefreshSaves = new Map();
+const ACCESS_TOKEN_MARGIN_MS = 30_000;
+
+function hasUsableAccessToken(connection) {
+  return Boolean(connection.tokenExpiresAt
+    && new Date(connection.tokenExpiresAt).getTime() > Date.now() + ACCESS_TOKEN_MARGIN_MS);
+}
 
 /**
  * QBOClient – per-connection wrapper around the Intuit OAuth SDK.
@@ -25,22 +37,7 @@ class QBOClient {
       redirectUri: config.qbo.redirectUri,
     });
 
-    // Hydrate the OAuth client with the stored tokens (include expiry so
-    // isAccessTokenValid() works and we don't force-refresh valid tokens)
-    const tokenPayload = {
-      access_token: connection.accessToken,
-      refresh_token: connection.refreshToken,
-      token_type: 'bearer',
-    };
-    if (connection.tokenExpiresAt) {
-      const remainingSec = Math.max(
-        0,
-        Math.floor((connection.tokenExpiresAt.getTime() - Date.now()) / 1000)
-      );
-      tokenPayload.expires_in = remainingSec;
-      tokenPayload.createdAt = Date.now();
-    }
-    this.oauthClient.setToken(tokenPayload);
+    this._adoptStoredTokens(connection);
 
     // Rate-limit tracking
     this._requestLog = [];
@@ -68,34 +65,148 @@ class QBOClient {
    * Ensure the access token is still valid; refresh if not.
    * Persists new tokens back to the Connection document.
    */
-  async ensureFreshToken() {
-    if (!this.oauthClient.isAccessTokenValid()) {
-      const response = await this.oauthClient.refresh();
+  _adoptStoredTokens(connection) {
+    // Do not dirty the caller's Mongoose document. A later unrelated save on
+    // that document must not overwrite a newer token rotation.
+    this.connection = connection;
+    const remainingSec = Math.max(0, Math.floor(
+      (new Date(connection.tokenExpiresAt || 0).getTime() - Date.now()) / 1000,
+    ));
+    const refreshExpiryMs = new Date(connection.refreshTokenExpiresAt || 0).getTime();
+    const refreshRemainingSec = refreshExpiryMs > Date.now()
+      ? Math.ceil((refreshExpiryMs - Date.now()) / 1000) : 0;
+    this.oauthClient.setToken({
+      access_token: connection.accessToken,
+      refresh_token: connection.refreshToken,
+      token_type: 'bearer',
+      expires_in: remainingSec,
+      x_refresh_token_expires_in: refreshRemainingSec,
+      createdAt: Date.now(),
+    });
+  }
 
-      // intuit-oauth AuthResponse: try .getJson(), then .json
-      let tokenData;
-      try {
-        tokenData = typeof response.getJson === 'function' ? response.getJson() : null;
-      } catch (_) { /* ignore */ }
-      if (!tokenData) {
-        tokenData = response.json || JSON.parse(response.body || '{}');
-      }
-
-      // Update Connection document in the database
-      this.connection.accessToken = tokenData.access_token || this.connection.accessToken;
-      this.connection.refreshToken = tokenData.refresh_token || this.connection.refreshToken;
-      this.connection.tokenExpiresAt = new Date(
-        Date.now() + (tokenData.expires_in || 3600) * 1000
+  async _saveRefreshedTokens(key, previousRefreshToken, fields) {
+    let saved;
+    try {
+      // A reconnect may revoke this document while Intuit handles refresh.
+      // Match the old token and status so that refresh cannot reactivate it or
+      // overwrite a newer authorization from another request/process.
+      saved = await Connection.findOneAndUpdate(
+        { _id: this.connection._id, status: { $in: ['active', 'expired'] }, refreshToken: previousRefreshToken },
+        { $set: fields },
+        { new: true },
       );
-      // Intuit returns x_refresh_token_expires_in on refresh too; keep the
-      // refresh-token lifetime fresh (it rolls forward as the token is used).
-      this.connection.refreshTokenExpiresAt = refreshTokenExpiryFrom(tokenData);
-      this.connection.lastRefreshedAt = new Date();
-      this.connection.status = 'active';
-      await this.connection.save();
+    } catch (error) {
+      error.qboStage = 'storage_save';
+      throw error;
+    }
+    if (!saved) {
+      pendingRefreshSaves.delete(key);
+      const error = new Error('Saved QuickBooks connection changed while tokens were refreshing. Retry the request.');
+      error.qboStage = 'conflict';
+      throw error;
+    }
+    pendingRefreshSaves.delete(key);
+    return saved;
+  }
 
-      // Re-hydrate the SDK client with new tokens
-      this.oauthClient.setToken(tokenData);
+  async _refreshStoredConnection(force) {
+    const key = String(this.connection._id || `${this.connection.userId}:${this.realmId}`);
+    let latest;
+    try {
+      latest = await Connection.findById(this.connection._id);
+    } catch (error) {
+      error.qboStage = 'storage_read';
+      throw error;
+    }
+    if (!latest || latest.status === 'revoked') {
+      const error = new Error('Saved QuickBooks connection is unavailable.');
+      error.qboStage = 'conflict';
+      throw error;
+    }
+    const pending = pendingRefreshSaves.get(key);
+    if (pending) {
+      if (latest.refreshToken === pending.refreshToken) {
+        pendingRefreshSaves.delete(key);
+        return latest;
+      }
+      if (latest.refreshToken !== pending.previousRefreshToken) {
+        pendingRefreshSaves.delete(key);
+        const error = new Error('Saved QuickBooks authorization changed during token recovery.');
+        error.qboStage = 'conflict';
+        throw error;
+      }
+      const saved = await this._saveRefreshedTokens(key, pending.previousRefreshToken, pending.fields);
+      console.info('[qbo-client] Previously refreshed tokens saved after storage recovered');
+      return saved;
+    }
+    // Another request may already have saved a new access and refresh token.
+    if (hasUsableAccessToken(latest)
+      && (!force || latest.refreshToken !== this.connection.refreshToken)) return latest;
+
+    this._adoptStoredTokens(latest);
+    let response;
+    try {
+      // The SDK's refresh() rejects locally when its in-memory lifetime is
+      // missing or stale. Legacy records may not have that lifetime, and the
+      // provider can be the only authority on whether a token still works.
+      // refreshUsingToken() sends the same request without that local gate.
+      response = await this.oauthClient.refreshUsingToken(latest.refreshToken);
+    } catch (error) {
+      error.qboStage = 'refresh';
+      throw error;
+    }
+    let tokenData;
+    try {
+      tokenData = typeof response.getJson === 'function' ? response.getJson() : null;
+    } catch (_) { /* use the response payload below */ }
+    try {
+      if (!tokenData) tokenData = response.json || JSON.parse(response.body || '{}');
+    } catch (_) {
+      const error = new Error('QuickBooks token refresh response was not valid JSON.');
+      error.qboStage = 'refresh_response';
+      throw error;
+    }
+    if (!tokenData.access_token || !tokenData.refresh_token) {
+      const error = new Error('QuickBooks returned an incomplete token refresh response.');
+      error.qboStage = 'refresh_response';
+      throw error;
+    }
+
+    const fields = {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      tokenExpiresAt: new Date(Date.now() + Number(tokenData.expires_in || 3600) * 1000),
+      refreshTokenExpiresAt: refreshTokenExpiryFrom(tokenData),
+      lastRefreshedAt: new Date(),
+      status: 'active',
+    };
+    pendingRefreshSaves.set(key, { previousRefreshToken: latest.refreshToken, refreshToken: fields.refreshToken, fields });
+    try {
+      latest = await this._saveRefreshedTokens(key, latest.refreshToken, fields);
+    } catch (error) {
+      console.error('[qbo-client] Refreshed tokens could not be saved', {
+        stage: error.qboStage || 'unknown',
+        errorType: error.name || 'Error', message: redactLogSecrets(error.message),
+      });
+      throw error;
+    }
+    console.info('[qbo-client] Access token refreshed and latest tokens saved');
+    return latest;
+  }
+
+  async ensureFreshToken({ force = false } = {}) {
+    const key = String(this.connection._id || `${this.connection.userId}:${this.realmId}`);
+    if (!force && !pendingRefreshSaves.has(key) && hasUsableAccessToken(this.connection)) return;
+    let flight = refreshFlights.get(key);
+    if (!flight) {
+      flight = this._refreshStoredConnection(force);
+      refreshFlights.set(key, flight);
+    }
+    try {
+      this._adoptStoredTokens(await flight);
+    } finally {
+      if (refreshFlights.get(key) === flight) refreshFlights.delete(key);
     }
   }
 
@@ -112,10 +223,11 @@ class QBOClient {
    * 5xx and network failures REJECT (throw); the try/catch below handles those,
    * plus any throw from refresh() inside ensureFreshToken.
    */
-  async apiCall(method, endpoint, body, _retryCount = 0) {
+  async apiCall(method, endpoint, body, _retryCount = 0, _authRetryCount = 0) {
     const MAX_RETRIES = 5;
 
     const url = `${this.apiBase}/${endpoint}`;
+    const endpointType = String(endpoint).split(/[/?]/)[0] || 'unknown';
 
     let response;
     let reachedApiCall = false;
@@ -155,6 +267,7 @@ class QBOClient {
         typeof err.code === 'string' && /^\d{3}$/.test(err.code) ? Number(err.code) : undefined;
       const status =
         err.authResponse?.response?.status || err.statusCode || err.status || codeStatus || 'unknown';
+      err.qboStage ||= reachedApiCall ? 'api' : 'refresh';
       // Attach a numeric status so route-level QBO error mapping (-> 502) works.
       if (typeof status === 'number' && typeof err.status !== 'number') {
         err.status = status;
@@ -172,8 +285,14 @@ class QBOClient {
 
       console.error('[qbo-client] API call failed', {
         method,
-        endpoint,
+        endpoint: endpointType,
+        stage: err.qboStage,
         status,
+        code: typeof err.code === 'string' ? redactLogSecrets(err.code) : 'unknown',
+        errorType: err.name || 'Error',
+        oauthError: typeof err.error === 'string' ? redactLogSecrets(err.error) : 'unknown',
+        providerDescription: redactLogSecrets(err.description || err.error_description),
+        message: redactLogSecrets(err.message),
         intuit_tid: intuitTid || 'unknown',
       });
 
@@ -191,6 +310,14 @@ class QBOClient {
     const status = response.status;
     const intuitTid = this._extractIntuitTid(headers, response.intuit_tid);
 
+    if (status === 401 && method === 'GET' && _authRetryCount === 0) {
+      console.warn('[qbo-client] API rejected access token; refreshing once before retry', {
+        endpoint: endpointType, intuit_tid: intuitTid || 'unknown',
+      });
+      await this.ensureFreshToken({ force: true });
+      return this.apiCall(method, endpoint, body, _retryCount, 1);
+    }
+
     // ---- 429: rate limited -> existing backoff/retry mechanism ----
     if (status === 429) {
       if (_retryCount >= MAX_RETRIES) {
@@ -198,10 +325,11 @@ class QBOClient {
           `QBO API rate limit exceeded after ${MAX_RETRIES} retries (HTTP 429)`
         );
         err.status = 429;
+        err.qboStage = 'api';
         if (intuitTid) err.intuit_tid = intuitTid;
         console.error('[qbo-client] API call failed', {
           method,
-          endpoint,
+          endpoint: endpointType,
           status: 429,
           intuit_tid: intuitTid || 'unknown',
         });
@@ -222,7 +350,7 @@ class QBOClient {
       const backoff = Math.min(retryAfter * 1000 * Math.pow(2, _retryCount), 60000);
       this._retryAfterUntil = Date.now() + backoff;
       await this._sleep(backoff);
-      return this.apiCall(method, endpoint, body, _retryCount + 1);
+      return this.apiCall(method, endpoint, body, _retryCount + 1, _authRetryCount);
     }
 
     // ---- Other 4xx/5xx: throw a meaningful, traceable error ----
@@ -234,12 +362,14 @@ class QBOClient {
         `QBO API error (HTTP ${status})${faultMessage ? `: ${faultMessage}` : ''}`
       );
       err.status = status;
+      err.qboStage = 'api';
       if (intuitTid) err.intuit_tid = intuitTid;
 
       console.error('[qbo-client] API call failed', {
         method,
-        endpoint,
+        endpoint: endpointType,
         status,
+        message: redactLogSecrets(faultMessage || err.message),
         intuit_tid: intuitTid || 'unknown',
       });
 
@@ -267,7 +397,7 @@ class QBOClient {
           '';
       } catch (_) { /* ignore */ }
     }
-    this._lastIntuitTid = successTid || '';
+    this._lastIntuitTid = this._extractIntuitTid(null, successTid);
 
     return parsed;
   }
@@ -311,22 +441,24 @@ class QBOClient {
    * @returns {string}
    */
   _extractIntuitTid(headers, fallback) {
+    const safeTid = (value) => typeof value === 'string' && /^[a-z0-9._-]{1,128}$/i.test(value)
+      ? value : '';
     if (headers && typeof headers === 'object') {
       const direct =
         headers.intuit_tid ||
         headers.Intuit_Tid ||
         headers.intuit_TID ||
         headers.INTUIT_TID;
-      if (direct) return String(direct);
+      if (safeTid(direct)) return direct;
 
       // Case-insensitive scan as a last resort
       for (const key of Object.keys(headers)) {
         if (key.toLowerCase() === 'intuit_tid') {
-          return String(headers[key]);
+          if (safeTid(headers[key])) return headers[key];
         }
       }
     }
-    return fallback ? String(fallback) : '';
+    return safeTid(fallback);
   }
 
   // ---------- Convenience methods ----------

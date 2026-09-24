@@ -36,6 +36,10 @@ The practical mental model is:
 - Separate what exists now from what is missing or optional, and say whether the user needs to do anything.
 - The user is a self-taught solo developer. Technical language is useful when it teaches; unexplained jargon and long abstract framing are not.
 
+## Current UI Target
+
+The owner uses this app on desktop. Prioritize desktop UI and rendered desktop verification. Do not spend time on mobile or 390px viewport checks unless the owner explicitly requests them. Responsive improvements may be made when useful, but they do not create a mobile testing requirement for current work. This project-specific direction overrides the generic responsive check in `AGENT_WORKFLOW.md`.
+
 ## Concurrent Sessions
 
 Multiple coding-agent sessions may work in this checkout at the same time.

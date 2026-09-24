@@ -6,12 +6,15 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const readline = require('node:readline');
+const { redactLogSecrets } = require('../backend/src/modules/log-diagnostic');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_API_PORT = 3001;
 const DEFAULT_WEB_PORT = 5173;
 const API_TIMEOUT_MS = 60_000;
 const WEB_TIMEOUT_MS = 30_000;
+const NGROK_TIMEOUT_MS = 15_000;
+const CALLBACK_PATH = '/api/qbo/callback';
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
 function stripAnsi(value) {
@@ -20,6 +23,20 @@ function stripAnsi(value) {
 
 function colorize(code, value, enabled) {
   return enabled ? `\u001b[${code}m${value}\u001b[0m` : value;
+}
+
+function celebrationText(value, enabled) {
+  if (!enabled) return value;
+  const stops = [[38, 196, 246], [121, 100, 247], [232, 98, 181]];
+  const letters = [...value];
+  return letters.map((letter, index) => {
+    const position = index * (stops.length - 1) / Math.max(1, letters.length - 1);
+    const left = Math.floor(position);
+    const right = Math.min(stops.length - 1, left + 1);
+    const blend = position - left;
+    const rgb = stops[left].map((channel, part) => Math.round(channel * (1 - blend) + stops[right][part] * blend));
+    return `\u001b[1;38;2;${rgb.join(';')}m${letter}`;
+  }).join('') + '\u001b[0m';
 }
 
 function parseArgs(argv = process.argv.slice(2), options = {}) {
@@ -37,13 +54,20 @@ function parseArgs(argv = process.argv.slice(2), options = {}) {
   };
 }
 
-function createOutput({ stream = process.stdout, color = true, quiet = false } = {}) {
+function formatLocalTimestamp(value) {
+  const date = new Date(value);
+  const pad = (part) => String(part).padStart(2, '0');
+  return `[${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}]`;
+}
+
+function createOutput({ stream = process.stdout, color = true, quiet = false, now = () => Date.now() } = {}) {
   const writeRaw = (value = '') => stream.write(`${value}\n`);
   const write = (value = '') => { if (!quiet) writeRaw(value); };
+  const timestamp = () => colorize('90', formatLocalTimestamp(now()), color);
   const prefix = (source) => {
     if (source === 'api') return colorize('36;1', ' API ', color);
     if (source === 'web') return colorize('35;1', ' WEB ', color);
-    if (source === 'qbo') return colorize('31;1', ' QBO ', color);
+    if (source === 'qbo') return colorize('36;1', ' QBO ', color);
     return colorize('34;1', ' DEV ', color);
   };
   const colors = { error: '31;1', success: '32;1', warning: '33;1', info: '37', muted: '90' };
@@ -52,17 +76,23 @@ function createOutput({ stream = process.stdout, color = true, quiet = false } =
     blank: () => write(),
     banner() {
       write(`🚀 ${colorize('1;36', 'Test Data Lab', color)} ${colorize('90', '— development', color)}`);
-      write(colorize('90', '   Safe startup · clear status · one-stop shutdown', color));
+      write(colorize('90', '   Safe startup · clear status · managed shutdown', color));
       write(colorize('36', '────────────────────────────────────────────────', color));
     },
     heading(value) { write(colorize('1', value, color)); },
+    celebrate(value) { write(celebrationText(value, color)); },
     write,
     line(level, value, source = 'dev') {
       if (quiet && !['warning', 'error'].includes(level)) return;
-      writeRaw(`${prefix(source)} ${colorize(colors[level] || colors.info, value, color)}`);
+      writeRaw(`${timestamp()} ${prefix(source)} ${colorize(colors[level] || colors.info, value, color)}`);
+    },
+    service(value, source, streamName) {
+      // Keep every child line, including stack traces and multiline objects.
+      // The stream label makes interleaved stdout/stderr diagnosable.
+      writeRaw(`${timestamp()} ${prefix(source)} [${streamName}] ${redactLogSecrets(value)}`);
     },
     action(value, source = 'dev') {
-      writeRaw(`${prefix(source)} ${colorize('90', `   Next: ${value}`, color)}`);
+      writeRaw(`${timestamp()} ${prefix(source)} ${colorize('90', `   Next: ${value}`, color)}`);
     },
     success(value, source) { this.line('success', value, source); },
     warning(value, source) { this.line('warning', value, source); },
@@ -85,14 +115,34 @@ function sanitizeSingleLine(value, fallback = 'unknown') {
 function sanitizeDiagnostic(value, fallback = 'check did not pass') {
   const text = String(value || fallback)
     .replace(/[\r\n\t]+/g, ' ')
+    .replace(/(mongodb(?:\+srv)?:\/\/)[^\s@/]+@/gi, '$1[redacted]@')
     .replace(/:\/\/[^\s:/]+:[^\s@/]+@/g, '://[redacted]@')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted email]')
-    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
-    .replace(/\b(api[-_ ]?key|authorization|access[-_ ]?token|refresh[-_ ]?token|secret)\s*[:=]\s*["']?[^\s,"';]+/gi, '$1=[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
+    .replace(/\b([a-z0-9_-]*(?:secret|token|password|passwd|pwd|api[-_]?key|authorization))\s*["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,"';]+)/gi, '$1=[redacted]')
+    .replace(/([?&](?:code|state|token|key|client_secret|access_token|refresh_token)=)[^&#\s]+/gi, '$1[redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[redacted JWT]')
     .replace(/\b(?:sk|key)-[a-z0-9_-]{12,}\b/gi, '[redacted key]')
     .replace(/\s{2,}/g, ' ')
     .trim();
   return (text || fallback).slice(0, 240);
+}
+
+function parseApiHealth(response) {
+  try {
+    const body = JSON.parse(response?.body || '');
+    return {
+      isApp: body.app === 'test-data-lab',
+      ready: response.status === 200 && body.app === 'test-data-lab'
+        && body.status === 'ok' && body.database === 'connected',
+    };
+  } catch {
+    return { isApp: false, ready: false };
+  }
+}
+
+function isWebReady(response) {
+  return response?.status === 200 && /<title>Test Data Lab<\/title>/i.test(response.body || '');
 }
 
 function getRuntimeIdentity(options = {}) {
@@ -151,7 +201,11 @@ function readStartupContext(options = {}) {
   const redirectUri = options.env?.QBO_REDIRECT_URI || parseEnvValue(contents, 'QBO_REDIRECT_URI');
   let callbackOrigin = '';
   try {
-    callbackOrigin = redirectUri ? new URL(redirectUri).origin : '';
+    const parsed = redirectUri ? new URL(redirectUri) : null;
+    if (parsed?.protocol === 'https:' && parsed.pathname === CALLBACK_PATH
+      && !parsed.search && !parsed.hash && !parsed.username && !parsed.password) {
+      callbackOrigin = parsed.origin;
+    }
   } catch {
     callbackOrigin = '';
   }
@@ -213,10 +267,65 @@ async function inspectStack(context, options = {}) {
     apiConnected ? request(`http://localhost:${context.apiPort}/api/health`) : null,
     webConnected ? request(`http://localhost:${context.webPort}/`) : null,
   ]);
-  let apiIsApp = false;
-  try { apiIsApp = apiResponse?.ok && JSON.parse(apiResponse.body).status === 'ok'; } catch { /* not this API */ }
-  const webIsApp = Boolean(webResponse?.ok && /<title>Test Data Lab<\/title>/i.test(webResponse.body));
-  return { apiConnected, webConnected, apiIsApp, webIsApp };
+  const apiHealth = parseApiHealth(apiResponse);
+  const webIsApp = isWebReady(webResponse);
+  return { apiConnected, webConnected, apiIsApp: apiHealth.isApp, apiReady: apiHealth.ready, webIsApp };
+}
+
+async function startCallbackProxy(context) {
+  const handler = (request, response) => {
+    const target = request.url || '';
+    if (request.method !== 'GET' || (target !== CALLBACK_PATH && !target.startsWith(`${CALLBACK_PATH}?`))) {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      response.end('Not found');
+      return;
+    }
+
+    const upstream = http.request({
+      hostname: '127.0.0.1',
+      port: context.apiPort,
+      method: 'GET',
+      path: target,
+      headers: { Accept: 'text/html' },
+    }, (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode || 502, {
+        'Content-Type': upstreamResponse.headers['content-type'] || 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      upstreamResponse.pipe(response);
+    });
+    upstream.once('error', () => {
+      if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Callback unavailable');
+    });
+    request.once('aborted', () => upstream.destroy());
+    upstream.end();
+  };
+  const bind = (host, port) => new Promise((resolve, reject) => {
+    const server = http.createServer(handler);
+    server.once('error', reject);
+    server.listen(port, host, () => {
+      server.off('error', reject);
+      resolve(server);
+    });
+  });
+  const ipv4 = await bind('127.0.0.1', context.proxyPort || 0);
+  const port = ipv4.address().port;
+  try {
+    const ipv6 = await bind('::1', port);
+    return { server: { servers: [ipv4, ipv6] }, port };
+  } catch (error) {
+    await stopCallbackProxy({ servers: [ipv4] });
+    throw error;
+  }
+}
+
+async function stopCallbackProxy(server) {
+  const results = await Promise.all((server.servers || [server]).map((listener) => new Promise((resolve) => {
+    listener.close((error) => resolve({ ok: !error, error: error?.message }));
+    listener.closeAllConnections?.();
+  })));
+  return results.find((result) => !result.ok) || { ok: true };
 }
 
 function isCommandAvailable(command, options = {}) {
@@ -241,44 +350,103 @@ async function inspectNgrok(context, options = {}) {
   if (!response.ok) return { installed, configured: true, online: false };
   try {
     const tunnels = JSON.parse(response.body).tunnels || [];
-    const online = tunnels.some((tunnel) => {
+    const matching = tunnels.filter((tunnel) => {
       try { return new URL(tunnel.public_url).origin === context.callbackOrigin; } catch { return false; }
     });
-    return { installed, configured: true, online };
+    if (matching.length === 0) return { installed, configured: true, online: false };
+    const targetMatches = (address) => {
+      try {
+        const target = new URL(address.includes('://') ? address : `http://${address}`);
+        return target.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(target.hostname)
+          && Number(target.port) === context.proxyPort && target.pathname === '/';
+      } catch { return false; }
+    };
+    if (!context.proxyPort) {
+      const directApi = matching.some((tunnel) => {
+        try {
+          const target = new URL(tunnel.config?.addr?.includes('://') ? tunnel.config.addr : `http://${tunnel.config?.addr}`);
+          return ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname)
+            && Number(target.port) === context.apiPort;
+        } catch { return false; }
+      });
+      if (directApi || matching.length !== 1) {
+        return { installed, configured: true, online: false, conflict: true };
+      }
+      let target;
+      try {
+        const addr = matching[0].config?.addr || '';
+        target = new URL(addr.includes('://') ? addr : `http://${addr}`);
+      } catch {
+        return { installed, configured: true, online: false, conflict: true };
+      }
+      const port = Number(target.port);
+      const isLocal = target.protocol === 'http:'
+        && ['localhost', '127.0.0.1'].includes(target.hostname)
+        && target.pathname === '/' && !target.search && !target.hash
+        && Number.isInteger(port) && port > 0 && port !== context.webPort;
+      if (!isLocal) return { installed, configured: true, online: false, conflict: true };
+      const connect = options.connect || canConnect;
+      const listening = (await Promise.all([
+        connect({ host: '127.0.0.1', port }),
+        connect({ host: '::1', port }),
+      ])).some(Boolean);
+      return listening
+        ? { installed, configured: true, online: false, unverified: true }
+        : { installed, configured: true, online: false, staleTargetPort: port };
+    }
+    const online = matching.length === 1 && targetMatches(matching[0].config?.addr || '');
+    return { installed, configured: true, online, ...(online ? {} : { conflict: true }) };
   } catch {
     return { installed, configured: true, online: false };
   }
 }
 
 function ngrokCommand(context) {
-  return context.callbackOrigin ? `ngrok http ${context.apiPort} --url ${context.callbackOrigin}` : '';
+  return context.callbackOrigin && context.proxyPort
+    ? `ngrok http ${context.proxyPort} --url ${context.callbackOrigin}` : '';
 }
 
-function renderQboReadiness(output, context, ngrok) {
+function renderQboReadiness(output, context, ngrok, options = {}) {
   output.blank();
-  output.heading('🔐 Production connection readiness');
   if (context.qboEnvironment === 'production') {
-    output.warning('PRODUCTION mode — approved write actions affect the real connected company.', 'qbo');
+    output.celebrate('✨ PRODUCTION · REAL QUICKBOOKS COMPANY');
+    output.info('Changes you approve will affect your real QuickBooks company.', 'qbo');
   } else {
-    output.info(`QuickBooks environment: ${context.qboEnvironment.toUpperCase()}`, 'qbo');
+    output.heading(`QuickBooks environment: ${context.qboEnvironment.toUpperCase()}`);
   }
 
   if (!ngrok.configured) {
-    output.warning('OAuth callback URL is not configured; connect/reconnect cannot finish.', 'qbo');
-    output.action('Set QBO_REDIRECT_URI to the registered HTTPS callback URL.', 'qbo');
+    output.warning('QuickBooks sign-in cannot return to this app yet. Connect/Reconnect needs setup.', 'qbo');
+    output.action(`Set QBO_REDIRECT_URI to the registered HTTPS URL ending in ${CALLBACK_PATH}.`, 'qbo');
     return;
   }
   if (ngrok.online) {
-    output.success(`OAuth callback tunnel is online at ${context.callbackOrigin}`, 'qbo');
-    output.muted('The tunnel is needed only while connecting or reconnecting QuickBooks.', 'qbo');
+    output.success('✅ QuickBooks sign-in return path is set up. Connect/Reconnect is ready to try.', 'qbo');
+    output.muted('The first sign-in will confirm that QuickBooks can return to this app.', 'qbo');
     return;
   }
 
-  output.warning('OAuth callback tunnel is offline. The app still runs, but connect/reconnect will fail with ERR_NGROK_3200.', 'qbo');
+  if (ngrok.conflict) {
+    output.warning('QuickBooks sign-in is pointing to the wrong place. Connect/Reconnect may fail.', 'qbo');
+    output.action('Close or correct the existing ngrok tunnel before connecting QuickBooks.', 'qbo');
+    return;
+  }
+  if (ngrok.unverified) {
+    output.warning('QuickBooks sign-in is open, but this check cannot confirm where it leads.', 'qbo');
+    output.action('Check the running npm run dev window before connecting QuickBooks.', 'qbo');
+    return;
+  }
+  if (ngrok.staleTargetPort) {
+    output.warning(`QuickBooks sign-in leads to a closed app port (${ngrok.staleTargetPort}, ERR_NGROK_8012).`, 'qbo');
+    output.action('Stop the existing stack, then run npm run dev to restore its protected gateway.', 'qbo');
+    return;
+  }
+
+  output.warning('QuickBooks sign-in is unavailable right now. The app still works, but Connect/Reconnect will fail (ERR_NGROK_3200).', 'qbo');
   if (!ngrok.installed) output.warning('ngrok is not available on PATH.', 'qbo');
-  output.action(`Open a separate PowerShell window and run: ${ngrokCommand(context)}`, 'qbo');
-  output.muted('Leave that window open, close the failed authorization popup, then click Connect again.', 'qbo');
-  output.muted('Normal app use does not need ngrok after the connection is established.', 'qbo');
+  if (context.proxyPort) {
+    output.action(`Run: ${ngrokCommand(context)}`, 'qbo');
+  } else output.action('Run npm run dev from a fresh stop to create the protected callback gateway.', 'qbo');
 }
 
 function buildNpmInvocation(scriptName, options = {}) {
@@ -301,6 +469,87 @@ function spawnManagedNpm(scriptName, options = {}) {
     windowsHide: true,
     stdio: ['inherit', 'pipe', 'pipe'],
   });
+}
+
+function spawnManagedNgrok(context, options = {}) {
+  if (!context.proxyPort) throw new Error('Protected callback gateway is not running.');
+  return (options.spawnFn || spawn)('ngrok', ['http', String(context.proxyPort), '--url', context.callbackOrigin], {
+    cwd: options.cwd || REPO_ROOT,
+    env: options.env || process.env,
+    shell: false,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function summarizeNgrokLine(rawLine) {
+  const line = stripAnsi(rawLine);
+  const code = line.match(/\bERR_NGROK_\d+\b/i)?.[0]?.toUpperCase();
+  let reason = '';
+  if (/authentication failed|failed to authenticate|unauthorized|not authenticated|(?:invalid|missing).*authtoken|authtoken.*(?:invalid|missing|error)/i.test(line)) reason = 'authentication or account setup';
+  else if (/already (?:online|in use)|domain.*(?:not reserved|not available|already.*in use)|reserved.*(?:another|different)/i.test(line)) reason = 'callback domain is unavailable';
+  else if (/limit.*(?:tunnel|endpoint)|(?:tunnel|endpoint).*limit/i.test(line)) reason = 'account tunnel limit reached';
+  else if (/connection refused|failed to connect to localhost|failed to connect to 127\.0\.0\.1/i.test(line)) reason = 'local API connection failed';
+  return code || reason ? `${code || 'ngrok error'}${reason ? ` (${reason})` : ''}` : '';
+}
+
+function captureNgrokDiagnostics(child) {
+  const diagnostics = { detail: '' };
+  for (const stream of [child.stdout, child.stderr]) {
+    if (!stream) continue;
+    readline.createInterface({ input: stream }).on('line', (line) => {
+      const detail = summarizeNgrokLine(line);
+      if (detail) diagnostics.detail = detail;
+    });
+  }
+  return diagnostics;
+}
+
+function summarizeServiceFailure(line) {
+  if (line.startsWith('[api/unhandled]')) {
+    const area = /^\[api\/unhandled\] area=(auth|qbo|company|seed|audit|generate|checkpoint|explore|issuepacks|ai|health|context|other)\b/.exec(line)?.[1] || 'other';
+    const status = /\bstatus=(\d{3})\b/.exec(line)?.[1];
+    const type = /\btype=(Error|TypeError|ReferenceError|SyntaxError|RangeError|ValidationError|CastError|MongoServerSelectionError|MongoNetworkError|OAuthError)\b/.exec(line)?.[1];
+    const reference = /\bref=([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\b/.exec(line)?.[1];
+    return `Unexpected ${area === 'other' ? 'API' : area} request failed${status || type ? ` (${[status && `HTTP ${status}`, type].filter(Boolean).join(', ')})` : ''}${reference ? `; reference ${reference}` : ''}. Check the affected screen.`;
+  }
+  const tag = line.match(/^\[([a-z][a-z0-9/-]*)\]/i)?.[1]?.toLowerCase();
+  const areaNames = {
+    auth: 'Account', company: 'Company', qbo: 'QuickBooks connection',
+    checkpoint: 'Checkpoint', issuepacks: 'Issue pack', seed: 'Seed',
+    generate: 'Generation', audit: 'Audit', explore: 'Entity Explorer', ai: 'AI Assistant',
+  };
+  const context = ({
+    'auth/register': 'Account creation',
+    'auth/login': 'Sign-in request',
+    'auth/me': 'Session check',
+    'company/get': 'Company details',
+    'company/health': 'Company connection check',
+    'company/snapshot': 'Company snapshot',
+    'checkpoint/list': 'Checkpoint list',
+    'issuepacks/list': 'Issue pack list',
+    'issuepacks/runs': 'Issue pack run list',
+    'seed/history': 'Seed history',
+    'generate/history': 'Generation history',
+    'audit/list': 'Audit list',
+    'explore/timeline': 'Recent activity',
+    'qbo/status': 'QuickBooks connection status',
+    'qbo-client': 'QuickBooks API request',
+  }[tag]) || (areaNames[tag?.split('/')[0]] && `${areaNames[tag.split('/')[0]]} request`);
+  let reason = '';
+  if (/EADDRINUSE/i.test(line)) reason = 'port is already in use';
+  else if (/MongoDB connection error|MongooseServerSelectionError/i.test(line)) reason = 'MongoDB connection failed';
+  else if (/ENOTFOUND|EAI_AGAIN/i.test(line)) reason = 'DNS lookup failed';
+  else if (/ECONNREFUSED/i.test(line)) reason = 'dependent service refused the connection';
+  else if (/MODULE_NOT_FOUND/i.test(line)) reason = 'a required module is missing';
+  else if (/SyntaxError/i.test(line)) reason = 'JavaScript syntax error';
+  if (context) return `${context} failed${reason ? `: ${reason}` : '; details hidden for privacy'}.`;
+  return reason ? `Service error: ${reason}.` : 'Unclassified service error; the safe log cannot identify its cause. Check the affected screen.';
+}
+
+function isErrorDetailLine(line) {
+  return /^(?:at\s+|[{}\[\],]\s*$|[a-z_$][\w$-]*\s*:)/i.test(line)
+    && !/^(?:Error|TypeError|ReferenceError|SyntaxError|RangeError)\s*:/i.test(line);
 }
 
 function translateChildLine(source, rawLine, state = {}, stream = 'stdout') {
@@ -327,22 +576,31 @@ function translateChildLine(source, rawLine, state = {}, stream = 'stdout') {
   }
   if (/ready in \d+\s*ms/i.test(line) || /Local:\s+http/i.test(line) || /Network:\s+use --host/i.test(line)) return { skip: true };
   if (/hmr update/i.test(line)) return { level: 'info', text: 'Browser assets updated' };
-  if (stream === 'stderr' || /\b(error|failed|exception)\b/i.test(line)) {
-    return { level: 'error', text: sanitizeDiagnostic(line) };
+  if (isErrorDetailLine(line)) return { skip: true };
+  const errorSignal = /\b(error|failed|exception)\b/i.test(line)
+    || /^(?:[A-Za-z]*Error|Exception)(?::|\s|\[)/.test(line)
+    || /\bERR_[A-Z0-9_]+\b/.test(line)
+    || line.startsWith('[api/unhandled]')
+    || (source === 'api' && stream === 'stderr' && /^\[(?:auth|company|qbo|qbo-client|checkpoint|issuepacks|seed|generate|audit|explore|ai)(?:\/[a-z0-9/-]+)?\]/i.test(line));
+  if (errorSignal) {
+    const text = summarizeServiceFailure(line);
+    const now = Date.now();
+    // Distinct request references must remain visible for UI-to-terminal tracing.
+    const key = `${source}:${text}`;
+    state.errorTimes ||= new Map();
+    if (now - (state.errorTimes.get(key) || 0) < 10_000) return { skip: true };
+    state.errorTimes.set(key, now);
+    return { level: 'error', text };
   }
   return { skip: true };
 }
 
 function attachChildOutput(child, source, output, state, options = {}) {
   const attach = (stream, streamName) => {
+    if (!stream) return;
     const reader = readline.createInterface({ input: stream });
     reader.on('line', (line) => {
-      if (options.verbose) {
-        output.info(stripAnsi(line), source);
-        return;
-      }
-      const translated = translateChildLine(source, line, state, streamName);
-      if (!translated.skip) output[translated.level || 'info'](translated.text, source);
+      output.service(line, source, streamName);
     });
   };
   attach(child.stdout, 'stdout');
@@ -358,10 +616,26 @@ async function waitForHttp(url, options = {}) {
       throw new Error(`${options.label} stopped before becoming ready.`);
     }
     const response = await request(url, { timeoutMs: 750 });
-    if (response.ok) return { elapsedMs: Date.now() - startedAt, response };
+    if (response.ok) {
+      if (!options.isReady || options.isReady(response)) return { elapsedMs: Date.now() - startedAt, response };
+      throw new Error(`${options.label} port answered, but it is not a ready Test Data Lab service.`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`${options.label} did not become ready within ${formatDuration(timeoutMs)}.`);
+}
+
+async function waitForNgrok(context, child, options = {}) {
+  const startedAt = Date.now();
+  const inspect = options.inspect || inspectNgrok;
+  const timeoutMs = options.timeoutMs ?? NGROK_TIMEOUT_MS;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (options.isFailed?.() || child.exitCode !== null) throw new Error('ngrok stopped before its tunnel was ready.');
+    const status = await inspect(context, { installed: true });
+    if (status.online) return status;
+    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 250));
+  }
+  throw new Error(`ngrok did not become ready within ${formatDuration(timeoutMs)}.`);
 }
 
 function buildOpenInvocation(url, platform = process.platform) {
@@ -380,61 +654,113 @@ function openBrowser(url, options = {}) {
   child.unref?.();
 }
 
-function stopProcessTree(child, options = {}) {
-  if (!child || !Number.isInteger(child.pid) || child.pid <= 0 || child.exitCode !== null) return Promise.resolve({ ok: true });
+function isPidRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+
+async function stopProcessTree(child, options = {}) {
+  if (!child || !Number.isInteger(child.pid) || child.pid <= 0
+    || child.exitCode != null || child.signalCode != null) return { ok: true, alreadyStopped: true };
   if ((options.platform || process.platform) === 'win32') {
-    return new Promise((resolve) => {
-      const killer = (options.spawnFn || spawn)('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-        stdio: 'ignore', windowsHide: true, shell: false,
-      });
+    const running = options.isPidRunning || isPidRunning;
+    if (!running(child.pid)) return { ok: true, alreadyStopped: true };
+    const result = await new Promise((resolve) => {
+      let killer;
+      try {
+        killer = (options.spawnFn || spawn)('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+          stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false,
+        });
+      } catch (error) {
+        resolve({ ok: false, error: error.message });
+        return;
+      }
+      let detail = '';
+      const capture = (chunk) => { detail = (detail + String(chunk)).slice(0, 1024); };
+      killer.stdout?.on('data', capture);
+      killer.stderr?.on('data', capture);
       killer.once('error', (error) => resolve({ ok: false, error: error.message }));
-      killer.once('exit', (code) => resolve({ ok: code === 0, error: code === 0 ? null : `taskkill exited ${code}` }));
+      killer.once('close', (code) => {
+        resolve({ ok: code === 0, error: code === 0 ? null
+          : `taskkill exited ${code}${detail.trim() ? `: ${sanitizeDiagnostic(detail)}` : ''}` });
+      });
     });
+    if (result.ok) return result;
+    // Ctrl+C may stop npm before taskkill reaches its PID. Verify the process
+    // rather than reporting a failed shutdown for an already-exited child.
+    if (running(child.pid)) await new Promise((resolve) => setTimeout(resolve, 150));
+    if (!running(child.pid)) return { ok: true, alreadyStopped: true };
+    return result;
   }
   child.kill('SIGTERM');
-  return Promise.resolve({ ok: true });
+  return { ok: true };
+}
+
+async function isPortListening(port, connect = canConnect) {
+  const results = await Promise.all([
+    connect({ host: '127.0.0.1', port }),
+    connect({ host: '::1', port }),
+  ]);
+  return results.some(Boolean);
 }
 
 async function stopDevelopmentServices(children, output, options = {}) {
   let ok = true;
   for (const entry of [...children].reverse()) {
-    const result = await (options.stopFn || stopProcessTree)(entry.child);
-    if (result.ok) output.success(`✅ ${entry.label} stopped`, entry.source);
-    else {
+    let result;
+    try {
+      result = await (entry.stop || options.stopFn || stopProcessTree)(entry.child);
+    } catch (error) {
+      result = { ok: false, error: error.message };
+    }
+    let portOpen = false;
+    let portCheckError;
+    if (entry.port) {
+      const attempts = options.portCheckAttempts ?? 6;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          portOpen = await (options.isPortListening || isPortListening)(entry.port);
+        } catch (error) {
+          portCheckError = error;
+          break;
+        }
+        if (!portOpen) break;
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, options.portCheckDelayMs ?? 150));
+      }
+    }
+    if (result.ok && !portOpen && !portCheckError) {
+      output.success(`✅ ${entry.label} ${result.alreadyStopped ? 'was already stopped' : 'stopped'}`, entry.source);
+    } else {
       ok = false;
-      output.error(`❌ Could not stop ${entry.label}: ${sanitizeDiagnostic(result.error)}`, entry.source);
+      if (!result.ok) output.error(`❌ Could not stop ${entry.label}: ${sanitizeDiagnostic(result.error)}`, entry.source);
+      if (portCheckError) output.warning(`Could not verify ${entry.label} port ${entry.port}: ${sanitizeDiagnostic(portCheckError.message)}`, entry.source);
+      if (portOpen) output.warning(`${entry.label} port ${entry.port} remains occupied. Check its owner before restarting.`, entry.source);
+      else if (entry.port && !result.ok && !portCheckError) output.info(`${entry.label} port ${entry.port} is closed, but its process may still be running.`, entry.source);
     }
   }
   if (ok) output.success('✅ Development environment closed cleanly');
-  else output.warning('⚠️ Shutdown incomplete — review the service messages above.');
+  else output.warning('⚠️  Shutdown incomplete — review the service messages above.');
   return { ok };
 }
 
 function renderPreview(output, context, identity) {
   output.banner();
   output.blank();
-  output.heading('🔎 Preflight');
-  output.muted('Preview only — no ports, processes, network services, or databases were checked.');
+  output.heading('🧪 Startup preview — no services started or checked');
   output.info(`${identity.branch} · commit ${identity.commit}${identity.dirty ? ' · local changes' : ''} · Node ${identity.nodeVersion}`);
-  output.success(`✅ API port ${context.apiPort} is available`);
-  output.success(`✅ Web port ${context.webPort} is available`);
-  output.blank();
-  output.heading('⚙️ Starting services');
-  output.info('⏳ Starting API and connecting to MongoDB…', 'api');
-  output.success('✅ MongoDB connected', 'api');
-  output.success('✅ API ready at http://127.0.0.1:3001 (1.4s)', 'api');
-  output.info('⏳ Starting the web app…', 'web');
-  output.success('✅ Web app ready at http://localhost:5173 (0.6s)', 'web');
-  output.blank();
-  output.heading('✨ Core app ready in 2.0s');
-  output.write('   App: http://localhost:5173');
-  output.write('   API: http://127.0.0.1:3001');
-  output.write('   Press Ctrl+C once to stop both services.');
-  renderQboReadiness(output, context, { installed: true, configured: Boolean(context.callbackOrigin), online: false });
-  output.blank();
-  output.heading('✅ Startup summary');
-  output.write('   Core services: 2 ready');
-  output.write('   OAuth callback: action needed only before connect/reconnect');
+  output.write(`   Would check API port ${context.apiPort} and web port ${context.webPort}.`);
+  output.write('   Would start the API, verify MongoDB health, then start the web app.');
+  if (context.callbackOrigin) output.write('   Would prepare the QuickBooks sign-in return path.');
+  else output.write('   QuickBooks callback URL is not configured.');
+  if (context.qboEnvironment === 'production') {
+    output.celebrate('✨ PRODUCTION · REAL QUICKBOOKS COMPANY');
+    output.info('Changes you approve will affect your real QuickBooks company.', 'qbo');
+  }
+  output.write('   Run npm run dev for observed readiness and shutdown controls.');
 }
 
 async function runDevLauncher(options = {}) {
@@ -456,21 +782,24 @@ async function runDevLauncher(options = {}) {
 
   const existing = await (options.inspectStack || inspectStack)(context);
   if (existing.apiConnected) {
-    (existing.apiIsApp ? output.success : output.error).call(output,
-      `${existing.apiIsApp ? '✅' : '❌'} API port ${context.apiPort} ${existing.apiIsApp ? 'is already serving Test Data Lab' : 'is occupied by another process'}`);
+    const description = existing.apiReady ? 'is already serving Test Data Lab'
+      : existing.apiIsApp ? 'has Test Data Lab, but its database is unavailable'
+        : 'is occupied by another process';
+    (existing.apiReady ? output.success : output.error).call(output,
+      `${existing.apiReady ? '✅' : '❌'} API port ${context.apiPort} ${description}`);
   } else output.success(`✅ API port ${context.apiPort} is available`);
   if (existing.webConnected) {
     (existing.webIsApp ? output.success : output.error).call(output,
       `${existing.webIsApp ? '✅' : '❌'} Web port ${context.webPort} ${existing.webIsApp ? 'is already serving Test Data Lab' : 'is occupied by another process'}`);
   } else output.success(`✅ Web port ${context.webPort} is available`);
 
-  const ngrok = await (options.inspectNgrok || inspectNgrok)(context);
+  let ngrok = await (options.inspectNgrok || inspectNgrok)(context);
   if (parsed.check) {
     renderQboReadiness(output, context, ngrok);
     output.write('   Status check only — no processes were started or stopped.');
     return { mode: 'check', existing, ngrok };
   }
-  if (existing.apiIsApp && existing.webIsApp) {
+  if (existing.apiReady && existing.webIsApp) {
     output.info('This development stack is already running; no duplicate processes were started.');
     output.write(`   App: http://localhost:${context.webPort}`);
     output.write(`   API: http://127.0.0.1:${context.apiPort}`);
@@ -490,16 +819,38 @@ async function runDevLauncher(options = {}) {
   const children = [];
   const state = {};
   let shuttingDown = false;
-  const shutdown = async (reason) => {
-    if (shuttingDown) return { ok: false };
-    shuttingDown = true;
-    output.blank();
-    output.info(`🛑 ${reason === 'SIGINT' ? 'Stopping development services' : 'Cleaning up development services'}…`);
-    return stopDevelopmentServices(children, output);
+  let serviceFailed = false;
+  let shutdownPromise;
+  let pendingGateway;
+  const ensureStarting = () => {
+    if (!shuttingDown) return;
+    const error = new Error('Startup stopped during shutdown.');
+    error.code = 'DEV_START_INTERRUPTED';
+    throw error;
   };
-  const onSignal = (signal) => { void shutdown(signal).then((result) => process.exit(result.ok ? 0 : 1)); };
+  const shutdown = (reason) => {
+    if (shutdownPromise) return shutdownPromise;
+    shuttingDown = true;
+    shutdownPromise = (async () => {
+      output.blank();
+      output.info(`🛑 ${reason === 'SIGINT' ? 'Stopping development services' : 'Cleaning up development services'}…`);
+      if (pendingGateway) await pendingGateway.catch(() => {});
+      return stopDevelopmentServices(children, output, {
+        stopFn: options.stopFn,
+        isPortListening: options.isPortListening,
+      });
+    })();
+    return shutdownPromise;
+  };
+  const onSignal = (signal) => { void shutdown(signal).then((result) => (options.exitProcess || process.exit)(result.ok && !serviceFailed ? 0 : 1)); };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
+  const unexpectedExit = (label) => (code, signal) => {
+    if (shuttingDown) return;
+    serviceFailed = true;
+    output.error(`❌ ${label} stopped unexpectedly (${signal || `exit code ${code}`}).`);
+    void shutdown(`${label} failure`).then(() => { process.exitCode = code || 1; });
+  };
 
   try {
     output.blank();
@@ -507,52 +858,119 @@ async function runDevLauncher(options = {}) {
     output.info('⏳ Starting API and connecting to MongoDB…', 'api');
     const api = (options.spawnNpm || spawnManagedNpm)('dev:backend', { env: process.env });
     api.once('error', (error) => { state.apiSpawnError = error; });
-    children.push({ child: api, label: 'API', source: 'api' });
+    children.push({ child: api, label: 'API', source: 'api', port: context.apiPort });
+    api.once('exit', unexpectedExit('API'));
     attachChildOutput(api, 'api', output, state, { verbose: parsed.verbose });
-    const apiReady = await waitForHttp(`http://127.0.0.1:${context.apiPort}/api/health`, {
+    const apiReady = await (options.waitForHttp || waitForHttp)(`http://127.0.0.1:${context.apiPort}/api/health`, {
       child: api,
       isFailed: () => Boolean(state.apiSpawnError),
+      isReady: (response) => parseApiHealth(response).ready,
       label: 'API',
       timeoutMs: API_TIMEOUT_MS,
     });
+    ensureStarting();
     output.success(`✅ API ready at http://127.0.0.1:${context.apiPort} (${formatDuration(apiReady.elapsedMs)})`, 'api');
 
     output.info('⏳ Starting the web app…', 'web');
     const web = (options.spawnNpm || spawnManagedNpm)('dev:frontend', { env: process.env });
     web.once('error', (error) => { state.webSpawnError = error; });
-    children.push({ child: web, label: 'Web app', source: 'web' });
+    children.push({ child: web, label: 'Web app', source: 'web', port: context.webPort });
+    web.once('exit', unexpectedExit('Web app'));
     attachChildOutput(web, 'web', output, state, { verbose: parsed.verbose });
-    const webReady = await waitForHttp(`http://localhost:${context.webPort}/`, {
+    const webReady = await (options.waitForHttp || waitForHttp)(`http://localhost:${context.webPort}/`, {
       child: web,
       isFailed: () => Boolean(state.webSpawnError) || api.exitCode !== null,
+      isReady: isWebReady,
       label: 'Web app',
       timeoutMs: WEB_TIMEOUT_MS,
     });
+    ensureStarting();
     output.success(`✅ Web app ready at http://localhost:${context.webPort} (${formatDuration(webReady.elapsedMs)})`, 'web');
 
+    if (ngrok.configured) {
+      try {
+        const desiredPort = ngrok.staleTargetPort;
+        pendingGateway = Promise.resolve().then(() => (options.startCallbackProxy || startCallbackProxy)({
+          ...context, proxyPort: desiredPort,
+        })).then((created) => {
+          children.push({ child: created.server, label: 'Protected callback gateway', source: 'qbo', stop: options.stopCallbackProxy || stopCallbackProxy });
+          return created;
+        });
+        const gateway = await pendingGateway;
+        ensureStarting();
+        context.proxyPort = gateway.port;
+        output.success('✅ QuickBooks sign-in return route is ready', 'qbo');
+        if (desiredPort) output.info('Reused the sign-in link from an earlier launch.', 'qbo');
+      } catch (error) {
+        if (shuttingDown) ensureStarting();
+        output.warning(`Could not start the protected callback gateway: ${sanitizeDiagnostic(error.message)}`, 'qbo');
+      }
+      // Re-check after the gateway starts; an existing tunnel may use this domain.
+      ngrok = await (options.inspectNgrok || inspectNgrok)(context);
+      ensureStarting();
+    }
+    if (ngrok.configured && ngrok.installed && context.proxyPort && !ngrok.online && !ngrok.conflict) {
+      output.info('⏳ Preparing QuickBooks sign-in…', 'qbo');
+      let tunnelDiagnostics = { detail: '' };
+      let tunnel;
+      let tunnelError;
+      try {
+        tunnel = (options.spawnNgrok || spawnManagedNgrok)(context);
+        children.push({ child: tunnel, label: 'ngrok tunnel', source: 'qbo' });
+        attachChildOutput(tunnel, 'qbo', output);
+        tunnelDiagnostics = captureNgrokDiagnostics(tunnel);
+        tunnel.once('error', (error) => { tunnelError = error; });
+        ngrok = await waitForNgrok(context, tunnel, {
+          inspect: options.inspectNgrok || inspectNgrok,
+          isFailed: () => Boolean(tunnelError),
+          timeoutMs: options.ngrokTimeoutMs ?? NGROK_TIMEOUT_MS,
+        });
+        ensureStarting();
+        output.success('✅ QuickBooks sign-in link is ready', 'qbo');
+        tunnel.once('exit', (code) => {
+          if (!shuttingDown) output.warning(`Callback tunnel stopped (exit code ${code})${tunnelDiagnostics.detail ? `; ${tunnelDiagnostics.detail}` : ''}; connect/reconnect needs ngrok.`, 'qbo');
+        });
+      } catch (error) {
+        if (shuttingDown) ensureStarting();
+        const spawnCode = tunnelError?.code || (!tunnel && error.code);
+        const cause = spawnCode === 'ENOENT' ? 'ngrok executable was not found'
+          : spawnCode === 'EACCES' ? 'ngrok could not be executed'
+            : spawnCode ? 'ngrok process could not launch'
+              : sanitizeDiagnostic(error.message);
+        output.warning(`Could not start the callback tunnel: ${cause}`, 'qbo');
+        if (tunnelDiagnostics.detail) output.warning(`ngrok reported: ${tunnelDiagnostics.detail}`, 'qbo');
+        if (tunnel) {
+          const stopped = await (options.stopFn || stopProcessTree)(tunnel);
+          if (stopped.ok) children.pop();
+        }
+      }
+    }
+
+    ensureStarting();
     output.blank();
-    output.heading(`✨ Core app ready in ${formatDuration(Date.now() - startedAt)}`);
-    output.write(`   App: http://localhost:${context.webPort}`);
-    output.write(`   API: http://127.0.0.1:${context.apiPort}`);
+    output.heading(`✨ Test Data Lab is ready in ${formatDuration(Date.now() - startedAt)}`);
+    output.write(`   Open the app: http://localhost:${context.webPort}`);
+    output.write(`   Local data service: http://127.0.0.1:${context.apiPort}`);
     output.write('   Tester credentials are shown on the sign-in page.');
-    output.write('   Press Ctrl+C once to stop both services.');
-    if (!parsed.verbose) output.write('   Need raw service logs? Run: npm run dev -- --verbose');
+    output.write('   When finished, press Ctrl+C once to stop this launch.');
+    output.write('   Logs below have timestamps. Common secrets are masked; keep company details private.');
+    if (ngrok.online && !children.some((entry) => entry.label === 'ngrok tunnel')) {
+      output.write('   The reused QuickBooks sign-in link stays open after Ctrl+C.');
+    }
     if (parsed.open) openBrowser(`http://localhost:${context.webPort}`);
     renderQboReadiness(output, context, ngrok);
     output.blank();
-    output.heading('✅ Startup summary');
-    output.write('   Core services: 2 ready');
-    output.write(`   OAuth callback: ${ngrok.online ? 'ready' : 'action needed only before connect/reconnect'}`);
+    output.heading('✅ At a glance');
+    output.success('✅ App ready: website and data service are running');
+    if (ngrok.online) output.success('✅ QuickBooks sign-in ready to try: Connect/Reconnect', 'qbo');
+    else output.warning(`QuickBooks sign-in: ${ngrok.conflict ? 'fix the existing link before Connect/Reconnect' : 'needs setup only for Connect/Reconnect'}`, 'qbo');
 
-    const unexpectedExit = (label) => (code, signal) => {
-      if (shuttingDown) return;
-      output.error(`❌ ${label} stopped unexpectedly (${signal || `exit code ${code}`}).`);
-      void shutdown(`${label} failure`).then(() => { process.exitCode = code || 1; });
-    };
-    api.once('exit', unexpectedExit('API'));
-    web.once('exit', unexpectedExit('Web app'));
     return { mode: 'running', children, ngrok };
   } catch (error) {
+    if (shuttingDown) {
+      await shutdown('startup failure');
+      return { mode: 'stopped', children, ngrok };
+    }
     output.error(`❌ ${sanitizeDiagnostic(error.message)}`);
     await shutdown('startup failure');
     throw error;
@@ -574,7 +992,9 @@ module.exports = {
   formatDuration,
   inspectNgrok,
   inspectStack,
+  isWebReady,
   ngrokCommand,
+  parseApiHealth,
   parseArgs,
   parseEnvValue,
   readStartupContext,
@@ -583,8 +1003,14 @@ module.exports = {
   requestHttp,
   runDevLauncher,
   sanitizeDiagnostic,
+  summarizeNgrokLine,
+  spawnManagedNgrok,
+  startCallbackProxy,
+  stopCallbackProxy,
   stopDevelopmentServices,
+  stopProcessTree,
   stripAnsi,
   translateChildLine,
   waitForHttp,
+  waitForNgrok,
 };

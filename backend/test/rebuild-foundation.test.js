@@ -281,11 +281,13 @@ test('legacy AI and issue-pack QBO mutation routes are off by default', async ()
 })
 
 test('public health remains reachable before authenticated rebuild routes', async () => {
-  await withServer(createApp(), async (baseUrl) => {
+  await withServer(createApp({ databaseReady: () => true }), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/health`)
     assert.equal(response.status, 200)
     const body = await response.json()
+    assert.equal(body.app, 'test-data-lab')
     assert.equal(body.status, 'ok')
+    assert.equal(body.database, 'connected')
     assert.equal(Number.isNaN(Date.parse(body.timestamp)), false)
   })
 })

@@ -41,11 +41,13 @@ export default function Dashboard() {
 
   const [health, setHealth] = useState(null)
   const [status, setStatus] = useState(null)
+  const [statusError, setStatusError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [healthError, setHealthError] = useState(null)
   const [notConnected, setNotConnected] = useState(false)
 
   const [snapshot, setSnapshot] = useState(null)
+  const [snapshotFailures, setSnapshotFailures] = useState([])
   const [snapshotLoading, setSnapshotLoading] = useState(true)
   const [snapshotError, setSnapshotError] = useState(null)
 
@@ -54,6 +56,7 @@ export default function Dashboard() {
   const [lastSeedRun, setLastSeedRun] = useState(null)
   const [lastGenRun, setLastGenRun] = useState(null)
   const [activity, setActivity] = useState([])
+  const [sectionErrors, setSectionErrors] = useState([])
 
   const fetchHealth = () => {
     setHealthError(null)
@@ -76,7 +79,10 @@ export default function Dashboard() {
     setSnapshotLoading(true)
     setSnapshotError(null)
     client.get('/company/snapshot')
-      .then((res) => setSnapshot(res.data?.counts || null))
+      .then((res) => {
+        setSnapshot(res.data?.counts || null)
+        setSnapshotFailures(res.data?.failures || [])
+      })
       .catch((err) => {
         // No active connection (404) → render cards as '—', not an error.
         if (err.response?.status === 404) {
@@ -88,7 +94,16 @@ export default function Dashboard() {
       .finally(() => setSnapshotLoading(false))
   }
 
+  const fetchStatus = () => {
+    setStatusError(null)
+    client.get('/qbo/status')
+      .then((res) => setStatus(res.data))
+      .catch((err) => setStatusError(err.response?.data?.error || 'Could not load saved connection status.'))
+  }
+
   useEffect(() => {
+    const addSectionError = (label) => setSectionErrors((errors) =>
+      errors.includes(label) ? errors : [...errors, label])
     // Initial loads inline so no setState runs synchronously in the effect body
     // (state already starts at its "loading" defaults). The fetchHealth /
     // fetchSnapshot helpers above are reused by the Alert retry handlers.
@@ -104,7 +119,10 @@ export default function Dashboard() {
       .finally(() => setLoading(false))
 
     client.get('/company/snapshot')
-      .then((res) => setSnapshot(res.data?.counts || null))
+      .then((res) => {
+        setSnapshot(res.data?.counts || null)
+        setSnapshotFailures(res.data?.failures || [])
+      })
       .catch((err) => {
         // No active connection (404) → render cards as '—', not an error.
         if (err.response?.status === 404) {
@@ -117,27 +135,27 @@ export default function Dashboard() {
 
     client.get('/qbo/status')
       .then((res) => setStatus(res.data))
-      .catch(() => {})
+      .catch((err) => setStatusError(err.response?.data?.error || 'Could not load saved connection status.'))
 
     client.get('/checkpoint')
       .then((res) => setCheckpoints(res.data?.checkpoints || []))
-      .catch(() => {})
+      .catch(() => addSectionError('Checkpoints'))
 
     client.get('/issuepacks/runs')
       .then((res) => setIssuePackRuns(res.data?.runs || []))
-      .catch(() => {})
+      .catch(() => addSectionError('Issue pack runs'))
 
     client.get('/seed/history')
       .then((res) => setLastSeedRun((res.data?.seedRuns || [])[0] || null))
-      .catch(() => {})
+      .catch(() => addSectionError('Seed history'))
 
     client.get('/generate/history')
       .then((res) => setLastGenRun((res.data?.genRuns || [])[0] || null))
-      .catch(() => {})
+      .catch(() => addSectionError('Generation history'))
 
     client.get('/explore/timeline?limit=10')
       .then((res) => setActivity((res.data?.entries || []).slice(0, 8)))
-      .catch(() => {})
+      .catch(() => addSectionError('Recent activity'))
   }, [])
 
   const environment = status?.environment
@@ -149,7 +167,7 @@ export default function Dashboard() {
   const connectionActive =
     health?.usable ?? (health?.connectionStatus === 'active' || status?.connected)
   const needsReconnect =
-    health?.needsReconnect || health?.connectionStatus === 'expired' || health?.connectionStatus === 'revoked'
+    health?.needsReconnect || health?.connectionStatus === 'expired' || status?.status === 'expired'
   const refreshDays = health?.refreshTokenExpiresInDays
   const accessMins = health?.accessTokenExpiresInMinutes ?? health?.tokenExpiresInMinutes
   const verifiedLive = health?.verified === true
@@ -157,18 +175,18 @@ export default function Dashboard() {
 
   // Primary token-health line: lifetime until re-auth is required.
   const tokenHealthLabel = needsReconnect
-    ? 'Reconnect required'
+    ? 'Check saved connection'
     : refreshDays != null
-      ? `Reconnect in ${refreshDays} day${refreshDays === 1 ? '' : 's'}`
+      ? `${refreshDays} day${refreshDays === 1 ? '' : 's'} in current refresh window`
       : connectionActive
         ? 'Connected'
         : '—'
 
   // Secondary line: the access-token reality, de-emphasized.
   const tokenHealthDetail = verifiedLive
-    ? 'Verified live · access token auto-refreshed'
+    ? 'Verified with QuickBooks just now'
     : probeFailed
-      ? "Couldn't verify just now — showing last known"
+      ? "Couldn't verify just now — saved connection kept"
       : accessMins != null && accessMins <= 0
         ? 'Access token expired (auto-refreshes on next call)'
         : accessMins != null
@@ -227,6 +245,27 @@ export default function Dashboard() {
           </Alert>
         ) : (
           <>
+            {statusError && (
+              <Alert variant="warning" onRetry={fetchStatus} className="mb-4 max-w-[700px]">
+                {statusError}
+              </Alert>
+            )}
+            {sectionErrors.length > 0 && (
+              <Alert variant="warning" onRetry={() => window.location.reload()} className="mb-4 max-w-[700px]">
+                Some dashboard sections could not load: {sectionErrors.join(', ')}. Values shown as empty may be unavailable.
+              </Alert>
+            )}
+            {needsReconnect && (
+              <Alert variant="warning" className="mb-4 max-w-[700px]">
+                The saved QuickBooks connection needs a check. <Link to="/settings" className="underline font-semibold">Try the saved connection</Link> in Settings. Reconnect if QuickBooks rejects it.
+              </Alert>
+            )}
+            {probeFailed && (
+              <Alert variant="warning" onRetry={fetchHealth} retryLabel="Check again" className="mb-4 max-w-[700px]">
+                {health?.probeFailure?.message || 'QuickBooks could not verify the saved connection.'}
+                {health?.probeFailure?.intuit_tid && ` Intuit reference: ${health.probeFailure.intuit_tid}.`}
+              </Alert>
+            )}
             {/* IDENTITY band */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
               <Card className="shadow-sm py-0">
@@ -252,8 +291,8 @@ export default function Dashboard() {
                     {environment == null ? (
                       <span className="text-base font-medium text-[#6B7280]">—</span>
                     ) : isProduction ? (
-                      <Badge variant="destructive" className="text-[11px] font-semibold uppercase tracking-wide">
-                        Production
+                      <Badge className="bg-gradient-to-r from-sky-700 via-violet-700 to-fuchsia-700 text-white text-[11px] font-semibold uppercase tracking-wide">
+                        ✨ Production
                       </Badge>
                     ) : (
                       <Badge variant="secondary" className="text-[11px] font-semibold uppercase tracking-wide">
@@ -267,11 +306,11 @@ export default function Dashboard() {
                 <CardContent className="py-5">
                   <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Connection</div>
                   <div className="text-base font-medium text-[var(--text-heading)] flex items-center gap-2">
-                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${connectionActive ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'}`} />
+                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${connectionActive ? 'bg-[var(--success)]' : needsReconnect ? 'bg-[var(--warning)]' : 'bg-[var(--danger)]'}`} />
                     {connectionActive
                       ? 'Connected'
                       : needsReconnect
-                        ? 'Reconnect required'
+                        ? 'Check saved connection'
                         : (health?.connectionStatus || status?.status || 'Disconnected')}
                   </div>
                   {connectionActive && (verifiedLive || probeFailed) && (
@@ -284,7 +323,7 @@ export default function Dashboard() {
               <Card className="shadow-sm py-0">
                 <CardContent className="py-5">
                   <div className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-[0.05em] mb-1.5">Token Health</div>
-                  <div className={`text-base font-medium ${needsReconnect ? 'text-[var(--danger)]' : 'text-[var(--text-heading)]'}`}>
+                  <div className={`text-base font-medium ${needsReconnect ? 'text-[var(--warning)]' : 'text-[var(--text-heading)]'}`}>
                     {tokenHealthLabel}
                   </div>
                   {tokenHealthDetail && (
@@ -301,6 +340,11 @@ export default function Dashboard() {
               <CardContent className="pt-5">
                 <h3 className="font-semibold text-[var(--text-heading)] mb-1">Live Snapshot</h3>
                 <p className="text-xs text-[#6B7280] mb-4">Live read-only counts from the connected company.</p>
+                {snapshotFailures.length > 0 && !snapshotError && (
+                  <Alert variant="warning" onRetry={fetchSnapshot} className="mb-4 max-w-[700px]">
+                    QuickBooks could not load {snapshotFailures.length} snapshot count{snapshotFailures.length === 1 ? '' : 's'}. The available counts are shown below.
+                  </Alert>
+                )}
                 {snapshotError ? (
                   <Alert variant="error" onRetry={fetchSnapshot} className="max-w-[560px]">
                     {snapshotError}

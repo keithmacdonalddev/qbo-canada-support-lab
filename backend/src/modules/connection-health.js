@@ -8,10 +8,10 @@
  *                     by qbo-client.ensureFreshToken(). An expired access token
  *                     is normal and self-healing -- it does NOT mean the
  *                     connection is broken.
- *   - refresh token : long-lived (~100 days, rolling). When this expires the
- *                     user MUST re-run OAuth. This is the real "is my
- *                     connection alive" signal, surfaced by Intuit as
- *                     x_refresh_token_expires_in on token responses.
+ *   - refresh token : provider-limited authorization. Its reported remaining
+ *                     lifetime is surfaced by Intuit as
+ *                     x_refresh_token_expires_in on token responses. The user
+ *                     may need to reconnect when that expires or is revoked.
  *
  * "Connected"/"usable" is therefore defined by the refresh token, not the
  * access token.
@@ -77,17 +77,16 @@ function deriveTokenHealth(connection, now = new Date()) {
 }
 
 /**
- * Compute the refresh-token expiry Date from an Intuit token response's
- * x_refresh_token_expires_in (seconds). Falls back to ~100 days when the field
- * is absent so a connection always has a reasonable expiry estimate.
+ * Compute the reported refresh-token expiry. Missing or invalid provider data
+ * is unknown, not a made-up deadline that could falsely force a reconnect.
  *
  * @param {object} tokenData - parsed token response
  * @param {Date} [now]
- * @returns {Date}
+ * @returns {Date|null}
  */
 function refreshTokenExpiryFrom(tokenData, now = new Date()) {
-  const DEFAULT_REFRESH_TTL_SEC = 100 * 24 * 60 * 60; // 100 days
-  const ttl = Number(tokenData && tokenData.x_refresh_token_expires_in) || DEFAULT_REFRESH_TTL_SEC;
+  const ttl = Number(tokenData?.x_refresh_token_expires_in);
+  if (!Number.isFinite(ttl) || ttl <= 0) return null;
   return new Date(now.getTime() + ttl * 1000);
 }
 
@@ -105,19 +104,22 @@ function refreshTokenExpiryFrom(tokenData, now = new Date()) {
  */
 function isAuthFailure(err) {
   if (!err) return false;
-  const status = err.status;
-  if (status === 400 || status === 401 || status === 403) return true;
+  // API 400/401/403 can describe query permission or a temporary upstream
+  // problem. Only an explicit rejection during the refresh step proves that
+  // the saved authorization needs replacing.
+  if (err.qboStage !== 'refresh') return false;
 
   // Load-bearing fallback: intuit-oauth@4.2.2 throws an expired-refresh-token
   // error with NO err.status (the HTTP 400 is dropped during error wrapping) but
   // with err.error/err.message/err.authResponse.json.error === 'invalid_grant'.
-  // Match only unambiguous OAuth refresh-token rejection markers here — do NOT
+  // Match only unambiguous refresh-token rejection markers here — do NOT
   // add a bare "unauthorized" substring, which a transient 5xx body could
   // contain and would then falsely force a reconnect.
   const haystack = [
     err.message,
     err.error,
     err.error_description,
+    err.description,
     err.originalMessage,
     err.authResponse && err.authResponse.json && err.authResponse.json.error,
   ]
@@ -125,7 +127,113 @@ function isAuthFailure(err) {
     .join(' ')
     .toLowerCase();
 
-  return /invalid_grant|invalid_token|refresh token/.test(haystack);
+  return /invalid_grant|refresh token (?:is )?(?:expired|revoked|invalid)/.test(haystack);
 }
 
-module.exports = { deriveTokenHealth, refreshTokenExpiryFrom, isAuthFailure };
+async function expireRejectedConnection(connection, err, userId, createAuditEntry) {
+  if (!isAuthFailure(err) || connection.status !== 'active') return false;
+  // The audit helper returns null on failure. Record the observed rejection
+  // first so a failed audit cannot leave an unaudited status mutation.
+  const audit = await createAuditEntry(userId, connection.realmId, 'QBO authorization rejected', {
+    actionType: 'connection', outcome: 'failure',
+    beforeState: { status: 'active' },
+  });
+  if (!audit) throw new Error('Could not audit QBO authorization rejection');
+  const Connection = require('../models/Connection');
+  // A newer OAuth grant or concurrent refresh may have replaced this token.
+  // Do not expire the replacement because an older attempt was rejected.
+  const changed = await Connection.findOneAndUpdate(
+    { _id: connection._id, userId, status: 'active', refreshToken: connection.refreshToken },
+    { $set: { status: 'expired' } },
+    { new: true },
+  );
+  if (!changed) return false;
+  connection.status = 'expired';
+  return true;
+}
+
+function describeProbeFailure(err) {
+  const status = Number(err?.status ?? err?.authResponse?.response?.status ?? err?.code);
+  let code = 'QBO_VERIFICATION_FAILED';
+  let message = 'QuickBooks could not verify the saved connection. Retry the check.';
+  if (isAuthFailure(err)) {
+    code = 'QBO_RECONNECT_REQUIRED';
+    message = 'QuickBooks rejected the saved authorization. Reconnect your company.';
+  } else if (status === 429) {
+    code = 'QBO_RATE_LIMITED';
+    message = 'QuickBooks is limiting requests. Retry in a few minutes.';
+  } else if (err?.qboStage === 'storage_save') {
+    code = 'QBO_TOKEN_SAVE_FAILED';
+    message = 'QuickBooks token storage failed. Retry while the app stays open.';
+  } else if (err?.qboStage === 'storage_read') {
+    code = 'QBO_STORAGE_UNAVAILABLE';
+    message = 'The app could not read the saved QuickBooks connection. Check the database connection and retry.';
+  } else if (err?.qboStage === 'conflict') {
+    code = 'QBO_CONNECTION_CHANGED';
+    message = 'The saved QuickBooks connection changed during verification. Check again.';
+  } else if (err?.qboStage === 'refresh' || err?.qboStage === 'refresh_response') {
+    code = 'QBO_REFRESH_UNAVAILABLE';
+    message = 'QuickBooks could not refresh the saved connection. Retry the check.';
+  } else if (status === 401 || status === 403) {
+    code = 'QBO_PERMISSION_ERROR';
+    message = 'QuickBooks rejected the verification request. Retry; reconnect if it continues.';
+  } else if (status >= 500) {
+    code = 'QBO_UNAVAILABLE';
+    message = 'QuickBooks is unavailable. Your saved connection has been kept.';
+  }
+  const traceId = err?.intuit_tid || err?.intuitTid;
+  const intuitTid = typeof traceId === 'string' && /^[a-z0-9._-]{1,128}$/i.test(traceId)
+    ? traceId : null;
+  return { code, message, qboStatus: Number.isInteger(status) && status >= 100 ? status : null, intuit_tid: intuitTid };
+}
+
+function describeRefreshFailure(err) {
+  const status = Number(err?.status ?? err?.authResponse?.response?.status ?? err?.code);
+  const qboStatus = Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+  const traceId = err?.intuit_tid || err?.intuitTid;
+  const intuitTid = typeof traceId === 'string' && /^[a-z0-9._-]{1,128}$/i.test(traceId)
+    ? traceId : null;
+  let httpStatus = 502;
+  let code = 'QBO_REFRESH_UNAVAILABLE';
+  let message = 'QuickBooks could not refresh the saved connection. Check the local API log, then retry.';
+  if (err?.qboStage === 'storage_save') {
+    httpStatus = 503;
+    code = 'QBO_TOKEN_SAVE_FAILED';
+    message = 'QuickBooks issued new tokens, but the app could not save them. Keep the API running and try again.';
+  } else if (err?.qboStage === 'storage_read') {
+    httpStatus = 503;
+    code = 'QBO_STORAGE_UNAVAILABLE';
+    message = 'The app could not read the saved QuickBooks connection. No refresh request was sent. Check the database connection and retry.';
+  } else if (err?.qboStage === 'conflict') {
+    httpStatus = 409;
+    code = 'QBO_CONNECTION_CHANGED';
+    message = 'The saved QuickBooks connection changed during refresh. Reload its status before trying again.';
+  } else if (qboStatus === 429) {
+    httpStatus = 429;
+    code = 'QBO_RATE_LIMITED';
+    message = 'QuickBooks is limiting token requests. Wait a few minutes, then try again.';
+  } else if (qboStatus === 400) {
+    code = 'QBO_REFRESH_REJECTED';
+    message = 'QuickBooks rejected the refresh request (HTTP 400). The saved connection was kept; check the local API log for the reason.';
+  } else if (qboStatus === 401 || qboStatus === 403) {
+    code = 'QBO_REFRESH_DENIED';
+    message = `QuickBooks denied the refresh request (HTTP ${qboStatus}). The saved connection was kept; check the local API log.`;
+  } else if (qboStatus && qboStatus >= 500) {
+    code = 'QBO_UNAVAILABLE';
+    message = `QuickBooks returned HTTP ${qboStatus}. The saved connection was kept; retry later.`;
+  } else if (/\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network error)\b|timeout of \d+ms exceeded/i.test(
+    [err?.code, err?.originalMessage].filter(Boolean).join(' '),
+  )) {
+    code = 'QBO_NETWORK_ERROR';
+    message = 'The app could not reach QuickBooks. Check the network and try again.';
+  } else if (err?.qboStage === 'refresh_response') {
+    code = 'QBO_REFRESH_RESPONSE_INVALID';
+    message = 'QuickBooks returned an incomplete refresh response. Check the local API log before retrying.';
+  }
+  return { httpStatus, code, message, qboStatus, intuit_tid: intuitTid };
+}
+
+module.exports = {
+  deriveTokenHealth, refreshTokenExpiryFrom, isAuthFailure,
+  expireRejectedConnection, describeProbeFailure, describeRefreshFailure,
+};

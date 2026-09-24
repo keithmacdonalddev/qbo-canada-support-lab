@@ -2,6 +2,7 @@
 
 const express = require('express')
 const cors = require('cors')
+const mongoose = require('mongoose')
 const errorHandler = require('./middleware/errorHandler')
 const { requestContext } = require('./middleware/requestContext')
 const { createRebuildRouter } = require('./routes/rebuild')
@@ -29,7 +30,13 @@ function createApp(options = {}) {
   orchestrator.bindSSE(aiRoutes.emitSSE)
 
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() })
+    const databaseConnected = (options.databaseReady || (() => mongoose.connection.readyState === 1))()
+    res.status(databaseConnected ? 200 : 503).json({
+      app: 'test-data-lab',
+      status: databaseConnected ? 'ok' : 'unavailable',
+      database: databaseConnected ? 'connected' : 'disconnected',
+      timestamp: new Date().toISOString(),
+    })
   })
 
   app.use('/api', options.rebuildRouter || createRebuildRouter(options.rebuildDependencies))

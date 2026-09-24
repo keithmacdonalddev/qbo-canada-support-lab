@@ -25,12 +25,17 @@ const userSchema = new mongoose.Schema(
     anthropicApiKey: {
       type: String,
     },
+    connectionSwitchVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
     toJSON: {
       transform(_doc, ret) {
         delete ret.password;
+        delete ret.connectionSwitchVersion;
         // Mask API key — show only last 4 chars
         if (ret.anthropicApiKey) {
           ret.hasAnthropicKey = true;

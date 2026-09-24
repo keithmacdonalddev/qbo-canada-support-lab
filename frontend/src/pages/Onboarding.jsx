@@ -14,16 +14,20 @@ export default function Onboarding() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [company, setCompany] = useState(null)
+  const [environment, setEnvironment] = useState(null)
   const [assessment, setAssessment] = useState(null)
 
   // Check if already connected on mount
   useEffect(() => {
     client.get('/qbo/status').then((res) => {
+      setEnvironment(res.data.environment)
       if (res.data.connected) {
         setCompany(res.data)
         setStep(1)
       }
-    }).catch(() => {})
+    }).catch((err) => {
+      setError(err.response?.data?.error || 'Could not check the saved QuickBooks connection. Make sure the API is running, then reload this page.')
+    })
   }, [])
 
   const handleConnect = async () => {
@@ -31,7 +35,7 @@ export default function Onboarding() {
     setError('')
     try {
       const res = await client.get('/qbo/connect')
-      const { authUri } = res.data
+      const { authUri, callbackOrigin } = res.data
       const popup = window.open(authUri, 'qbo_connect', 'width=600,height=700')
       if (!popup) {
         setError('The QuickBooks authorization window was blocked. Allow popups and try again.')
@@ -52,6 +56,7 @@ export default function Onboarding() {
         if (statusRes.data.connected) {
           setCompany(statusRes.data)
           setStep(1)
+          window.dispatchEvent(new Event('qbo-connection-changed'))
           return true
         }
         return false
@@ -75,7 +80,7 @@ export default function Onboarding() {
 
       // Listen for postMessage from callback popup
       const onMessage = async (event) => {
-        if (event.source !== popup) return
+        if (event.source !== popup || event.origin !== callbackOrigin) return
         if (event.data?.type === 'qbo_connected') {
           await finish('QuickBooks did not finish connecting. Please try again.')
         } else if (event.data?.type === 'qbo_error') {
@@ -136,8 +141,12 @@ export default function Onboarding() {
                 Connect to QuickBooks Online
               </CardTitle>
               <CardDescription className="leading-relaxed">
-                Link your QBO sandbox account to get started. A new window will open to authorize the
-                connection.
+                {environment === 'production'
+                  ? 'Link your production QuickBooks Online company. Approved write actions will affect that real company.'
+                  : environment === 'sandbox'
+                    ? 'Link your QuickBooks Online sandbox company.'
+                    : 'Link your QuickBooks Online company.'}{' '}
+                A new window will open to authorize the connection.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -159,7 +168,7 @@ export default function Onboarding() {
               <div className="mb-5">
                 <div className="flex justify-between py-2 border-b border-[var(--border)]">
                   <span className="text-[13px] text-[var(--text-light)]">Name</span>
-                  <span className="text-[13px] font-medium text-[var(--text-heading)]">{company?.companyName || 'Sandbox Company'}</span>
+                  <span className="text-[13px] font-medium text-[var(--text-heading)]">{company?.companyName || 'Company name unavailable'}</span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-[var(--border)]">
                   <span className="text-[13px] text-[var(--text-light)]">Realm ID</span>

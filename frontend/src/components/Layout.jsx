@@ -18,12 +18,17 @@ export default function Layout({ children }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [company, setCompany] = useState(null)
+  const [companyError, setCompanyError] = useState(false)
 
   useEffect(() => {
-    client
-      .get('/qbo/status')
-      .then((res) => setCompany(res.data))
-      .catch(() => {})
+    const refreshStatus = () => {
+      client.get('/qbo/status')
+        .then((res) => { setCompany(res.data); setCompanyError(false) })
+        .catch(() => setCompanyError(true))
+    }
+    refreshStatus()
+    window.addEventListener('qbo-connection-changed', refreshStatus)
+    return () => window.removeEventListener('qbo-connection-changed', refreshStatus)
   }, [])
 
   const handleLogout = () => {
@@ -31,14 +36,18 @@ export default function Layout({ children }) {
     navigate('/login')
   }
 
-  const connectionStatus = company?.connected
-  const companyName = company?.companyName || 'No Company'
+  const connectionStatus = companyError ? 'Status unavailable'
+    : !company ? 'Checking connection…'
+      : company.status === 'expired' ? 'Check saved connection'
+        : company.connected ? 'Saved connection' : 'No connection'
+  const companyName = companyError ? 'Company status unavailable'
+    : company?.companyName || (company ? 'No Company' : 'Checking company…')
   const environment = company?.environment
   const isProduction = environment === 'production'
 
   return (
     <div className="flex min-h-screen">
-      <aside className="w-60 min-w-60 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] flex flex-col p-0">
+      <aside className="hidden md:flex w-60 min-w-60 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] flex-col p-0">
         <div className="flex items-center gap-2.5 px-5 pt-5 pb-6">
           <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--primary)] text-white font-bold text-base">
             T
@@ -79,37 +88,63 @@ export default function Layout({ children }) {
         </div>
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="flex items-center justify-between px-7 h-14 bg-[var(--topbar-bg)] border-b border-[var(--border)]">
-          <div className="flex items-center gap-3">
-            <span className="font-semibold text-[15px] text-[var(--text-heading)]">
+        <div className="md:hidden flex items-center justify-between gap-3 bg-[var(--sidebar-bg)] text-white px-4 py-3">
+          <span className="font-semibold text-[15px]">Test Data Lab</span>
+          <details className="relative">
+            <summary className="cursor-pointer rounded-md border border-white/25 px-3 py-1.5 text-sm font-medium">Menu</summary>
+            <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-white/20 bg-[var(--sidebar-bg)] p-2 shadow-xl">
+              <nav className="flex flex-col gap-0.5" aria-label="Mobile navigation">
+                {navItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.to === '/'}
+                    className={({ isActive }) =>
+                      `rounded-md px-3 py-2 text-sm text-white no-underline ${isActive ? 'bg-[var(--sidebar-hover)] font-semibold' : ''}`
+                    }
+                  >
+                    {item.icon} {item.label}
+                  </NavLink>
+                ))}
+              </nav>
+              <div className="mt-2 border-t border-white/20 px-3 py-2 text-xs break-all text-white/75">{user?.email}</div>
+              <button onClick={handleLogout} className="w-full rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10">Log out</button>
+            </div>
+          </details>
+        </div>
+        <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 min-h-14 bg-[var(--topbar-bg)] border-b border-[var(--border)] md:px-7">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="truncate font-semibold text-[15px] text-[var(--text-heading)]">
               {companyName}
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {environment && (
               <span
                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
                   isProduction
-                    ? 'bg-[var(--danger)] text-white'
+                    ? 'bg-gradient-to-r from-sky-700 via-violet-700 to-fuchsia-700 text-white'
                     : 'bg-[var(--border)] text-[var(--text-heading)]'
                 }`}
               >
-                {isProduction ? 'Production' : 'Sandbox'}
+                {isProduction ? '✨ Production' : 'Sandbox'}
               </span>
             )}
             <div className="flex items-center gap-2">
               <span
                 className={`inline-block w-[9px] h-[9px] rounded-full ${
-                  connectionStatus ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'
+                  companyError || !company ? 'bg-[var(--warning)]'
+                    : company.connected ? 'bg-[var(--success)]'
+                      : company.status === 'expired' ? 'bg-[var(--warning)]' : 'bg-[var(--danger)]'
                 }`}
               />
               <span className="text-[13px] text-[var(--text-light)]">
-                {connectionStatus ? 'Connected' : 'Disconnected'}
+                {connectionStatus}
               </span>
             </div>
           </div>
         </header>
-        <main className="flex-1 p-7 overflow-y-auto">{children}</main>
+        <main className="min-w-0 flex-1 p-4 overflow-y-auto md:p-7">{children}</main>
       </div>
     </div>
   )
