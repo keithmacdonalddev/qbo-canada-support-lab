@@ -15,7 +15,7 @@ async function getActiveConnection(userId) {
 /**
  * GET /
  * Returns audit logs for the user's active company.
- * Query params: limit, offset, actionType, startDate, endDate
+ * Query params: limit, offset, actionType (comma-separated list allowed), startDate, endDate
  * Supervisors can see all entries for their company.
  */
 router.get('/', authenticate, async (req, res) => {
@@ -40,8 +40,10 @@ router.get('/', authenticate, async (req, res) => {
       filter.userId = req.user.id;
     }
 
+    // One type, or several separated by commas (History's filter groups).
     if (actionType) {
-      filter.actionType = actionType;
+      const types = String(actionType).split(',').map((t) => t.trim()).filter(Boolean);
+      filter.actionType = types.length > 1 ? { $in: types } : types[0];
     }
 
     if (startDate || endDate) {

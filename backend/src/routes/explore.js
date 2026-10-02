@@ -11,7 +11,28 @@ const VALID_ENTITIES = [
   'Customer', 'Invoice', 'Payment', 'CreditMemo',
   'Bill', 'BillPayment', 'VendorCredit', 'Vendor',
   'Item', 'Account', 'JournalEntry', 'Estimate', 'Deposit',
+  'SalesReceipt', 'RefundReceipt', 'Purchase', 'PurchaseOrder', 'Transfer', 'TimeActivity',
 ];
+
+// Dated records: listed newest first and searched by document number.
+const TRANSACTION_ENTITIES = [
+  'Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment', 'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit',
+  'SalesReceipt', 'RefundReceipt', 'Purchase', 'PurchaseOrder', 'Transfer', 'TimeActivity',
+];
+
+// These carry no document number, so a search term can't narrow them.
+const NO_DOC_NUMBER = ['Transfer', 'TimeActivity', 'Payment', 'Deposit'];
+
+// Linked transactions name some types differently from the endpoint that
+// reads them (a bill shows its payment as BillPaymentCheck, for example).
+const LINK_READ_TYPES = {
+  BillPaymentCheck: 'BillPayment', BillPaymentCreditCard: 'BillPayment', ReceivePayment: 'Payment',
+  Expense: 'Purchase', Check: 'Purchase', CreditCardCredit: 'Purchase',
+};
+
+function readableType(txnType) {
+  return LINK_READ_TYPES[txnType] || txnType;
+}
 
 async function getActiveConnection(userId) {
   return Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 });
@@ -37,12 +58,12 @@ router.get('/search', authenticate, async (req, res) => {
     const qbo = await createQBOClient(connection);
     let queryStr = `SELECT * FROM ${type}`;
 
-    if (q) {
+    if (q && !NO_DOC_NUMBER.includes(type)) {
       // Sanitize: strip single quotes, backslashes, and control chars
-      const sanitized = q.replace(/['\\\x00-\x1f]/g, '').trim();
+      const sanitized = String(q).replace(/['\\\x00-\x1f]/g, '').trim();
       if (sanitized) {
         const nameField = ['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName';
-        if (['Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment', 'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit'].includes(type)) {
+        if (TRANSACTION_ENTITIES.includes(type)) {
           queryStr += ` WHERE DocNumber LIKE '%${sanitized}%'`;
         } else {
           queryStr += ` WHERE ${nameField} LIKE '%${sanitized}%'`;
@@ -50,7 +71,13 @@ router.get('/search', authenticate, async (req, res) => {
       }
     }
 
-    queryStr += ` MAXRESULTS ${Math.min(Number(limit), 100)}`;
+    // Newest transactions first; lists (customers, items...) alphabetically.
+    if (TRANSACTION_ENTITIES.includes(type)) {
+      queryStr += ' ORDERBY TxnDate DESC';
+    } else {
+      queryStr += ` ORDERBY ${['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName'}`;
+    }
+    queryStr += ` MAXRESULTS ${Math.min(Number(limit) || 50, 100)}`;
 
     const result = await qbo.query(queryStr);
     const records = result.QueryResponse?.[type] || [];
@@ -142,13 +169,17 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
     const { entity, id } = req.params;
     const qbo = await createQBOClient(connection);
 
+    // Each record is one QuickBooks read; stop well short of the rate limit.
+    const MAX_RECORDS = 40;
     const visited = new Set();
+    let truncated = false;
     const nodes = [];
     const edges = [];
 
     async function trace(entityType, entityId) {
       const key = `${entityType}:${entityId}`;
       if (visited.has(key)) return;
+      if (visited.size >= MAX_RECORDS) { truncated = true; return; }
       visited.add(key);
 
       try {
@@ -167,10 +198,10 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
         for (const link of linkedTxns) {
           edges.push({
             from: key,
-            to: `${link.TxnType}:${link.TxnId}`,
+            to: `${readableType(link.TxnType)}:${link.TxnId}`,
             linkType: 'LinkedTxn',
           });
-          await trace(link.TxnType, link.TxnId);
+          await trace(readableType(link.TxnType), link.TxnId);
         }
 
         // Follow Line-level LinkedTxn (e.g., Payment lines linking to Invoices)
@@ -180,10 +211,10 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
           for (const link of lineLinks) {
             edges.push({
               from: key,
-              to: `${link.TxnType}:${link.TxnId}`,
+              to: `${readableType(link.TxnType)}:${link.TxnId}`,
               linkType: 'LineLinkedTxn',
             });
-            await trace(link.TxnType, link.TxnId);
+            await trace(readableType(link.TxnType), link.TxnId);
           }
         }
       } catch (err) {
@@ -198,7 +229,7 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
 
     await trace(entity, id);
 
-    return res.json({ nodes, edges });
+    return res.json({ nodes, edges, truncated });
   } catch (err) {
     console.error('[explore/chain]', err.message);
     if (respondQboError(res, err)) return;
