@@ -49,7 +49,7 @@ const NOTE_FORMATS = {
  * @param {string} format - 'escalation' | 'internal' | 'customer'
  * @returns {Object} { content, format, formatName, generatedAt, tokenUsage }
  */
-async function generateNote(sessionData, format = 'escalation') {
+async function generateNote(sessionData, format = 'escalation', { userApiKey } = {}) {
   const noteFormat = NOTE_FORMATS[format];
   if (!noteFormat) throw new Error(`Invalid note format: ${format}`);
 
@@ -61,22 +61,20 @@ async function generateNote(sessionData, format = 'escalation') {
     content: `Based on the following investigation findings, generate a ${noteFormat.name}.\n\n${findings}`,
   }];
 
-  const response = await aiProvider.chat(messages, [], {
+  const completion = await aiProvider.complete({
     system: noteFormat.systemPrompt,
+    prompt: messages[0].content,
     maxTokens: 2048,
+    userApiKey,
   });
-
-  const content = response.content
-    .filter(b => b.type === 'text')
-    .map(b => b.text)
-    .join('\n');
+  const content = completion.text;
 
   return {
     content,
     format,
     formatName: noteFormat.name,
     generatedAt: new Date(),
-    tokenUsage: response.usage,
+    tokenUsage: completion.usage,
   };
 }
 

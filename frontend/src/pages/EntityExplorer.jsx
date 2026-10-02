@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import Layout from '../components/Layout'
 import client from '../api/client'
 import { Card, CardContent } from '@/components/ui/card'
@@ -50,8 +51,10 @@ function getCellValue(record, col) {
 }
 
 export default function EntityExplorer() {
-  const [entityType, setEntityType] = useState('Customer')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchParams] = useSearchParams()
+  const initialType = ENTITY_TYPES.includes(searchParams.get('type')) ? searchParams.get('type') : 'Customer'
+  const [entityType, setEntityType] = useState(initialType)
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') || '')
   const [results, setResults] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState(null)
@@ -74,6 +77,15 @@ export default function EntityExplorer() {
       setLoading(false)
     }
   }
+
+  // Arriving from "Find a record" on Today runs that search immediately.
+  const autoSearched = useRef(false)
+  useEffect(() => {
+    if (autoSearched.current || !searchParams.has('type')) return
+    autoSearched.current = true
+    handleSearch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleSelectRecord = async (record) => {
     setDetailLoading(true)

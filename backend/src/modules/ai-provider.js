@@ -1,5 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk').default;
 const config = require('../config');
+const codexCli = require('./codex-cli');
 
 const MODELS = {
   FAST: config.ai.modelFast,
@@ -111,4 +112,34 @@ function getKeyConfig() {
   };
 }
 
-module.exports = { chat, stream, MODELS, resolveApiKey, getKeyConfig };
+/**
+ * Decide which model service answers: the Codex CLI (owner's ChatGPT
+ * subscription) or an Anthropic API key. See config.ai.provider.
+ * @returns {Promise<'codex'|'anthropic'>}
+ */
+async function resolveProvider() {
+  if (config.ai.provider === 'anthropic') return 'anthropic';
+  if (config.ai.provider === 'codex') return 'codex';
+  const status = await codexCli.getStatus();
+  return status.installed && status.loggedIn ? 'codex' : 'anthropic';
+}
+
+/**
+ * Plain text completion (no tools) on whichever provider is active.
+ * @param {Object} options - { system, prompt, maxTokens?, userApiKey? }
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number } }>}
+ */
+async function complete({ system, prompt, maxTokens, userApiKey } = {}) {
+  if (await resolveProvider() === 'codex') {
+    const result = await codexCli.run({ system, prompt });
+    return { text: result.text, usage: result.usage };
+  }
+  const response = await chat([{ role: 'user', content: prompt }], [], { system, maxTokens, userApiKey });
+  const text = (response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  return {
+    text,
+    usage: { inputTokens: response.usage?.input_tokens || 0, outputTokens: response.usage?.output_tokens || 0 },
+  };
+}
+
+module.exports = { chat, stream, complete, resolveProvider, MODELS, resolveApiKey, getKeyConfig };

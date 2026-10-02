@@ -156,6 +156,7 @@ Scale counts are set only after sandbox rate, latency, storage, and report-perfo
 - **Checkpoints and diffs:** deferred. Preserve existing records and code; do not expand them during the core rebuild.
 - **Existing issue packs:** legacy/experimental. Preserve definitions and runs, but do not present the five examples as representative support coverage.
 - **AI investigation and notes:** future/experimental. Preserve code and data; no new core dependency or write authority.
+- **Owner direction, 2026-10-02:** AI-driven issue reproduction is now the app's primary workflow. The operator describes a customer issue; the assistant reads the company and queues the creates, sparse updates and voids needed to recreate it (no deletes). Every change still runs only after the operator approves the plan, with production confirmation and audit. The assistant can use the owner's Codex CLI (ChatGPT subscription) or an Anthropic key. See `docs/design/ux-overhaul-2026-10.md`.
 
 These routes remain an implementation baseline during migration. Their presence in source does not make them rebuild priorities or release evidence.
 

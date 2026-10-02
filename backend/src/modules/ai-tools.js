@@ -10,6 +10,17 @@ const VALID_ENTITY_TYPES = [
   'Vendor', 'Item', 'Account', 'JournalEntry', 'Estimate', 'Deposit',
 ];
 
+// Record types the assistant may create or edit to reproduce an issue. Every
+// such change is queued as a plan step and runs only after the user approves.
+// There is deliberately no delete; voiding is limited to the types QBO voids.
+const WRITABLE_ENTITY_TYPES = [
+  'Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term',
+  'Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate',
+  'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder',
+  'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity',
+];
+const VOIDABLE_ENTITY_TYPES = ['Invoice', 'Payment', 'SalesReceipt', 'BillPayment'];
+
 /**
  * Sanitize a string for use inside QBO query LIKE clauses.
  * Escapes single quotes and strips control characters.
@@ -339,6 +350,52 @@ const toolDefinitions = [
       required: ['name'],
     },
   },
+  {
+    name: 'createRecord',
+    description:
+      'Create any supported QuickBooks Online record (customer, vendor, item, account, invoice, payment, credit memo, sales receipt, refund, estimate, bill, bill payment, vendor credit, expense/Purchase, purchase order, deposit, transfer, journal entry, time activity). '
+      + 'Pass the record body exactly as the QBO Accounting API v3 expects for that entity (e.g. CustomerRef, Line with DetailType, TxnDate, LinkedTxn). '
+      + 'Look up the Ids of referenced customers, vendors, items, accounts and tax codes first; never invent Ids. Queued for user approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entityType: { type: 'string', enum: WRITABLE_ENTITY_TYPES, description: 'QBO entity name' },
+        record: { type: 'object', description: 'QBO API v3 request body for the new record' },
+        summary: { type: 'string', description: 'One plain-English sentence describing this change for the reviewer' },
+      },
+      required: ['entityType', 'record', 'summary'],
+    },
+  },
+  {
+    name: 'updateRecord',
+    description:
+      'Change fields on an existing QuickBooks Online record with a sparse update. Pass only the fields to change, in QBO API v3 shape; '
+      + 'the server fetches the current SyncToken. Use it to edit amounts, dates, links, memos, terms, statuses (e.g. Active=false) and so on. Queued for user approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entityType: { type: 'string', enum: WRITABLE_ENTITY_TYPES, description: 'QBO entity name' },
+        id: { type: 'string', description: 'QBO Id of the record to change' },
+        changes: { type: 'object', description: 'Only the fields to set, in QBO API v3 shape' },
+        summary: { type: 'string', description: 'One plain-English sentence describing this change for the reviewer' },
+      },
+      required: ['entityType', 'id', 'changes', 'summary'],
+    },
+  },
+  {
+    name: 'voidTransaction',
+    description:
+      'Void an invoice, payment, sales receipt or bill payment. The record stays in QuickBooks with zero amounts and a Voided memo. Queued for user approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entityType: { type: 'string', enum: VOIDABLE_ENTITY_TYPES, description: 'QBO entity name' },
+        id: { type: 'string', description: 'QBO Id of the transaction to void' },
+        summary: { type: 'string', description: 'One plain-English sentence describing why it is voided' },
+      },
+      required: ['entityType', 'id', 'summary'],
+    },
+  }
 ];
 
 // ---------------------------------------------------------------------------
@@ -467,6 +524,10 @@ async function handleGetEntityDetail(input, context) {
       success: false,
       error: `Invalid entity type "${type}". Must be one of: ${VALID_ENTITY_TYPES.join(', ')}`,
     };
+  }
+
+  if (!/^\d+$/.test(String(id))) {
+    return { success: false, error: `Invalid ${type} Id: ${String(id).slice(0, 40)}` };
   }
 
   const result = await context.qbo.read(type.toLowerCase(), id);
@@ -890,6 +951,83 @@ async function handleCreateCheckpoint(input, context) {
 // Maps
 // ---------------------------------------------------------------------------
 
+function recordSummary(entityType, record) {
+  if (!record) return { entityType };
+  return {
+    entityType,
+    id: record.Id,
+    docNumber: record.DocNumber,
+    name: record.DisplayName || record.Name || record.FullyQualifiedName,
+    totalAmt: record.TotalAmt,
+    balance: record.Balance,
+    txnDate: record.TxnDate,
+    privateNote: record.PrivateNote,
+  };
+}
+
+function checkWritable(entityType, allowed = WRITABLE_ENTITY_TYPES, id) {
+  if (!allowed.includes(entityType)) {
+    return { success: false, error: `Unsupported entity type: ${entityType}. Allowed: ${allowed.join(', ')}` };
+  }
+  // QBO Ids are numeric; anything else could alter the request path.
+  if (id !== undefined && !/^\d+$/.test(String(id))) {
+    return { success: false, error: `Invalid ${entityType} Id: ${String(id).slice(0, 40)}` };
+  }
+  return null;
+}
+
+async function handleCreateRecord(input, context) {
+  const { entityType, record } = input;
+  const invalid = checkWritable(entityType);
+  if (invalid) return invalid;
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { success: false, error: 'record must be an object in QBO API shape' };
+  }
+  // QBO treats a body with Id/SyncToken as an update (a full overwrite without
+  // sparse), so a "create" must never carry them. Edits go through updateRecord.
+  const updateFields = ['Id', 'SyncToken', 'sparse'].filter((key) => Object.prototype.hasOwnProperty.call(record, key));
+  if (updateFields.length) {
+    return { success: false, error: `createRecord cannot include ${updateFields.join(', ')}. Use updateRecord to change an existing record.` };
+  }
+  const result = await context.qbo.create(entityType.toLowerCase(), record);
+  return { success: true, data: recordSummary(entityType, result[entityType]) };
+}
+
+async function handleUpdateRecord(input, context) {
+  const { entityType, id, changes } = input;
+  const invalid = checkWritable(entityType, WRITABLE_ENTITY_TYPES, id ?? '');
+  if (invalid) return invalid;
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    return { success: false, error: 'changes must be an object in QBO API shape' };
+  }
+  const entity = entityType.toLowerCase();
+  const current = (await context.qbo.read(entity, id))[entityType];
+  if (!current) return { success: false, error: `${entityType} ${id} was not found` };
+  const result = await context.qbo.update(entity, {
+    ...changes,
+    Id: current.Id,
+    SyncToken: current.SyncToken,
+    sparse: true,
+  });
+  return { success: true, data: recordSummary(entityType, result[entityType]) };
+}
+
+async function handleVoidTransaction(input, context) {
+  const { entityType, id } = input;
+  const invalid = checkWritable(entityType, VOIDABLE_ENTITY_TYPES, id ?? '');
+  if (invalid) return invalid;
+  const entity = entityType.toLowerCase();
+  const current = (await context.qbo.read(entity, id))[entityType];
+  if (!current) return { success: false, error: `${entityType} ${id} was not found` };
+  const body = { Id: current.Id, SyncToken: current.SyncToken };
+  // QBO voids payments and bill payments through a sparse update with
+  // include=void; invoices and sales receipts use operation=void.
+  const result = ['Payment', 'BillPayment'].includes(entityType)
+    ? await context.qbo.apiCall('POST', `${entity}?operation=update&include=void`, { ...body, sparse: true })
+    : await context.qbo.apiCall('POST', `${entity}?operation=void`, body);
+  return { success: true, data: recordSummary(entityType, result[entityType] || current) };
+}
+
 const toolHandlers = {
   lookupCustomer: handleLookupCustomer,
   lookupInvoice: handleLookupInvoice,
@@ -903,6 +1041,9 @@ const toolHandlers = {
   applyBillPayment: handleApplyBillPayment,
   runIssuePack: handleRunIssuePack,
   createCheckpoint: handleCreateCheckpoint,
+  createRecord: handleCreateRecord,
+  updateRecord: handleUpdateRecord,
+  voidTransaction: handleVoidTransaction,
 };
 
 const toolPermissions = {
@@ -918,6 +1059,9 @@ const toolPermissions = {
   applyBillPayment: 'confirm',
   runIssuePack: 'confirm',
   createCheckpoint: 'confirm',
+  createRecord: 'confirm',
+  updateRecord: 'confirm',
+  voidTransaction: 'confirm',
 };
 
 module.exports = {
@@ -925,4 +1069,6 @@ module.exports = {
   toolHandlers,
   toolPermissions,
   VALID_ENTITY_TYPES,
+  WRITABLE_ENTITY_TYPES,
+  VOIDABLE_ENTITY_TYPES,
 };

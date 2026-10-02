@@ -1,150 +1,206 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
+import { useState } from 'react'
+import {
+  WandSparkles, Building2, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown,
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { useState, useEffect } from 'react'
-import client from '../api/client'
+import { useConnection } from '../context/ConnectionContext'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { StatusDot, EnvironmentTag, connectionSummary } from '@/components/ui/status'
+import { cn } from '@/lib/utils'
 
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: '\u25A3' },
-  { to: '/lab', label: 'Lab Tools', icon: '\u2692' },
-  { to: '/ai', label: 'AI Assistant', icon: '\u2726' },
-  { to: '/explorer', label: 'Entity Explorer', icon: '\u229E' },
-  { to: '/checkpoints', label: 'Checkpoints', icon: '\u2299' },
-  { to: '/issuepacks', label: 'Issue Packs', icon: '\u2298' },
-  { to: '/audit', label: 'Audit Log', icon: '\u2637' },
-  { to: '/settings', label: 'Settings', icon: '\u2699' },
+// The app exists to do one thing well: turn a customer's description of a
+// problem into that same situation in the QuickBooks company. Everything else
+// supports that job, so navigation is four places, in order of use.
+const NAV = [
+  { to: '/', label: 'Reproduce', icon: WandSparkles, match: (p) => p === '/' || p.startsWith('/cases') },
+  { to: '/company', label: 'Company', icon: Building2, match: (p) => p.startsWith('/company') || p.startsWith('/lab') },
+  { to: '/explorer', label: 'Records', icon: Table2, match: (p) => p.startsWith('/explorer') },
+  { to: '/audit', label: 'History', icon: History, match: (p) => p.startsWith('/audit') },
 ]
+
+const LEGACY_NAV = [
+  { to: '/ai', label: 'Old AI console' },
+  { to: '/issuepacks', label: 'Issue packs' },
+  { to: '/checkpoints', label: 'Checkpoints' },
+]
+
+function NavItem({ item, active }) {
+  const Icon = item.icon
+  return (
+    <Link
+      to={item.to}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13.5px] no-underline transition-colors duration-100 focus-visible:outline-offset-[-2px]',
+        active
+          ? 'bg-[var(--surface)] font-medium text-[var(--ink)] shadow-[0_0_0_1px_var(--line)]'
+          : 'text-[var(--ink-2)] hover:bg-[var(--sunken)] hover:text-[var(--ink)]',
+      )}
+    >
+      {Icon && <Icon className="size-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />}
+      {item.label}
+    </Link>
+  )
+}
+
+// Shown on every page while QuickBooks is unusable, with the fix in place.
+function ConnectionBar() {
+  const connection = useConnection()
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+
+  if (!connection || ['loading', 'connected'].includes(connection.state)) return null
+
+  const trySaved = async () => {
+    setBusy(true)
+    setResult(null)
+    setResult(await connection.trySavedConnection())
+    setBusy(false)
+  }
+
+  const reconnect = (
+    <Link to="/onboarding" className={cn(buttonVariants({ variant: result?.rejected ? 'default' : 'outline', size: 'sm' }), 'no-underline')}>
+      Reconnect
+    </Link>
+  )
+
+  let message
+  let actions
+  if (connection.state === 'unavailable') {
+    message = 'The lab server is not responding, so nothing can be read or changed.'
+    actions = <Button size="sm" variant="outline" onClick={connection.refresh}><RefreshCw /> Check again</Button>
+  } else if (connection.state === 'none') {
+    message = 'No QuickBooks company is connected yet.'
+    actions = <Link to="/onboarding" className={cn(buttonVariants({ size: 'sm' }), 'no-underline')}>Connect company</Link>
+  } else if (result?.rejected) {
+    message = 'QuickBooks rejected the saved sign-in. Reconnect to continue.'
+    actions = reconnect
+  } else {
+    message = 'QuickBooks is disconnected. Nothing can be reproduced, read or changed until it is fixed.'
+    actions = (
+      <>
+        <Button size="sm" onClick={trySaved} disabled={busy}>
+          {busy ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          {busy ? 'Checking…' : 'Try saved connection'}
+        </Button>
+        {reconnect}
+      </>
+    )
+  }
+
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[#f0dcb4] bg-[var(--attention-soft)] px-5 py-2.5 md:px-8">
+      <StatusDot tone="attention" />
+      <p className="min-w-0 flex-1 text-[13px] text-[var(--ink)]">
+        {message}
+        {result && !result.rejected && <span className="text-[var(--danger-ink)]"> {result.message}</span>}
+        {result?.intuitTid && <span className="text-[var(--ink-3)]"> Intuit reference: {result.intuitTid}</span>}
+      </p>
+      <div className="flex items-center gap-2">{actions}</div>
+    </div>
+  )
+}
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth()
+  const connection = useConnection()
   const navigate = useNavigate()
-  const [company, setCompany] = useState(null)
-  const [companyError, setCompanyError] = useState(false)
-
-  useEffect(() => {
-    const refreshStatus = () => {
-      client.get('/qbo/status')
-        .then((res) => { setCompany(res.data); setCompanyError(false) })
-        .catch(() => setCompanyError(true))
-    }
-    refreshStatus()
-    window.addEventListener('qbo-connection-changed', refreshStatus)
-    return () => window.removeEventListener('qbo-connection-changed', refreshStatus)
-  }, [])
+  const { pathname } = useLocation()
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
-  const connectionStatus = companyError ? 'Status unavailable'
-    : !company ? 'Checking connection…'
-      : company.status === 'expired' ? 'Check saved connection'
-        : company.connected ? 'Saved connection' : 'No connection'
-  const companyName = companyError ? 'Company status unavailable'
-    : company?.companyName || (company ? 'No Company' : 'Checking company…')
-  const environment = company?.environment
-  const isProduction = environment === 'production'
+  const summary = connectionSummary(connection?.status, connection?.state === 'unavailable')
+  const companyName = connection?.state === 'unavailable' ? 'Company unavailable'
+    : connection?.companyName || (connection?.status ? 'No company connected' : 'Loading company…')
 
-  return (
-    <div className="flex min-h-screen">
-      <aside className="hidden md:flex w-60 min-w-60 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] flex-col p-0">
-        <div className="flex items-center gap-2.5 px-5 pt-5 pb-6">
-          <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--primary)] text-white font-bold text-base">
-            T
-          </span>
-          <span className="text-white font-semibold text-[15px]">Test Data Lab</span>
-        </div>
-        <nav className="flex flex-col gap-0.5 px-2.5 flex-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 py-2.5 px-3 rounded-md text-[var(--sidebar-text)] no-underline text-sm transition-colors duration-150 ${
-                  isActive
-                    ? 'bg-[var(--sidebar-hover)] text-[var(--sidebar-active)] font-medium'
-                    : ''
-                }`
-              }
-            >
-              <span className="text-base w-5 text-center">{item.icon}</span>
+  const nav = (
+    <nav aria-label="Main" className="flex flex-col gap-0.5">
+      {NAV.map((item) => <NavItem key={item.to} item={item} active={item.match(pathname)} />)}
+    </nav>
+  )
+
+  const footer = (
+    <div className="flex flex-col gap-0.5 border-t border-[var(--line)] pt-3">
+      <NavItem item={{ to: '/settings', label: 'Settings', icon: Settings }} active={pathname.startsWith('/settings')} />
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[12.5px] text-[var(--ink-3)] hover:bg-[var(--sunken)] hover:text-[var(--ink-2)]">
+          <ChevronDown className="size-3.5 -rotate-90 transition-transform group-open:rotate-0" aria-hidden="true" />
+          Legacy tools
+        </summary>
+        <div className="flex flex-col gap-0.5 pl-6">
+          {LEGACY_NAV.map((item) => (
+            <NavLink key={item.to} to={item.to} className="rounded-md px-2.5 py-1.5 text-[12.5px] text-[var(--ink-3)] no-underline hover:bg-[var(--sunken)] hover:text-[var(--ink)]">
               {item.label}
             </NavLink>
           ))}
-        </nav>
-        <div className="px-4 pt-4 pb-5 border-t border-white/[0.08]">
-          <div className="mb-2.5">
-            <div className="text-[13px] text-[var(--sidebar-text)] overflow-hidden text-ellipsis whitespace-nowrap">
-              {user?.email}
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="bg-white/[0.06] text-[var(--sidebar-text)] border-none rounded-md py-1.5 px-3.5 text-[13px] cursor-pointer w-full"
-          >
-            Log out
-          </button>
         </div>
+      </details>
+      <div className="mt-2 flex items-center gap-2 px-2.5">
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--ink-3)]" title={user?.email}>{user?.email}</span>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="rounded-md p-1.5 text-[var(--ink-3)] hover:bg-[var(--sunken)] hover:text-[var(--ink)]"
+          aria-label="Log out"
+          title="Log out"
+        >
+          <LogOut className="size-4" strokeWidth={1.75} />
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex min-h-screen bg-[var(--canvas)]">
+      {connection?.isProduction && (
+        <div aria-hidden="true" className="fixed inset-x-0 top-0 z-50 h-[3px] bg-[var(--production)]" />
+      )}
+      <aside className="sticky top-0 hidden h-screen w-[220px] shrink-0 flex-col border-r border-[var(--line)] bg-[var(--canvas)] px-3 pb-3 pt-4 md:flex">
+        <Link to="/" className="mb-6 flex items-center gap-2.5 px-2.5 no-underline">
+          <span aria-hidden="true" className="grid size-6 place-items-center rounded-[6px] bg-[var(--ink)] text-[11px] font-semibold tracking-tight text-white">
+            TD
+          </span>
+          <span className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--ink)]">Test Data Lab</span>
+        </Link>
+        <div className="flex-1 overflow-y-auto">{nav}</div>
+        {footer}
       </aside>
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="md:hidden flex items-center justify-between gap-3 bg-[var(--sidebar-bg)] text-white px-4 py-3">
-          <span className="font-semibold text-[15px]">Test Data Lab</span>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--canvas)] px-4 py-3 md:hidden">
+          <span className="text-[14px] font-semibold text-[var(--ink)]">Test Data Lab</span>
           <details className="relative">
-            <summary className="cursor-pointer rounded-md border border-white/25 px-3 py-1.5 text-sm font-medium">Menu</summary>
-            <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-white/20 bg-[var(--sidebar-bg)] p-2 shadow-xl">
-              <nav className="flex flex-col gap-0.5" aria-label="Mobile navigation">
-                {navItems.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive }) =>
-                      `rounded-md px-3 py-2 text-sm text-white no-underline ${isActive ? 'bg-[var(--sidebar-hover)] font-semibold' : ''}`
-                    }
-                  >
-                    {item.icon} {item.label}
-                  </NavLink>
-                ))}
-              </nav>
-              <div className="mt-2 border-t border-white/20 px-3 py-2 text-xs break-all text-white/75">{user?.email}</div>
-              <button onClick={handleLogout} className="w-full rounded-md px-3 py-2 text-left text-sm text-white hover:bg-white/10">Log out</button>
+            <summary className="cursor-pointer rounded-md border border-[var(--line-strong)] px-3 py-1.5 text-sm font-medium">Menu</summary>
+            <div className="absolute right-0 top-full z-50 mt-2 w-60 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2 shadow-[var(--shadow-md)]">
+              {nav}
+              <div className="mt-3">{footer}</div>
             </div>
           </details>
         </div>
-        <header className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 min-h-14 bg-[var(--topbar-bg)] border-b border-[var(--border)] md:px-7">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="truncate font-semibold text-[15px] text-[var(--text-heading)]">
-              {companyName}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            {environment && (
-              <span
-                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
-                  isProduction
-                    ? 'bg-gradient-to-r from-sky-700 via-violet-700 to-fuchsia-700 text-white'
-                    : 'bg-[var(--border)] text-[var(--text-heading)]'
-                }`}
-              >
-                {isProduction ? '✨ Production' : 'Sandbox'}
-              </span>
-            )}
-            <div className="flex items-center gap-2">
-              <span
-                className={`inline-block w-[9px] h-[9px] rounded-full ${
-                  companyError || !company ? 'bg-[var(--warning)]'
-                    : company.connected ? 'bg-[var(--success)]'
-                      : company.status === 'expired' ? 'bg-[var(--warning)]' : 'bg-[var(--danger)]'
-                }`}
-              />
-              <span className="text-[13px] text-[var(--text-light)]">
-                {connectionStatus}
-              </span>
+
+        {/* Scope strip: which company a change will land in, always visible. */}
+        <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--canvas)]">
+          <div className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-5 py-2 md:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="truncate text-[13.5px] font-medium text-[var(--ink)]" title={companyName}>{companyName}</span>
+              <EnvironmentTag environment={connection?.environment} />
             </div>
+            <Link
+              to="/company"
+              className="flex items-center gap-2 rounded-md px-2 py-1 text-[13px] text-[var(--ink-2)] no-underline hover:bg-[var(--sunken)] hover:text-[var(--ink)]"
+            >
+              <StatusDot tone={summary.tone} />
+              {summary.label}
+            </Link>
           </div>
+          <ConnectionBar />
         </header>
-        <main className="min-w-0 flex-1 p-4 overflow-y-auto md:p-7">{children}</main>
+
+        <main className="min-w-0 flex-1 px-5 py-6 md:px-8 md:py-8">{children}</main>
       </div>
     </div>
   )

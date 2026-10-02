@@ -263,6 +263,17 @@ export default function Settings() {
                 </div>
                 <Separator />
 
+                {/* Which model service answers */}
+                <div className="flex justify-between items-center py-2.5">
+                  <span className="text-[13px] text-[#6B7280]">Using</span>
+                  <span className="text-sm font-medium text-[var(--text-heading)]">
+                    {aiConfig.provider === 'codex'
+                      ? `Codex CLI · ChatGPT subscription (${aiConfig.codex?.model || 'default model'})`
+                      : 'Anthropic API key'}
+                  </span>
+                </div>
+                <Separator />
+
                 {/* Global key info */}
                 <div className="flex justify-between items-center py-2.5">
                   <span className="text-[13px] text-[#6B7280]">Shared API key</span>

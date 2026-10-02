@@ -6,52 +6,77 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --bg: #f5f6fa;
-  --bg-surface: #ffffff;
-  --text: #3a3a4a;
-  --text-light: #8a8a9a;
-  --text-heading: #1a1a2e;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-light: rgba(37, 99, 235, 0.08);
-  --success: #16a34a;
-  --success-light: rgba(22, 163, 74, 0.1);
-  --danger: #dc2626;
-  --danger-light: rgba(220, 38, 38, 0.08);
-  --warning: #f59e0b;
-  --border: #e2e4ea;
-  --border-light: #f0f1f5;
-  --sidebar-bg: #1a1a2e;
-  --sidebar-text: #b0b0c8;
-  --sidebar-active: #ffffff;
-  --sidebar-hover: rgba(255, 255, 255, 0.06);
-  --topbar-bg: #ffffff;
-  --radius: 0.625rem;
-  --radius-lg: 12px;
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, 'Courier New', monospace;
+  /*
+   * Test Data Lab visual system (2026-10 overhaul).
+   * Neutral warm paper + ink. Colour is reserved for meaning:
+   * link = interactive text and focus, ok/attention/danger = status,
+   * production = the real-company environment. Never decoration.
+   */
+  --canvas: #f6f5f2;
+  --surface: #ffffff;
+  --surface-muted: #faf9f7;
+  --sunken: #efeee9;
+  --line: #e5e3dd;
+  --line-strong: #d3d0c8;
+  --ink: #1b1a17;
+  --ink-2: #57544c;
+  --ink-3: #87837a;
+  --link: #2f55c4;
+  --link-soft: #eaeffb;
+  --ok: #1d7a4d;
+  --ok-soft: #e6f3ec;
+  --attention: #9a5b00;
+  --attention-dot: #d48a06;
+  --attention-soft: #fdf3e1;
+  --danger-ink: #b42a1f;
+  --danger-soft: #fbeae8;
+  --production: #8b2d6f;
+  --production-soft: #f6e9f2;
+  --focus: #2f55c4;
+
+  /* Legacy names still used by pages that have not migrated yet. */
+  --bg: var(--canvas);
+  --bg-surface: var(--surface);
+  --text: var(--ink);
+  --text-light: var(--ink-3);
+  --text-heading: var(--ink);
+  --primary: var(--ink);
+  --primary-hover: #34322d;
+  --primary-light: var(--link-soft);
+  --success: var(--ok);
+  --success-light: var(--ok-soft);
+  --danger: var(--danger-ink);
+  --danger-light: var(--danger-soft);
+  --warning: var(--attention-dot);
+  --border: var(--line);
+  --border-light: var(--sunken);
+  --radius: 0.5rem;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(27, 26, 23, 0.04);
+  --shadow-md: 0 6px 20px rgba(27, 26, 23, 0.08);
+  --sans: 'Geist Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
 
   font: 14px/1.5 var(--sans);
-  color: var(--text);
-  background: var(--bg);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  color: var(--ink);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  --background: var(--surface);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary-foreground: #ffffff;
+  --secondary: var(--sunken);
+  --secondary-foreground: var(--ink);
+  --muted: var(--sunken);
+  --muted-foreground: var(--ink-2);
+  --accent: var(--sunken);
+  --accent-foreground: var(--ink);
   --destructive: oklch(0.577 0.245 27.325);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --input: var(--line-strong);
+  --ring: var(--focus);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -77,7 +102,8 @@ body {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -118,6 +144,7 @@ body {
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -157,7 +184,15 @@ body {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    background: var(--canvas);
+    color: var(--ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
   }
   html {
     @apply font-sans;

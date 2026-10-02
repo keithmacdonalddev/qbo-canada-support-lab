@@ -57,6 +57,25 @@ function sendQboErrorJson(res, err) {
 }
 
 /**
+ * Errors from the AI model service (Codex CLI) are reported as themselves,
+ * not as QuickBooks failures. Never an app-level 401.
+ */
+function sendAiProviderError(res, err) {
+  if (!err?.aiProvider) return false;
+  res.status(safeStatus(err)).json({ success: false, error: err.message, provider: 'ai' });
+  return true;
+}
+
+/**
+ * Upstream auth failures (e.g. a revoked Anthropic key) must not become an
+ * HTTP 401: the frontend treats any 401 as session expiry and logs out.
+ */
+function safeStatus(err) {
+  const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
+  return status === 401 || status === 403 ? 502 : status;
+}
+
+/**
  * Helper -- find the user's active QBO Connection.
  */
 async function getActiveConnection(userId) {
@@ -70,31 +89,48 @@ async function getActiveConnection(userId) {
  * Returns AI feature-flag state so the frontend knows what's available.
  */
 router.get('/config', authenticate, async (req, res) => {
-  const aiProvider = require('../modules/ai-provider');
-  const User = require('../models/User');
-  const user = await User.findById(req.user.id).select('+anthropicApiKey');
+  try {
+    const aiProvider = require('../modules/ai-provider');
+    const User = require('../models/User');
+    const user = await User.findById(req.user.id).select('+anthropicApiKey');
 
-  const keyConfig = aiProvider.getKeyConfig();
-  const hasUserKey = !!(user && user.anthropicApiKey);
-  const maskedKey = hasUserKey
-    ? '••••' + user.anthropicApiKey.slice(-4)
-    : null;
+    const keyConfig = aiProvider.getKeyConfig();
+    const hasUserKey = !!(user && user.anthropicApiKey);
+    const maskedKey = hasUserKey
+      ? '••••' + user.anthropicApiKey.slice(-4)
+      : null;
 
-  // Can this user actually use AI right now?
-  const available =
-    (keyConfig.userKeysEnabled && hasUserKey) ||
-    keyConfig.globalKeySet;
+    // Codex CLI = the owner's ChatGPT subscription through the signed-in codex
+    // program; no API key needed. ?refresh=true re-checks the sign-in now.
+    const codexCli = require('../modules/codex-cli');
+    const codex = await codexCli.getStatus({ refresh: req.query.refresh === 'true' });
+    const provider = await aiProvider.resolveProvider();
+    const anthropicAvailable =
+      (keyConfig.userKeysEnabled && hasUserKey) ||
+      keyConfig.globalKeySet;
 
-  return res.json({
-    success: true,
-    data: {
-      ...keyConfig,
-      featureFlags: publicFeatureFlags().experimental,
-      hasUserKey,
-      maskedKey,
-      available,
-    },
-  });
+    // Can this user actually use AI right now?
+    const available = provider === 'codex'
+      ? codex.installed && codex.loggedIn
+      : anthropicAvailable;
+
+    return res.json({
+      success: true,
+      data: {
+        ...keyConfig,
+        featureFlags: publicFeatureFlags().experimental,
+        hasUserKey,
+        maskedKey,
+        available,
+        provider,
+        providerSetting: config.ai.provider,
+        codex,
+      },
+    });
+  } catch (err) {
+    console.error('[ai/config]', err.message);
+    return res.status(500).json({ success: false, error: 'AI settings could not be loaded.' });
+  }
 });
 
 /**
@@ -131,8 +167,9 @@ router.post('/chat', async (req, res) => {
     return res.json({ success: true, data: result });
   } catch (err) {
     console.error('[ai/chat]', err.message);
+    if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
 
@@ -158,8 +195,9 @@ router.post('/plan/:id/approve', async (req, res) => {
     return res.json({ success: true, data: { plan } });
   } catch (err) {
     console.error('[ai/plan/approve]', err.message);
+    if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
 
@@ -183,8 +221,9 @@ router.post('/plan/:id/reject', async (req, res) => {
     return res.json({ success: true, data: { plan } });
   } catch (err) {
     console.error('[ai/plan/reject]', err.message);
+    if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
 
@@ -221,8 +260,9 @@ router.post(
     return res.json({ success: true, data: { plan } });
     } catch (err) {
     console.error('[ai/plan/execute]', err.message);
+    if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
     }
   }
 );
@@ -304,8 +344,9 @@ router.post('/investigate', async (req, res) => {
     return res.json({ success: true, data: result });
   } catch (err) {
     console.error('[ai/investigate]', err.message);
+    if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
 
@@ -332,9 +373,12 @@ router.post('/generate-note', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
+    const User = require('../models/User');
+    const user = await User.findById(req.user.id).select('+anthropicApiKey');
     const note = await aiNotes.generateNote(
       { messages: session.messages },
-      format
+      format,
+      { userApiKey: user?.anthropicApiKey || null },
     );
 
     const connection = await getActiveConnection(req.user.id);
@@ -349,7 +393,7 @@ router.post('/generate-note', async (req, res) => {
     return res.json({ success: true, data: { note } });
   } catch (err) {
     console.error('[ai/generate-note]', err.message);
-    return res.status(err.status || 500).json({ success: false, error: err.message });
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
 

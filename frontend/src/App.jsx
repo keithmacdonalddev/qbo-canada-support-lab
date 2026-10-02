@@ -1,9 +1,12 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
+import { ConnectionProvider } from './context/ConnectionContext'
 import { ToastProvider } from './components/ui/toast'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
+import Reproduce from './pages/Reproduce'
+import Case from './pages/Case'
+import Company from './pages/Company'
 import Onboarding from './pages/Onboarding'
 import Settings from './pages/Settings'
 import AuditLog from './pages/AuditLog'
@@ -16,17 +19,14 @@ import AICommandCenter from './pages/AICommandCenter'
 export default function App() {
   return (
     <AuthProvider>
+      <ConnectionProvider>
       <ToastProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
+        <Route path="/" element={<ProtectedRoute><Reproduce /></ProtectedRoute>} />
+        <Route path="/cases/:id" element={<ProtectedRoute><Case /></ProtectedRoute>} />
+        <Route path="/company" element={<ProtectedRoute><Company /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<Navigate to="/company" replace />} />
         <Route
           path="/onboarding"
           element={
@@ -101,6 +101,7 @@ export default function App() {
         />
       </Routes>
       </ToastProvider>
+      </ConnectionProvider>
     </AuthProvider>
   )
 }

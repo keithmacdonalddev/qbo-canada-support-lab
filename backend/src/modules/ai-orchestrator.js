@@ -1,5 +1,7 @@
 const config = require('../config');
 const aiProvider = require('./ai-provider');
+const codexCli = require('./codex-cli');
+const { createToolSession } = require('./ai-tool-bridge');
 const { toolDefinitions, toolHandlers, toolPermissions } = require('./ai-tools');
 const AISession = require('../models/AISession');
 const AIPlan = require('../models/AIPlan');
@@ -54,6 +56,8 @@ Rules:
 - When proposing a plan, break it into discrete numbered steps.
 - Each step must map to exactly one tool call.
 - Never fabricate entity IDs — always look them up first.
+- To reproduce an issue, prefer createRecord, updateRecord and voidTransaction with QBO API v3 bodies; queue every change the reproduction needs.
+- When a later step needs a value from a record created by an earlier step in the same plan, write {{stepN.id}} (or {{stepN.docNumber}}) with that step's number; the server fills it in when the plan runs.
 - When investigating, gather evidence before forming conclusions.
 - Be concise but thorough in explanations.`;
 
@@ -74,12 +78,57 @@ Rules:
  * @param {Object} input
  * @returns {string}
  */
-function describeToolCall(toolName, input) {
+function money(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `$${n.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null;
+}
+
+function linesTotal(lines) {
+  if (!Array.isArray(lines)) return null;
+  const sum = lines.reduce((total, line) => total + (Number(line?.amount ?? line?.Amount) || 0), 0);
+  return sum ? sum : null;
+}
+
+// Facts read from the actual payload, so the reviewer sees what will really
+// be sent, next to the assistant's own summary. QBO uses only the .value of a
+// reference, so show the Id rather than a name the assistant may have guessed.
+function refLabel(ref, kind) {
+  if (!ref || ref.value === undefined) return null;
+  return `${kind} #${ref.value}${ref.name ? ` (${ref.name})` : ''}`;
+}
+
+function describeRecordChange(verb, input, planSoFar = []) {
+  const record = input.record || input.changes || {};
+  const party = refLabel(record.CustomerRef, 'customer') || refLabel(record.VendorRef, 'vendor')
+    || refLabel(record.EntityRef, 'payee') || record.DisplayName || record.Name || null;
+  const lineTotal = linesTotal(record.Line);
+  const amount = lineTotal !== null ? money(lineTotal) : money(record.TotalAmt);
+  let target = '';
+  if (input.id !== undefined) {
+    const ref = /^\{\{\s*step\s*(\d+)\.(\w+)\s*\}\}$/.exec(String(input.id));
+    const source = ref ? planSoFar.find((step) => step.stepNumber === Number(ref[1])) : null;
+    target = ref
+      ? ` from step ${ref[1]}${source?.toolInput?.entityType ? ` (${source.toolInput.entityType})` : ''}`
+      : ` #${input.id}`;
+  }
+  const changed = input.changes ? `fields: ${Object.keys(input.changes).join(', ')}` : null;
+  const facts = [`${verb} ${input.entityType}${target}`, party, amount, record.TxnDate, changed]
+    .filter(Boolean).join(' · ');
+  return input.summary ? `${facts} — ${String(input.summary).slice(0, 300)}` : facts;
+}
+
+function describeToolCall(toolName, input, planSoFar = []) {
   switch (toolName) {
+    case 'createRecord':
+      return describeRecordChange('Create', input, planSoFar);
+    case 'updateRecord':
+      return describeRecordChange('Update', input, planSoFar);
+    case 'voidTransaction':
+      return describeRecordChange('Void', input, planSoFar);
     case 'createInvoice': {
       const customer = input.customerRef?.name || input.customerRef?.value || 'unknown customer';
-      const total = input.totalAmount || input.amount || '?';
-      return `Create invoice for ${customer}: $${total}`;
+      const total = money(input.totalAmount || input.amount || linesTotal(input.lines)) || '$?';
+      return `Create invoice for ${customer}: ${total}${input.txnDate ? `, dated ${input.txnDate}` : ''}`;
     }
     case 'applyPayment': {
       const amount = input.amount || '?';
@@ -93,8 +142,8 @@ function describeToolCall(toolName, input) {
     }
     case 'createBill': {
       const vendor = input.vendorRef?.name || input.vendorRef?.value || 'unknown vendor';
-      const billAmt = input.totalAmount || input.amount || '?';
-      return `Create bill from ${vendor}: $${billAmt}`;
+      const billAmt = money(input.totalAmount || input.amount || linesTotal(input.lines)) || '$?';
+      return `Create bill from ${vendor}: ${billAmt}${input.txnDate ? `, dated ${input.txnDate}` : ''}`;
     }
     case 'createBillPayment': {
       const billId = input.billId || input.billRef?.value || '?';
@@ -199,6 +248,11 @@ function extractTextFromContent(content) {
     .join('\n');
 }
 
+/** Model name to record on a session, for whichever provider will answer. */
+async function currentModelName() {
+  return await aiProvider.resolveProvider() === 'codex' ? `codex:${config.ai.codex.model}` : config.ai.modelFast;
+}
+
 // ---------------------------------------------------------------------------
 // Helper: load context needed by most orchestrator functions
 // ---------------------------------------------------------------------------
@@ -256,7 +310,7 @@ async function chat(userId, realmId, sessionId, userMessage) {
       status: 'active',
       mode: 'suggest',
       messages: [],
-      model: config.ai.modelFast,
+      model: await currentModelName(),
     });
   }
 
@@ -354,6 +408,56 @@ async function agenticLoop(messages, systemPrompt, context) {
   const { qbo, userId, realmId, connection, userApiKey } = context;
   const maxRounds = config.ai.maxToolRounds || 10;
   const planSteps = [];
+
+  // One tool call, whichever provider asked for it: write tools are queued as
+  // plan steps for user approval; read tools run now and are audited.
+  async function handleTool(name, input) {
+    if (!Object.prototype.hasOwnProperty.call(toolHandlers, name)) {
+      return { success: false, error: `Unknown tool: ${name}` };
+    }
+    // Anything not explicitly marked read-only ('auto') needs approval.
+    if (toolPermissions[name] !== 'auto') {
+      planSteps.push({
+        stepNumber: planSteps.length + 1,
+        description: describeToolCall(name, input, planSteps),
+        toolName: name,
+        toolInput: input,
+        requiresConfirmation: true,
+        status: 'pending',
+      });
+      return { queued: true, message: `Step added to execution plan for user approval: ${name}` };
+    }
+
+    const handler = toolHandlers[name];
+    if (!handler) return { success: false, error: `Unknown tool: ${name}` };
+    try {
+      const result = await handler(input, { qbo, userId, realmId, connection });
+      await createAuditEntry(userId, realmId, `AI lookup: ${name}`, {
+        actionType: 'ai_read',
+        tool: name,
+        inputParams: input,
+        outcome: 'success',
+        aiDriven: true,
+      });
+      return result;
+    } catch (err) {
+      await createAuditEntry(userId, realmId, `AI lookup failed: ${name}`, {
+        actionType: 'ai_read',
+        tool: name,
+        inputParams: input,
+        outcome: 'failure',
+        aiDriven: true,
+        error: err.message,
+      });
+      return { success: false, error: err.message };
+    }
+  }
+
+  if (await aiProvider.resolveProvider() === 'codex') {
+    const { finalResponse, totalUsage } = await runCodexTurn(messages, systemPrompt, handleTool);
+    return { finalResponse, planSteps, totalUsage };
+  }
+
   const totalUsage = { inputTokens: 0, outputTokens: 0 };
   const providerOpts = { system: systemPrompt, userApiKey };
 
@@ -375,70 +479,13 @@ async function agenticLoop(messages, systemPrompt, context) {
       : [];
 
     const toolResults = [];
-
     for (const toolUse of toolUseBlocks) {
-      const permission = toolPermissions[toolUse.name];
-
-      if (permission === 'confirm') {
-        // Don't execute — collect as plan steps
-        planSteps.push({
-          stepNumber: planSteps.length + 1,
-          description: describeToolCall(toolUse.name, toolUse.input),
-          toolName: toolUse.name,
-          toolInput: toolUse.input,
-          requiresConfirmation: true,
-          status: 'pending',
-        });
-
-        // Return a synthetic result telling Claude the step was queued
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
-            queued: true,
-            message: `Step added to execution plan for user approval: ${toolUse.name}`,
-          }),
-        });
-      } else {
-        // Auto-execute read tools
-        const handler = toolHandlers[toolUse.name];
-        let result;
-
-        if (!handler) {
-          result = { success: false, error: `Unknown tool: ${toolUse.name}` };
-        } else {
-          try {
-            result = await handler(toolUse.input, { qbo, userId, realmId, connection });
-
-            // Audit the read
-            await createAuditEntry(userId, realmId, `AI lookup: ${toolUse.name}`, {
-              actionType: 'ai_read',
-              tool: toolUse.name,
-              inputParams: toolUse.input,
-              outcome: 'success',
-              aiDriven: true,
-            });
-          } catch (err) {
-            result = { success: false, error: err.message };
-
-            // Audit the failed read
-            await createAuditEntry(userId, realmId, `AI lookup failed: ${toolUse.name}`, {
-              actionType: 'ai_read',
-              tool: toolUse.name,
-              inputParams: toolUse.input,
-              outcome: 'failure',
-              aiDriven: true,
-              error: err.message,
-            });
-          }
-        }
-
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify(result),
-        });
-      }
+      const result = await handleTool(toolUse.name, toolUse.input);
+      toolResults.push({
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: JSON.stringify(result),
+      });
     }
 
     // Add assistant response + tool results to messages for next round
@@ -459,6 +506,50 @@ async function agenticLoop(messages, systemPrompt, context) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Codex CLI turn — the same tools, served to Codex over MCP
+// ---------------------------------------------------------------------------
+
+const CODEX_TOOL_NOTE = `
+
+Tool use:
+- Your only tools are the testdatalab tools. You have no shell, file or web access.
+- Read tools return live data from the connected company.
+- Write tools are NOT executed when you call them. Each call is queued as a step in a plan the user reviews and approves. Call every write tool the reproduction needs, in the order they must run, then in your final answer explain what the queued plan will do and why it reproduces the issue.`;
+
+const CODEX_READ_ONLY_NOTE = `
+
+Tool use:
+- Your only tools are the testdatalab read tools. You have no shell, file or web access.
+- This is an investigation: gather evidence with the read tools and explain it. You cannot change the company.`;
+
+const READ_ONLY_TOOLS = toolDefinitions.filter((tool) => toolPermissions[tool.name] === 'auto');
+
+/** Flatten Anthropic-format messages into a transcript Codex can read. */
+function transcriptFor(messages) {
+  return messages.map((msg) => {
+    const text = typeof msg.content === 'string'
+      ? msg.content
+      : (Array.isArray(msg.content) ? msg.content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '');
+    return text.trim() ? `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${text.trim()}` : null;
+  }).filter(Boolean).join('\n\n');
+}
+
+async function runCodexTurn(messages, systemPrompt, handleTool, { readOnly = false } = {}) {
+  const toolSession = createToolSession({ tools: readOnly ? READ_ONLY_TOOLS : toolDefinitions, execute: handleTool });
+  try {
+    const prompt = `${transcriptFor(messages)}\n\nReply to the user's latest message.`;
+    const note = readOnly ? CODEX_READ_ONLY_NOTE : CODEX_TOOL_NOTE;
+    const result = await codexCli.run({ system: systemPrompt + note, prompt, bridge: toolSession.bridge });
+    return {
+      finalResponse: { content: [{ type: 'text', text: result.text }], stop_reason: 'end_turn' },
+      totalUsage: result.usage,
+    };
+  } finally {
+    toolSession.revoke();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. executePlan — run an approved plan
 // ---------------------------------------------------------------------------
 
@@ -468,24 +559,74 @@ async function agenticLoop(messages, systemPrompt, context) {
  * @param {string} userId
  * @returns {Object} Updated AIPlan document
  */
-async function executePlan(planId, userId) {
-  const plan = await AIPlan.findById(planId);
-  if (!plan) throw new Error('Plan not found');
-  if (plan.userId.toString() !== userId.toString()) throw new Error('Unauthorized');
-  if (!['approved', 'partially_approved'].includes(plan.status)) {
-    throw new Error(`Plan status is "${plan.status}" — must be approved or partially_approved`);
+/**
+ * Replace {{stepN.field}} placeholders with values from earlier step results
+ * in the same plan, so one plan can create a record and then link to it.
+ * When a placeholder supplies the Id of the record to update or void, the
+ * earlier step must have produced that same record type.
+ */
+const STEP_REF = /\{\{\s*step\s*(\d+)\.(\w+)\s*\}\}/g;
+
+function resolveStepRefs(value, resultsByStep) {
+  if (typeof value === 'string') {
+    return value.replace(STEP_REF, (_match, stepNumber, field) => {
+      const data = resultsByStep.get(Number(stepNumber))?.data;
+      if (!data || data[field] === undefined || data[field] === null) {
+        throw new Error(`Step ${stepNumber} has no ${field} to use here. Earlier steps must run first.`);
+      }
+      return String(data[field]);
+    });
   }
+  if (Array.isArray(value)) return value.map((item) => resolveStepRefs(item, resultsByStep));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveStepRefs(item, resultsByStep)]));
+  }
+  return value;
+}
+
+function checkTargetRef(toolInput, resultsByStep) {
+  const match = /^\{\{\s*step\s*(\d+)\.id\s*\}\}$/.exec(String(toolInput?.id ?? ''));
+  if (!match) return;
+  const sourceType = resultsByStep.get(Number(match[1]))?.data?.entityType;
+  if (sourceType !== toolInput.entityType) {
+    throw new Error(`Step ${match[1]} created a ${sourceType || 'different record'}, not a ${toolInput.entityType}. Nothing was changed.`);
+  }
+}
+
+async function executePlan(planId, userId) {
+  const existing = await AIPlan.findById(planId);
+  if (!existing) throw new Error('Plan not found');
+  if (existing.userId.toString() !== userId.toString()) throw new Error('Unauthorized');
+  if (!['approved', 'partially_approved'].includes(existing.status)) {
+    throw new Error(`Plan status is "${existing.status}" — must be approved or partially_approved`);
+  }
+
+  // Claim the plan atomically so a second click, tab or retry cannot run it twice.
+  const plan = await AIPlan.findOneAndUpdate(
+    { _id: planId, userId, status: { $in: ['approved', 'partially_approved'] } },
+    { $set: { status: 'executing' } },
+    { new: true },
+  );
+  if (!plan) throw new Error('This plan is already running or has finished.');
 
   // Load connection and QBO client
   const connection = await Connection.findOne({ userId, realmId: plan.realmId, status: 'active' });
-  if (!connection) throw new Error('No active QBO connection');
-  const qbo = await createQBOClient(connection);
-
-  // Mark plan as executing
-  plan.status = 'executing';
-  await plan.save();
+  if (!connection) {
+    plan.status = existing.status;
+    await plan.save();
+    throw new Error('No active QBO connection');
+  }
+  let qbo;
+  try {
+    qbo = await createQBOClient(connection);
+  } catch (err) {
+    plan.status = existing.status;
+    await plan.save();
+    throw err;
+  }
 
   let hasFailure = false;
+  const resultsByStep = new Map();
 
   for (const step of plan.steps) {
     // Only execute approved steps
@@ -507,7 +648,7 @@ async function executePlan(planId, userId) {
       status: 'executing',
     });
 
-    const handler = toolHandlers[step.toolName];
+    const handler = Object.prototype.hasOwnProperty.call(toolHandlers, step.toolName) ? toolHandlers[step.toolName] : null;
     if (!handler) {
       step.status = 'failed';
       step.error = `Unknown tool: ${step.toolName}`;
@@ -525,8 +666,14 @@ async function executePlan(planId, userId) {
       continue;
     }
 
+    let input = step.toolInput;
     try {
-      const result = await handler(step.toolInput, { qbo, userId, realmId: plan.realmId, connection });
+      checkTargetRef(step.toolInput, resultsByStep);
+      input = resolveStepRefs(step.toolInput, resultsByStep);
+      const result = await handler(input, { qbo, userId, realmId: plan.realmId, connection });
+      // Handlers report refusals (bad type, missing record) without throwing.
+      if (result && result.success === false) throw new Error(result.error || 'The change was refused.');
+      resultsByStep.set(step.stepNumber, result);
       step.status = 'completed';
       step.result = result;
       step.executedAt = new Date();
@@ -534,7 +681,7 @@ async function executePlan(planId, userId) {
       await createAuditEntry(userId, plan.realmId, `AI executed: ${step.toolName}`, {
         actionType: 'ai_executed',
         tool: step.toolName,
-        inputParams: step.toolInput,
+        inputParams: input,
         outcome: 'success',
         aiDriven: true,
         approvalEvent: planId,
@@ -554,7 +701,7 @@ async function executePlan(planId, userId) {
       await createAuditEntry(userId, plan.realmId, `AI execution failed: ${step.toolName}`, {
         actionType: 'ai_executed',
         tool: step.toolName,
-        inputParams: step.toolInput,
+        inputParams: input,
         outcome: 'failure',
         aiDriven: true,
         approvalEvent: planId,
@@ -723,7 +870,7 @@ async function investigate(userId, realmId, sessionId, question) {
       status: 'active',
       mode: 'investigate',
       messages: [],
-      model: config.ai.modelFast,
+      model: await currentModelName(),
     });
   }
 
@@ -751,84 +898,77 @@ async function investigate(userId, realmId, sessionId, question) {
   const totalUsage = { inputTokens: 0, outputTokens: 0 };
   const providerOpts = { system: systemPrompt, userApiKey };
 
-  let iteration = 0;
-  let response = await aiProvider.chat(messages, toolDefinitions, providerOpts);
-
-  if (response.usage) {
-    totalUsage.inputTokens += response.usage.input_tokens || 0;
-    totalUsage.outputTokens += response.usage.output_tokens || 0;
+  async function handleTool(name, input) {
+    if (toolPermissions[name] !== 'auto') {
+      // Block write tools in investigation mode
+      return { success: false, error: 'Write operations not available in investigation mode' };
+    }
+    const handler = toolHandlers[name];
+    if (!handler) return { success: false, error: `Unknown tool: ${name}` };
+    try {
+      const result = await handler(input, { qbo, userId, realmId, connection });
+      await createAuditEntry(userId, realmId, `AI investigation lookup: ${name}`, {
+        actionType: 'ai_read',
+        tool: name,
+        inputParams: input,
+        outcome: 'success',
+        aiDriven: true,
+      });
+      return result;
+    } catch (err) {
+      await createAuditEntry(userId, realmId, `AI investigation lookup failed: ${name}`, {
+        actionType: 'ai_read',
+        tool: name,
+        inputParams: input,
+        outcome: 'failure',
+        aiDriven: true,
+        error: err.message,
+      });
+      return { success: false, error: err.message };
+    }
   }
 
-  while (response.stop_reason === 'tool_use' && iteration < maxRounds) {
-    iteration++;
+  let response;
+  if (await aiProvider.resolveProvider() === 'codex') {
+    const turn = await runCodexTurn(messages, systemPrompt, handleTool, { readOnly: true });
+    response = turn.finalResponse;
+    totalUsage.inputTokens += turn.totalUsage.inputTokens;
+    totalUsage.outputTokens += turn.totalUsage.outputTokens;
+  } else {
+    let iteration = 0;
+    response = await aiProvider.chat(messages, toolDefinitions, providerOpts);
 
-    const toolUseBlocks = Array.isArray(response.content)
-      ? response.content.filter(b => b.type === 'tool_use')
-      : [];
+    if (response.usage) {
+      totalUsage.inputTokens += response.usage.input_tokens || 0;
+      totalUsage.outputTokens += response.usage.output_tokens || 0;
+    }
 
-    const toolResults = [];
+    while (response.stop_reason === 'tool_use' && iteration < maxRounds) {
+      iteration++;
 
-    for (const toolUse of toolUseBlocks) {
-      const permission = toolPermissions[toolUse.name];
+      const toolUseBlocks = Array.isArray(response.content)
+        ? response.content.filter(b => b.type === 'tool_use')
+        : [];
 
-      if (permission === 'confirm') {
-        // Block write tools in investigation mode
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: JSON.stringify({
-            success: false,
-            error: 'Write operations not available in investigation mode',
-          }),
-        });
-      } else {
-        // Auto-execute read tools
-        const handler = toolHandlers[toolUse.name];
-        let result;
-
-        if (!handler) {
-          result = { success: false, error: `Unknown tool: ${toolUse.name}` };
-        } else {
-          try {
-            result = await handler(toolUse.input, { qbo, userId, realmId, connection });
-
-            await createAuditEntry(userId, realmId, `AI investigation lookup: ${toolUse.name}`, {
-              actionType: 'ai_read',
-              tool: toolUse.name,
-              inputParams: toolUse.input,
-              outcome: 'success',
-              aiDriven: true,
-            });
-          } catch (err) {
-            result = { success: false, error: err.message };
-
-            await createAuditEntry(userId, realmId, `AI investigation lookup failed: ${toolUse.name}`, {
-              actionType: 'ai_read',
-              tool: toolUse.name,
-              inputParams: toolUse.input,
-              outcome: 'failure',
-              aiDriven: true,
-              error: err.message,
-            });
-          }
-        }
-
+      const toolResults = [];
+      for (const toolUse of toolUseBlocks) {
+        const result = await handleTool(toolUse.name, toolUse.input);
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
           content: JSON.stringify(result),
         });
       }
-    }
 
-    messages.push({ role: 'assistant', content: response.content });
-    messages.push({ role: 'user', content: toolResults });
+      messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'user', content: toolResults });
 
-    response = await aiProvider.chat(messages, toolDefinitions, providerOpts);
+      response = await aiProvider.chat(messages, toolDefinitions, providerOpts);
 
-    if (response.usage) {
-      totalUsage.inputTokens += response.usage.input_tokens || 0;
-      totalUsage.outputTokens += response.usage.output_tokens || 0;
+      if (response.usage) {
+        totalUsage.inputTokens += response.usage.input_tokens || 0;
+        totalUsage.outputTokens += response.usage.output_tokens || 0;
+      }
     }
   }
 
@@ -899,22 +1039,21 @@ Based on the following AI investigation session, generate the note. Reference sp
     },
   ];
 
-  const response = await aiProvider.chat(messages, [], {
+  const completion = await aiProvider.complete({
     system: noteSystemPrompt,
+    prompt: messages[0].content,
     maxTokens: config.ai.maxTokens,
     userApiKey,
   });
 
-  const noteContent = extractTextFromContent(response.content);
+  const noteContent = completion.text;
 
   // Update session mode
   session.mode = 'generate_note';
 
   // Track token usage for note generation
-  if (response.usage) {
-    session.tokenUsage.inputTokens += response.usage.input_tokens || 0;
-    session.tokenUsage.outputTokens += response.usage.output_tokens || 0;
-  }
+  session.tokenUsage.inputTokens += completion.usage.inputTokens;
+  session.tokenUsage.outputTokens += completion.usage.outputTokens;
   await session.save();
 
   return noteContent;
@@ -925,6 +1064,8 @@ Based on the following AI investigation session, generate the note. Reference sp
 // ---------------------------------------------------------------------------
 
 module.exports = {
+  resolveStepRefs,
+  checkTargetRef,
   chat,
   executePlan,
   approvePlan,

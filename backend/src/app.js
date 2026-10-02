@@ -23,6 +23,8 @@ function createApp(options = {}) {
   app.use('/api/checkpoint', require('./routes/checkpoint'))
   app.use('/api/explore', require('./routes/explore'))
   app.use('/api/issuepacks', require('./routes/issuepacks'))
+  // Codex CLI runs call this app's AI tools here (per-run token, no JWT).
+  app.use('/api/ai-tools/mcp', require('./routes/ai-tools-mcp'))
   const aiRoutes = require('./routes/ai')
   app.use('/api/ai', aiRoutes.router)
 

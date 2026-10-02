@@ -32,6 +32,17 @@ const config = {
     // Both can be enabled simultaneously (user key takes priority).
     globalKeyEnabled: process.env.AI_GLOBAL_KEY_ENABLED === 'true',
     userKeysEnabled: process.env.AI_USER_KEYS_ENABLED !== 'false', // default true
+    // Which model service the AI assistant uses:
+    //   auto      -> Codex CLI when it is installed and signed in, else Anthropic key
+    //   codex     -> always the Codex CLI (owner's ChatGPT subscription, no API key)
+    //   anthropic -> always an Anthropic API key
+    provider: ['auto', 'codex', 'anthropic'].includes(process.env.AI_PROVIDER) ? process.env.AI_PROVIDER : 'auto',
+    codex: {
+      cliPath: process.env.CODEX_CLI_PATH || null,
+      model: process.env.CODEX_MODEL || 'gpt-6.1-sol',
+      effort: process.env.CODEX_REASONING_EFFORT || 'medium',
+      timeoutMs: parseInt(process.env.CODEX_TIMEOUT_MS) || 300000,
+    },
   },
   features: {
     rebuildReadOnly: enabled('REBUILD_READ_ONLY_ENABLED', true),
