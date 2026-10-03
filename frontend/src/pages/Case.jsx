@@ -138,6 +138,31 @@ function StepRow({ step, environment }) {
   )
 }
 
+// "Making change 2 of 5" with a bar, while the server works through the list.
+function RunProgress({ plan }) {
+  const toRun = plan.steps.filter((s) => !['rejected', 'pending', 'proposed'].includes(s.status))
+  const total = toRun.length || plan.steps.length
+  const finished = toRun.filter((s) => ['completed', 'failed', 'skipped'].includes(s.status)).length
+  const current = toRun.find((s) => s.status === 'executing')
+  const position = Math.min(total, finished + 1)
+  return (
+    <div role="status" aria-live="polite">
+      <div className="flex items-center justify-between gap-3 text-[13px]">
+        <span className="flex min-w-0 items-center gap-2 text-[var(--ink)]">
+          <LoaderCircle className="size-4 shrink-0 animate-spin text-[var(--ink-3)]" aria-hidden="true" />
+          Making change {position} of {total}…
+        </span>
+        <span className="shrink-0 tabular text-[12.5px] text-[var(--ink-3)]">{finished} done</span>
+      </div>
+      {current?.description && <p className="mt-1 line-clamp-2 pl-6 text-[12.5px] text-[var(--ink-2)]">{current.description}</p>}
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--sunken)]" role="progressbar" aria-label="Changes made" aria-valuemin={0} aria-valuemax={total} aria-valuenow={finished}>
+        <div className="h-full rounded-full bg-[var(--ok)] transition-[width] duration-300" style={{ width: `${total ? Math.round((finished / total) * 100) : 0}%` }} />
+      </div>
+      <p className="mt-2 text-[12.5px] text-[var(--ink-3)]">The changes keep going on the lab server if you leave this page.</p>
+    </div>
+  )
+}
+
 function ChangesPanel({ plan, environment, canWrite, onRun, onDiscard, busy, actionError }) {
   if (!plan) {
     return (
@@ -172,7 +197,7 @@ function ChangesPanel({ plan, environment, canWrite, onRun, onDiscard, busy, act
             )}
           </>
         )}
-        {plan.status === 'executing' && <p className="text-[13px] text-[var(--ink-2)]">Making the changes in QuickBooks…</p>}
+        {plan.status === 'executing' && <RunProgress plan={plan} />}
         {plan.status === 'completed' && (
           <p className="text-[13px] text-[var(--ok)]">Done. {done} {done === 1 ? 'change' : 'changes'} made. Open the records to confirm the customer's view.</p>
         )}
@@ -310,6 +335,23 @@ export default function Case() {
   const plans = session?.plans || []
   const plan = plans[plans.length - 1] || null
   const environment = connection?.environment
+  const executing = plan?.status === 'executing'
+
+  // While changes are being made (including after a page reload), re-read the
+  // case every second so each step ticks off as the server finishes it.
+  useEffect(() => {
+    if (!executing) return undefined
+    const timer = setTimeout(() => setVersion((v) => v + 1), 1000)
+    return () => clearTimeout(timer)
+  }, [executing, session])
+
+  // The server only starts once the production check passes, so the
+  // confirmation can step aside and let the progress show.
+  useEffect(() => {
+    if (!executing || !confirmOpen) return undefined
+    const timer = setTimeout(() => setConfirmOpen(false), 0)
+    return () => clearTimeout(timer)
+  }, [executing, confirmOpen])
 
   const sendReply = async (e) => {
     e.preventDefault()
@@ -333,12 +375,19 @@ export default function Case() {
     setRunning(true)
     setGuardError(null)
     setActionError(null)
+    let peek = null
     try {
       if (plan.status === 'proposed') await client.post(`/ai/plan/${plan._id}/approve`, {})
-      await client.post(`/ai/plan/${plan._id}/execute`, connection?.isProduction ? { confirmProduction: true } : {})
+      const execution = client.post(`/ai/plan/${plan._id}/execute`, connection?.isProduction ? { confirmProduction: true } : {})
+      // The request only answers when every change is made. Re-read the case
+      // shortly after it starts; once it shows "executing", the progress
+      // effect keeps it current step by step.
+      peek = setTimeout(() => setVersion((v) => v + 1), 700)
+      await execution
       setConfirmOpen(false)
       setVersion((v) => v + 1)
     } catch (err) {
+      clearTimeout(peek)
       const data = err.response?.data
       const message = typeof data?.error === 'string' ? data.error : data?.error?.message
       if (err.response?.status === 412) {
