@@ -334,7 +334,9 @@ router.get('/sessions/:id/changes', async (req, res) => {
 
     const plans = [...(session.plans || [])].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     const refs = caseChanges.collectRefs(plans);
-    const cacheKey = `${session._id}:${[...refs].map(([type, ids]) => `${type}=${[...ids].sort().join('.')}`).sort().join(';')}`;
+    // Finished steps are part of the key: a payment that just ran changes the balances shown.
+    const finished = plans.flatMap((p) => (p.steps || []).filter((s) => s.status === 'completed').map((s) => `${p._id}.${s.stepNumber}`)).join(',');
+    const cacheKey = `${session._id}:${[...refs].map(([type, ids]) => `${type}=${[...ids].sort().join('.')}`).sort().join(';')}:${finished}`;
     let names = changeNameCache.get(cacheKey);
     if (!names || names.expiresAt < Date.now()) {
       let map = new Map();
@@ -354,7 +356,8 @@ router.get('/sessions/:id/changes', async (req, res) => {
       if (changeNameCache.size > 200) changeNameCache.delete(changeNameCache.keys().next().value);
     }
 
-    return res.json({ success: true, data: caseChanges.describeChanges(plans, names.map) });
+    const request = (session.messages || []).find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
+    return res.json({ success: true, data: caseChanges.describeChanges(plans, names.map, { request }) });
   } catch (err) {
     console.error('[ai/sessions/changes]', err.message);
     return res.status(500).json({ success: false, error: 'Failed to describe the changes' });

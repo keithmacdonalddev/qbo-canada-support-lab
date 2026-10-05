@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { collectRefs, describeChanges, loadNames, plainError } = require('../src/modules/case-changes');
+const { collectRefs, describeChanges, loadNames, parseAsks, plainError } = require('../src/modules/case-changes');
 
 const deposit = (status, linkIds) => ({
   stepNumber: 1, toolName: 'createRecord', status,
@@ -122,4 +122,79 @@ test('name lookups stop at the time budget and report it', async () => {
   const qbo = { query: () => new Promise(() => {}) };
   const found = await loadNames(qbo, new Map([['Customer', new Set(['1'])]]), { budgetMs: 20 });
   assert.equal(found.complete, false);
+});
+
+test('the listed items of the opening request become the checklist', () => {
+  const asks = parseAsks([
+    'Fill these coverage gaps (batch 1). Use existing customers.',
+    '',
+    '1. Current receivables: 3 unpaid invoices to different customers, dated in the',
+    '   last 2 weeks, due after today (Net 30).',
+    '2. Transfer between two bank accounts',
+    '',
+    'Show the full plan before writing anything.',
+  ].join('\n'));
+  assert.deepEqual(asks, [
+    { number: 1, title: 'Current receivables', detail: '3 unpaid invoices to different customers, dated in the last 2 weeks, due after today (Net 30).' },
+    { number: 2, title: 'Transfer between two bank accounts', detail: '' },
+  ]);
+  assert.deepEqual(parseAsks('Fill these gaps:\n- Customers with payment terms\n'), [{ number: 1, title: 'Customers with payment terms', detail: '' }]);
+  assert.deepEqual(parseAsks('Reproduce a partial payment on invoice 1001.'), []);
+});
+
+test('changes carry the ask they answer; a lone ask takes everything', () => {
+  const step = (n, goal) => ({ stepNumber: n, toolName: 'createRecord', status: 'pending',
+    toolInput: { entityType: 'Transfer', goal, record: { TxnDate: '2026-10-02', Amount: n } } });
+  const two = describeChanges([{ _id: 'g', status: 'proposed', steps: [step(1, 2), step(2, 9), step(3)] }], new Map(), { request: '1. A\n2. B' });
+  assert.equal(two.asks.length, 2);
+  assert.deepEqual(two.changes.map((c) => c.goal), [2, null, null]);
+  const one = describeChanges([{ _id: 'g', status: 'proposed', steps: [step(1)] }], new Map(), { request: '- Only this' });
+  assert.equal(one.changes[0].goal, 1);
+});
+
+test('a deposit lists its payments, and a made payment says what is left owing', () => {
+  const payment = (n, invoiceId, id) => ({ stepNumber: n, toolName: 'createRecord', status: 'completed',
+    toolInput: { entityType: 'Payment', record: { CustomerRef: { value: '62' }, TotalAmt: 100, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: invoiceId, TxnType: 'Invoice' }] }] } },
+    result: { success: true, data: { entityType: 'Payment', id } } });
+  const balances = new Map([['Invoice:570', 0], ['Invoice:569', 712.5]]);
+  const found = Object.assign(new Map([['Invoice:570', '111058'], ['Invoice:569', '111057']]), { balances });
+  const view = describeChanges([
+    { _id: 'a', status: 'completed', steps: [payment(1, '570', '584'), payment(2, '569', '585')] },
+    { _id: 'b', status: 'completed', steps: [{ ...deposit('completed', ['584', '{{step3.id}}']), stepNumber: 1 }] },
+  ], found);
+  assert.deepEqual(view.changes[0].facts, ['Applied to invoice 111058, now paid in full']);
+  assert.deepEqual(view.changes[1].facts, ['Applied to invoice 111057, $712.50 still owing']);
+  // 584 was made by change a:1; step 3 of proposal b does not exist, so it is dropped.
+  assert.deepEqual(view.changes.find((c) => c.entityType === 'Deposit').includes, ['a:1']);
+});
+
+test('a payment not yet made does not claim a balance', () => {
+  const found = Object.assign(new Map(), { balances: new Map([['Invoice:570', 0]]) });
+  const view = describeChanges([{ _id: 'w', status: 'proposed', steps: [
+    { stepNumber: 1, toolName: 'createRecord', status: 'pending', toolInput: { entityType: 'Payment', record: { TotalAmt: 5, Line: [{ Amount: 5, LinkedTxn: [{ TxnId: '570', TxnType: 'Invoice' }] }] } } },
+  ] }], found);
+  assert.deepEqual(view.changes[0].facts, ['Applied to invoice #570']);
+});
+
+test('name lookups also keep invoice and bill balances', async () => {
+  const qbo = { async query() { return { QueryResponse: { Invoice: [{ Id: '569', DocNumber: '111057', Balance: 712.5 }] } }; } };
+  const found = await loadNames(qbo, new Map([['Invoice', new Set(['569'])]]));
+  assert.equal(found.get('Invoice:569'), '111057');
+  assert.equal(found.balances.get('Invoice:569'), 712.5);
+});
+
+test('only the first list and its top-level items count, with their written numbers', () => {
+  const nested = parseAsks('1. Deposits:\n  - payment from A\n  - payment from B\n2. Transfer\n\nRules:\n- Use existing customers');
+  assert.deepEqual(nested.map((a) => [a.number, a.title]), [[1, 'Deposits'], [2, 'Transfer']]);
+  assert.equal(nested[0].detail, 'Payment from A; payment from B');
+  assert.deepEqual(parseAsks('3. Third\n4. Fourth').map((a) => a.number), [3, 4]);
+  assert.deepEqual(parseAsks('  - one\n  - two').map((a) => a.title), ['one', 'two']);
+});
+
+test('a payment being edited is not tucked under a deposit', () => {
+  const view = describeChanges([{ _id: 'e', status: 'proposed', steps: [
+    { stepNumber: 1, toolName: 'updateRecord', status: 'pending', toolInput: { entityType: 'Payment', id: '584', changes: { PrivateNote: 'x' } } },
+    { ...deposit('pending', ['584']), stepNumber: 2 },
+  ] }]);
+  assert.equal(view.changes.find((c) => c.entityType === 'Deposit').includes, undefined);
 });

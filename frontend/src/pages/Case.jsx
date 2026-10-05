@@ -204,7 +204,15 @@ const TYPES = {
   Vendor: { plural: 'Vendors', Icon: Users },
   Employee: { plural: 'Employees', Icon: Users },
 }
-const typeInfo = (t) => TYPES[t] || { plural: String(t).replace(/([a-z])([A-Z])/g, '$1 $2'), Icon: Wallet }
+const SINGULAR = {
+  SalesReceipt: 'Sales receipt', CreditMemo: 'Credit note', RefundReceipt: 'Refund', Payment: 'Customer payment',
+  Deposit: 'Bank deposit', BillPayment: 'Bill payment', VendorCredit: 'Vendor credit', Purchase: 'Expense',
+  PurchaseOrder: 'Purchase order', JournalEntry: 'Journal entry', TimeActivity: 'Time entry',
+}
+const typeInfo = (t) => {
+  const words = String(t).replace(/([a-z])([A-Z])/g, '$1 $2')
+  return { plural: words, Icon: Wallet, ...TYPES[t], singular: SINGULAR[t] || words }
+}
 
 const STATUS = {
   done: { Icon: Check, label: 'Made', cls: 'bg-[var(--ok)] text-white border-[var(--ok)]' },
@@ -216,7 +224,7 @@ const STATUS = {
   skipped: { Icon: Minus, label: 'Not made', cls: 'text-[var(--ink-3)] border-[var(--line)]' },
 }
 
-function ChangeRow({ change, step, environment }) {
+function ChangeRow({ change, step, environment, showType = false, nested = false }) {
   const [open, setOpen] = useState(false)
   const status = STATUS[change.status] || STATUS.pending
   const verb = change.action === 'void' ? 'Void' : change.action === 'update' ? 'Edit' : null
@@ -225,7 +233,7 @@ function ChangeRow({ change, step, environment }) {
   const name = `${change.party || typeInfo(change.entityType).plural}${change.docNumber ? ` #${change.docNumber}` : ''}`
   return (
     <li className="group">
-      <div className="grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] items-start gap-x-3 px-4 py-2.5">
+      <div className={cn('grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] items-start gap-x-3 py-2.5 pr-4', nested ? 'pl-12' : 'pl-4')}>
         <span className={cn('mt-0.5 grid size-5 place-items-center rounded-full border', status.cls)} title={status.label}>
           <status.Icon className={cn('size-3', status.spin && 'animate-spin')} strokeWidth={2.5} aria-hidden="true" />
           <span className="sr-only">{status.label}</span>
@@ -233,6 +241,7 @@ function ChangeRow({ change, step, environment }) {
         <div className="min-w-0">
           <p className={cn('truncate text-[13.5px] font-medium', muted ? 'text-[var(--ink-3)]' : 'text-[var(--ink)]')}>
             {verb && <span className="mr-1.5 rounded bg-[var(--sunken)] px-1.5 py-px text-[11px] font-semibold uppercase text-[var(--ink-2)]">{verb}</span>}
+            {showType && <span className="font-normal text-[var(--ink-3)]">{typeInfo(change.entityType).singular} · </span>}
             {change.party || typeInfo(change.entityType).plural}
             {change.docNumber && <span className="ml-1.5 font-normal text-[var(--ink-3)]">#{change.docNumber}</span>}
           </p>
@@ -266,6 +275,89 @@ function ChangeRow({ change, step, environment }) {
         </div>
       </div>
     </li>
+  )
+}
+
+// Where one ask stands, from the records that answer it.
+function askStatus(changes) {
+  if (changes.length === 0) return 'empty'
+  if (changes.some((c) => c.status === 'failed')) return 'failed'
+  if (changes.some((c) => ['running', 'queued'].includes(c.status))) return 'running'
+  if (changes.some((c) => c.status === 'waiting')) return 'waiting'
+  if (changes.every((c) => c.status === 'done')) return 'done'
+  return 'pending'
+}
+
+const ASK_NOTE = {
+  done: (n) => `${n} made`,
+  failed: () => 'Needs attention',
+  running: () => 'Making now',
+  waiting: (n) => `${n} waiting for approval`,
+  pending: () => 'Not finished',
+  empty: () => 'Nothing made for this',
+}
+
+// The records under one heading, with a deposit's customer payments tucked under it.
+function AskRows({ changes, steps, environment }) {
+  // Each payment sits under the first deposit here that combines it, and only there.
+  const under = new Map()
+  for (const c of changes) {
+    for (const key of c.includes || []) {
+      if (!under.has(key) && key !== c.key && changes.some((p) => p.key === key)) under.set(key, c.key)
+    }
+  }
+  const row = (c, nested = false) => (
+    <ChangeRow key={c.key} change={c} step={steps.get(`${c.planId}:${c.stepNumber}`)} environment={environment} showType nested={nested} />
+  )
+  return (
+    <ul className="divide-y divide-[var(--line)]">
+      {changes.filter((c) => !under.has(c.key)).flatMap((c) => [
+        row(c),
+        ...changes.filter((p) => under.get(p.key) === c.key).map((p) => row(p, true)),
+      ])}
+    </ul>
+  )
+}
+
+// The case's request as a checklist: each listed ask, ticked off with the records that answer it.
+function AskList({ asks, changes, steps, environment }) {
+  const other = changes.filter((c) => !c.goal)
+  return (
+    <ol className="divide-y divide-[var(--line-strong)]">
+      {asks.map((ask) => {
+        const mine = changes.filter((c) => c.goal === ask.number)
+        const state = askStatus(mine)
+        const badge = state === 'done' ? STATUS.done : state === 'failed' ? STATUS.failed : state === 'running' ? STATUS.running : STATUS.pending
+        return (
+          <li key={ask.number}>
+            <div className="flex items-start gap-3 bg-[var(--surface-muted)] px-4 py-2.5">
+              <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border', badge.cls)}>
+                <badge.Icon className={cn('size-3', badge.spin && 'animate-spin')} strokeWidth={2.5} aria-hidden="true" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[13.5px] font-semibold text-[var(--ink)]">
+                  <span className="mr-1.5 tabular text-[var(--ink-3)]">{ask.number}.</span>{ask.title}
+                </h3>
+                {ask.detail && <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-[var(--ink-2)]">{ask.detail}</p>}
+              </div>
+              <span className={cn('shrink-0 pt-0.5 text-[12px]', state === 'failed' ? 'font-medium text-[var(--danger-ink)]' : state === 'done' ? 'text-[var(--ok)]' : 'text-[var(--ink-3)]')}>
+                {ASK_NOTE[state](mine.length)}
+              </span>
+            </div>
+            {mine.length > 0 && <AskRows changes={mine} steps={steps} environment={environment} />}
+          </li>
+        )
+      })}
+      {other.length > 0 && (
+        <li>
+          <div className="bg-[var(--surface-muted)] px-4 py-2.5">
+            <h3 className="text-[13.5px] font-semibold text-[var(--ink)]">Other changes</h3>
+            <p className="mt-0.5 text-[12.5px] text-[var(--ink-2)]">Not matched to an item in the request.</p>
+          </div>
+          <AskRows changes={other} steps={steps} environment={environment} />
+        </li>
+      )}
+    </ol>
   )
 }
 
@@ -359,10 +451,19 @@ function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy
   }, [view])
 
   const counts = view?.counts
+  const asks = view?.asks || []
+  const asksDone = asks.filter((a) => askStatus((view?.changes || []).filter((c) => c.goal === a.number)) === 'done').length
   return (
     <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)]" aria-label="Changes in QuickBooks">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
-        <h2 className="text-[14px] font-semibold text-[var(--ink)]">Changes in QuickBooks</h2>
+        <h2 className="text-[14px] font-semibold text-[var(--ink)]">
+          {asks.length > 1 ? 'What you asked for' : 'Changes in QuickBooks'}
+          {asks.length > 1 && (
+            <span className={cn('ml-2 text-[12.5px] font-medium', asksDone === asks.length ? 'text-[var(--ok)]' : 'text-[var(--ink-3)]')}>
+              {asksDone} of {asks.length} done
+            </span>
+          )}
+        </h2>
         {counts && (
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
             {counts.done > 0 && <span className="rounded-full bg-[var(--ok-soft)] px-2 py-0.5 font-medium text-[var(--ok)]">{counts.done} made</span>}
@@ -389,6 +490,13 @@ function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy
         <p className="px-4 py-6 text-[13px] leading-relaxed text-[var(--ink-3)]">
           No changes proposed yet. When the assistant knows what to create, each record appears here for you to review before anything is touched.
         </p>
+      ) : asks.length > 0 ? (
+        <div className="border-t border-[var(--line)]">
+          <div className="grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] gap-x-3 border-b border-[var(--line)] px-4 py-1.5 text-[11.5px] font-medium uppercase tracking-[0.04em] text-[var(--ink-3)]" aria-hidden="true">
+            <span /><span>Record</span><span>Date</span><span className="text-right">Amount</span><span />
+          </div>
+          <AskList asks={asks} changes={view.changes} steps={steps} environment={environment} />
+        </div>
       ) : (
         <div className="divide-y divide-[var(--line)]">
           <div className="grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] gap-x-3 px-4 py-1.5 text-[11.5px] font-medium uppercase tracking-[0.04em] text-[var(--ink-3)]" aria-hidden="true">
@@ -537,7 +645,18 @@ export default function Case() {
     if (isNew) return
     let cancelled = false
     client.get(`/ai/sessions/${id}`)
-      .then((res) => { if (!cancelled) { setSession(res.data?.data?.session || null); setLoadError(null) } })
+      .then((res) => {
+        if (cancelled) return
+        const nextSession = res.data?.data?.session || null
+        const nextPlans = nextSession?.plans || []
+        const nextPlan = nextPlans[nextPlans.length - 1]
+        setSession(nextSession)
+        setLoadError(null)
+        // Errors belong to the attempted proposal. Another tab or company member
+        // can finish it, or the assistant can replace it with a new proposal.
+        setActionError((error) => error && nextPlan?._id === error.planId
+          && !['executing', 'completed', 'rejected'].includes(nextPlan.status) ? error : null)
+      })
       .catch((err) => { if (!cancelled) setLoadError(err.response?.status === 404 ? 'This case does not exist.' : (err.response?.data?.error || 'The case could not be loaded.')) })
     // The readable list of changes, with names looked up in QuickBooks.
     client.get(`/ai/sessions/${id}/changes`)
@@ -623,7 +742,7 @@ export default function Case() {
         setGuardError(message || 'Production confirmation is required.')
       } else {
         setConfirmOpen(false)
-        setActionError(message || 'The changes could not be made.')
+        setActionError({ planId: plan._id, message: message || 'The changes could not be made.' })
         setVersion((v) => v + 1)
       }
     } finally {
@@ -637,7 +756,7 @@ export default function Case() {
       await client.post(`/ai/plan/${plan._id}/reject`)
       setVersion((v) => v + 1)
     } catch (err) {
-      setActionError(err.response?.data?.error || 'The proposal could not be discarded.')
+      setActionError({ planId: plan._id, message: err.response?.data?.error || 'The proposal could not be discarded.' })
     }
   }
 
@@ -693,7 +812,7 @@ export default function Case() {
                 loading={!view}
                 canWrite={canWrite}
                 busy={running}
-                actionError={actionError}
+                actionError={actionError && actionError.planId === plan?._id && !['executing', 'completed', 'rejected'].includes(plan?.status) ? actionError.message : null}
                 onRun={() => { setGuardError(null); setConfirmOpen(true) }}
                 onDiscard={discard}
                 onReload={() => setVersion((v) => v + 1)}

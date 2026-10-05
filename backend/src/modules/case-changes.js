@@ -17,6 +17,7 @@ const REF_TYPES = {
 const LOOKUP_TYPES = ['Customer', 'Vendor', 'Employee', 'Item', 'TaxCode', 'Term', 'Class', 'Department', 'Account',
   'Invoice', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Estimate', 'PurchaseOrder', 'SalesReceipt'];
 const TXN_TYPES = new Set(['Invoice', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Estimate', 'PurchaseOrder', 'SalesReceipt']);
+const BALANCE_TYPES = new Set(['Invoice', 'Bill']);
 
 // Older write tools and the record each one makes.
 const LEGACY_TOOLS = {
@@ -54,6 +55,7 @@ function stepRecord(step) {
 }
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 const round2 = (v) => Math.round(v * 100) / 100;
+const money = (v) => `$${Number(v).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Every { type, id } a set of plans refers to, for name lookups. */
 function collectRefs(plans) {
@@ -98,6 +100,8 @@ function nameOf(type, record) {
 async function loadNames(qbo, refs, { concurrency = 3, budgetMs = 8000 } = {}) {
   const names = new Map();
   names.complete = true;
+  // What is still owed on invoices and bills, so a payment can say whether it settled one.
+  names.balances = new Map();
   const queue = [...refs].map(([type, ids]) => [type, [...ids].filter(isId).slice(0, 100)]).filter(([, ids]) => ids.length);
   const worker = async () => {
     while (queue.length) {
@@ -107,6 +111,7 @@ async function loadNames(qbo, refs, { concurrency = 3, budgetMs = 8000 } = {}) {
         for (const record of res?.QueryResponse?.[type] || []) {
           const name = nameOf(type, record);
           if (name) names.set(`${type}:${record.Id}`, name);
+          if (BALANCE_TYPES.has(type) && typeof record.Balance === 'number') names.balances.set(`${type}:${record.Id}`, num(record.Balance));
         }
       } catch {
         names.complete = false;
@@ -138,10 +143,54 @@ const STEP_STATUS = {
 };
 
 /**
- * Describe the changes in a case. `plans` are the case's AIPlan documents in
- * creation order; `names` is the Map from loadNames (may be empty).
+ * The numbered or bulleted items of a case's opening request, as a checklist:
+ * [{ number, title, detail }]. "3. Deposits: record 3 payments…" reads as title
+ * "Deposits", detail "record 3 payments…". Empty when the request has no list.
  */
-function describeChanges(plans, names = new Map()) {
+function parseAsks(text) {
+  const items = [];
+  let indent = null;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const depth = line.length - line.trimStart().length;
+    // Only the first list counts, and only its top-level items: lines indented
+    // deeper, sub-bullets included, carry on the item above; other text ends the list.
+    const item = /^\s{0,3}(?:(\d{1,2})[.)]|[-*•])\s+(\S.*)$/.exec(line);
+    if (item && (indent === null || depth === indent)) {
+      indent = depth;
+      items.push({ written: item[1] ? Number(item[1]) : null, text: item[2].trim() });
+    } else if (items.length && depth > indent) {
+      const sub = /^\s*(?:\d{1,2}[.)]|[-*•])\s+(\S.*)$/.exec(line);
+      const last = items[items.length - 1];
+      last.text += sub ? `${/:$/.test(last.text) ? ' ' : '; '}${sub[1].trim()}` : ` ${line.trim()}`;
+    } else if (items.length) {
+      break;
+    }
+  }
+  // Numbered lists keep their own numbers, which is what the assistant tags against.
+  const numbered = items.length > 0 && items.every((it, i, all) => it.written !== null
+    && all.findIndex((other) => other.written === it.written) === i);
+  return items.slice(0, 30).map(({ written, text: full }, i) => {
+    const colon = full.indexOf(':');
+    let title = full;
+    let detail = '';
+    if (colon >= 3 && colon <= 60) {
+      title = full.slice(0, colon).trim();
+      detail = full.slice(colon + 1).trim().replace(/^[a-z]/, (c) => c.toUpperCase());
+    } else if (full.length > 80) {
+      title = `${full.slice(0, 81).replace(/\s+\S*$/, '')}…`;
+      detail = full;
+    }
+    return { number: numbered ? written : i + 1, title, detail: detail.length > 200 ? `${detail.slice(0, 201).replace(/\s+\S*$/, '')}…` : detail };
+  });
+}
+
+/**
+ * Describe the changes in a case. `plans` are the case's AIPlan documents in
+ * creation order; `names` is the Map from loadNames (may be empty); `request`
+ * is the case's opening message, whose listed items become the checklist.
+ */
+function describeChanges(plans, names = new Map(), { request = '' } = {}) {
   const label = (type, id, fallback) => {
     if (id === undefined || id === null || id === '') return null;
     const ref = PLACEHOLDER.exec(String(id));
@@ -218,7 +267,10 @@ function describeChanges(plans, names = new Map()) {
             const ref = PLACEHOLDER.exec(String(t.TxnId));
             if (ref) return `the ${word} from change ${ref[1]}`;
             const doc = names.get(`${t.TxnType}:${t.TxnId}`);
-            return doc ? `${word} ${doc}` : `${word} #${t.TxnId}`;
+            // Once the payment is made, say whether that left anything owing (as of now).
+            const balance = status === 'done' ? names.balances?.get(`${t.TxnType}:${t.TxnId}`) : undefined;
+            const left = balance === undefined ? '' : balance === 0 ? ', now paid in full' : `, ${money(balance)} still owing`;
+            return `${doc ? `${word} ${doc}` : `${word} #${t.TxnId}`}${left}`;
           }));
           if (applied.length) fact(`${entityType === 'Payment' ? 'Applied to' : 'Pays'} ${applied.join(', ')}`);
           if (record.DepositToAccountRef) fact(`Into ${refName('DepositToAccountRef', record.DepositToAccountRef, 'account')}`);
@@ -281,6 +333,15 @@ function describeChanges(plans, names = new Map()) {
         amount,
         amountNote: result.totalAmt !== undefined && result.totalAmt !== null ? null : amountNote,
         facts,
+        // Which item of the opening request this change answers (the assistant's tag).
+        goal: Number.isInteger(Number(input.goal)) && Number(input.goal) > 0 ? Number(input.goal) : null,
+        // Customer payments a deposit combines: the change that made each one, or its QuickBooks Id.
+        linked: entityType === 'Deposit'
+          ? (record.Line || []).flatMap((l) => l?.LinkedTxn || []).filter((t) => t?.TxnType === 'Payment').map((t) => {
+            const ref = PLACEHOLDER.exec(String(t.TxnId));
+            return ref ? { key: `${plan._id}:${ref[1]}` } : { id: String(t.TxnId) };
+          })
+          : null,
         summary: input.summary ? String(input.summary).slice(0, 300) : null,
         error: status === 'failed' ? plainError(step.error || step.result?.error) : null,
         // Same record, proposed again? Compared on what was asked for, not the result.
@@ -303,7 +364,19 @@ function describeChanges(plans, names = new Map()) {
     if (redo) row.retriedBy = redo.key;
   }
 
-  const visible = rows.filter((r) => !r.retriedBy).map(({ matchKey, ...row }) => row);
+  const shown = rows.filter((r) => !r.retriedBy);
+  const asks = parseAsks(request);
+  const visible = shown.map(({ matchKey, linked, ...row }) => {
+    // A request with a single ask: everything in the case answers it.
+    let goal = row.goal && asks.some((a) => a.number === row.goal) ? row.goal : null;
+    if (!goal && asks.length === 1) goal = 1;
+    // A deposit lists the payments it combines, so they can sit under it.
+    const includes = linked
+      ? linked.map((l) => l.key || shown.find((r) => r.entityType === 'Payment' && r.action === 'create' && r.recordId === l.id)?.key)
+        .filter((key) => key && shown.some((r) => r.key === key))
+      : undefined;
+    return { ...row, goal, ...(includes?.length ? { includes } : {}) };
+  });
   const counts = {
     done: visible.filter((r) => r.status === 'done').length,
     failed: visible.filter((r) => r.status === 'failed').length,
@@ -313,6 +386,7 @@ function describeChanges(plans, names = new Map()) {
     retried: rows.filter((r) => r.retriedBy && r.status === 'failed').length,
   };
   return {
+    asks,
     changes: visible,
     counts,
     proposals: live.length,
@@ -331,4 +405,4 @@ function plainError(error) {
   return text.replace(/^QBO API error \(HTTP \d+\):\s*/i, 'QuickBooks rejected it: ').slice(0, 240);
 }
 
-module.exports = { collectRefs, loadNames, describeChanges, plainError };
+module.exports = { collectRefs, loadNames, describeChanges, parseAsks, plainError };
