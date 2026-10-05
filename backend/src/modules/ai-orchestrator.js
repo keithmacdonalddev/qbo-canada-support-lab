@@ -559,7 +559,7 @@ async function runCodexTurn(messages, systemPrompt, handleTool, { readOnly = fal
       totalUsage: result.usage,
     };
   } finally {
-    toolSession.revoke();
+    await toolSession.close();
   }
 }
 

@@ -62,11 +62,17 @@ function createToolSession({
       if (calls > maxCalls) {
         return Promise.resolve({ success: false, error: `Tool limit reached (${maxCalls} calls). Answer with what you have.` });
       }
-      const runCall = queue.then(() => executeAsActor(name, input || {}));
+      const runCall = queue.then(() => session.active
+        ? executeAsActor(name, input || {})
+        : { success: false, error: 'This tool session has ended.' });
       queue = runCall.catch(() => {});
       return runCall;
     },
     bridge: { serverName: SERVER_NAME, url: bridgeUrl(), token, tokenEnv: TOKEN_ENV },
+    async close() {
+      session.revoke();
+      await queue; // Preserve receipts from an external write already in flight.
+    },
     revoke() {
       revoked = true;
       sessions.delete(token);

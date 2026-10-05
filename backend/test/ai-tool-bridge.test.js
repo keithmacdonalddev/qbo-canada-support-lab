@@ -71,3 +71,25 @@ test('a revoked session stops answering', async () => {
   const result = await handleMcpRequest(s.bridge.token, { jsonrpc: '2.0', id: 5, method: 'tools/list' });
   assert.equal(result.status, 404);
 });
+
+test('closing a bridge waits for the active write and refuses queued writes', async () => {
+  let release;
+  let started;
+  const began = new Promise((resolve) => { started = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let calls = 0;
+  const s = session(async () => { calls += 1; started(); await gate; return { success: true, saved: 'record' }; });
+  const first = s.call('createInvoice', {});
+  await began;
+  const second = s.call('createInvoice', {});
+  let closed = false;
+  const closing = s.close().then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  release();
+  assert.equal((await first).saved, 'record');
+  assert.equal((await second).success, false);
+  await closing;
+  assert.equal(calls, 1);
+  assert.equal(closed, true);
+});

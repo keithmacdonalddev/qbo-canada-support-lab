@@ -1,6 +1,8 @@
 # UX overhaul: issue-first direction (2026-10-02)
 
-**Status:** Built for owner review. Supersedes the earlier "Today dashboard" attempt from the same day, which the owner rejected.
+**October 5 update:** Reproduce now uses Describe → Recreate → Check results → Result. A connected company and submitted case authorize the necessary case work; per-plan and typed production approvals below describe the historical October 2 implementation. See [autonomous reproduction](../architecture/autonomous-reproduction.md) for the current boundaries and remaining verification limits.
+
+**Historical status:** Built for owner review. Supersedes the earlier "Today dashboard" attempt from the same day, which the owner rejected.
 
 ## The owner's answers that drive it
 

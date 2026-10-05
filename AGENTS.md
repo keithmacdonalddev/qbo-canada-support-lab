@@ -153,7 +153,7 @@ Frontend:
 - Keep frontend code ESM/React JSX.
 - Keep QBO mutations behind explicit user intent, visible company scope, audit logging, and existing route/module boundaries.
 - Use existing modules before adding new abstractions.
-- Keep AI writes behind plan/approval flows. AI should use internal tool contracts, not raw QBO API calls.
+- Reproduce cases use connected-company plus submitted-case authorization (owner direction, 2026-10-05), without per-plan approval. Limit edits/voids/deletions and transaction links to case-created records; preserve audit and evidence. Legacy AI plans retain approval flows. AI uses internal tool contracts, not raw QBO API calls. See `docs/architecture/autonomous-reproduction.md`. This product policy does not grant coding agents permission to run live checks or start services.
 - Update docs or memory when a durable project fact changes.
 - Infer the complete practical outcome when the request omits obvious supporting work. Deliver a polished result without inventing unrelated scope or making materially different product decisions without approval.
 - Write or run tests in proportion to risk. Do not forbid testing, and do not use broad live tests where a focused non-mutating check is enough.

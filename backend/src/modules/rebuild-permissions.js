@@ -2,6 +2,7 @@
 
 const ROLE_PERMISSIONS = Object.freeze({
   'lab-owner': Object.freeze([
+    'reproduction.run',
     'company.read',
     'blueprint.read',
     'blueprint.manage',
@@ -19,6 +20,7 @@ const ROLE_PERMISSIONS = Object.freeze({
     'audit.read',
   ]),
   operator: Object.freeze([
+    'reproduction.run',
     'company.read',
     'blueprint.read',
     'coverage.read',
@@ -30,6 +32,7 @@ const ROLE_PERMISSIONS = Object.freeze({
     'app_data.read',
   ]),
   'support-agent': Object.freeze([
+    'reproduction.run',
     'company.read',
     'blueprint.read',
     'coverage.read',

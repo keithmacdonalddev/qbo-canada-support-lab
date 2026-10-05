@@ -26,7 +26,7 @@ const LEGACY_TOOLS = {
   applyPayment: { action: 'create', entityType: 'Payment' },
   applyBillPayment: { action: 'create', entityType: 'BillPayment' },
 };
-const WRITE_TOOLS = { createRecord: 'create', updateRecord: 'update', voidTransaction: 'void' };
+const WRITE_TOOLS = { createRecord: 'create', updateRecord: 'update', voidTransaction: 'void', deleteRecord: 'delete' };
 
 const isId = (v) => /^\d+$/.test(String(v ?? ''));
 

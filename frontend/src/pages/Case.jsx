@@ -5,7 +5,6 @@ import {
   CreditCard, ExternalLink, FileText, HandCoins, Landmark, LoaderCircle, Minus, Package, Receipt, Users, Wallet,
 } from 'lucide-react'
 import Layout from '../components/Layout'
-import ProductionGuardDialog from '../components/ProductionGuardDialog'
 import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { Button } from '@/components/ui/button'
@@ -13,27 +12,19 @@ import { qboRecordUrl } from '@/lib/qbo-links'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/ui/markdown'
 
-// A case is one customer issue moving through four stages:
-// describe -> review the proposed changes -> run them -> check in QuickBooks.
-const STAGES = ['Describe', 'Review changes', 'Run', 'Check in QuickBooks']
+// A case runs from description through execution, observation and evidence.
+const STAGES = ['Describe', 'Recreate', 'Check results', 'Result']
 
 // A short heading from a case's opening message: its first sentence (unless that is
 // a fragment like "Hi." or "1."), cut at a word.
 function caseTitle(text) {
-  const line = String(text || '').split('\n').find((l) => l.trim())?.trim() || ''
+  const line = String(text || '').replace(/[*#]/g, '').split('\n').find((l) => l.trim())?.trim() || ''
   const first = line.match(/^.+?[.!?](?=\s|$)/)?.[0]
   const sentence = first && first.length >= 15 ? first : line
   if (sentence.length <= 90) return sentence
   return `${sentence.slice(0, 91).replace(/\s+\S*$/, '')}…`
 }
 
-function stageFor(plan) {
-  if (!plan) return 0
-  if (['proposed', 'approved', 'partially_approved'].includes(plan.status)) return 1
-  if (plan.status === 'executing') return 2
-  if (['completed', 'failed'].includes(plan.status)) return 3
-  return 0
-}
 
 const money = (n) => (n === null || n === undefined ? '' : `$${Number(n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
 const shortDate = (d) => {
@@ -218,7 +209,7 @@ const STATUS = {
   done: { Icon: Check, label: 'Made', cls: 'bg-[var(--ok)] text-white border-[var(--ok)]' },
   failed: { Icon: CircleX, label: 'Failed', cls: 'bg-[var(--danger-soft)] text-[var(--danger-ink)] border-[var(--danger-soft)]' },
   running: { Icon: LoaderCircle, label: 'Making now', cls: 'text-[var(--ink-2)] border-[var(--line-strong)]', spin: true },
-  waiting: { Icon: CircleDashed, label: 'Waiting for approval', cls: 'text-[var(--ink-3)] border-transparent' },
+  waiting: { Icon: CircleDashed, label: 'Not run', cls: 'text-[var(--ink-3)] border-transparent' },
   queued: { Icon: CircleDashed, label: 'Next in line', cls: 'text-[var(--ink-3)] border-transparent' },
   pending: { Icon: CircleDashed, label: 'Not made', cls: 'text-[var(--ink-3)] border-transparent' },
   skipped: { Icon: Minus, label: 'Not made', cls: 'text-[var(--ink-3)] border-[var(--line)]' },
@@ -227,7 +218,7 @@ const STATUS = {
 function ChangeRow({ change, step, environment, showType = false, nested = false }) {
   const [open, setOpen] = useState(false)
   const status = STATUS[change.status] || STATUS.pending
-  const verb = change.action === 'void' ? 'Void' : change.action === 'update' ? 'Edit' : null
+  const verb = change.action === 'delete' ? 'Delete' : change.action === 'void' ? 'Void' : change.action === 'update' ? 'Edit' : null
   const url = change.status === 'done' && change.recordId ? qboRecordUrl(change.entityType, change.recordId, environment) : null
   const muted = ['skipped', 'pending'].includes(change.status)
   const name = `${change.party || typeInfo(change.entityType).plural}${change.docNumber ? ` #${change.docNumber}` : ''}`
@@ -279,162 +270,7 @@ function ChangeRow({ change, step, environment, showType = false, nested = false
 }
 
 // Where one ask stands, from the records that answer it.
-function askStatus(changes) {
-  if (changes.length === 0) return 'empty'
-  if (changes.some((c) => c.status === 'failed')) return 'failed'
-  if (changes.some((c) => ['running', 'queued'].includes(c.status))) return 'running'
-  if (changes.some((c) => c.status === 'waiting')) return 'waiting'
-  if (changes.every((c) => c.status === 'done')) return 'done'
-  return 'pending'
-}
-
-const ASK_NOTE = {
-  done: (n) => `${n} made`,
-  failed: () => 'Needs attention',
-  running: () => 'Making now',
-  waiting: (n) => `${n} waiting for approval`,
-  pending: () => 'Not finished',
-  empty: () => 'Nothing made for this',
-}
-
-// The records under one heading, with a deposit's customer payments tucked under it.
-function AskRows({ changes, steps, environment }) {
-  // Each payment sits under the first deposit here that combines it, and only there.
-  const under = new Map()
-  for (const c of changes) {
-    for (const key of c.includes || []) {
-      if (!under.has(key) && key !== c.key && changes.some((p) => p.key === key)) under.set(key, c.key)
-    }
-  }
-  const row = (c, nested = false) => (
-    <ChangeRow key={c.key} change={c} step={steps.get(`${c.planId}:${c.stepNumber}`)} environment={environment} showType nested={nested} />
-  )
-  return (
-    <ul className="divide-y divide-[var(--line)]">
-      {changes.filter((c) => !under.has(c.key)).flatMap((c) => [
-        row(c),
-        ...changes.filter((p) => under.get(p.key) === c.key).map((p) => row(p, true)),
-      ])}
-    </ul>
-  )
-}
-
-// The case's request as a checklist: each listed ask, ticked off with the records that answer it.
-function AskList({ asks, changes, steps, environment }) {
-  const other = changes.filter((c) => !c.goal)
-  return (
-    <ol className="divide-y divide-[var(--line-strong)]">
-      {asks.map((ask) => {
-        const mine = changes.filter((c) => c.goal === ask.number)
-        const state = askStatus(mine)
-        const badge = state === 'done' ? STATUS.done : state === 'failed' ? STATUS.failed : state === 'running' ? STATUS.running : STATUS.pending
-        return (
-          <li key={ask.number}>
-            <div className="flex items-start gap-3 bg-[var(--surface-muted)] px-4 py-2.5">
-              <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border', badge.cls)}>
-                <badge.Icon className={cn('size-3', badge.spin && 'animate-spin')} strokeWidth={2.5} aria-hidden="true" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h3 className="text-[13.5px] font-semibold text-[var(--ink)]">
-                  <span className="mr-1.5 tabular text-[var(--ink-3)]">{ask.number}.</span>{ask.title}
-                </h3>
-                {ask.detail && <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-[var(--ink-2)]">{ask.detail}</p>}
-              </div>
-              <span className={cn('shrink-0 pt-0.5 text-[12px]', state === 'failed' ? 'font-medium text-[var(--danger-ink)]' : state === 'done' ? 'text-[var(--ok)]' : 'text-[var(--ink-3)]')}>
-                {ASK_NOTE[state](mine.length)}
-              </span>
-            </div>
-            {mine.length > 0 && <AskRows changes={mine} steps={steps} environment={environment} />}
-          </li>
-        )
-      })}
-      {other.length > 0 && (
-        <li>
-          <div className="bg-[var(--surface-muted)] px-4 py-2.5">
-            <h3 className="text-[13.5px] font-semibold text-[var(--ink)]">Other changes</h3>
-            <p className="mt-0.5 text-[12.5px] text-[var(--ink-2)]">Not matched to an item in the request.</p>
-          </div>
-          <AskRows changes={other} steps={steps} environment={environment} />
-        </li>
-      )}
-    </ol>
-  )
-}
-
-// "Making change 2 of 5" with a bar, while the server works through the list.
-function RunProgress({ plan }) {
-  const toRun = plan.steps.filter((s) => !['rejected', 'pending', 'proposed'].includes(s.status))
-  const total = toRun.length || plan.steps.length
-  const finished = toRun.filter((s) => ['completed', 'failed', 'skipped'].includes(s.status)).length
-  const position = Math.min(total, finished + 1)
-  return (
-    <div role="status" aria-live="polite">
-      <div className="flex items-center justify-between gap-3 text-[13px]">
-        <span className="flex min-w-0 items-center gap-2 font-medium text-[var(--ink)]">
-          <LoaderCircle className="size-4 shrink-0 animate-spin text-[var(--ink-3)]" aria-hidden="true" />
-          Making change {position} of {total}…
-        </span>
-        <span className="shrink-0 tabular text-[12.5px] text-[var(--ink-3)]">{finished} done</span>
-      </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--sunken)]" role="progressbar" aria-label="Changes made" aria-valuemin={0} aria-valuemax={total} aria-valuenow={finished}>
-        <div className="h-full rounded-full bg-[var(--ok)] transition-[width] duration-300" style={{ width: `${total ? Math.round((finished / total) * 100) : 0}%` }} />
-      </div>
-      <p className="mt-2 text-[12.5px] text-[var(--ink-3)]">The changes keep going on the lab server if you leave this page.</p>
-    </div>
-  )
-}
-
-// What the latest proposal needs from you, or what happened to it.
-function PlanBand({ plan, canWrite, busy, actionError, onRun, onDiscard }) {
-  if (!plan) return null
-  const waiting = ['proposed', 'approved', 'partially_approved'].includes(plan.status)
-  const n = plan.steps.length
-  const failed = plan.steps.filter((s) => s.status === 'failed').length
-  let body = null
-  if (waiting) {
-    body = (
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-[14px] font-semibold text-[var(--ink)]">Review {n === 1 ? 'this change' : `these ${n} changes`}</p>
-          <p className="text-[12.5px] text-[var(--ink-2)]">Nothing is written to QuickBooks until you approve.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" onClick={onDiscard} disabled={busy}>Discard</Button>
-          <Button size="lg" onClick={onRun} disabled={busy || !canWrite}>
-            {busy && <LoaderCircle className="animate-spin" />}
-            {busy ? 'Running…' : `Make ${n === 1 ? 'this change' : `these ${n} changes`}`}
-          </Button>
-        </div>
-        {!canWrite && (
-          <p className="w-full text-[12.5px] leading-relaxed text-[var(--ink-2)]">
-            Making changes is switched off on the lab server. Set <code className="font-mono text-[12px]">LEGACY_AI_MUTATIONS_ENABLED=true</code> in the backend .env and restart the backend.
-          </p>
-        )}
-      </div>
-    )
-  } else if (plan.status === 'executing') {
-    body = <RunProgress plan={plan} />
-  } else if (plan.status === 'failed') {
-    body = (
-      <p className="text-[13px] text-[var(--danger-ink)]">
-        {failed || 'A'} {failed === 1 || !failed ? 'change' : 'changes'} failed, so the rest of this proposal stopped. Records already made stay in QuickBooks. Ask the assistant to fix it and continue.
-      </p>
-    )
-  } else if (plan.status === 'completed') {
-    body = <p className="text-[13px] text-[var(--ok)]">All done. Open a record to see it the way the customer does.</p>
-  } else if (plan.status === 'rejected') {
-    body = <p className="text-[13px] text-[var(--ink-3)]">The last proposal was discarded. Nothing was changed.</p>
-  }
-  if (!body && !actionError) return null
-  return (
-    <div className={cn('border-b border-[var(--line)] px-4 py-3.5', waiting && 'bg-[var(--attention-soft)]')}>
-      {body}
-      {actionError && <p className="mt-2 text-[12.5px] text-[var(--danger-ink)]">{actionError}</p>}
-    </div>
-  )
-}
-
-function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy, actionError, onRun, onDiscard, onReload }) {
+export function ChangesLedger({ view, plans, environment, loading, onReload }) {
   const steps = useMemo(() => {
     const map = new Map()
     for (const p of plans) for (const s of p.steps || []) map.set(`${p._id}:${s.stepNumber}`, s)
@@ -451,23 +287,16 @@ function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy
   }, [view])
 
   const counts = view?.counts
-  const asks = view?.asks || []
-  const asksDone = asks.filter((a) => askStatus((view?.changes || []).filter((c) => c.goal === a.number)) === 'done').length
   return (
     <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)]" aria-label="Changes in QuickBooks">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
         <h2 className="text-[14px] font-semibold text-[var(--ink)]">
-          {asks.length > 1 ? 'What you asked for' : 'Changes in QuickBooks'}
-          {asks.length > 1 && (
-            <span className={cn('ml-2 text-[12.5px] font-medium', asksDone === asks.length ? 'text-[var(--ok)]' : 'text-[var(--ink-3)]')}>
-              {asksDone} of {asks.length} done
-            </span>
-          )}
+          Changes in QuickBooks
         </h2>
         {counts && (
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
             {counts.done > 0 && <span className="rounded-full bg-[var(--ok-soft)] px-2 py-0.5 font-medium text-[var(--ok)]">{counts.done} made</span>}
-            {counts.waiting > 0 && <span className="rounded-full bg-[var(--attention-soft)] px-2 py-0.5 font-medium text-[var(--ink)]">{counts.waiting} waiting</span>}
+            {counts.waiting > 0 && <span className="rounded-full bg-[var(--attention-soft)] px-2 py-0.5 font-medium text-[var(--ink)]">{counts.waiting} proposed earlier</span>}
             {counts.failed > 0 && <span className="rounded-full bg-[var(--danger-soft)] px-2 py-0.5 font-medium text-[var(--danger-ink)]">{counts.failed} failed</span>}
             {counts.running > 0 && <span className="rounded-full bg-[var(--sunken)] px-2 py-0.5 text-[var(--ink-2)]">{counts.running} in progress</span>}
             {counts.notDone > 0 && <span className="rounded-full bg-[var(--sunken)] px-2 py-0.5 text-[var(--ink-2)]">{counts.notDone} not made</span>}
@@ -478,7 +307,7 @@ function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy
         )}
       </header>
 
-      <PlanBand plan={plan} canWrite={canWrite} busy={busy} actionError={actionError} onRun={onRun} onDiscard={onDiscard} />
+
 
       {view?.error ? (
         <div className="px-4 py-6 text-[13px] text-[var(--ink-2)]" role="alert">
@@ -488,15 +317,8 @@ function ChangesLedger({ view, plans, plan, environment, loading, canWrite, busy
         <p className="flex items-center gap-2 px-4 py-6 text-[13px] text-[var(--ink-3)]"><LoaderCircle className="size-3.5 animate-spin" /> Loading changes…</p>
       ) : groups.length === 0 ? (
         <p className="px-4 py-6 text-[13px] leading-relaxed text-[var(--ink-3)]">
-          No changes proposed yet. When the assistant knows what to create, each record appears here for you to review before anything is touched.
+          Records appear here as the agent creates and changes them.
         </p>
-      ) : asks.length > 0 ? (
-        <div className="border-t border-[var(--line)]">
-          <div className="grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] gap-x-3 border-b border-[var(--line)] px-4 py-1.5 text-[11.5px] font-medium uppercase tracking-[0.04em] text-[var(--ink-3)]" aria-hidden="true">
-            <span /><span>Record</span><span>Date</span><span className="text-right">Amount</span><span />
-          </div>
-          <AskList asks={asks} changes={view.changes} steps={steps} environment={environment} />
-        </div>
       ) : (
         <div className="divide-y divide-[var(--line)]">
           <div className="grid grid-cols-[20px_minmax(0,1fr)_96px_112px_88px] gap-x-3 px-4 py-1.5 text-[11.5px] font-medium uppercase tracking-[0.04em] text-[var(--ink-3)]" aria-hidden="true">
@@ -582,270 +404,174 @@ function CaseNote({ sessionId }) {
   )
 }
 
+export function ReproductionStatus({ run, onStop, stopping, onContinue, busy, error }) {
+  const active = run?.status === 'running';
+  const labels = { reproduced: 'Issue reproduced', not_reproduced: 'Not reproduced in these tests', unverified: 'Result not fully verified' };
+  return (
+    <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4" aria-label="Reproduction progress">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[var(--ink)]" role="status">
+          {active && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
+          {active ? (run.phase === 'checking' ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
+            : labels[run?.outcome] || 'Ready to continue this case'}
+        </h2>
+        {active && <Button variant="outline" size="sm" onClick={onStop} disabled={stopping || run.stopRequested}>{run.stopRequested ? 'Stopping…' : 'Stop'}</Button>}
+      </div>
+      {active ? (
+        <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">
+          {run.stopRequested ? 'Finishing any change already sent, then stopping.' : 'The agent is creating the test records, making the relevant changes and checking what QuickBooks saved. You can leave this page; the case keeps running.'}
+        </p>
+      ) : (
+        <>
+          <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">{run?.summary || 'Continue the original request automatically. The agent will create its own test records and check the results.'}</p>
+          {(!run || run.status === 'interrupted') && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue reproduction'}</Button>}
+        </>
+      )}
+      {run?.conditions?.length > 0 && (
+        <div className="mt-4 border-t border-[var(--line)] pt-3">
+          <h3 className="text-[12px] font-semibold text-[var(--ink-2)]">What the agent is checking</h3>
+          <ul className="mt-2 space-y-2 text-[13px]">
+            {run.conditions.map((label) => {
+              const check = [...(run.checks || [])].reverse().find((c) => c.label === label && c.revision === run.revision);
+              return <li key={label} className="flex items-start gap-2">
+                {check?.available ? (check.passed ? <Check className="mt-0.5 size-4 shrink-0 text-[var(--ok)]" /> : <Minus className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />) : <CircleDashed className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />}
+                <span>{label}{check?.available && <span className="block text-[12px] text-[var(--ink-3)]">Observed: {String(check.actual)} · Expected: {String(check.expected)}</span>}</span>
+              </li>;
+            })}
+          </ul>
+        </div>
+      )}
+      {run?.tests?.length > 0 && <details className="mt-3 text-[13px]"><summary className="cursor-pointer font-medium">Tests performed</summary><ul className="mt-2 list-disc space-y-1 pl-5">{run.tests.map((test, i) => <li key={i}>{test}</li>)}</ul></details>}
+      {run?.limitations?.length > 0 && <div className="mt-3 text-[13px] text-[var(--ink-2)]"><p className="font-medium">What remains unverified</p><ul className="mt-1 list-disc space-y-1 pl-5">{run.limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul></div>}
+      {error && <p role="alert" className="mt-3 text-[13px] text-[var(--danger-ink)]">{error}</p>}
+    </section>
+  );
+}
+
 export default function Case() {
-  const { id } = useParams()
-  const location = useLocation()
-  const navigate = useNavigate()
-  const connection = useConnection()
-  const isNew = id === 'new'
-  const initialMessage = isNew ? location.state?.message : null
+  const { id } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const connection = useConnection();
+  const isNew = id === 'new';
+  const initialMessage = isNew ? location.state?.message : null;
+  const [session, setSession] = useState(null);
+  const [view, setView] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [chatError, setChatError] = useState(null);
+  const [failedText, setFailedText] = useState(null);
+  const [reply, setReply] = useState('');
+  const [version, setVersion] = useState(0);
+  const [stopping, setStopping] = useState(false);
+  const started = useRef(false);
+  const submission = useRef({ text: initialMessage, requestId: location.state?.requestId || crypto.randomUUID() });
 
-  const [session, setSession] = useState(null)
-  const [view, setView] = useState(null)
-  const [loadError, setLoadError] = useState(null)
-  const [pending, setPending] = useState(null) // { text, since }
-  const [chatError, setChatError] = useState(null)
-  const [failedText, setFailedText] = useState(null)
-  const [reply, setReply] = useState('')
-  const [canWrite, setCanWrite] = useState(false)
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [actionError, setActionError] = useState(null)
-  const [guardError, setGuardError] = useState(null)
-  const [version, setVersion] = useState(0)
-  const started = useRef(false)
-
-  useEffect(() => {
-    let cancelled = false
-    client.get('/ai/config')
-      .then((res) => { if (!cancelled) setCanWrite(res.data?.data?.featureFlags?.aiMutations === true) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [])
-
-  // A brand-new case sends the description first, then moves to its own URL.
-  const startCase = async (text) => {
-    setChatError(null)
-    setFailedText(null)
-    setPending({ text, since: Date.now() })
+  const startCase = async (text, existingId) => {
+    if (submission.current.text !== text) submission.current = { text, requestId: crypto.randomUUID() };
+    setChatError(null);
+    setFailedText(null);
+    setPending({ text, since: Date.now() });
     try {
-      const res = await client.post('/ai/chat', { message: text })
-      const newId = res.data?.data?.session?._id
-      setPending(null)
-      if (newId) navigate(`/cases/${newId}`, { replace: true })
-    } catch (err) {
-      setPending(null)
-      setFailedText(text)
-      setChatError(err.response?.data?.error || 'The assistant could not start this case.')
-    }
-  }
-
-  useEffect(() => {
-    if (!isNew || started.current) return
-    started.current = true
-    if (!initialMessage) {
-      navigate('/', { replace: true })
-      return
-    }
-    startCase(initialMessage)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNew, initialMessage])
-
-  useEffect(() => {
-    if (isNew) return
-    let cancelled = false
-    client.get(`/ai/sessions/${id}`)
-      .then((res) => {
-        if (cancelled) return
-        const nextSession = res.data?.data?.session || null
-        const nextPlans = nextSession?.plans || []
-        const nextPlan = nextPlans[nextPlans.length - 1]
-        setSession(nextSession)
-        setLoadError(null)
-        // Errors belong to the attempted proposal. Another tab or company member
-        // can finish it, or the assistant can replace it with a new proposal.
-        setActionError((error) => error && nextPlan?._id === error.planId
-          && !['executing', 'completed', 'rejected'].includes(nextPlan.status) ? error : null)
-      })
-      .catch((err) => { if (!cancelled) setLoadError(err.response?.status === 404 ? 'This case does not exist.' : (err.response?.data?.error || 'The case could not be loaded.')) })
-    // The readable list of changes, with names looked up in QuickBooks.
-    client.get(`/ai/sessions/${id}/changes`)
-      .then((res) => { if (!cancelled) setView(res.data?.data || null) })
-      .catch(() => { if (!cancelled) setView((v) => (v && !v.error ? v : { error: true })) })
-    return () => { cancelled = true }
-  }, [id, isNew, version])
-
-  const plans = useMemo(() => session?.plans || [], [session])
-  const plan = plans[plans.length - 1] || null
-  const environment = connection?.environment
-  const executing = plan?.status === 'executing'
-
-  // While changes are being made (including after a page reload), re-read the
-  // case every second so each step ticks off as the server finishes it.
-  useEffect(() => {
-    if (!executing) return undefined
-    const timer = setTimeout(() => setVersion((v) => v + 1), 1000)
-    return () => clearTimeout(timer)
-  }, [executing, session])
-
-  // Someone else (a shared-company member, or another tab) may continue this
-  // case. Re-read it when the window comes back into view and every 15 s while visible.
-  useEffect(() => {
-    if (isNew) return undefined
-    const refresh = () => { if (document.visibilityState === 'visible') setVersion((v) => v + 1) }
-    const timer = setInterval(refresh, 15000)
-    document.addEventListener('visibilitychange', refresh)
-    window.addEventListener('focus', refresh)
-    return () => {
-      clearInterval(timer)
-      document.removeEventListener('visibilitychange', refresh)
-      window.removeEventListener('focus', refresh)
-    }
-  }, [isNew])
-
-  // The server only starts once the production check passes, so the
-  // confirmation can step aside and let the progress show.
-  useEffect(() => {
-    if (!executing || !confirmOpen) return undefined
-    const timer = setTimeout(() => setConfirmOpen(false), 0)
-    return () => clearTimeout(timer)
-  }, [executing, confirmOpen])
-
-  const sendReply = async (e) => {
-    e.preventDefault()
-    const text = reply.trim()
-    if (!text || pending) return
-    setReply('')
-    setChatError(null)
-    setPending({ text, since: Date.now() })
-    try {
-      await client.post('/ai/chat', { sessionId: id, message: text })
-      setVersion((v) => v + 1)
-    } catch (err) {
-      setReply(text)
-      setChatError(err.response?.data?.error || 'The assistant could not answer.')
-    } finally {
-      setPending(null)
-    }
-  }
-
-  const run = async () => {
-    setRunning(true)
-    setGuardError(null)
-    setActionError(null)
-    let peek = null
-    try {
-      if (plan.status === 'proposed') await client.post(`/ai/plan/${plan._id}/approve`, {})
-      const execution = client.post(`/ai/plan/${plan._id}/execute`, connection?.isProduction ? { confirmProduction: true } : {})
-      // The request only answers when every change is made. Re-read the case
-      // shortly after it starts; once it shows "executing", the progress
-      // effect keeps it current step by step.
-      peek = setTimeout(() => setVersion((v) => v + 1), 700)
-      await execution
-      setConfirmOpen(false)
-      setVersion((v) => v + 1)
-    } catch (err) {
-      clearTimeout(peek)
-      const data = err.response?.data
-      const message = typeof data?.error === 'string' ? data.error : data?.error?.message
-      if (err.response?.status === 412) {
-        setGuardError(message || 'Production confirmation is required.')
-      } else {
-        setConfirmOpen(false)
-        setActionError({ planId: plan._id, message: message || 'The changes could not be made.' })
-        setVersion((v) => v + 1)
+      const res = await client.post('/ai/reproduce', {
+        message: text, sessionId: existingId, requestId: submission.current.requestId,
+        realmId: connection?.status?.realmId, environment: connection?.environment,
+      });
+      const next = res.data?.data?.session;
+      if (next?._id) {
+        setSession(next);
+        if (isNew) navigate('/cases/' + next._id, { replace: true });
+        else setVersion((v) => v + 1);
       }
-    } finally {
-      setRunning(false)
-    }
-  }
-
-  const discard = async () => {
-    setActionError(null)
-    try {
-      await client.post(`/ai/plan/${plan._id}/reject`)
-      setVersion((v) => v + 1)
+      // Keep the id for network retries; a successful new instruction gets a new id.
+      submission.current = { text: null, requestId: null };
     } catch (err) {
-      setActionError({ planId: plan._id, message: err.response?.data?.error || 'The proposal could not be discarded.' })
+      setFailedText(text);
+      setChatError(err.response?.data?.error || 'The case could not start. Retrying this request will not duplicate its records.');
+    } finally {
+      setPending(null);
     }
-  }
+  };
 
-  const messages = (session?.messages || []).filter((m) => ['user', 'assistant'].includes(m.role) && m.content?.trim())
-  const opening = messages.find((m) => m.role === 'user')?.content || initialMessage || session?.title
-  const title = caseTitle(opening) || 'New case'
-  const busy = Boolean(pending)
-  const hasChanges = Boolean(plan) || (view?.changes?.length || 0) > 0
-  const startedAt = session?.createdAt ? new Date(session.createdAt).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  useEffect(() => {
+    if (!isNew || started.current || !connection?.ready) return;
+    started.current = true;
+    if (!initialMessage) { navigate('/', { replace: true }); return; }
+    startCase(initialMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, initialMessage, connection?.ready]);
 
-  const conversation = (
-    <Conversation
-      messages={messages}
-      pending={pending}
-      failedText={failedText}
-      chatError={chatError}
-      onRetry={() => startCase(failedText)}
-      loading={!session && !pending && !chatError && !isNew}
-      isNew={isNew}
-      reply={reply}
-      setReply={setReply}
-      onSend={sendReply}
-      canSend={Boolean(connection?.ready)}
-      busy={busy}
-    />
-  )
+  useEffect(() => {
+    if (isNew) return;
+    let cancelled = false;
+    client.get('/ai/sessions/' + id)
+      .then((res) => { if (!cancelled) { setSession(res.data?.data?.session || null); setLoadError(null); } })
+      .catch((err) => { if (!cancelled) setLoadError(err.response?.data?.error || 'The case could not be loaded.'); });
+    client.get('/ai/sessions/' + id + '/changes')
+      .then((res) => { if (!cancelled) setView(res.data?.data || null); })
+      .catch(() => { if (!cancelled) setView((v) => v && !v.error ? v : { error: true }); });
+    return () => { cancelled = true; };
+  }, [id, isNew, version]);
+
+  const run = session?.reproduction;
+  const active = run?.status === 'running';
+  useEffect(() => {
+    if (isNew) return;
+    const refresh = () => { if (document.visibilityState === 'visible') setVersion((v) => v + 1); };
+    const timer = setInterval(refresh, active ? 1500 : 15000);
+    window.addEventListener('focus', refresh);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, [isNew, active]);
+
+  const sendReply = (event) => {
+    event.preventDefault();
+    const text = reply.trim();
+    if (!text || pending || active) return;
+    setReply('');
+    startCase(text, id);
+  };
+  const stop = async () => {
+    setStopping(true);
+    setChatError(null);
+    try { await client.post('/ai/sessions/' + id + '/stop'); setVersion((v) => v + 1); }
+    catch (err) { setChatError(err.response?.data?.error || 'The stop request could not be sent.'); }
+    finally { setStopping(false); }
+  };
+
+  const plans = useMemo(() => session?.plans || [], [session]);
+  const messages = (session?.messages || []).filter((m) => ['user', 'assistant'].includes(m.role) && m.content?.trim());
+  const opening = messages.find((m) => m.role === 'user')?.content || initialMessage || session?.title;
+  const title = run?.title || caseTitle(opening) || 'New case';
+  const stage = !run ? 0 : active ? (run.phase === 'checking' ? 2 : 1) : 3;
+  const busy = Boolean(pending) || active;
 
   return (
     <Layout>
       <div className="mx-auto max-w-[1280px]">
-        <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]">
-          <ArrowLeft className="size-3.5" aria-hidden="true" /> All cases
-        </Link>
+        <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> All cases</Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-          <div className="min-w-0">
-            <h1 className="line-clamp-2 max-w-[60ch] text-[22px] font-semibold leading-snug tracking-[-0.015em] text-[var(--ink)]">{title}</h1>
-            {startedAt && <p className="mt-1 text-[12.5px] text-[var(--ink-3)]">Started {startedAt}</p>}
-          </div>
-          <Stepper current={stageFor(plan)} />
+          <h1 className="line-clamp-2 max-w-[60ch] text-[22px] font-semibold leading-snug text-[var(--ink)]">{title}</h1>
+          <Stepper current={stage} />
         </div>
-
-        {loadError ? (
-          <p className="mt-8 text-[13.5px] text-[var(--ink-2)]">{loadError} <Link to="/" className="font-medium text-[var(--link)]">Back to Reproduce</Link></p>
-        ) : hasChanges ? (
-          // Once there is something to review, the changes lead and the conversation sits beside them.
+        {loadError ? <p className="mt-8 text-[13px]" role="alert">{loadError} <button onClick={() => setVersion((v) => v + 1)} className="text-[var(--link)]">Try again</button></p> : (
           <div className="mt-5 grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="flex min-w-0 flex-col gap-5">
-              <ChangesLedger
-                view={view}
-                plans={plans}
-                plan={plan}
-                environment={environment}
-                loading={!view}
-                canWrite={canWrite}
-                busy={running}
-                actionError={actionError && actionError.planId === plan?._id && !['executing', 'completed', 'rejected'].includes(plan?.status) ? actionError.message : null}
-                onRun={() => { setGuardError(null); setConfirmOpen(true) }}
-                onDiscard={discard}
-                onReload={() => setVersion((v) => v + 1)}
-              />
-              {plan?.status === 'completed' && <CaseNote sessionId={id} />}
+              {!isNew && <ReproductionStatus run={run} onStop={stop} stopping={stopping} busy={busy}
+                error={chatError}
+                onContinue={() => startCase('Complete the original reproduction request automatically, including setup, supported experiments and verification. Do not stop for repeated approvals or manual setup. Supersede the earlier proposal.', id)} />}
+              <ChangesLedger view={view} plans={plans} environment={run?.environment || connection?.environment}
+                loading={!view && !isNew} onReload={() => setVersion((v) => v + 1)} />
+              {run && !active && <CaseNote sessionId={id} />}
             </div>
-            <aside className="min-w-0 xl:sticky xl:top-4">{conversation}</aside>
-          </div>
-        ) : (
-          <div className="mt-5 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="min-w-0">{conversation}</div>
-            <aside className="rounded-[12px] border border-dashed border-[var(--line-strong)] px-4 py-4 text-[13px] leading-relaxed text-[var(--ink-3)]">
-              <p className="font-medium text-[var(--ink-2)]">Changes in QuickBooks</p>
-              <p className="mt-1">
-                {busy ? 'The assistant is working out what to create…' : 'When the assistant knows what to create, each record appears here for you to review before anything is touched.'}
-              </p>
+            <aside className="min-w-0 xl:sticky xl:top-4">
+              <Conversation messages={messages} pending={pending} failedText={failedText}
+                chatError={chatError} onRetry={() => startCase(failedText, isNew ? undefined : id)}
+                loading={!session && !pending && !chatError && !isNew} isNew={isNew}
+                reply={reply} setReply={setReply} onSend={sendReply} canSend={Boolean(connection?.ready) && !active} busy={busy} />
             </aside>
           </div>
         )}
       </div>
-
-      <ProductionGuardDialog
-        key={confirmOpen ? `run-${plan?._id}` : 'closed'}
-        open={confirmOpen}
-        environment={environment}
-        title={`Make ${plan?.steps?.length || 0} ${plan?.steps?.length === 1 ? 'change' : 'changes'} in QuickBooks?`}
-        description="Each listed change is made in order: new records are created, edits are saved and voids are applied. QuickBooks keeps all of them afterwards; nothing is deleted."
-        actionLabel="Make changes"
-        loading={running}
-        error={guardError}
-        onConfirm={run}
-        onCancel={() => setConfirmOpen(false)}
-      />
     </Layout>
-  )
+  );
 }

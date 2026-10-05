@@ -13,6 +13,7 @@ const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
 const { isQboError } = require('../modules/qbo-error');
 const caseChanges = require('../modules/case-changes');
+const reproduction = require('../modules/reproduction-runner');
 const { createQBOClient } = require('../modules/qbo-client');
 
 const router = express.Router();
@@ -86,6 +87,36 @@ async function getActiveConnection(userId) {
 
 // --- Routes ---
 
+// Reproduction is the connected company's normal workflow. The submitted case
+// grants its operation scope; legacy plan/production confirmations are not used.
+router.post('/reproduce', async (req, res) => {
+  try {
+    const connection = await getActiveConnection(req.user.id);
+    if (!connection) return res.status(409).json({ success: false, error: 'Connect QuickBooks before starting a case.' });
+    if (String(req.body.realmId || '') !== String(connection.realmId) || req.body.environment !== config.qbo.environment) {
+      return res.status(409).json({ success: false, error: 'The connected company changed. Refresh the company information before starting.' });
+    }
+    const session = await reproduction.startCase({
+      userId: req.user.id, actorId: req.user.actorId || req.user.id, connection,
+      requestId: req.body.requestId, message: req.body.message, sessionId: req.body.sessionId,
+    });
+    return res.status(202).json({ success: true, data: { session: reproduction.publicState(session) } });
+  } catch (err) {
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/sessions/:id/stop', async (req, res) => {
+  try {
+    const session = await reproduction.stopCase(req.user.id, req.params.id);
+    return res.json({ success: true, data: { session: reproduction.publicState(session) } });
+  } catch (err) {
+    return res.status(safeStatus(err)).json({ success: false, error: err.message });
+  }
+});
+
+
+
 /**
  * GET /config
  * Returns AI feature-flag state so the frontend knows what's available.
@@ -153,6 +184,9 @@ router.post('/chat', async (req, res) => {
     }
     const realmId = connection.realmId;
 
+    if (sessionId && await AISession.exists({ _id: sessionId, userId: req.user.id, mode: 'reproduce' })) {
+      return res.status(409).json({ success: false, error: 'Use the reproduction case endpoint to continue this case.' });
+    }
     let result;
     if (mode === 'investigate') {
       result = await orchestrator.investigate(req.user.id, realmId, sessionId, message);
@@ -310,7 +344,7 @@ router.get('/sessions/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
-    return res.json({ success: true, data: { session } });
+    return res.json({ success: true, data: { session: reproduction.publicState(session) } });
   } catch (err) {
     console.error('[ai/sessions/get]', err.message);
     return res.status(500).json({ success: false, error: 'Failed to fetch session' });

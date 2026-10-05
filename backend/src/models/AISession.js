@@ -19,7 +19,9 @@ const aiSessionSchema = new mongoose.Schema({
   realmId: { type: String, required: true },
   title: { type: String, default: 'New AI Session' },
   status: { type: String, enum: ['active', 'completed', 'archived'], default: 'active' },
-  mode: { type: String, enum: ['suggest', 'investigate', 'generate_note'], default: 'suggest' },
+  mode: { type: String, enum: ['suggest', 'investigate', 'generate_note', 'reproduce'], default: 'suggest' },
+  submissionId: { type: String },
+  reproduction: { type: mongoose.Schema.Types.Mixed },
   messages: [messageSchema],
   plans: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AIPlan' }],
   tokenUsage: {
@@ -29,6 +31,7 @@ const aiSessionSchema = new mongoose.Schema({
   model: { type: String },
 }, { timestamps: true });
 
+aiSessionSchema.index({ userId: 1, realmId: 1, submissionId: 1 }, { unique: true, partialFilterExpression: { submissionId: { $type: 'string' } } });
 aiSessionSchema.index({ userId: 1, createdAt: -1 });
 aiSessionSchema.index({ userId: 1, realmId: 1, status: 1 });
 

@@ -264,7 +264,6 @@ export default function Reproduce() {
 
   const connected = connection?.ready === true
   const aiReady = ai?.available === true
-  const canWrite = ai?.featureFlags?.aiMutations === true
   const canStart = connected && aiReady
 
   const recheck = (
@@ -304,7 +303,7 @@ export default function Reproduce() {
     e?.preventDefault()
     const text = description.trim()
     if (!text || !canStart) return
-    navigate('/cases/new', { state: { message: text } })
+    navigate('/cases/new', { state: { message: text, requestId: crypto.randomUUID() } })
   }
 
   const blockedReason = !connected ? 'Connect QuickBooks first.'
@@ -320,7 +319,7 @@ export default function Reproduce() {
             What is the customer seeing?
           </h1>
           <p className="mt-2 max-w-[68ch] text-[14px] leading-relaxed text-[var(--ink-2)]">
-            Describe it in plain words. The assistant reads the company, proposes the exact records to create or change, and makes them only after you approve.
+            Describe it once. The agent creates test records in your connected company, tries the relevant changes, and reports what it could reproduce.
           </p>
 
           {blockingSetup && (
@@ -375,11 +374,6 @@ export default function Reproduce() {
             ))}
           </div>
 
-          {ai !== null && aiReady && !canWrite && (
-            <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--ink-3)]">
-              Making changes is switched off on the lab server, so the assistant can investigate and propose but not apply. To turn it on, set {code('LEGACY_AI_MUTATIONS_ENABLED=true')} in the backend .env and restart the backend.
-            </p>
-          )}
 
           {aiError && (
             <p className="mt-6 text-[13px] text-[var(--danger-ink)]">
