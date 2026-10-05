@@ -74,3 +74,9 @@ npm run dev:preview
 ```
 
 Do not run `npm run dev` merely to verify terminal formatting: backend startup connects to MongoDB. Built-in issue-pack seeding and interrupted-run rewrites are now off by default behind `LEGACY_STARTUP_MAINTENANCE_ENABLED`, but an explicit service-start request is still required. Live QuickBooks OAuth and mutation workflows remain separate and require explicit intent.
+
+## Local database on this PC
+
+Test Data Lab now uses authenticated MongoDB at `127.0.0.1:27017`, database `qbo-support-lab`, on this PC. The existing `DLsocialMongoDB` Windows service starts automatically and stores database files on D:. Start the app normally with `npm run dev`; an Atlas connection is no longer required for app storage. QuickBooks remains an online production service.
+
+The ignored root `.env` stores the database-specific local login. See [local database operations](ops/local-mongodb.md) for backups, migration evidence, and recovery.
