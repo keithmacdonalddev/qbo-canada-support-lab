@@ -6,6 +6,7 @@ import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { buttonVariants } from '@/components/ui/button'
 import { StatusDot, EnvironmentTag } from '@/components/ui/status'
+import { CoverageUnavailable, useCoverage } from '@/components/coverage'
 import { cn } from '@/lib/utils'
 
 // Company answers: is the test company believable and current, and what's in it?
@@ -98,15 +99,7 @@ export default function Company() {
   const [lastGenRun, setLastGenRun] = useState(undefined)
   const [lastSeedRun, setLastSeedRun] = useState(undefined)
   const [activity, setActivity] = useState(null)
-  const [context, setContext] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-    client.get('/context')
-      .then((res) => { if (!cancelled) setContext(res.data?.data || null) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [])
+  const coverage = useCoverage(ready)
 
   useEffect(() => {
     if (!ready) return
@@ -132,7 +125,7 @@ export default function Company() {
   const status = connection?.status
   const lastActivity = lastGenRun ? (lastGenRun.completedAt || lastGenRun.startedAt || lastGenRun.createdAt) : null
   const behind = daysSince(lastActivity)
-  const definitions = context?.definitions?.counts
+  const coverageSummary = coverage.result?.summary
 
   // The one decision on this page.
   let currency
@@ -205,15 +198,23 @@ export default function Company() {
             )}
           </Panel>
 
-          <Panel title="Coverage evidence">
-            {definitions ? (
+          <Panel
+            title="Coverage"
+            action={<Link to="/coverage" className="text-[12.5px] font-medium text-[var(--link)] no-underline hover:underline">Open map</Link>}
+          >
+            {!ready ? (
+              <p className="px-5 py-4 text-[13px] text-[var(--ink-3)]">Shown once QuickBooks is connected.</p>
+            ) : coverage.state === 'unavailable' ? (
+              <CoverageUnavailable className="px-5 py-4" />
+            ) : coverageSummary ? (
               <div className="flex flex-col gap-4 px-5 py-4">
-                <Meter label="Features" done={definitions.capabilities - definitions.capabilityCoverageUnknown} total={definitions.capabilities} />
-                <Meter label="Reports" done={definitions.reports - definitions.reportCoverageUnknown} total={definitions.reports} />
-                <p className="text-[12.5px] leading-relaxed text-[var(--ink-3)]">How many QuickBooks features and reports the company has proven it can show.</p>
+                <Meter label="Areas fully in use" done={coverageSummary.areas.covered || 0} total={coverageSummary.measuredAreas} />
+                <p className="text-[12.5px] leading-relaxed text-[var(--ink-3)]">
+                  {coverageSummary.gaps.assistant} gaps the assistant can fill, {coverageSummary.gaps.quickbooks} to do in QuickBooks. Read from the company's own records.
+                </p>
               </div>
             ) : (
-              <p className="px-5 py-4 text-[13px] text-[var(--ink-3)]">Unavailable.</p>
+              <p className="px-5 py-4 text-[13px] text-[var(--ink-3)]">{coverage.state === 'error' ? coverage.error : 'Checking…'}</p>
             )}
           </Panel>
         </div>

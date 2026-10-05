@@ -9,6 +9,7 @@
 
 const { randomBytes } = require('crypto');
 const config = require('../config');
+const { bindActor } = require('./actor-context');
 
 const SERVER_NAME = 'testdatalab';
 const TOKEN_ENV = 'TEST_DATA_LAB_TOOL_TOKEN';
@@ -40,6 +41,10 @@ function createToolSession({
   let calls = 0;
   const expiresAt = Date.now() + maxAgeMs;
 
+  // Tool calls arrive on the MCP request, not the one that started the run;
+  // keep the starting request's actor for their audit entries.
+  const executeAsActor = bindActor(execute);
+
   const session = {
     get active() { return !revoked && Date.now() < expiresAt; },
     listForModel() {
@@ -57,7 +62,7 @@ function createToolSession({
       if (calls > maxCalls) {
         return Promise.resolve({ success: false, error: `Tool limit reached (${maxCalls} calls). Answer with what you have.` });
       }
-      const runCall = queue.then(() => execute(name, input || {}));
+      const runCall = queue.then(() => executeAsActor(name, input || {}));
       queue = runCall.catch(() => {});
       return runCall;
     },

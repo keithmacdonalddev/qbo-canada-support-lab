@@ -1,4 +1,5 @@
 const AuditLog = require('../models/AuditLog');
+const { currentActorId } = require('../modules/actor-context');
 
 /**
  * createAuditEntry – writes an append-only AuditLog document.
@@ -11,8 +12,11 @@ const AuditLog = require('../models/AuditLog');
  */
 async function createAuditEntry(userId, realmId, action, details = {}) {
   try {
+    // In a shared company, userId is the workspace owner; record who really acted.
+    const actorId = currentActorId();
     const entry = await AuditLog.create({
       userId,
+      actorUserId: actorId && actorId !== String(userId) ? actorId : undefined,
       realmId,
       action,
       actionType: details.actionType,

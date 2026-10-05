@@ -57,7 +57,8 @@ router.get('/', authenticate, async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(parseInt(offset, 10))
         .limit(parseInt(limit, 10))
-        .populate('userId', 'email displayName'),
+        .populate('userId', 'email displayName')
+        .populate('actorUserId', 'email displayName'),
       AuditLog.countDocuments(filter),
     ]);
 
@@ -82,7 +83,8 @@ router.get('/', authenticate, async (req, res) => {
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const entry = await AuditLog.findById(req.params.id)
-      .populate('userId', 'email displayName');
+      .populate('userId', 'email displayName')
+      .populate('actorUserId', 'email displayName');
 
     if (!entry) {
       return res.status(404).json({ error: 'Audit entry not found' });

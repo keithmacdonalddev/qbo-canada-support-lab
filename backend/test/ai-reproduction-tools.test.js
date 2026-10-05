@@ -47,10 +47,29 @@ test('createRecord refuses unsupported types and non-object bodies without calli
   assert.equal(qbo.calls.length, 0);
 });
 
-test('update and void refuse non-numeric Ids', async () => {
+test('every writable type can be looked up, with the right search field', async () => {
+  const { VALID_ENTITY_TYPES, WRITABLE_ENTITY_TYPES } = require('../src/modules/ai-tools');
+  for (const type of WRITABLE_ENTITY_TYPES) assert.ok(VALID_ENTITY_TYPES.includes(type), `${type} is not readable`);
+
+  const queries = [];
+  const qbo = { async query(sql) { queries.push(sql); return { QueryResponse: {} }; } };
+  for (const [type, query] of [['Employee', 'Sam'], ['Term', 'Net'], ['Bill', '80395'], ['TimeActivity', 'x'], ['Term', '']]) {
+    assert.equal((await toolHandlers.searchEntities({ type, query }, { qbo })).success, true);
+  }
+  assert.deepEqual(queries, [
+    "SELECT * FROM Employee WHERE DisplayName LIKE '%Sam%' MAXRESULTS 10",
+    "SELECT * FROM Term WHERE Name LIKE '%Net%' MAXRESULTS 10",
+    "SELECT * FROM Bill WHERE DocNumber LIKE '%80395%' MAXRESULTS 10",
+    'SELECT * FROM TimeActivity MAXRESULTS 10',
+    'SELECT * FROM Term MAXRESULTS 10',
+  ]);
+});
+
+test('update, void and chain lookups refuse non-numeric Ids', async () => {
   const qbo = fakeQbo({ type: 'Invoice', current: { Id: '7', SyncToken: '3' } });
   assert.equal((await toolHandlers.updateRecord({ entityType: 'Invoice', id: '7?x=1', changes: {} }, { qbo })).success, false);
   assert.equal((await toolHandlers.voidTransaction({ entityType: 'Invoice', id: '../7' }, { qbo })).success, false);
+  assert.equal((await toolHandlers.getTransactionChain({ entityType: 'Invoice', entityId: '7/../preferences' }, { qbo })).success, false);
   assert.equal(qbo.calls.length, 0);
 });
 

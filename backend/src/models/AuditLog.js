@@ -7,6 +7,12 @@ const auditLogSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    // Set when a member of a shared company acted in the owner's workspace
+    // (userId is then the owner). Absent when the owner acted.
+    actorUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
     realmId: {
       type: String,
       required: true,

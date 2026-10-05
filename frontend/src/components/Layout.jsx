@@ -1,7 +1,7 @@
 import { NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import {
-  WandSparkles, Building2, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown,
+  WandSparkles, Building2, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
@@ -11,9 +11,11 @@ import { cn } from '@/lib/utils'
 
 // The app exists to do one thing well: turn a customer's description of a
 // problem into that same situation in the QuickBooks company. Everything else
-// supports that job, so navigation is four places, in order of use.
+// supports that job: Coverage shows what the company is missing, then where
+// its data lives and what the lab did.
 const NAV = [
   { to: '/', label: 'Reproduce', icon: WandSparkles, match: (p) => p === '/' || p.startsWith('/cases') },
+  { to: '/coverage', label: 'Coverage', icon: LayoutGrid, match: (p) => p.startsWith('/coverage') },
   { to: '/company', label: 'Company', icon: Building2, match: (p) => p.startsWith('/company') || p.startsWith('/lab') },
   { to: '/explorer', label: 'Records', icon: Table2, match: (p) => p.startsWith('/explorer') },
   { to: '/audit', label: 'History', icon: History, match: (p) => p.startsWith('/audit') },

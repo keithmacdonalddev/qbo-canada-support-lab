@@ -18,7 +18,7 @@ async function start() {
     const AIPlan = require('./models/AIPlan');
     const [staleGenRuns, staleSeedRuns, stalePackRuns, stalePlans] = await Promise.all([
       GenerationRun.updateMany(
-        { status: 'in_progress' },
+        { status: 'in_progress', executionVersion: { $exists: false } },
         { $set: { status: 'failed', completedAt: new Date(), 'progress.phase': 'error', 'progress.detail': 'Server restarted — job interrupted' } }
       ),
       SeedRun.updateMany(

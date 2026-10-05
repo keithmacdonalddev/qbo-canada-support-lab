@@ -40,7 +40,7 @@ const companyProfileSchema = new mongoose.Schema(
     },
     generationStatus: {
       type: String,
-      enum: ['pending', 'in_progress', 'completed', 'failed'],
+      enum: ['pending', 'in_progress', 'completed', 'partial', 'failed', 'interrupted'],
       default: 'pending',
     },
     lastGenerationDate: {

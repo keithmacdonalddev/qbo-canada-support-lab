@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import Layout from '../components/Layout'
 import client from '../api/client'
 import ProductionGuardDialog from '../components/ProductionGuardDialog'
@@ -9,6 +9,17 @@ import { Alert } from '@/components/ui/alert'
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from '@/components/ui/table'
+
+function generationResult(run) {
+  const count = run.counts || {}
+  const details = [
+    (count.created ?? run.createdTransactions?.length ?? 0) + ' created',
+    count.failed ? count.failed + ' failed' : null,
+    count.pending ? count.pending + ' not yet attempted' : null,
+    count.uncertain ? count.uncertain + ' need inspection' : null,
+  ].filter(Boolean).join(' · ')
+  return { success: run.success === true, message: (run.statusLabel || run.status) + ': ' + details }
+}
 
 export default function LabTools() {
   const [environment, setEnvironment] = useState(null)
@@ -23,6 +34,33 @@ export default function LabTools() {
   const [genProgress, setGenProgress] = useState(null)
   const [genConfig, setGenConfig] = useState({ monthsBack: 6, txnsPerMonth: 30 })
   const [genError, setGenError] = useState(null)
+  const [currentGenRun, setCurrentGenRun] = useState(null)
+  const [genStatusLoading, setGenStatusLoading] = useState(true)
+  const [genStatusError, setGenStatusError] = useState(null)
+  const [additionalBatch, setAdditionalBatch] = useState(false)
+
+  const applyGenerationRun = useCallback((run) => {
+    setCurrentGenRun(run)
+    if (run?.config && !run.canCreateAdditional) {
+      setGenConfig(previous => ({ monthsBack: run.config.monthsBack ?? previous.monthsBack, txnsPerMonth: run.config.txnsPerMonth ?? previous.txnsPerMonth }))
+    }
+    setGenerating(run?.status === 'in_progress')
+    setGenProgress(run?.status === 'in_progress' ? run.progress : null)
+    setGenResult(run && run.status !== 'in_progress' ? generationResult(run) : null)
+    if (run && run.status !== 'in_progress') {
+      setGenLogCache(cache => { const next = { ...cache }; delete next[run._id]; return next })
+      setExpandedGenRun(id => id === run._id ? null : id)
+    }
+  }, [])
+
+  const fetchGenerationStatus = useCallback(() => {
+    setGenStatusLoading(true)
+    setGenStatusError(null)
+    client.get('/generate/status')
+      .then(res => applyGenerationRun(res.data.genRun))
+      .catch(err => setGenStatusError(err.response?.data?.error || 'Could not check saved progress. Retry before generating.'))
+      .finally(() => setGenStatusLoading(false))
+  }, [applyGenerationRun])
 
   const [genHistory, setGenHistory] = useState([])
   const [genHistoryLoading, setGenHistoryLoading] = useState(false)
@@ -47,14 +85,14 @@ export default function LabTools() {
 
   const isProduction = environment === 'production'
 
-  const fetchGenHistory = () => {
+  const fetchGenHistory = useCallback(() => {
     setGenHistoryLoading(true)
     setGenHistoryError(null)
     client.get('/generate/history')
       .then((res) => setGenHistory(res.data.genRuns || []))
       .catch((err) => setGenHistoryError(err.response?.data?.error || 'Could not load generation history.'))
       .finally(() => setGenHistoryLoading(false))
-  }
+  }, [])
 
   const fetchSeedHistory = () => {
     setSeedHistoryLoading(true)
@@ -71,7 +109,11 @@ export default function LabTools() {
       .catch(() => {})
     fetchGenHistory()
     fetchSeedHistory()
-  }, [])
+    client.get('/generate/status')
+      .then(res => applyGenerationRun(res.data.genRun))
+      .catch(err => setGenStatusError(err.response?.data?.error || 'Could not check saved progress. Retry before generating.'))
+      .finally(() => setGenStatusLoading(false))
+  }, [applyGenerationRun, fetchGenHistory])
 
   // Toggle generation run expansion — lazy-load log
   const toggleGenRun = async (runId) => {
@@ -85,7 +127,7 @@ export default function LabTools() {
       try {
         const res = await client.get(`/generate/log/${runId}`)
         setGenLogCache((prev) => ({ ...prev, [runId]: res.data }))
-      } catch { /* ignore */ }
+      } catch { setGenError('Could not load generation details. Close the row and try again.') }
       finally { setLogLoading(false) }
     }
   }
@@ -141,47 +183,29 @@ export default function LabTools() {
     return () => clearInterval(interval)
   }, [seeding])
 
-  // Poll for generation progress
+  // Restore and follow the saved run; a lost status request is visible, not a retry of writes.
   useEffect(() => {
     if (!generating) return
     const interval = setInterval(async () => {
       try {
         const res = await client.get('/generate/status')
-        const run = res.data.genRun
-        if (run?.progress) setGenProgress(run.progress)
-        if (run?.status === 'completed' || run?.status === 'failed') {
-          setGenerating(false)
-          setGenProgress(null)
-          const s = run.txnsSummary || {}
-          const totalTxns = Object.values(s).reduce((a, b) => a + b, 0)
-          const parts = []
-          if (s.invoices) parts.push(`${s.invoices} invoices`)
-          if (s.payments) parts.push(`${s.payments} payments`)
-          if (s.bills) parts.push(`${s.bills} bills`)
-          if (s.billPayments) parts.push(`${s.billPayments} bill payments`)
-          if (s.creditMemos) parts.push(`${s.creditMemos} credit memos`)
-          if (s.vendorCredits) parts.push(`${s.vendorCredits} vendor credits`)
-          if (s.journalEntries) parts.push(`${s.journalEntries} journal entries`)
-          const errors = run.generationErrors?.length || 0
-          setGenResult({
-            success: run.status === 'completed',
-            message: parts.length
-              ? `Created ${totalTxns} transactions: ${parts.join(', ')}${errors ? ` (${errors} errors)` : ''}`
-              : (run.status === 'failed' ? 'Generation failed' : 'Done'),
-          })
-          fetchGenHistory()
-        }
-      } catch { /* ignore */ }
+        applyGenerationRun(res.data.genRun)
+        setGenStatusError(null)
+        if (res.data.genRun?.status !== 'in_progress') fetchGenHistory()
+      } catch {
+        setGenStatusError('Progress could not be refreshed. The saved run is kept; do not start another batch.')
+      }
     }, 3000)
     return () => clearInterval(interval)
-  }, [generating])
+  }, [generating, applyGenerationRun, fetchGenHistory])
 
   // Guard entry points — open the dialog instead of running immediately.
   const handleSeed = () => {
     setSeedError(null)
     setPendingAction('seed')
   }
-  const handleGenerate = () => {
+  const handleGenerate = (additional = false) => {
+    setAdditionalBatch(additional)
     setGenError(null)
     setPendingAction('generate')
   }
@@ -209,12 +233,14 @@ export default function LabTools() {
         setSeedError(null)
         setSeeding(true)
       } else if (action === 'generate') {
-        await client.post('/generate/start', { ...genConfig, ...confirmFlag })
+        const intent = additionalBatch
+          ? { previousRunId: currentGenRun._id }
+          : currentGenRun ? { resumeRunId: currentGenRun._id } : {}
+        const res = await client.post('/generate/start', { ...genConfig, ...intent, ...confirmFlag })
+        applyGenerationRun(res.data.genRun)
+        fetchGenHistory()
         setPendingAction(null)
-        setGenResult(null)
-        setGenProgress(null)
         setGenError(null)
-        setGenerating(true)
       }
     } catch (err) {
       if (err.response?.status === 412) {
@@ -239,9 +265,12 @@ export default function LabTools() {
         'Creates test customers, vendors, and service items in the connected company. These are the building blocks generation and issue packs rely on.',
     },
     generate: {
-      title: 'Generate Historical Activity',
-      actionLabel: generating ? 'Generating...' : 'Generate History',
-      description: `Creates ${genConfig.monthsBack} months of realistic linked transactions (~${genConfig.txnsPerMonth}/month): invoices, payments, bills, bill payments, and more.`,
+      title: additionalBatch ? 'Add Another Batch' : currentGenRun ? 'Resume Saved Generation' : 'Generate Historical Activity',
+      actionLabel: additionalBatch ? 'Add More Transactions' : currentGenRun ? 'Resume Saved Run' : 'Generate History',
+      description: additionalBatch
+        ? `Adds MORE transactions for ${genConfig.monthsBack} months, including periods already generated. Existing records stay in QuickBooks.`
+        : currentGenRun ? 'Continues the original saved plan. Confirmed records are skipped; only unfinished work is attempted.'
+          : `Creates ${genConfig.monthsBack} months of linked transactions (~${genConfig.txnsPerMonth} chains/month). The plan and progress are saved for safe retries.`,
     },
   }
   const activeGuard = pendingAction ? guardConfig[pendingAction] : null
@@ -423,6 +452,12 @@ export default function LabTools() {
                 <p className="text-xs">Bill ("You owe Vendor $2,000") → Bill Payment ("You paid the vendor") → sometimes a Vendor Credit ("Vendor gave $200 back"). Same idea — the payment links back to the bill.</p>
               </div>
             </div>
+            {genStatusError && <Alert variant="error" onRetry={fetchGenerationStatus} className="mb-3">{genStatusError}</Alert>}
+            {currentGenRun?.recoveryMessage && <Alert className="mb-3">{currentGenRun.recoveryMessage}</Alert>}
+            {currentGenRun?.inspection?.map((step, index) => <p key={index} className="mb-3 text-sm">
+              Check in QuickBooks: {step.entity} · {step.txnDate} · CAD {step.amount?.toFixed(2)} · {step.customerOrVendor || 'Account adjustment'}{step.linkedTo ? ' · ' + step.linkedTo : ''}
+            </p>)}
+            {currentGenRun?.lastError && <Alert variant="error" className="mb-3">{currentGenRun.lastError}</Alert>}
             {genError && (
               <Alert variant="error" className="mb-3">{genError}</Alert>
             )}
@@ -433,7 +468,7 @@ export default function LabTools() {
                   value={genConfig.monthsBack}
                   onChange={(e) => setGenConfig({ ...genConfig, monthsBack: Number(e.target.value) })}
                   className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                  disabled={generating}
+                  disabled={generating || genStatusLoading || (!!currentGenRun && !currentGenRun.canCreateAdditional)}
                 >
                   {[3, 4, 5, 6, 9, 12].map((m) => (
                     <option key={m} value={m}>{m} months</option>
@@ -441,21 +476,22 @@ export default function LabTools() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-medium text-[#6B7280] uppercase tracking-wide mb-1 block">Txns/Month</label>
+                <label className="text-xs font-medium text-[#6B7280] uppercase tracking-wide mb-1 block">Chains/Month</label>
                 <select
                   value={genConfig.txnsPerMonth}
                   onChange={(e) => setGenConfig({ ...genConfig, txnsPerMonth: Number(e.target.value) })}
                   className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                  disabled={generating}
+                  disabled={generating || genStatusLoading || (!!currentGenRun && !currentGenRun.canCreateAdditional)}
                 >
                   {[10, 20, 30, 40, 50, 60].map((n) => (
                     <option key={n} value={n}>{n} per month</option>
                   ))}
                 </select>
               </div>
-              <Button onClick={handleGenerate} disabled={generating}>
-                {generating ? 'Generating...' : 'Generate History'}
+              <Button onClick={() => handleGenerate()} disabled={generating || genStatusLoading || !!genStatusError || (!!currentGenRun && !currentGenRun.canResume)}>
+                {genStatusLoading ? 'Checking saved progress...' : generating ? 'Generating...' : currentGenRun?.canResume ? 'Resume Saved Run' : currentGenRun?.success ? 'History Generated' : currentGenRun ? 'Inspection Needed' : 'Generate History'}
               </Button>
+              {currentGenRun?.canCreateAdditional && <Button variant="outline" onClick={() => handleGenerate(true)} disabled={generating || genStatusLoading || !!genStatusError}>Add Another Batch</Button>}
               {generating && genProgress && (
                 <Badge variant="secondary" className="px-3.5 py-1.5 text-[13px]">{genProgress.detail}</Badge>
               )}
@@ -496,7 +532,7 @@ export default function LabTools() {
                 <TableBody>
                   {genHistory.map((run) => {
                     const s = run.txnsSummary || {}
-                    const totalTxns = Object.values(s).reduce((a, b) => a + b, 0)
+                    const totalTxns = run.counts?.created ?? Object.values(s).reduce((a, b) => a + b, 0)
                     const duration = run.startedAt && run.completedAt
                       ? Math.round((new Date(run.completedAt) - new Date(run.startedAt)) / 1000)
                       : null
@@ -511,8 +547,8 @@ export default function LabTools() {
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-[#6B7280]">{isExpanded ? '▼' : '▶'}</span>
-                              <Badge variant={run.status === 'completed' ? 'secondary' : run.status === 'failed' ? 'destructive' : 'outline'}>
-                                {run.status}
+                              <Badge variant={run.status === 'completed' ? 'secondary' : ['failed', 'partial', 'interrupted'].includes(run.status) ? 'destructive' : 'outline'}>
+                                {run.statusLabel || run.status}
                               </Badge>
                             </div>
                           </TableCell>
@@ -540,7 +576,7 @@ export default function LabTools() {
                             <TableCell colSpan={6} className="p-0">
                               {logLoading && !log ? (
                                 <p className="text-xs text-[#6B7280] p-4">Loading log...</p>
-                              ) : log && log.transactions?.length > 0 ? (
+                              ) : log ? (
                                 <div className="max-h-[500px] overflow-y-auto border-t border-[var(--border)]">
                                   <Table>
                                     <TableHeader>
@@ -556,7 +592,7 @@ export default function LabTools() {
                                       </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                      {log.transactions.map((txn, i) => (
+                                      {(log.transactions || []).map((txn, i) => (
                                         <TableRow key={i}>
                                           <TableCell>
                                             <Badge variant="outline" className="text-[11px]">{txn.entity}</Badge>
@@ -572,6 +608,7 @@ export default function LabTools() {
                                       ))}
                                     </TableBody>
                                   </Table>
+                                  {log.lastError && <p className="p-3 text-sm text-[var(--danger)]">{log.lastError}</p>}
                                   {log.errors?.length > 0 && (
                                     <div className="p-3 border-t border-[var(--border)]">
                                       <p className="text-xs font-medium text-[var(--danger)] mb-1">{log.errors.length} error(s):</p>

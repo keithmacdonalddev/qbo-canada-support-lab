@@ -314,6 +314,9 @@ router.get('/status', authenticate, async (req, res) => {
       refreshTokenExpiresAt: health.refreshTokenExpiresAt,
       refreshTokenExpiresInDays: health.refreshTokenExpiresInDays,
       lastRefreshedAt: connection.lastRefreshedAt,
+      // True when this is a shared company's connection (see middleware/companyScope.js);
+      // reconnect, refresh and disconnect then belong to its owner's account.
+      sharedCompany: Boolean(req.user.sharedCompany),
     });
   } catch (err) {
     console.error('[qbo/status]', err.message);

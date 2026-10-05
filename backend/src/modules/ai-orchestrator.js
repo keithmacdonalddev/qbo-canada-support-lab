@@ -3,6 +3,7 @@ const aiProvider = require('./ai-provider');
 const codexCli = require('./codex-cli');
 const { createToolSession } = require('./ai-tool-bridge');
 const { toolDefinitions, toolHandlers, toolPermissions } = require('./ai-tools');
+const coverage = require('./coverage');
 const AISession = require('../models/AISession');
 const AIPlan = require('../models/AIPlan');
 const CompanyProfile = require('../models/CompanyProfile');
@@ -10,6 +11,7 @@ const Connection = require('../models/Connection');
 const User = require('../models/User');
 const { createQBOClient } = require('./qbo-client');
 const { createAuditEntry } = require('../middleware/auditLogger');
+const { currentActorId } = require('./actor-context');
 
 // Late-bound import to break circular dependency (routes → orchestrator → routes)
 let emitSSE = () => {};
@@ -52,14 +54,24 @@ Context:
 Rules:
 - All write operations require user confirmation before execution.
 - You can freely read/search/inspect entities without confirmation.
-- Always reference specific entity IDs and amounts in your explanations.
+- Write replies for a support agent, not a developer. Name records the way QuickBooks shows them: customer, vendor and account names, invoice and bill numbers, dates and amounts. Never put tool names, API field names, JSON or internal Ids in a reply; Ids belong only inside tool inputs.
+- Keep replies short: what you found or did in a sentence or two, then what you need from the user, if anything. The app lists every proposed change with names, amounts and status beside the conversation, so do not repeat the plan as a table or list.
+- Give each queued change a one-sentence summary a bookkeeper would understand, using names (for example "Invoice Alex Blakey for 5 hours of trimming, due Oct 21").
 - When proposing a plan, break it into discrete numbered steps.
 - Each step must map to exactly one tool call.
 - Never fabricate entity IDs — always look them up first.
 - To reproduce an issue, prefer createRecord, updateRecord and voidTransaction with QBO API v3 bodies; queue every change the reproduction needs.
 - When a later step needs a value from a record created by an earlier step in the same plan, write {{stepN.id}} (or {{stepN.docNumber}}) with that step's number; the server fills it in when the plan runs.
 - When investigating, gather evidence before forming conclusions.
-- Be concise but thorough in explanations.`;
+- Be concise but thorough in explanations.
+- When asked to fill coverage gaps, call getCoverage with refresh true (the company may have changed), then queue realistic records that fit the company's existing customers, vendors, items, accounts and tax codes, dated in the last 30 days unless told otherwise. Fill only gaps marked as ones you can create; name the others as things to do in QuickBooks.
+- Use runReport to confirm what a customer would see in a report.`;
+
+  // What the company has real records for, from the last coverage check.
+  const coverageSummary = coverage.summarizeForAssistant(coverage.getCached(companyProfile.realmId));
+  prompt += coverageSummary
+    ? `\n\nCompany coverage (which QuickBooks features have real records):\n${coverageSummary}`
+    : '\n\nCompany coverage has not been checked yet. Call getCoverage when it matters which features have records.';
 
   if (additionalContext.modeInstructions) {
     prompt += '\n\n' + additionalContext.modeInstructions;
@@ -276,8 +288,9 @@ async function loadContext(userId, realmId) {
     throw new Error(`No company profile found for user ${userId}, realm ${realmId}`);
   }
 
-  // Load user's personal API key (if any) for the AI provider
-  const user = await User.findById(userId).select('+anthropicApiKey');
+  // Load the acting user's personal API key (if any) for the AI provider. In a
+  // shared company userId is the workspace owner; keys are never shared.
+  const user = await User.findById(currentActorId() || userId).select('+anthropicApiKey');
   const userApiKey = user?.anthropicApiKey || null;
 
   return { connection, qbo, companyProfile, userApiKey };
@@ -723,6 +736,9 @@ async function executePlan(planId, userId) {
   plan.status = anyFailed ? 'failed' : 'completed';
   plan.completedAt = new Date();
   await plan.save();
+  // The company just changed, so an earlier coverage result would show
+  // filled gaps as still missing and invite duplicate records.
+  coverage.invalidate(plan.realmId);
 
   emitSSE(plan.sessionId.toString(), 'done', {
     planId: plan._id.toString(),
@@ -785,7 +801,7 @@ async function approvePlan(planId, userId, stepApprovals) {
   }
 
   plan.approvedAt = new Date();
-  plan.approvedBy = userId;
+  plan.approvedBy = currentActorId() || userId;
   await plan.save();
 
   // Audit the approval
@@ -1002,8 +1018,8 @@ async function generateNote(sessionId, format = 'internal') {
   const session = await AISession.findById(sessionId);
   if (!session) throw new Error('AI session not found');
 
-  // Load user's API key
-  const user = await User.findById(session.userId).select('+anthropicApiKey');
+  // Load the acting user's API key (never the shared company owner's)
+  const user = await User.findById(currentActorId() || session.userId).select('+anthropicApiKey');
   const userApiKey = user?.anthropicApiKey || null;
 
   // Build a summary of all messages and tool results from the session

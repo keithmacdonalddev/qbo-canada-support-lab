@@ -1,10 +1,11 @@
 const express = require('express');
 const Connection = require('../models/Connection');
-const CompanyProfile = require('../models/CompanyProfile');
 const GenerationRun = require('../models/GenerationRun');
 const { authenticate } = require('../middleware/auth');
 const { requireProductionConfirm } = require('../middleware/productionGuard');
-const { runGenerationJob } = require('../modules/generation-engine');
+const { createGenerationService } = require('../modules/generation-service');
+const { generationView } = require('../modules/generation-state');
+const service = createGenerationService();
 
 const router = express.Router();
 
@@ -26,48 +27,11 @@ router.post('/start', authenticate, requireProductionConfirm, async (req, res) =
       return res.status(404).json({ error: 'No active QBO connection' });
     }
 
-    const realmId = connection.realmId;
-
-    // Prevent duplicate runs
-    const existing = await GenerationRun.findOne({
-      userId: req.user.id,
-      realmId,
-      status: 'in_progress',
-    });
-    if (existing) {
-      return res.json({ genRun: existing, message: 'Generation already in progress' });
-    }
-
-    // Accept optional config overrides
-    const { monthsBack = 6, txnsPerMonth = 30 } = req.body || {};
-
-    const genRun = await GenerationRun.create({
-      userId: req.user.id,
-      realmId,
-      status: 'pending',
-      config: {
-        monthsBack: Math.min(monthsBack, 12),
-        txnsPerMonth: Math.min(txnsPerMonth, 60),
-        arWeight: 0.6,
-        apWeight: 0.4,
-      },
-      progress: { phase: 'starting', detail: 'Initializing...' },
-    });
-
-    await CompanyProfile.findOneAndUpdate(
-      { userId: req.user.id, realmId },
-      { generationStatus: 'in_progress' }
-    );
-
-    // Fire and forget
-    runGenerationJob(req.user.id, realmId, genRun._id, connection).catch((err) => {
-      console.error('[generate/background]', err.message);
-    });
-
-    return res.json({ genRun, message: 'Generation started' });
+    const genRun = await service.start(connection, req.user.id, req.body || {});
+    return res.json({ genRun });
   } catch (err) {
     console.error('[generate/start]', err.message);
-    return res.status(500).json({ error: 'Failed to start generation' });
+    return res.status([400, 409].includes(err.status) ? err.status : 500).json({ error: [400, 409].includes(err.status) ? err.message : 'Could not start generation. Saved progress has been kept.' });
   }
 });
 
@@ -82,16 +46,13 @@ router.get('/status', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'No active QBO connection' });
     }
 
-    const genRun = await GenerationRun.findOne({
-      userId: req.user.id,
-      realmId: connection.realmId,
-    }).sort({ createdAt: -1 });
+    const genRun = await service.current(connection, req.user.id);
 
     if (!genRun) {
       return res.json({ genRun: null, message: 'No generation runs found' });
     }
 
-    return res.json({ genRun });
+    return res.json({ genRun: generationView(genRun) });
   } catch (err) {
     console.error('[generate/status]', err.message);
     return res.status(500).json({ error: 'Failed to fetch generation status' });
@@ -111,10 +72,10 @@ router.get('/history', authenticate, async (req, res) => {
 
     const genRuns = await GenerationRun.find({
       userId: req.user.id,
-      realmId: connection.realmId,
+      ...service.runFilter(connection),
     }).sort({ createdAt: -1 });
 
-    return res.json({ genRuns });
+    return res.json({ genRuns: genRuns.map(run => generationView(run)) });
   } catch (err) {
     console.error('[generate/history]', err.message);
     return res.status(500).json({ error: 'Failed to fetch generation history' });
@@ -127,23 +88,20 @@ router.get('/history', authenticate, async (req, res) => {
  */
 router.get('/log/:runId', authenticate, async (req, res) => {
   try {
+    const connection = await getActiveConnection(req.user.id);
+    if (!connection) return res.status(404).json({ error: 'No active QBO connection' });
     const genRun = await GenerationRun.findOne({
-      _id: req.params.runId,
-      userId: req.user.id,
+      _id: req.params.runId, userId: req.user.id, ...service.runFilter(connection),
     });
 
     if (!genRun) {
       return res.status(404).json({ error: 'Generation run not found' });
     }
 
+    const view = generationView(genRun);
     return res.json({
-      runId: genRun._id,
-      status: genRun.status,
-      config: genRun.config,
-      txnsSummary: genRun.txnsSummary,
-      transactions: genRun.createdTransactions,
-      errors: genRun.generationErrors,
-      totalTransactions: genRun.createdTransactions.length,
+      ...view, runId: genRun._id, transactions: view.createdTransactions,
+      errors: view.generationErrors, totalTransactions: view.counts.created,
     });
   } catch (err) {
     console.error('[generate/log]', err.message);

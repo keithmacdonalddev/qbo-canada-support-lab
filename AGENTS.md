@@ -188,3 +188,31 @@ Before reporting completion:
 - Report commands run and any commands skipped because they would start services or mutate QBO/database state.
 - Mention any repo state that remains local-only or intentionally untracked.
 - Commit and push only when explicitly requested; preserve existing authorization, project branch/upstream rules, and unrelated work.
+
+## Codex defaults moved from the global file
+
+These instructions apply to Codex in this project. More specific current project rules still apply.
+
+### Communication
+
+- Be concise by default. Expand only when detail affects correctness, safety, a decision, or the user asks.
+- For completed work, report the outcome, actual verification, material risks, and any user action; omit tool-by-tool narration.
+
+### Work and evidence
+
+- A question does not authorize changes; carry clearly authorized work through without repeated permission requests. Keep implementation scoped to the requested outcome, and prefer current project instructions and explicit user directions over historical notes.
+- Distinguish configured behavior, observed results, and anything unverified when reporting rendered app behavior.
+
+### Deterministic checks — Luna only
+
+- For Luna checks, verify effective model and effort. Supply exact commands, working directory, and boundaries; require exit codes, concise failures, and cleanup evidence. The runner does not make code fixes, weaken assertions, update snapshots, install dependencies, call live providers, or change persistent services without separate authority. Ordinary source/Git inspection, human testing, unattended CI, and specialist visual/security judgment remain with their usual owners.
+
+### Selective memory and evidence
+
+- Skip optional global memory for self-contained tasks; follow any required project-specific memory routine. When prior work matters, search `C:/Users/NewAdmin/.codex/memories/MEMORY.md` for the specific project and topic with `rg -n`; use `$CODEX_HOME/memories` if that home differs.
+- Start with matching sections and linked evidence. Avoid loading unrelated history or whole memory collections by default, and reuse context already available.
+- Match investigation depth to the task. Expand when evidence is missing, conflicting, stale, or leaves important assumptions untested; there is no fixed file or search limit.
+- Treat memory, document summaries, and subagent conclusions as leads. Before relying on material claims, inspect the underlying original records for past decisions and current sources or observed behavior for present-state claims. Check document freshness; do not substitute secondhand confidence for verification.
+- Stop when the answer and relevant exceptions are adequately supported. Distinguish firsthand findings, historical reports, inference, and unresolved uncertainty. Answer quality takes priority over token savings.
+- When using memory, append one `<oai-mem-citation>` block with `<citation_entries>` containing relative file paths and `START-END|note=[reason]`, and `<rollout_ids>` containing associated UUIDs. Omit these citations from PR messages.
+- Preserve generated memories. Only on explicit user request, add a timestamped update note under `memories/extensions/ad_hoc/notes/`.

@@ -6,6 +6,10 @@ const config = require('../config');
  * Attaches { id, email, role } to req.user.
  */
 function authenticate(req, res, next) {
+  // Already verified by companyScope, which may have set req.user.id to the
+  // shared company's workspace owner. Only server middleware sets req.user.
+  if (req.user && req.user.scopeResolved) return next();
+
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or malformed Authorization header' });

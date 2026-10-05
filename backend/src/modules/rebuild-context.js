@@ -27,7 +27,8 @@ function createContextService(dependencies = {}) {
     async resolve(user) {
       const connection = await connectionLookup(user.id)
       const membership = connection
-        ? await membershipLookup(user.id, connection.realmId)
+        // A member of a shared company has the owner's connection but its own role.
+        ? await membershipLookup(user.actorId || user.id, connection.realmId)
         : null
       const permissionSnapshot = resolvePermissionSnapshot({
         membership,

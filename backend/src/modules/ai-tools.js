@@ -4,12 +4,6 @@ const IssuePackRun = require('../models/IssuePackRun');
 const { createCheckpoint, diffCheckpoints } = require('./checkpoint');
 const { executePack } = require('./issuepack-engine');
 
-const VALID_ENTITY_TYPES = [
-  'Customer', 'Invoice', 'Payment', 'CreditMemo',
-  'Bill', 'BillPayment', 'VendorCredit',
-  'Vendor', 'Item', 'Account', 'JournalEntry', 'Estimate', 'Deposit',
-];
-
 // Record types the assistant may create or edit to reproduce an issue. Every
 // such change is queued as a plan step and runs only after the user approves.
 // There is deliberately no delete; voiding is limited to the types QBO voids.
@@ -19,7 +13,28 @@ const WRITABLE_ENTITY_TYPES = [
   'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder',
   'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity',
 ];
+
+// Types the read tools accept. Every writable type must be readable, so the
+// assistant can look up the references (employee, term, class) a new record needs.
+const VALID_ENTITY_TYPES = [...WRITABLE_ENTITY_TYPES, 'TaxCode', 'TaxRate', 'PaymentMethod'];
+
+// How searchEntities matches its text: by Name, by DocNumber, or (types with
+// neither) not at all, returning the most recent records instead.
+const NAME_SEARCH_TYPES = ['Item', 'Account', 'Class', 'Department', 'Term', 'TaxCode', 'TaxRate', 'PaymentMethod'];
+const UNSEARCHABLE_TEXT_TYPES = ['Transfer', 'TimeActivity'];
 const VOIDABLE_ENTITY_TYPES = ['Invoice', 'Payment', 'SalesReceipt', 'BillPayment'];
+
+// Reports the QuickBooks Reports API serves, by URL name (docs/discovery/catalog.v1.json
+// lists General Ledger and Account List under their report-table names).
+const REPORT_NAMES = [
+  'BalanceSheet', 'ProfitAndLoss', 'ProfitAndLossDetail', 'TrialBalance', 'GeneralLedger', 'CashFlow',
+  'AgedReceivables', 'AgedReceivableDetail', 'AgedPayables', 'AgedPayableDetail',
+  'CustomerBalance', 'CustomerBalanceDetail', 'CustomerSales', 'CustomerIncome',
+  'VendorBalance', 'VendorBalanceDetail', 'VendorExpenses',
+  'ItemSales', 'ClassSales', 'DepartmentSales', 'AccountList',
+  'InventoryValuationSummary', 'InventoryValuationDetail',
+];
+const REPORT_MAX_LINES = 150;
 
 /**
  * Sanitize a string for use inside QBO query LIKE clauses.
@@ -73,7 +88,7 @@ const toolDefinitions = [
   {
     name: 'searchEntities',
     description:
-      'Generic search across any QBO entity type. Use for vendors, items, accounts, bills, payments, credit memos, journal entries, estimates, deposits, and more.',
+      'Generic search across any QBO entity type. Use for vendors, employees, items, accounts, terms, tax codes, classes, locations (Department), bills, payments, credit memos, journal entries, estimates, deposits, and more. Pass an empty query to list records of a type.',
     input_schema: {
       type: 'object',
       properties: {
@@ -157,6 +172,37 @@ const toolDefinitions = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: 'getCoverage',
+    description:
+      'Show which QuickBooks feature areas this company actually uses, measured from its records: for each area (sales, payables, banking, tax, projects, dimensions and so on) which signals are in use, stale or missing, '
+      + 'when each was last seen, and whether you can create the missing records or a person must do it in QuickBooks. Use it to find gaps to fill, or to check that a reproduction has the surrounding data it needs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        area: { type: 'string', description: 'Optional catalog area key, e.g. sales.receivables-lifecycle. Omit for all areas.' },
+        refresh: { type: 'boolean', description: 'Read the company again instead of using a result up to ten minutes old.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'runReport',
+    description:
+      'Run a QuickBooks report and return its rows as text. Use it to check what a customer would see in a report, or to confirm a reproduction or a filled gap shows up where expected.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        report: { type: 'string', enum: REPORT_NAMES, description: 'QuickBooks Reports API name' },
+        startDate: { type: 'string', description: 'YYYY-MM-DD period start (period reports)' },
+        endDate: { type: 'string', description: 'YYYY-MM-DD period end (period reports)' },
+        reportDate: { type: 'string', description: 'YYYY-MM-DD as-of date (aging and balance reports)' },
+        accountingMethod: { type: 'string', enum: ['Accrual', 'Cash'] },
+        summarizeColumnBy: { type: 'string', enum: ['Total', 'Month', 'Quarter', 'Year', 'Customers', 'Vendors', 'Classes', 'Departments'] },
+      },
+      required: ['report'],
     },
   },
 
@@ -491,18 +537,11 @@ async function handleSearchEntities(input, context) {
 
   let queryStr = `SELECT * FROM ${type}`;
 
-  if (query) {
-    // Items and Accounts use Name; transactions use DocNumber; people use DisplayName
-    const nameField = ['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName';
-    const txnTypes = [
-      'Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment',
-      'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit',
-    ];
-    if (txnTypes.includes(type)) {
-      queryStr += ` WHERE DocNumber LIKE '%${query}%'`;
-    } else {
-      queryStr += ` WHERE ${nameField} LIKE '%${query}%'`;
-    }
+  if (query && !UNSEARCHABLE_TEXT_TYPES.includes(type)) {
+    // People use DisplayName; lists (items, accounts, terms...) use Name; transactions use DocNumber
+    const people = ['Customer', 'Vendor', 'Employee'];
+    const field = people.includes(type) ? 'DisplayName' : NAME_SEARCH_TYPES.includes(type) ? 'Name' : 'DocNumber';
+    queryStr += ` WHERE ${field} LIKE '%${query}%'`;
   }
 
   queryStr += ` MAXRESULTS ${limit}`;
@@ -549,6 +588,10 @@ async function handleGetTransactionChain(input, context) {
       success: false,
       error: `Invalid entity type "${entityType}". Must be one of: ${VALID_ENTITY_TYPES.join(', ')}`,
     };
+  }
+
+  if (!/^\d+$/.test(String(entityId))) {
+    return { success: false, error: `Invalid ${entityType} Id: ${String(entityId).slice(0, 40)}` };
   }
 
   const visited = new Set();
@@ -1028,6 +1071,79 @@ async function handleVoidTransaction(input, context) {
   return { success: true, data: recordSummary(entityType, result[entityType] || current) };
 }
 
+async function handleGetCoverage(input, context) {
+  // Required here, not at the top: coverage reads WRITABLE_ENTITY_TYPES from this module.
+  const coverage = require('./coverage');
+  const result = await coverage.getCoverage(context.qbo, context.realmId, { refresh: input.refresh === true });
+  const area = input.area ? String(input.area) : null;
+  if (area && !result.areas.some((a) => a.key === area)) {
+    return { success: false, error: `Unknown area ${area}. Known areas: ${result.areas.map((a) => a.key).join(', ')}` };
+  }
+  return {
+    success: true,
+    data: {
+      checkedAt: result.checkedAt,
+      summary: coverage.summarizeForAssistant(result, { areaKey: area }),
+      areas: result.areas
+        .filter((a) => !area || a.key === area)
+        .map(({ key, name, status, signals }) => ({ key, name, status, signals })),
+    },
+  };
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function reportCells(cols) {
+  return (cols || []).map((c) => (c?.value ?? '')).join(' | ');
+}
+
+function flattenReportRows(rows, depth, out) {
+  for (const row of rows || []) {
+    if (out.lines.length >= REPORT_MAX_LINES) { out.truncated = true; return; }
+    const pad = '  '.repeat(depth);
+    if (row.Header?.ColData) out.lines.push(pad + reportCells(row.Header.ColData));
+    if (row.ColData) { out.lines.push(pad + reportCells(row.ColData)); out.dataRows += 1; }
+    if (row.Rows?.Row) flattenReportRows(row.Rows.Row, depth + 1, out);
+    if (row.Summary?.ColData) out.lines.push(pad + reportCells(row.Summary.ColData));
+  }
+}
+
+async function handleRunReport(input, context) {
+  const { report } = input;
+  if (!REPORT_NAMES.includes(report)) {
+    return { success: false, error: `Unknown report. Use one of: ${REPORT_NAMES.join(', ')}` };
+  }
+  const params = new URLSearchParams();
+  for (const [field, param] of [['startDate', 'start_date'], ['endDate', 'end_date'], ['reportDate', 'report_date']]) {
+    if (input[field] == null) continue;
+    if (!DATE_RE.test(String(input[field]))) return { success: false, error: `${field} must be YYYY-MM-DD` };
+    params.set(param, input[field]);
+  }
+  if (['Accrual', 'Cash'].includes(input.accountingMethod)) params.set('accounting_method', input.accountingMethod);
+  if (typeof input.summarizeColumnBy === 'string' && /^[A-Za-z]+$/.test(input.summarizeColumnBy)) {
+    params.set('summarize_column_by', input.summarizeColumnBy);
+  }
+  const query = params.toString();
+  const result = await context.qbo.apiCall('GET', `reports/${report}${query ? `?${query}` : ''}`);
+  const header = result?.Header || {};
+  const noData = (header.Option || []).some((o) => o.Name === 'NoReportData' && String(o.Value) === 'true');
+  const out = { lines: [], dataRows: 0, truncated: false };
+  flattenReportRows(result?.Rows?.Row, 0, out);
+  return {
+    success: true,
+    data: {
+      report: header.ReportName || report,
+      period: [header.StartPeriod, header.EndPeriod].filter(Boolean).join(' to ') || null,
+      basis: header.ReportBasis || null,
+      columns: (result?.Columns?.Column || []).map((c) => c.ColTitle || c.ColType || ''),
+      empty: noData || out.dataRows === 0,
+      dataRows: out.dataRows,
+      lines: out.lines,
+      truncated: out.truncated,
+    },
+  };
+}
+
 const toolHandlers = {
   lookupCustomer: handleLookupCustomer,
   lookupInvoice: handleLookupInvoice,
@@ -1035,6 +1151,8 @@ const toolHandlers = {
   getEntityDetail: handleGetEntityDetail,
   getTransactionChain: handleGetTransactionChain,
   getChangeSummary: handleGetChangeSummary,
+  getCoverage: handleGetCoverage,
+  runReport: handleRunReport,
   createInvoice: handleCreateInvoice,
   applyPayment: handleApplyPayment,
   createBill: handleCreateBill,
@@ -1053,6 +1171,8 @@ const toolPermissions = {
   getEntityDetail: 'auto',
   getTransactionChain: 'auto',
   getChangeSummary: 'auto',
+  getCoverage: 'auto',
+  runReport: 'auto',
   createInvoice: 'confirm',
   applyPayment: 'confirm',
   createBill: 'confirm',

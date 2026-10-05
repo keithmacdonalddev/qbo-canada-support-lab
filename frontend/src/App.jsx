@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Reproduce from './pages/Reproduce'
 import Case from './pages/Case'
 import Company from './pages/Company'
+import Coverage from './pages/Coverage'
 import Onboarding from './pages/Onboarding'
 import Settings from './pages/Settings'
 import AuditLog from './pages/AuditLog'
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/" element={<ProtectedRoute><Reproduce /></ProtectedRoute>} />
         <Route path="/cases/:id" element={<ProtectedRoute><Case /></ProtectedRoute>} />
         <Route path="/company" element={<ProtectedRoute><Company /></ProtectedRoute>} />
+        <Route path="/coverage" element={<ProtectedRoute><Coverage /></ProtectedRoute>} />
         <Route path="/dashboard" element={<Navigate to="/company" replace />} />
         <Route
           path="/onboarding"

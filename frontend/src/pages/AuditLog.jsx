@@ -85,9 +85,11 @@ function toolFromAction(entry) {
 function lookupText(entry) {
   const tool = toolFromAction(entry)
   const p = entry.inputParams || {}
-  if (tool === 'searchEntities') return p.entityType ? `${RECORD_TYPES[p.entityType]?.plural?.toLowerCase() || p.entityType}` : 'records'
+  // searchEntities and getEntityDetail name the record type `type`; other tools use `entityType`.
+  const type = p.type ?? p.entityType
+  if (tool === 'searchEntities') return type ? `${RECORD_TYPES[type]?.plural?.toLowerCase() || type}` : 'records'
   if (tool === 'runReport') return p.reportName || p.report || 'a report'
-  if (tool === 'getEntityDetail' && p.entityType) return `${typeLabel(p.entityType).toLowerCase()} #${p.id ?? ''}`.trim()
+  if (tool === 'getEntityDetail' && type) return `${typeLabel(type).toLowerCase()} #${p.id ?? ''}`.trim()
   return LOOKUPS[tool] || (tool ? tool.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() : 'records')
 }
 
@@ -195,7 +197,8 @@ function Details({ entry }) {
         {dateTime(entry.createdAt)}
         {entry.tool && <> · tool <span className="font-mono">{entry.tool}</span></>}
         {entry.approvalEvent && <> · plan <span className="font-mono">{entry.approvalEvent}</span></>}
-        {entry.userId?.email && <> · {entry.userId.email}</>}
+        {/* A member of the shared company acting in the owner's workspace is named as the actor. */}
+        {(entry.actorUserId?.email || entry.userId?.email) && <> · {entry.actorUserId?.email || entry.userId.email}</>}
       </p>
       {sections.map(([label, value]) => (
         <div key={label}>

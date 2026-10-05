@@ -18,15 +18,24 @@ function signToken(user) {
 }
 
 function isDevAccessEmail(email) {
-  return config.devAccess.enabled && email.toLowerCase() === config.devAccess.email;
+  // Trimmed and lowercased like the User schema stores it, so padding cannot slip past.
+  return config.devAccess.enabled && String(email).trim().toLowerCase() === config.devAccess.email;
+}
+
+// The tester password is public (it is in the source and on the sign-in page),
+// and the tester account may be a member of the real company. Hand it out and
+// accept it only from this computer, never from the network.
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function fromThisComputer(req) {
+  return LOOPBACK_ADDRESSES.has(req.socket?.remoteAddress);
 }
 
 /**
  * GET /dev-access
  * Returns the intentionally public shared tester credentials in local development.
  */
-router.get('/dev-access', (_req, res) => {
-  if (!config.devAccess.enabled) {
+router.get('/dev-access', (req, res) => {
+  if (!config.devAccess.enabled || !fromThisComputer(req)) {
     return res.json({ enabled: false });
   }
 
@@ -89,7 +98,10 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (isDevAccessEmail(normalizedEmail) && !fromThisComputer(req)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
     const isDevAccessAttempt = isDevAccessEmail(normalizedEmail)
       && password === config.devAccess.password;
 
@@ -118,6 +130,11 @@ router.post('/login', async (req, res) => {
     }
 
     if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Backstop on the stored account, whatever spelling of the email was sent.
+    if (user.email === config.devAccess.email && !fromThisComputer(req)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 

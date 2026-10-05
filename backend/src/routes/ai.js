@@ -12,6 +12,8 @@ const { createAuditEntry } = require('../middleware/auditLogger');
 const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
 const { isQboError } = require('../modules/qbo-error');
+const caseChanges = require('../modules/case-changes');
+const { createQBOClient } = require('../modules/qbo-client');
 
 const router = express.Router();
 
@@ -92,7 +94,7 @@ router.get('/config', authenticate, async (req, res) => {
   try {
     const aiProvider = require('../modules/ai-provider');
     const User = require('../models/User');
-    const user = await User.findById(req.user.id).select('+anthropicApiKey');
+    const user = await User.findById(req.user.actorId || req.user.id).select('+anthropicApiKey');
 
     const keyConfig = aiProvider.getKeyConfig();
     const hasUserKey = !!(user && user.anthropicApiKey);
@@ -315,6 +317,50 @@ router.get('/sessions/:id', async (req, res) => {
   }
 });
 
+// Names change rarely; keep them a few minutes per case and set of referenced records,
+// so polling a running case does not repeat the lookups.
+const changeNameCache = new Map();
+const CHANGE_NAME_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * GET /sessions/:id/changes
+ * The case's changes to QuickBooks across all its proposals, with customer,
+ * vendor, account and document names looked up (read-only) in place of Ids.
+ */
+router.get('/sessions/:id/changes', async (req, res) => {
+  try {
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id }).populate('plans');
+    if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
+
+    const plans = [...(session.plans || [])].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const refs = caseChanges.collectRefs(plans);
+    const cacheKey = `${session._id}:${[...refs].map(([type, ids]) => `${type}=${[...ids].sort().join('.')}`).sort().join(';')}`;
+    let names = changeNameCache.get(cacheKey);
+    if (!names || names.expiresAt < Date.now()) {
+      let map = new Map();
+      let complete = false;
+      const connection = await getActiveConnection(req.user.id);
+      if (connection && connection.realmId === session.realmId) {
+        try {
+          map = await caseChanges.loadNames(await createQBOClient(connection), refs);
+          complete = map.complete !== false;
+        } catch (err) {
+          console.error('[ai/sessions/changes] name lookup', err.message);
+        }
+      }
+      // A partial lookup is retried soon; a complete one is kept for a few minutes.
+      names = { map, expiresAt: Date.now() + (complete ? CHANGE_NAME_TTL_MS : 20 * 1000) };
+      changeNameCache.set(cacheKey, names);
+      if (changeNameCache.size > 200) changeNameCache.delete(changeNameCache.keys().next().value);
+    }
+
+    return res.json({ success: true, data: caseChanges.describeChanges(plans, names.map) });
+  } catch (err) {
+    console.error('[ai/sessions/changes]', err.message);
+    return res.status(500).json({ success: false, error: 'Failed to describe the changes' });
+  }
+});
+
 /**
  * POST /investigate
  * Start an investigation.
@@ -374,7 +420,7 @@ router.post('/generate-note', async (req, res) => {
     }
 
     const User = require('../models/User');
-    const user = await User.findById(req.user.id).select('+anthropicApiKey');
+    const user = await User.findById(req.user.actorId || req.user.id).select('+anthropicApiKey');
     const note = await aiNotes.generateNote(
       { messages: session.messages },
       format,
