@@ -14,6 +14,17 @@ const planStepSchema = new mongoose.Schema({
   result: { type: mongoose.Schema.Types.Mixed },
   error: { type: String },
   executedAt: { type: Date },
+  // Server-owned dispatch scope; absent on historical receipts. Never backfilled
+  // from the currently selected connection or from model-generated tool input.
+  executionScope: { type: new mongoose.Schema({
+    version: { type: Number, enum: [1], required: true },
+    realmId: { type: String, required: true },
+    environment: { type: String, enum: ['production', 'sandbox'], required: true },
+    connectionId: { type: String, required: true },
+  }, { _id: false }), default: undefined },
+  // A reproduction change to a record that existed before the case waits here for
+  // the company owner: { state: needed|deciding|approved|declined|stale|failed, ... }.
+  approval: { type: mongoose.Schema.Types.Mixed },
 }, { _id: true });
 
 const aiPlanSchema = new mongoose.Schema({

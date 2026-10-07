@@ -9,6 +9,8 @@ const { deriveTokenHealth, isAuthFailure, expireRejectedConnection, describeProb
 const { redactLogSecrets } = require('../modules/log-diagnostic');
 
 const router = express.Router();
+router.use('/business-plan', require('./business-plan').createBusinessPlanRouter());
+router.use('/business-baseline', require('./business-baseline').createBusinessBaselineRouter());
 
 /**
  * Helper -- find the user's active Connection or return 404.
@@ -289,6 +291,28 @@ router.get('/health', authenticate, async (req, res) => {
   } catch (err) {
     console.error('[company/health] failed', redactLogSecrets(err.stack || err.message));
     return res.status(503).json({ error: 'Company connection status could not be loaded. Retry the check.', code: 'CONNECTION_STATUS_UNAVAILABLE' });
+  }
+});
+
+/** Read-only, bounded evidence for a requested accounting period. */
+router.get('/book-evidence', authenticate, async (req, res) => {
+  try {
+    const connection = await getActiveConnection(req.user.id);
+    if (!connection) return res.status(404).json({ error: 'No active QBO connection' });
+    const { readBookEvidence, validDate } = require('../modules/book-evidence');
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const throughDate = req.query.throughDate || today;
+    if (!validDate(throughDate)) return res.status(400).json({ error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
+    const fromDate = req.query.fromDate || throughDate.slice(0, 7) + '-01';
+    if (!validDate(fromDate) || !validDate(throughDate)) return res.status(400).json({ error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
+    const qbo = await createQBOClient(connection);
+    const evidence = await readBookEvidence(qbo, { fromDate, throughDate, today });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ data: { realmId: String(connection.realmId), environment: require('../config').qbo.environment, ...evidence } });
+  } catch (error) {
+    if (error.status === 400 && !error.qboStage) return res.status(400).json({ error: error.message });
+    if (respondQboError(res, error)) return;
+    return res.status(500).json({ error: 'Book evidence could not be checked.' });
   }
 });
 

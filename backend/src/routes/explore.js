@@ -1,42 +1,21 @@
 const express = require('express');
+const mongoose = require('mongoose');
+const { readRecordOrigin } = require('../modules/record-origin');
 const Connection = require('../models/Connection');
 const AuditLog = require('../models/AuditLog');
 const { authenticate } = require('../middleware/auth');
 const { createQBOClient } = require('../modules/qbo-client');
 const { respondQboError } = require('../modules/qbo-error');
 
+const config = require('../config');
+const { searchQuery, pageResult, identity, canonicalType, integer, ENTITIES, invalid } = require('../modules/record-queries');
+function createExploreRouter(dependencies = {}) {
 const router = express.Router();
-
-const VALID_ENTITIES = [
-  'Customer', 'Invoice', 'Payment', 'CreditMemo',
-  'Bill', 'BillPayment', 'VendorCredit', 'Vendor',
-  'Item', 'Account', 'JournalEntry', 'Estimate', 'Deposit',
-  'SalesReceipt', 'RefundReceipt', 'Purchase', 'PurchaseOrder', 'Transfer', 'TimeActivity',
-];
-
-// Dated records: listed newest first and searched by document number.
-const TRANSACTION_ENTITIES = [
-  'Invoice', 'Bill', 'Payment', 'CreditMemo', 'BillPayment', 'VendorCredit', 'Estimate', 'JournalEntry', 'Deposit',
-  'SalesReceipt', 'RefundReceipt', 'Purchase', 'PurchaseOrder', 'Transfer', 'TimeActivity',
-];
-
-// These carry no document number, so a search term can't narrow them.
-const NO_DOC_NUMBER = ['Transfer', 'TimeActivity', 'Payment', 'Deposit'];
-
-// Linked transactions name some types differently from the endpoint that
-// reads them (a bill shows its payment as BillPaymentCheck, for example).
-const LINK_READ_TYPES = {
-  BillPaymentCheck: 'BillPayment', BillPaymentCreditCard: 'BillPayment', ReceivePayment: 'Payment',
-  Expense: 'Purchase', Check: 'Purchase', CreditCardCredit: 'Purchase',
-};
-
-function readableType(txnType) {
-  return LINK_READ_TYPES[txnType] || txnType;
-}
-
-async function getActiveConnection(userId) {
-  return Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 });
-}
+const qboFor = dependencies.qboFor || createQBOClient;
+const originFor = dependencies.originFor || (input => readRecordOrigin({ ...input, db: mongoose.connection.db, userId: new mongoose.Types.ObjectId(input.userId) }));
+const getActiveConnection = dependencies.getActiveConnection || (userId => Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 }));
+const scope = connection => ({ realmId: connection.realmId, environment: config.qbo.environment, connectionId: String(connection._id) });
+router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 /**
  * GET /search
@@ -45,48 +24,16 @@ async function getActiveConnection(userId) {
  */
 router.get('/search', authenticate, async (req, res) => {
   try {
+    const request = searchQuery(req.query);
     const connection = await getActiveConnection(req.user.id);
-    if (!connection) {
-      return res.status(404).json({ error: 'No active QBO connection' });
-    }
-
-    const { type, q, limit = 50 } = req.query;
-    if (!type || !VALID_ENTITIES.includes(type)) {
-      return res.status(400).json({ error: `Invalid entity type. Must be one of: ${VALID_ENTITIES.join(', ')}` });
-    }
-
-    const qbo = await createQBOClient(connection);
-    let queryStr = `SELECT * FROM ${type}`;
-
-    if (q && !NO_DOC_NUMBER.includes(type)) {
-      // Sanitize: strip single quotes, backslashes, and control chars
-      const sanitized = String(q).replace(/['\\\x00-\x1f]/g, '').trim();
-      if (sanitized) {
-        const nameField = ['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName';
-        if (TRANSACTION_ENTITIES.includes(type)) {
-          queryStr += ` WHERE DocNumber LIKE '%${sanitized}%'`;
-        } else {
-          queryStr += ` WHERE ${nameField} LIKE '%${sanitized}%'`;
-        }
-      }
-    }
-
-    // Newest transactions first; lists (customers, items...) alphabetically.
-    if (TRANSACTION_ENTITIES.includes(type)) {
-      queryStr += ' ORDERBY TxnDate DESC';
-    } else {
-      queryStr += ` ORDERBY ${['Item', 'Account'].includes(type) ? 'Name' : 'DisplayName'}`;
-    }
-    queryStr += ` MAXRESULTS ${Math.min(Number(limit) || 50, 100)}`;
-
-    const result = await qbo.query(queryStr);
-    const records = result.QueryResponse?.[type] || [];
-
-    return res.json({ type, records, count: records.length });
-  } catch (err) {
-    console.error('[explore/search]', err.message);
-    if (respondQboError(res, err)) return;
-    return res.status(500).json({ error: 'Search failed' });
+    if (!connection) return res.status(404).json({ error: 'No active QBO connection' });
+    const qbo = await qboFor(connection);
+    const result = pageResult(await qbo.query(request.query), request);
+    return res.json({ ...result, scope: scope(connection) });
+  } catch (error) {
+    if (error.recordInputError) return res.status(400).json({ error: error.message });
+    if (respondQboError(res, error)) return;
+    return res.status(500).json({ error: 'Records could not be read completely. Try again.' });
   }
 });
 
@@ -102,7 +49,9 @@ router.get('/timeline', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'No active QBO connection' });
     }
 
-    const { limit = 50, entityType } = req.query;
+    const { entityType } = req.query;
+    const limit = integer(req.query.limit, 50, 1, 200);
+    if (entityType !== undefined && !ENTITIES.includes(entityType)) throw invalid('Choose a supported record type.');
 
     const filter = {
       userId: req.user.id,
@@ -118,8 +67,23 @@ router.get('/timeline', authenticate, async (req, res) => {
 
     return res.json({ entries });
   } catch (err) {
-    console.error('[explore/timeline]', err.message);
+    if (err.recordInputError) return res.status(400).json({ error: err.message });
     return res.status(500).json({ error: 'Failed to load timeline' });
+  }
+});
+
+// App receipts are a separate read: an unavailable history must not hide QBO data.
+router.get('/:entity/:id/origin', authenticate, async (req, res) => {
+  try {
+    const { entity, id } = identity(req.params.entity, req.params.id);
+    if (Object.keys(req.query).length) throw invalid('Record origin requests do not accept query options.');
+    const connection = await getActiveConnection(req.user.id);
+    if (!connection) return res.status(404).json({ error: 'No active QBO connection' });
+    const origin = await originFor({ userId: req.user.id, realmId: connection.realmId, environment: config.qbo.environment, entity, id });
+    return res.json({ ...origin, scope: scope(connection) });
+  } catch (error) {
+    if (error.recordInputError) return res.status(400).json({ error: error.message });
+    return res.status(503).json({ error: 'Creation history could not be checked. QuickBooks records are still available.' });
   }
 });
 
@@ -134,21 +98,19 @@ router.get('/:entity/:id', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'No active QBO connection' });
     }
 
-    const { entity, id } = req.params;
-    if (!VALID_ENTITIES.map((e) => e.toLowerCase()).includes(entity.toLowerCase())) {
-      return res.status(400).json({ error: 'Invalid entity type' });
-    }
+    const { entity, id } = identity(req.params.entity, req.params.id);
+    if (Object.keys(req.query).length) throw invalid('Record detail requests do not accept query options.');
 
-    const qbo = await createQBOClient(connection);
+    const qbo = await qboFor(connection);
     const result = await qbo.read(entity.toLowerCase(), id);
 
     // QBO returns { Invoice: {...} } or { Customer: {...} } etc.
-    const entityKey = Object.keys(result).find((k) => k !== 'time');
-    const record = entityKey ? result[entityKey] : result;
+    const record = result?.[entity];
+    if (!record || String(record.Id) !== id) throw new Error('Invalid record response');
 
-    return res.json({ entity: entity.toLowerCase(), record });
+    return res.json({ entity: entity.toLowerCase(), record, scope: scope(connection) });
   } catch (err) {
-    console.error('[explore/read]', err.message);
+    if (err.recordInputError) return res.status(400).json({ error: err.message });
     if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Failed to read entity' });
   }
@@ -166,26 +128,30 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'No active QBO connection' });
     }
 
-    const { entity, id } = req.params;
-    const qbo = await createQBOClient(connection);
+    const { entity, id } = identity(req.params.entity, req.params.id);
+    if (Object.keys(req.query).length) throw invalid('Record chain requests do not accept query options.');
+    const qbo = await qboFor(connection);
 
     // Each record is one QuickBooks read; stop well short of the rate limit.
-    const MAX_RECORDS = 40;
+    const MAX_RECORDS = 40, MAX_EDGES = 1000;
+    const deadline = Date.now() + 60000;
     const visited = new Set();
     let truncated = false;
     const nodes = [];
     const edges = [];
 
     async function trace(entityType, entityId) {
+      entityType = canonicalType(entityType) || entityType;
       const key = `${entityType}:${entityId}`;
       if (visited.has(key)) return;
-      if (visited.size >= MAX_RECORDS) { truncated = true; return; }
+      if (visited.size >= MAX_RECORDS || Date.now() >= deadline) { truncated = true; return; }
       visited.add(key);
 
       try {
+        identity(entityType, String(entityId));
         const result = await qbo.read(entityType.toLowerCase(), entityId);
-        const entityKey = Object.keys(result).find((k) => k !== 'time');
-        const record = entityKey ? result[entityKey] : result;
+        const record = result?.[entityType];
+        if (!record || String(record.Id) !== String(entityId)) throw new Error('Invalid linked record response');
 
         nodes.push({
           entity: entityType,
@@ -196,12 +162,13 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
         // Follow LinkedTxn references
         const linkedTxns = record.LinkedTxn || [];
         for (const link of linkedTxns) {
+          if (edges.length >= MAX_EDGES || Date.now() >= deadline) { truncated = true; return; }
           edges.push({
             from: key,
-            to: `${readableType(link.TxnType)}:${link.TxnId}`,
+            to: `${(canonicalType(link.TxnType) || link.TxnType)}:${link.TxnId}`,
             linkType: 'LinkedTxn',
           });
-          await trace(readableType(link.TxnType), link.TxnId);
+          await trace((canonicalType(link.TxnType) || link.TxnType), link.TxnId);
         }
 
         // Follow Line-level LinkedTxn (e.g., Payment lines linking to Invoices)
@@ -209,32 +176,36 @@ router.get('/:entity/:id/chain', authenticate, async (req, res) => {
         for (const line of lines) {
           const lineLinks = line.LinkedTxn || [];
           for (const link of lineLinks) {
+            if (edges.length >= MAX_EDGES || Date.now() >= deadline) { truncated = true; return; }
             edges.push({
               from: key,
-              to: `${readableType(link.TxnType)}:${link.TxnId}`,
-              linkType: 'LineLinkedTxn',
+              to: `${(canonicalType(link.TxnType) || link.TxnType)}:${link.TxnId}`,
+              linkType: 'LineLinkedTxn', fromLineId: line.Id == null ? null : String(line.Id), toLineId: link.TxnLineId == null ? null : String(link.TxnLineId),
             });
-            await trace(readableType(link.TxnType), link.TxnId);
+            await trace((canonicalType(link.TxnType) || link.TxnType), link.TxnId);
           }
         }
       } catch (err) {
-        // Entity might not be readable — skip silently
+        // Preserve an explicit incomplete node rather than implying a full graph.
         nodes.push({
           entity: entityType,
           id: entityId,
-          error: err.message,
+          error: 'Linked record could not be read.', intuit_tid: err.intuit_tid || null,
         });
       }
     }
 
     await trace(entity, id);
 
-    return res.json({ nodes, edges, truncated });
+    return res.json({ nodes, edges, truncated, complete: !truncated && !nodes.some(node => node.error), scope: scope(connection) });
   } catch (err) {
-    console.error('[explore/chain]', err.message);
+    if (err.recordInputError) return res.status(400).json({ error: err.message });
     if (respondQboError(res, err)) return;
     return res.status(500).json({ error: 'Failed to trace chain' });
   }
 });
 
-module.exports = router;
+return router;
+}
+module.exports = createExploreRouter();
+module.exports.createExploreRouter = createExploreRouter;

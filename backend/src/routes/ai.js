@@ -11,9 +11,11 @@ const { requireFeatureFlag, publicFeatureFlags } = require('../middleware/featur
 const { createAuditEntry } = require('../middleware/auditLogger');
 const orchestrator = require('../modules/ai-orchestrator');
 const aiNotes = require('../modules/ai-notes');
-const { isQboError } = require('../modules/qbo-error');
+const { isQboError, respondQboError } = require('../modules/qbo-error');
 const caseChanges = require('../modules/case-changes');
 const reproduction = require('../modules/reproduction-runner');
+const approvals = require('../modules/reproduction-approvals');
+const { screenBroker } = require('../modules/reproduction-screen');
 const { createQBOClient } = require('../modules/qbo-client');
 
 const router = express.Router();
@@ -87,6 +89,27 @@ async function getActiveConnection(userId) {
 
 // --- Routes ---
 
+// Authenticated local-app rendezvous; the companion never receives a JWT.
+const screenScope = (req) => ({ userId: String(req.user.id), actorId: String(req.user.actorId || req.user.id), caseId: req.params.id });
+router.get('/sessions/:id/screen', async (req, res) => {
+  try {
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('reproduction');
+    if (!session) return res.status(404).json({ success: false, error: 'Case not found.' });
+    const request = await screenBroker.poll(screenScope(req));
+    return res.json({ success: true, data: { request } });
+  } catch { return res.status(409).json({ success: false, error: 'The screen check is no longer active.' }); }
+});
+router.post('/sessions/:id/screen', async (req, res) => {
+  try {
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('reproduction');
+    if (!session) return res.status(404).json({ success: false, error: 'Case not found.' });
+    if (req.body?.type === 'heartbeat') screenBroker.heartbeat(screenScope(req), req.body.ready === true);
+    else if (req.body?.type === 'receipt') await screenBroker.receive(screenScope(req), req.body);
+    else return res.status(400).json({ success: false, error: 'Invalid screen message.' });
+    return res.json({ success: true });
+  } catch { return res.status(409).json({ success: false, error: 'The screen evidence expired or did not match this active case.' }); }
+});
+
 // Reproduction is the connected company's normal workflow. The submitted case
 // grants its operation scope; legacy plan/production confirmations are not used.
 router.post('/reproduce', async (req, res) => {
@@ -103,6 +126,22 @@ router.post('/reproduce', async (req, res) => {
     return res.status(202).json({ success: true, data: { session: reproduction.publicState(session) } });
   } catch (err) {
     return res.status(safeStatus(err)).json({ success: false, error: err.message });
+  }
+});
+
+// The company owner approves or declines a case change to a record that existed
+// before the case. Members see the request but cannot decide it.
+router.post('/sessions/:id/approvals', async (req, res) => {
+  try {
+    const { planId, stepNumber, decision } = req.body || {};
+    const result = await approvals.decide({ userId: req.user.id, actorId: req.user.actorId || req.user.id,
+      sessionId: req.params.id, planId, stepNumber, decision });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    if (err.caseDecision) return res.status(err.status).json({ success: false, error: err.message });
+    if (isQboError(err)) return respondQboError(res, err);
+    console.error('[ai/sessions/approvals]', err.message);
+    return res.status(500).json({ success: false, error: 'The decision could not be completed. Nothing was changed unless the case shows otherwise.' });
   }
 });
 

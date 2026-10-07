@@ -23,6 +23,10 @@ const CATALOG_PATH = path.resolve(__dirname, '../../../docs/discovery/catalog.v1
 const LOOKBACK_DAYS = 365;
 const DEFAULT_FRESH_DAYS = 45;
 const MAX_RESULTS = 1000;
+const READ_BUDGET_MS = 60 * 1000;
+const MAX_CHECK_PAGES = 128;
+const MAX_CHECK_RECORDS = 100000;
+const MAX_PAGES = 50; // Explicit read budget; an exhausted budget is incomplete evidence.
 const CACHE_MS = 10 * 60 * 1000;
 // A forced re-read within this window returns the result just made, so
 // repeated refreshes (by a person or the assistant) cost one check.
@@ -272,38 +276,62 @@ function daysBefore(today, days) {
   return d.toISOString().slice(0, 10);
 }
 
-function queryFor(name, since) {
+function queryFor(name, since, startPosition = 1) {
+  if (LIST_SOURCES[name]?.single) return 'SELECT * FROM ' + LIST_SOURCES[name].entity;
+  const pagination = ' STARTPOSITION ' + startPosition + ' MAXRESULTS ' + MAX_RESULTS;
   if (LIST_SOURCES[name]) {
     const { entity, where = '' } = LIST_SOURCES[name];
-    return `SELECT * FROM ${entity} ${where} MAXRESULTS ${MAX_RESULTS}`.replace(/\s+/g, ' ');
+    return ('SELECT * FROM ' + entity + ' ' + where + pagination).replace(/\s+/g, ' ');
   }
-  return `SELECT * FROM ${name} WHERE TxnDate >= '${since}' ORDERBY TxnDate DESC MAXRESULTS ${MAX_RESULTS}`;
+  return "SELECT * FROM " + name + " WHERE TxnDate >= '" + since + "' ORDERBY TxnDate DESC" + pagination;
 }
 
 function shortError(err) {
-  const status = err?.status ? `HTTP ${err.status}` : null;
+  const status = err?.status ? 'HTTP ' + err.status : null;
   const msg = String(err?.message || 'Read failed').replace(/^QBO API error \(HTTP \d+\):\s*/, '').slice(0, 160);
-  return status ? `${status}: ${msg}` : msg;
+  return status ? status + ': ' + msg : msg;
 }
 
-async function readSource(qbo, name, since) {
+async function readSource(qbo, name, since, budget = { pages: MAX_PAGES, records: MAX_PAGES * MAX_RESULTS, deadline: Date.now() + READ_BUDGET_MS }) {
   const entity = LIST_SOURCES[name]?.entity || name;
+  const records = [];
+  const ids = new Set();
   try {
-    const result = await qbo.query(queryFor(name, since));
-    const records = result?.QueryResponse?.[entity] || [];
-    return { records, truncated: records.length >= MAX_RESULTS };
+    for (let page = 0; page < MAX_PAGES; page++) {
+      if (budget.pages <= 0 || budget.records < MAX_RESULTS || Date.now() >= budget.deadline) {
+        return { records, truncated: true, incompleteReason: 'The shared coverage read budget or deadline was reached.' };
+      }
+      budget.pages--;
+      budget.records -= MAX_RESULTS; // Reserve before the asynchronous request.
+      const result = await qbo.query(queryFor(name, since, page * MAX_RESULTS + 1));
+      if (!result?.QueryResponse || typeof result.QueryResponse !== 'object') throw new Error('QuickBooks returned no query response');
+      const rows = result.QueryResponse[entity] || [];
+      if (!Array.isArray(rows) || rows.length > MAX_RESULTS) throw new Error('QuickBooks returned an invalid record list');
+      budget.records += MAX_RESULTS - rows.length;
+      let repeated = false;
+      for (const row of rows) {
+        if (row.Id && ids.has(String(row.Id))) { repeated = true; continue; }
+        if (row.Id) ids.add(String(row.Id));
+        records.push(row);
+      }
+      // Offset pages can change while a company is edited. Never silently call
+      // a repeated/shifted page complete or retry it without a bound.
+      if (repeated) return { records, truncated: true, incompleteReason: 'Records changed or repeated while paging. Check again.' };
+      if (LIST_SOURCES[name]?.single || rows.length < MAX_RESULTS) return { records, truncated: false };
+    }
+    return { records, truncated: true, incompleteReason: 'The coverage read budget was reached.' };
   } catch (err) {
-    return { records: [], error: shortError(err), cause: err };
+    return { records, truncated: records.length > 0, error: shortError(err), cause: err };
   }
 }
 
-async function readAll(qbo, names, since) {
+async function readAll(qbo, names, since, budget = { pages: MAX_CHECK_PAGES, records: MAX_CHECK_RECORDS, deadline: Date.now() + READ_BUDGET_MS }) {
   const out = {};
   let next = 0;
   async function worker() {
     while (next < names.length) {
       const name = names[next++];
-      out[name] = await readSource(qbo, name, since);
+      out[name] = await readSource(qbo, name, since, budget);
     }
   }
   await Promise.all(Array.from({ length: Math.min(POOL_SIZE, names.length) }, worker));
@@ -320,16 +348,26 @@ function evaluateSignal(signal, data, ctx) {
 
   if (signal.read) {
     const src = data.preferences;
-    if (src?.error) {
+    if (!src || src.error || !src.records?.[0]) {
       ctx.failedSources.add('preferences');
-      return { ...base, status: 'error', error: src.error };
+      return { ...base, status: 'error', error: src?.error || 'Preferences were not returned' };
     }
     return { ...base, status: signal.read(prefs(ctx)) ? 'ok' : 'missing' };
   }
 
+  const prerequisiteSources = signal.needs === NEEDS_PROJECTS || signal.match === onProject ? ['customers']
+    : [NEEDS_CLASSES, NEEDS_LOCATIONS, NEEDS_MULTICURRENCY].includes(signal.needs) || signal.match === foreign ? ['preferences'] : [];
+  const incompletePrerequisite = prerequisiteSources.find((name) => !data[name] || data[name].error || data[name].truncated
+    || (name === 'preferences' && !data[name].records?.[0]));
+  if (incompletePrerequisite) {
+    ctx.failedSources.add(incompletePrerequisite);
+    return { ...base, status: 'error', error: 'Prerequisite records could not be completely checked: ' + incompletePrerequisite };
+  }
+
   const sourceNames = [signal.source, signal.alsoSource].filter(Boolean);
-  const failed = sourceNames.map((n) => data[n]).find((s) => !s || s.error);
-  if (failed) {
+  const failedName = sourceNames.find((n) => !data[n] || data[n].error);
+  if (failedName) {
+    const failed = data[failedName];
     // QuickBooks refuses some reads while the feature is off; that's a gap, not a failure.
     const blockedBy = signal.needs ? signal.needs(ctx) : null;
     if (blockedBy) return { ...base, status: 'missing', fill: 'quickbooks', blockedBy };
@@ -344,16 +382,20 @@ function evaluateSignal(signal, data, ctx) {
 
   if (signal.kind === 'setup') {
     const count = signal.count ? signal.count(records) : records.length;
-    return { ...base, status: count >= min ? 'ok' : 'missing', count, min, truncated };
+    return { ...base, status: count >= min ? 'ok' : truncated ? 'error' : 'missing', count, min, truncated,
+      ...(count < min && truncated ? { error: 'The record list is incomplete; absence is not established.' } : {}) };
   }
 
   const freshDays = signal.freshDays || DEFAULT_FRESH_DAYS;
   const freshSince = daysBefore(ctx.today, freshDays);
-  const dates = records.map((r) => r[signal.dateField || 'TxnDate']).filter(Boolean).sort();
+  const allDates = records.map((r) => r[signal.dateField || 'TxnDate']).filter((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d));
+  const future = allDates.filter((d) => d > ctx.today).length;
+  const dates = allDates.filter((d) => d <= ctx.today && d >= daysBefore(ctx.today, LOOKBACK_DAYS)).sort();
   const last = dates[dates.length - 1] || null;
   const recent = dates.filter((d) => d >= freshSince).length;
-  const status = recent >= min ? 'ok' : records.length > 0 ? 'stale' : 'missing';
-  const result = { ...base, status, count: records.length, recent, freshDays, last, truncated };
+  const status = recent >= min ? 'ok' : truncated ? 'error' : dates.length > 0 ? 'stale' : 'missing';
+  const result = { ...base, status, count: dates.length, recent, freshDays, last, truncated, future,
+    ...(status === 'error' ? { error: 'The record list is incomplete; absence is not established.' } : {}) };
   // A gap whose prerequisite is missing can only be started in QuickBooks.
   const blockedBy = status !== 'ok' && signal.needs ? signal.needs(ctx) : null;
   return blockedBy ? { ...result, fill: 'quickbooks', blockedBy } : result;
@@ -424,6 +466,14 @@ function scoreCoverage(data, { today, catalog = loadCatalog() } = {}) {
     summary: { areas: areaCounts, measuredAreas: measured.length, gaps },
     areas,
     sourceErrors,
+    evidence: {
+      complete: !measured.some((area) => area.signals.some((signal) => signal.status === 'error'))
+        && !Object.values(data).some((source) => source?.truncated),
+      incompleteSources: Object.entries(data).filter(([, source]) => source?.truncated).map(([name, source]) => ({
+        source: LIST_SOURCES[name]?.entity || name, reason: source.incompleteReason || 'The source was only partially read.',
+      })),
+      meaning: 'Completed bounded reads of feature presence and recent activity; not a consistent snapshot or proof of calendar continuity or reconciled accounts.',
+    },
   };
 }
 
@@ -509,6 +559,7 @@ function summarizeForAssistant(result, { areaKey } = {}) {
 
 module.exports = {
   getCoverage,
+  readSource,
   getCached,
   invalidate,
   scoreCoverage,
@@ -516,5 +567,5 @@ module.exports = {
   AREA_SIGNALS,
   LIST_SOURCES,
   TXN_SOURCES,
-  _internal: { evaluateSignal, areaStatus, refsOn, queryFor, daysBefore, cache },
+  _internal: { evaluateSignal, areaStatus, refsOn, queryFor, readSource, readAll, daysBefore, cache },
 };

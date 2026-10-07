@@ -40,6 +40,14 @@ function checkReferences(value, owned, entityType) {
   }
 }
 
+// QBO's root MetaData describes who/when, not an accounting relationship.
+// This helper is ONLY for records read from QBO. Outgoing payloads stay strict.
+function checkSavedRecord(record, owned, entityType) {
+  const { MetaData: _metadata, ...businessRecord } = record;
+  checkReferences(businessRecord, owned, entityType);
+  return businessRecord;
+}
+
 function checkWrite(name, input, owned) {
   if (!WRITES.has(name)) fail('This tool is not available for autonomous reproduction.');
   if (!WRITABLE_ENTITY_TYPES.includes(input.entityType)) fail('Unsupported record type.');
@@ -52,6 +60,7 @@ function checkWrite(name, input, owned) {
   if (['voidTransaction', 'deleteRecord'].includes(name) && (Object.hasOwn(input, 'record') || Object.hasOwn(input, 'changes'))) fail('This operation accepts only its record identity.');
   const body = name === 'createRecord' ? input.record : name === 'updateRecord' ? input.changes : {};
   if (!body || typeof body !== 'object' || Array.isArray(body)) fail('Provide an object payload.');
+  if (Object.hasOwn(body, 'MetaData')) fail('MetaData is read-only. Omit it from changes and create payloads.');
   checkReferences(body, owned, input.entityType);
   // Isolate counterparties so auto-apply cannot consume pre-existing balances.
   for (const [key, type] of [['CustomerRef', 'Customer'], ['VendorRef', 'Vendor']]) {
@@ -62,6 +71,19 @@ function checkWrite(name, input, owned) {
   if (name === 'createRecord' && (body.Id !== undefined || body.SyncToken !== undefined || body.sparse !== undefined)) {
     fail('A create must not contain update fields.');
   }
+}
+
+// Deleting or voiding a transaction that existed before the case is never run by
+// the agent; it waits for the company owner. Edits of existing records stay
+// refused: an approval card cannot yet show a field-by-field change.
+function checkApprovalRequest(name, input, voidableTypes) {
+  if (!['voidTransaction', 'deleteRecord'].includes(name)) fail('Only records created in this case can be changed. Deleting or voiding an existing transaction can be requested for the owner to approve.');
+  if (!WRITABLE_ENTITY_TYPES.includes(input.entityType)) fail('Unsupported record type.');
+  if (!/^\d+$/.test(String(input.id ?? ''))) fail('Give the QuickBooks Id of the existing record.');
+  if (name === 'deleteRecord' && !DELETE_TYPES.includes(input.entityType)) fail('This record type cannot be deleted.');
+  if (name === 'voidTransaction' && !voidableTypes.includes(input.entityType)) fail('This record type cannot be voided.');
+  if (Object.hasOwn(input, 'record') || Object.hasOwn(input, 'changes')) fail('This operation accepts only its record identity.');
+  if (typeof input.summary !== 'string' || !input.summary.trim()) fail('Explain the change in one sentence for the owner.');
 }
 
 function pathValues(record, path) {
@@ -90,14 +112,36 @@ function evaluateCheck(records, check) {
     passed: available ? (check.operator === 'not_equal' ? !equal : equal) : null };
 }
 
+function measurementKey(check) {
+  const sources = (check.sources || []).map(({ entityType, id, path }) =>
+    [entityType, String(id), path]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  // Changing the target or field adds evidence; it cannot erase an earlier failure.
+  return JSON.stringify([sources, check.aggregate, check.operator, check.expected]);
+}
+
+function conditionResults(conditions, checks, revision) {
+  return conditions.map((label) => {
+    const measurements = new Map();
+    for (const check of checks) {
+      if (check.label === label) measurements.set(measurementKey(check), check);
+    }
+    const evidence = [...measurements.values()].map((check) => ({
+      ...check, current: check.revision === revision,
+    }));
+    const available = evidence.length > 0 && evidence.every((check) => check.current && check.available);
+    return { label, checks: evidence, available,
+      passed: available ? evidence.every((check) => check.passed === true) : null };
+  });
+}
+
 function classifyOutcome(requested, conditions, checks, revision) {
   if (!['reproduced', 'not_reproduced', 'unverified'].includes(requested)) return 'unverified';
   if (requested === 'unverified') return requested;
-  const latest = conditions.map((label) => [...checks].reverse().find((c) => c.label === label && c.revision === revision));
+  const latest = conditionResults(conditions, checks, revision);
   if (!latest.length || latest.some((c) => !c || !c.available)) return 'unverified';
   const allPass = latest.every((c) => c.passed);
   return requested === 'reproduced' ? (allPass ? requested : 'unverified')
     : (!allPass ? requested : 'unverified');
 }
 
-module.exports = { WRITES, DELETE_TYPES, owns, checkReferences, checkWrite, pathValues, evaluateCheck, classifyOutcome };
+module.exports = { WRITES, DELETE_TYPES, owns, checkReferences, checkSavedRecord, checkWrite, checkApprovalRequest, pathValues, evaluateCheck, measurementKey, conditionResults, classifyOutcome };

@@ -274,3 +274,300 @@ test('update payload cannot hide foreign links behind a harmless create payload'
   assert.throws(() => checkWrite('createRecord', { entityType: 'Bill',
     record: {}, changes: {} }, owned), /accepts a record/);
 });
+
+test('a change to a record that existed before the case waits for the owner and is not sent', async () => {
+  const f = fixture();
+  f.records.set('Bill:501', { Id: '501', SyncToken: '3', DocNumber: '80395456', VendorRef: { value: '77', name: '3252' }, TotalAmt: 120.47, Balance: 120.47, TxnDate: '2026-05-31' });
+  const results = [];
+  await runEngine({ ...f.options, runModel: async (_messages, tool) => {
+    await define(tool, ['The duplicate bill is gone']);
+    results.push(await tool('deleteRecord', { entityType: 'Bill', id: '501', summary: 'Delete the duplicate of bill 80395456' }));
+    results.push(await tool('deleteRecord', { entityType: 'Bill', id: '501', summary: 'Again' }));
+    results.push(await tool('updateRecord', { entityType: 'Bill', id: '501', changes: { ProcessBillPayment: true }, summary: 'Pay it' }));
+    results.push(await tool('voidTransaction', { entityType: 'Bill', id: '501', summary: 'Void it' }));
+    await finish(tool, 'unverified');
+  } });
+  assert.equal(results[0].approvalRequired, true);
+  assert.equal(results[1].stepNumber, results[0].stepNumber, 'a repeated request reuses the waiting one');
+  assert.equal(results[2].success, false);
+  assert.match(results[3].error, /cannot be voided/);
+  assert.ok(f.records.has('Bill:501'), 'nothing reached QuickBooks');
+  assert.ok(!f.calls.some(([method]) => ['POST', 'update'].includes(method)));
+  assert.equal(f.plan.steps.length, 1);
+  const [step] = f.plan.steps;
+  assert.equal(step.status, 'pending');
+  assert.equal(step.requiresConfirmation, true);
+  assert.equal(step.approval.state, 'needed');
+  assert.equal(step.approval.syncToken, '3');
+  assert.deepEqual(step.approval.record, { docNumber: '80395456', party: '3252', total: 120.47, balance: 120.47, txnDate: '2026-05-31', createdAt: null });
+});
+
+test('QBO metadata permits case-owned update, void and delete without entering the outgoing payload', async () => {
+  const f = fixture();
+  const originalRead = f.qbo.read;
+  f.qbo.read = async (...args) => {
+    const response = await originalRead(...args);
+    for (const record of Object.values(response)) if (record) record.MetaData = { LastModifiedByRef: { value: 'qbo-user' } };
+    return response;
+  };
+  const originalUpdate = f.qbo.update;
+  f.qbo.update = async (entity, payload) => {
+    assert.equal(payload.MetaData, undefined);
+    assert.equal(payload.SyncToken, '0');
+    return originalUpdate(entity, payload);
+  };
+  const originalApi = f.qbo.apiCall;
+  f.qbo.apiCall = async (method, path, payload) => {
+    assert.equal(payload.MetaData, undefined);
+    if (path === 'invoice?operation=void') return { Invoice: { Id: payload.Id, SyncToken: '1' } };
+    return originalApi(method, path, payload);
+  };
+  await runEngine({ ...f.options, runModel: async (_messages, tool) => {
+    await define(tool);
+    const bill = await create(tool, 'Bill', { Line: [line(5)] });
+    const updated = await tool('updateRecord', { entityType: 'Bill', id: bill.data.id, changes: { Line: [line(3.5)] }, summary: 'Reduce hours' });
+    assert.equal(updated.success, true);
+    assert.equal(updated.savedRecord.Line[0].ItemBasedExpenseLineDetail.Qty, 3.5);
+    const invoice = await create(tool, 'Invoice', { Line: [{ Amount: 10 }] });
+    assert.equal((await tool('voidTransaction', { entityType: 'Invoice', id: invoice.data.id, summary: 'Void test' })).success, true);
+    assert.equal((await tool('deleteRecord', { entityType: 'Bill', id: bill.data.id, summary: 'Delete test' })).success, true);
+    await finish(tool, 'unverified');
+  } });
+  assert.equal(f.plan.steps.length, 5);
+  assert.ok(f.plan.steps.every((step) => step.status === 'completed'));
+});
+
+test('compound quantity and link checks preserve failure through finishCase', async () => {
+  const f = fixture();
+  const label = 'Bill has 3.5 hours and retains its PO line';
+  await runEngine({ ...f.options, runModel: async (_messages, tool) => {
+    await define(tool, [label]);
+    const po = await create(tool, 'PurchaseOrder', { Line: [line(6)] });
+    const bill = await create(tool, 'Bill', { Line: [line(5, po.data.id)] });
+    const compare = (path, expected) => tool('checkCase', { label, expected, operator: 'equal', aggregate: 'single',
+      sources: [{ entityType: 'Bill', id: bill.data.id, path }] });
+    assert.equal((await compare('Line.0.ItemBasedExpenseLineDetail.Qty', 3.5)).passed, false);
+    assert.equal((await compare('Line.0.LinkedTxn.0.TxnLineId', '1')).passed, true);
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(f.state.checks.length, 2);
+  assert.equal(f.state.outcome, 'unverified');
+});
+
+test('evidence overflow cannot turn an unchecked failing comparison into a reproduced outcome', async () => {
+  const f = fixture();
+  await runEngine({ ...f.options, runModel: async (_messages, tool) => {
+    await define(tool);
+    const bill = await create(tool, 'Bill', { Line: [line(5)] });
+    f.state.checks = Array.from({ length: 100 }, (_, i) => ({ label: 'Observed quantity', expected: i, actual: i,
+      operator: 'equal', aggregate: 'single', available: true, passed: true, revision: f.state.revision,
+      sources: [{ entityType: 'Bill', id: bill.data.id, path: 'Fixture' + i }] }));
+    const result = await tool('checkCase', { label: 'Observed quantity', expected: 3.5, operator: 'equal', aggregate: 'single',
+      sources: [{ entityType: 'Bill', id: bill.data.id, path: 'Line.0.ItemBasedExpenseLineDetail.Qty' }] });
+    assert.equal(result.success, false);
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(f.state.checks.length, 100, 'existing evidence is never evicted');
+  assert.equal(f.state.outcome, 'unverified');
+  assert.equal(f.state.status, 'stopped');
+  assert.match(f.state.summary, /Evidence budget/);
+});
+
+const { providerTimeout } = require('../src/modules/ai-provider-timeout');
+test('provider timeout resumes saved invoice without repeating its create', async () => {
+  const f = fixture(); let passes = 0; let reconciled = 0;
+  await runEngine({ ...f.options, confirmContinuation: async () => { reconciled++; }, runModel: async (messages, tool, _tools, budget) => {
+    assert.ok(budget.deadline > Date.now());
+    if (++passes === 1) {
+      await define(tool, ['Invoice total is 120']);
+      await create(tool, 'Invoice', { TotalAmt: 120, Line: [{ Amount: 120 }] });
+      await tool('saveProgress', { currentStep: 'Check saved invoice', remainingSteps: ['Read total'] });
+      throw providerTimeout('Codex', 300000);
+    }
+    assert.match(messages.at(-1).content, /Check saved invoice/);
+    const id = f.state.ownedRecords[0].id;
+    await tool('checkCase', { label: 'Invoice total is 120', sources: [{ entityType: 'Invoice', id, path: 'TotalAmt' }], expected: 120, aggregate: 'single', operator: 'equal' });
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(passes, 2); assert.equal(reconciled, 1);
+  assert.equal(f.calls.filter((c) => c[0] === 'create').length, 1);
+  assert.equal(f.state.outcome, 'reproduced');
+  assert.equal(f.state.continuationCount, 1);
+});
+test('only identified model timeouts resume, and repeated idle timeouts stop', async () => {
+  for (const error of [Object.assign(new Error('QBO unavailable'), { status: 504 }), new Error('Authentication failed')]) {
+    const f = fixture(); let passes = 0;
+    await runEngine({ ...f.options, confirmContinuation: async () => assert.fail('must not resume'), runModel: async () => { passes++; throw error; } });
+    assert.equal(passes, 1); assert.equal(f.state.status, 'stopped');
+  }
+  const f = fixture(); let passes = 0;
+  await runEngine({ ...f.options, confirmContinuation: async () => {}, runModel: async () => { passes++; throw providerTimeout('Codex', 300000); } });
+  assert.equal(passes, 2); assert.match(f.state.summary, /repeatedly/);
+});
+test('stop, changed scope, unknown writes and missing receipts prevent model continuation', async () => {
+  for (const reason of ['Stopped at your request', 'Company disconnected', 'Saved receipts missing']) {
+    const f = fixture(); let passes = 0;
+    await runEngine({ ...f.options, confirmContinuation: async () => { throw new Error(reason); }, runModel: async () => { passes++; throw providerTimeout('Codex', 300000); } });
+    assert.equal(passes, 1); assert.ok(f.state.summary.includes(reason));
+  }
+  const f = fixture(); let passes = 0;
+  f.plan.steps.push({ status: 'executing', result: { outcomeUnknown: true } });
+  await runEngine({ ...f.options, confirmContinuation: async () => {}, runModel: async () => { passes++; throw providerTimeout('Codex', 300000); } });
+  assert.equal(passes, 1); assert.match(f.state.summary, /reconciliation/);
+});
+test('verification reserve blocks changes while allowing saved evidence and final result', async () => {
+  const f = fixture(); f.state.conditions = ['Observed quantity'];
+  f.state.ownedRecords = [{ entityType: 'Bill', id: '20' }];
+  f.records.set('Bill:20', { Id: '20', Line: [line(3.5)] });
+  await runEngine({ ...f.options, deadline: Date.now() + 60000, runModel: async (_m, tool) => {
+    const denied = await create(tool, 'Bill', { Line: [line(5)] });
+    assert.equal(denied.verificationOnly, true);
+    await tool('checkCase', { label: 'Observed quantity', sources: [{ entityType: 'Bill', id: '20', path: 'Line.*.ItemBasedExpenseLineDetail.Qty' }], expected: 3.5, aggregate: 'sum', operator: 'equal' });
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(f.calls.filter((c) => c[0] === 'create').length, 0);
+  assert.equal(f.state.outcome, 'reproduced');
+});
+test('transaction batches require evidence before further changes', async () => {
+  const f = fixture();
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool);
+    const bills = [];
+    for (let i = 0; i < 8; i++) bills.push(await create(tool, 'Bill', { Line: [line(5)] }));
+    assert.match((await create(tool, 'Bill', { Line: [line(5)] })).error, /Read the affected records/);
+    await tool('checkCase', { label: 'Observed quantity', sources: bills.map((b) => ({ entityType: 'Bill', id: b.data.id, path: 'Line.*.ItemBasedExpenseLineDetail.Qty' })), expected: 40, aggregate: 'sum', operator: 'equal' });
+    assert.equal((await create(tool, 'Bill', { Line: [line(5)] })).success, true);
+    await finish(tool, 'unverified');
+  } });
+  assert.equal(f.plan.steps.length, 9);
+});
+test('failed progress persistence stops automatic continuation', async () => {
+  const f = fixture(); let passes = 0;
+  await assert.rejects(() => runEngine({ ...f.options, persist: async () => { throw new Error('database down'); }, confirmContinuation: async () => assert.fail('must not continue'), runModel: async (_m, tool) => {
+    passes++; try { await tool('saveProgress', { currentStep: 'Setup', remainingSteps: [] }); } catch {}
+    throw providerTimeout('Codex', 300000);
+  } }), /database down/);
+  assert.equal(passes, 1);
+});
+
+test('write-budget exhaustion still permits verification', async () => {
+  const f = fixture();
+  await runEngine({ ...f.options, maxWrites: 1, runModel: async (_m, tool) => {
+    await define(tool);
+    const bill = await create(tool, 'Bill', { Line: [line(5)] });
+    assert.equal((await create(tool, 'Bill', { Line: [line(5)] })).verificationOnly, true);
+    await tool('checkCase', { label: 'Observed quantity', sources: [{ entityType: 'Bill', id: bill.data.id, path: 'Line.*.ItemBasedExpenseLineDetail.Qty' }], expected: 5, aggregate: 'sum', operator: 'equal' });
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(f.state.outcome, 'reproduced'); assert.equal(f.plan.steps.length, 1);
+});
+test('preflight crossing the reserve does not send the prepared change', async () => {
+  const f = fixture(); const now = Date.now; let clock = now();
+  Date.now = () => clock;
+  try {
+    await runEngine({ ...f.options, deadline: clock + 100000, audit: async (action) => {
+      if (action.startsWith('Case change started')) clock += 20000;
+      return {};
+    }, runModel: async (_m, tool) => {
+      await define(tool);
+      const result = await create(tool, 'Bill', { Line: [line(5)] });
+      assert.match(result.error, /No change was sent/);
+      await finish(tool, 'unverified');
+    } });
+  } finally { Date.now = now; }
+  assert.equal(f.calls.filter((c) => c[0] === 'create').length, 0);
+  assert.equal(f.plan.steps[0].result.outcomeUnknown, false);
+});
+
+test('batch verification includes linked parents retained only in the pre-edit record', async () => {
+  const f = fixture();
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool);
+    const po = await create(tool, 'PurchaseOrder', { Line: [line(6)] });
+    const bill = await create(tool, 'Bill', { Line: [line(5, po.data.id)] });
+    await tool('getEntityDetail', { type: 'PurchaseOrder', id: po.data.id });
+    await tool('checkCase', { label: 'Observed quantity', sources: [{ entityType: 'Bill', id: bill.data.id, path: 'Line.*.ItemBasedExpenseLineDetail.Qty' }], expected: 5, aggregate: 'sum', operator: 'equal' });
+    for (let i = 0; i < 8; i++) {
+      const updated = await tool('updateRecord', { entityType: 'Bill', id: bill.data.id, changes: { Line: [line(3.5)] }, summary: 'Remove original link and edit quantity' });
+      assert.equal(updated.success, true);
+    }
+    const checkBill = () => tool('checkCase', { label: 'Observed quantity', sources: [{ entityType: 'Bill', id: bill.data.id, path: 'Line.*.ItemBasedExpenseLineDetail.Qty' }], expected: 3.5, aggregate: 'sum', operator: 'equal' });
+    await checkBill();
+    const blocked = await create(tool, 'Bill', { Line: [line(1)] });
+    assert.equal(blocked.success, false);
+    assert.deepEqual(blocked.pendingInspections, ['PurchaseOrder:' + po.data.id]);
+    await tool('getEntityDetail', { type: 'PurchaseOrder', id: po.data.id });
+    await checkBill();
+    assert.equal((await create(tool, 'Bill', { Line: [line(1)] })).success, true);
+    await finish(tool, 'unverified');
+  } });
+});
+
+test('screen observations use numeric tolerance and contribute to the final evidence', async () => {
+  const f = fixture();
+  f.state.conditions = ['Screen quantity']; f.state.revision = 4;
+  f.state.ownedRecords = [{ entityType: 'PurchaseOrder', id: '608' }];
+  await runEngine({ ...f.options, inspectScreen: async () => ({ kind: 'observed_screen', actual: 0.1 + 0.2, revision: 4 }),
+    runModel: async (_messages, tool) => {
+      const check = await tool('checkScreen', { label: 'Screen quantity', id: '608', expected: 0.3, operator: 'equal' });
+      assert.equal(check.passed, true);
+      await finish(tool, 'reproduced');
+    } });
+  assert.equal(f.state.outcome, 'reproduced');
+});
+test('missing or stale screen evidence remains unverified', async () => {
+  for (const inspectScreen of [undefined, async () => ({ kind: 'observed_screen', actual: 5, revision: 3 })]) {
+    const f = fixture(); f.state.conditions = ['Screen quantity']; f.state.revision = 4;
+    f.state.ownedRecords = [{ entityType: 'PurchaseOrder', id: '608' }];
+    await runEngine({ ...f.options, inspectScreen, runModel: async (_messages, tool) => {
+      const check = await tool('checkScreen', { label: 'Screen quantity', id: '608', expected: 5, operator: 'equal' });
+      assert.equal(check.available, false);
+      await finish(tool, 'reproduced');
+    } });
+    assert.equal(f.state.outcome, 'unverified');
+  }
+});
+test('screen evidence overflow cannot discard a failure and certify earlier passes', async () => {
+  const f = fixture(); f.state.conditions = ['Screen quantity']; f.state.revision = 4;
+  f.state.ownedRecords = [{ entityType: 'PurchaseOrder', id: '608' }];
+  f.state.checks = Array.from({ length: 100 }, (_, i) => ({ label: 'Screen quantity', expected: 5, operator: 'equal', aggregate: 'single',
+    available: true, passed: true, actual: 5, revision: 4, sources: [{ entityType: 'PurchaseOrder', id: String(i), path: 'screen.billedQuantity' }] }));
+  await runEngine({ ...f.options, inspectScreen: async () => ({ kind: 'observed_screen', actual: 3.5, revision: 4 }),
+    runModel: async (_messages, tool) => {
+      const check = await tool('checkScreen', { label: 'Screen quantity', id: '608', expected: 5, operator: 'equal' });
+      assert.equal(check.success, false); await finish(tool, 'reproduced');
+    } });
+  assert.equal(f.state.outcome, 'unverified'); assert.match(f.state.summary, /Evidence budget/);
+});
+
+test('Received evidence does not replace an unavailable Billed measurement', async () => {
+  const f = fixture(); f.state.conditions = ['Reported billed discrepancy']; f.state.revision = 4;
+  f.state.ownedRecords = [{ entityType: 'PurchaseOrder', id: '608' }];
+  await runEngine({ ...f.options, inspectScreen: async ({ field }) => {
+    if (field === 'billedQuantity') throw new Error('Billed column not present');
+    return { kind: 'observed_screen', field, actual: 3.5, revision: 4 };
+  }, runModel: async (_messages, tool) => {
+    await tool('checkScreen', { label: 'Reported billed discrepancy', id: '608', expected: 5, operator: 'equal' });
+    await tool('checkScreen', { label: 'Reported billed discrepancy', id: '608', field: 'receivedQuantity', expected: 3.5, operator: 'equal' });
+    await finish(tool, 'reproduced');
+  } });
+  assert.equal(f.state.outcome, 'unverified'); assert.equal(f.state.checks.length, 2);
+  assert.equal(f.state.checks[0].sources[0].path, 'screen.billedQuantity');
+  assert.equal(f.state.checks[1].sources[0].path, 'screen.receivedQuantity');
+});
+
+test('new dispatch receipts persist server scope before QBO and ignore supplied scope', async () => {
+  const f = fixture(); f.plan.realmId = 'actual-realm'; f.state.environment = 'production'; f.state.connectionId = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const snapshots = [];
+  f.options.persist = async () => snapshots.push(structuredClone(f.plan.steps));
+  await runEngine({ ...f.options, runModel: async (_messages, tool) => {
+    await define(tool);
+    await tool('createRecord', { entityType: 'Vendor', record: { DisplayName: 'Fixture vendor' }, summary: 'Create fixture',
+      executionScope: { realmId: 'other', environment: 'sandbox' } });
+    await finish(tool, 'unverified');
+  } });
+  const scope = { version: 1, realmId: 'actual-realm', environment: 'production', connectionId: 'aaaaaaaaaaaaaaaaaaaaaaaa' };
+  assert.deepEqual(snapshots.find(steps => steps[0]?.status === 'executing')[0].executionScope, scope);
+  assert.deepEqual(f.plan.steps[0].executionScope, scope);
+  assert.equal(f.calls.filter(call => call[0] === 'create').length, 1);
+});

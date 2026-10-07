@@ -2,35 +2,35 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import Layout from '../components/Layout'
+import BookEvidence from '../components/BookEvidence'
+import BusinessBaseline from '../components/BusinessBaseline'
+import BusinessPlan from '../components/BusinessPlan'
+import BusinessOperations from '../components/BusinessOperations'
 import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { buttonVariants } from '@/components/ui/button'
 import { StatusDot, EnvironmentTag } from '@/components/ui/status'
 import { CoverageUnavailable, useCoverage } from '@/components/coverage'
 import { cn } from '@/lib/utils'
+import { companyReadiness } from '@/lib/company-readiness.mjs'
 
 // Company answers: is the test company believable and current, and what's in it?
 // Keeping it current is one decision ("catch up"), not a form of parameters.
 
 const COUNT_ROWS = [
-  { key: 'customers', label: 'Customers' },
-  { key: 'vendors', label: 'Vendors' },
-  { key: 'items', label: 'Products and services' },
-  { key: 'accounts', label: 'Accounts' },
+  { key: 'customers', label: 'Active customers' },
+  { key: 'vendors', label: 'Active vendors' },
+  { key: 'items', label: 'Active products and services' },
+  { key: 'accounts', label: 'Active accounts' },
   { key: 'openInvoices', label: 'Open invoices' },
   { key: 'openBills', label: 'Unpaid bills' },
 ]
 
 function shortDate(date) {
   if (!date) return '—'
-  return new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  return new Date(typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date + 'T12:00:00' : date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function daysSince(date) {
-  if (!date) return null
-  const ms = Date.now() - new Date(date).getTime()
-  return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 86400000)) : null
-}
 
 function humanizeAction(action) {
   const text = String(action || 'Activity').replace(/[._-]+/g, ' ').trim()
@@ -92,12 +92,16 @@ function Meter({ label, done, total }) {
 
 export default function Company() {
   const connection = useConnection()
+  const scope = [connection?.status?.realmId, connection?.environment, connection?.ready].join(':')
+  return <CompanyContent key={scope} connection={connection} />
+}
+
+function CompanyContent({ connection }) {
   const ready = connection?.ready === true
   const [health, setHealth] = useState(null)
+  const [readVersion, setReadVersion] = useState(0)
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotError, setSnapshotError] = useState(false)
-  const [lastGenRun, setLastGenRun] = useState(undefined)
-  const [lastSeedRun, setLastSeedRun] = useState(undefined)
   const [activity, setActivity] = useState(null)
   const coverage = useCoverage(ready)
 
@@ -110,46 +114,21 @@ export default function Company() {
     client.get('/company/snapshot')
       .then((res) => settle(() => { setSnapshot(res.data?.counts || {}); setSnapshotError(false) }))
       .catch(() => settle(() => setSnapshotError(true)))
-    client.get('/generate/history')
-      .then((res) => settle(() => setLastGenRun((res.data?.genRuns || [])[0] || null)))
-      .catch(() => {})
-    client.get('/seed/history')
-      .then((res) => settle(() => setLastSeedRun((res.data?.seedRuns || [])[0] || null)))
-      .catch(() => {})
     client.get('/explore/timeline?limit=6')
       .then((res) => settle(() => setActivity(res.data?.entries || [])))
       .catch(() => settle(() => setActivity('error')))
     return () => { cancelled = true }
-  }, [ready])
+  }, [ready, readVersion])
 
   const status = connection?.status
-  const lastActivity = lastGenRun ? (lastGenRun.completedAt || lastGenRun.startedAt || lastGenRun.createdAt) : null
-  const behind = daysSince(lastActivity)
   const coverageSummary = coverage.result?.summary
-
-  // The one decision on this page.
-  let currency
-  if (!ready) {
-    currency = { tone: 'muted', title: 'Waiting on QuickBooks', detail: 'How current the books are shows once the connection works.' }
-  } else if (lastGenRun === undefined || lastSeedRun === undefined) {
-    currency = { tone: 'muted', title: 'Checking…', detail: null, loading: true }
-  } else if (lastSeedRun === null) {
-    currency = { tone: 'attention', title: 'The company has no starter records', detail: 'Add customers, vendors and products first. Everything else builds on them.', cta: 'Add starter records' }
-  } else if (lastGenRun === null) {
-    currency = { tone: 'attention', title: 'No business activity yet', detail: 'Generate a history of invoices, payments and bills so the company looks like a real business.', cta: 'Generate history' }
-  } else if (lastGenRun.status === 'failed') {
-    currency = { tone: 'danger', title: 'The last update stopped partway', detail: `Started ${shortDate(lastGenRun.startedAt)}. Progress is saved; resume it to finish.`, cta: 'Review and resume' }
-  } else if (behind != null && behind > 1) {
-    currency = { tone: 'attention', title: `${behind} days behind`, detail: `Activity runs through ${shortDate(lastActivity)}. Catch up so today's reports have current transactions.`, cta: 'Catch up to today' }
-  } else {
-    currency = { tone: 'ok', title: 'Up to date', detail: `Activity runs through ${shortDate(lastActivity)}.` }
-  }
+  const currency = companyReadiness({ ready, result: coverage.result, state: coverage.state, error: coverage.error })
 
   return (
     <Layout>
       <div className="mx-auto max-w-[1080px]">
         <h1 className="text-[22px] font-semibold tracking-[-0.015em] text-[var(--ink)]">{status?.companyName || 'Company'}</h1>
-        <p className="mt-1 text-[13.5px] text-[var(--ink-2)]">The test company customers' issues are reproduced in.</p>
+        <p className="mt-1 text-[13.5px] text-[var(--ink-2)]">Maintain a realistic business, keep its records current, and verify the results.</p>
 
         <section className="mt-6 flex flex-wrap items-center gap-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-6 py-5">
           <StatusDot tone={currency.tone} className="size-2.5" />
@@ -160,12 +139,41 @@ export default function Company() {
             </h2>
             {currency.detail && <p className="mt-0.5 text-[13.5px] text-[var(--ink-2)]">{currency.detail}</p>}
           </div>
-          {currency.cta && (
-            <Link to="/lab" className={cn(buttonVariants({ size: 'lg' }), 'no-underline')}>
-              {currency.cta} <ArrowRight />
-            </Link>
-          )}
+          <button type="button" disabled={!ready || coverage.state === 'checking'} onClick={() => { setReadVersion(v => v + 1); coverage.check({ refresh: true }) }} className={buttonVariants({ size: 'lg' })}>
+            {coverage.state === 'checking' ? 'Checking…' : 'Check business activity'}
+          </button>
         </section>
+
+        {ready && coverage.result && (
+          <Panel title="What still needs to be established" className="mt-5" action={<Link to="/coverage" className="text-[12.5px] font-medium text-[var(--link)]">Inspect coverage <ArrowRight className="inline size-3.5" /></Link>}>
+            <div className="px-5 py-4 text-[13px] text-[var(--ink-2)]">
+              <p>Activity assessed through {currency.asOf || 'an unknown date'}. A finished generation job does not prove the books are current.</p>
+              {(currency.stale || currency.checkFailed || currency.incomplete) && <p role="status" className="mt-2 text-[var(--attention)]">{currency.checkFailed ? 'The latest check failed. Earlier findings are shown below.' : currency.stale ? 'These findings need refreshing.' : 'Some records could not be read completely.'}</p>}
+              <ul className="mt-3 list-disc space-y-1 pl-5">
+                <li>Business calendar: no verified continuous-through date.</li>
+                <li>Reports and reconciliation: completeness has not been established.</li>
+                <li>{currency.unanswered} coverage checks still require evidence or a successful read.</li>
+              </ul>
+            </div>
+            {currency.gaps.length > 0 && <div className="border-t border-[var(--line)] px-5 py-4">
+              <h3 className="text-[13px] font-semibold text-[var(--ink)]">Activity and setup gaps</h3>
+              <ul className="mt-2 grid gap-x-6 gap-y-2 md:grid-cols-2">
+                {currency.gaps.map(gap => <li key={gap.areaKey + ':' + gap.key} className="text-[13px]">
+                  <span className="text-[var(--ink)]">{gap.label}</span>
+                  <span className="ml-2 text-[var(--ink-3)]">{gap.last ? 'Latest ' + shortDate(gap.last) : 'Missing in the checked records'}</span>
+                </li>)}
+              </ul>
+            </div>}
+          </Panel>
+        )}
+
+        <BusinessPlan realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+
+        <BusinessOperations realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+
+        <BusinessBaseline realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+
+        <BookEvidence realmId={status?.realmId} enabled={ready} />
 
         <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
           <Panel title="Connection">
@@ -186,7 +194,7 @@ export default function Company() {
             {!ready ? (
               <p className="px-5 py-4 text-[13px] text-[var(--ink-3)]">Shown once QuickBooks is connected.</p>
             ) : snapshotError ? (
-              <p className="px-5 py-4 text-[13px] text-[var(--ink-2)]">QuickBooks didn't return the counts.</p>
+              <div className="px-5 py-4 text-[13px] text-[var(--ink-2)]"><p>QuickBooks didn't return the counts.</p><button type="button" onClick={() => setReadVersion(v => v + 1)} className="mt-2 text-[var(--link)]">Retry counts</button></div>
             ) : (
               <dl className="divide-y divide-[var(--line)] px-5 py-1">
                 {COUNT_ROWS.map((row) => (

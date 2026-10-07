@@ -31,6 +31,10 @@ const companyMembershipSchema = new mongoose.Schema(
       enum: ['active', 'suspended', 'retired'],
       default: 'active',
     },
+    // Write fence for explicitly reviewed local business-storage setup.
+    businessSetupVersion: { type: Number, default: 0 },
+    // Transaction conflict fence for retained company observations.
+    businessObservationVersion: { type: Number, default: 0 },
     migratedFromLegacyRole: {
       type: String,
       enum: ['agent', 'supervisor', null],

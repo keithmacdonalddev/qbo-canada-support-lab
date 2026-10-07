@@ -217,6 +217,10 @@ function describeChanges(plans, names = new Map(), { request = '' } = {}) {
       const result = step.result?.data || {};
 
       let status = STEP_STATUS[step.status];
+      // A change to a pre-existing record waiting for (or being decided by) the owner.
+      if (step.approval?.state === 'needed' && step.status === 'pending') status = 'approval';
+      if (step.approval?.state === 'deciding' && step.status === 'pending') status = 'running';
+      if (step.approval?.state === 'declined') status = 'declined';
       if (!status) {
         if (['proposed', 'approved', 'partially_approved'].includes(plan.status)) status = 'waiting';
         else if (plan.status === 'executing') status = 'queued';
@@ -317,6 +321,12 @@ function describeChanges(plans, names = new Map(), { request = '' } = {}) {
         if (action === 'update' && input.changes) fact(`Changes ${Object.keys(input.changes).join(', ')}`);
       }
 
+      // An existing record the owner is asked about: show it as QuickBooks did when proposed.
+      const shown = step.approval?.record;
+      if (shown) {
+        party = shown.party || party;
+        if (amount === null && shown.total !== null && shown.total !== undefined) amount = num(shown.total);
+      }
       rows.push({
         key: `${plan._id}:${step.stepNumber}`,
         planId: String(plan._id),
@@ -326,8 +336,8 @@ function describeChanges(plans, names = new Map(), { request = '' } = {}) {
         entityType,
         status,
         recordId: result.id || (action !== 'create' && isId(input.id) ? String(input.id) : null),
-        docNumber: result.docNumber || null,
-        date: record.TxnDate || result.txnDate || null,
+        docNumber: result.docNumber || shown?.docNumber || null,
+        date: record.TxnDate || result.txnDate || shown?.txnDate || null,
         dueDate: record.DueDate || null,
         party,
         amount,
@@ -343,6 +353,7 @@ function describeChanges(plans, names = new Map(), { request = '' } = {}) {
           })
           : null,
         summary: input.summary ? String(input.summary).slice(0, 300) : null,
+        approval: step.approval ? { state: step.approval.state, record: step.approval.record || null } : null,
         error: status === 'failed' ? plainError(step.error || step.result?.error) : null,
         // Same record, proposed again? Compared on what was asked for, not the result.
         matchKey: (() => {
@@ -383,6 +394,7 @@ function describeChanges(plans, names = new Map(), { request = '' } = {}) {
     waiting: visible.filter((r) => r.status === 'waiting').length,
     running: visible.filter((r) => ['running', 'queued'].includes(r.status)).length,
     notDone: visible.filter((r) => ['skipped', 'pending'].includes(r.status)).length,
+    approval: visible.filter((r) => r.status === 'approval').length,
     retried: rows.filter((r) => r.retriedBy && r.status === 'failed').length,
   };
   return {

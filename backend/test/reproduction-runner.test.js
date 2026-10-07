@@ -12,10 +12,15 @@ function set(obj, path, value) {
 }
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some((part) => matches(doc, part));
+    if (key === '$and') return value.every((part) => matches(doc, part));
     const actual = get(doc, key);
+    if (value === null) return actual === null || actual === undefined;
     if (value && typeof value === 'object') {
       if ('$ne' in value) return actual !== value.$ne;
       if ('$in' in value) return value.$in.includes(actual);
+      if ('$exists' in value) return (actual !== undefined) === value.$exists;
+      if ('$lt' in value) return actual !== undefined && actual !== null && new Date(actual) < new Date(value.$lt);
     }
     return String(actual) === String(value);
   });
@@ -73,6 +78,7 @@ function setup(options = {}) {
   let starts = 0;
   const runner = createRunner({
     AISession, AIPlan, config, instance: 'test-instance',
+    ...(options.providerDependencies || {}),
     Connection: { findOne: async () => connection, exists: async () => connection.status === 'active' },
     CompanyMembership: { findOne: async () => membership },
     User: { findById: () => ({ select: async () => ({}) }) },
@@ -209,4 +215,63 @@ test('provider failure after confirmed historical writes does not make their out
   await f.runner.waitForIdle(first._id);
   assert.equal(runs, 2);
   assert.equal(f.AIPlan.store.get(saved.reproduction.planId).steps.length, 1);
+});
+
+test('a case cannot start a run while the owner is deciding a change to an existing record', async () => {
+  const f = setup();
+  const first = await f.start();
+  await f.runner.waitForIdle(first._id);
+  f.AISession.store.get(first._id).reproduction.decisionLockUntil = new Date(Date.now() + 60000).toISOString();
+  await assert.rejects(() => f.start({ sessionId: first._id, requestId: 'request-123456782' }), /being decided/);
+  f.AISession.store.get(first._id).reproduction.decisionLockUntil = new Date(Date.now() - 1000).toISOString();
+  const resumed = await f.start({ sessionId: first._id, requestId: 'request-123456783' });
+  await f.runner.waitForIdle(resumed._id);
+  assert.equal(f.starts, 2);
+});
+
+test('provider timeout drains a confirmed write before durable reconciliation and continuation', async () => {
+  const { providerTimeout } = require('../src/modules/ai-provider-timeout');
+  let drained = false; let modelCalls = 0; let execute;
+  const f = setup({ providerDependencies: {
+    aiProvider: { resolveProvider: async () => 'codex' },
+    createToolSession: (options) => { execute = options.execute; return { bridge: {}, close: async () => { await execute(); drained = true; } }; },
+    codexCli: { run: async ({ timeoutMs }) => { assert.ok(timeoutMs > 0 && timeoutMs <= 300000); modelCalls++; throw providerTimeout('Codex', timeoutMs); } },
+  }, runEngine: async ({ state, plan, persist, runModel, confirmContinuation }) => {
+    await assert.rejects(() => runModel([], async () => {
+      plan.steps.push({ stepNumber: 1, status: 'completed', result: { data: { id: '1' } } });
+      await persist();
+    }, [], { deadline: Date.now() + 50000 }), /did not finish/);
+    assert.equal(drained, true);
+    await confirmContinuation();
+    state.status = 'completed'; state.summary = 'Confirmed after draining';
+  } });
+  const started = await f.start(); await f.runner.waitForIdle(started._id);
+  assert.equal(modelCalls, 1);
+  assert.equal(f.AISession.store.get(started._id).reproduction.summary, 'Confirmed after draining');
+});
+test('continuation rejects missing durable receipts and a stop during provider drain', async () => {
+  for (const stop of [false, true]) {
+    const f = setup({ runEngine: async ({ state, plan, confirmContinuation }) => {
+      if (stop) await f.runner.stopCase('owner', [...f.AISession.store.keys()][0]);
+      else plan.steps.push({ stepNumber: 1, status: 'completed', result: { data: { id: 'unsaved' } } });
+      await assert.rejects(confirmContinuation, stop ? /Stopped at your request/ : /could not be reconciled/);
+      state.status = 'completed'; state.summary = 'Refused unsafe continuation';
+    } });
+    const started = await f.start(); await f.runner.waitForIdle(started._id);
+    assert.equal(f.AISession.store.get(started._id).reproduction.summary, 'Refused unsafe continuation');
+  }
+});
+
+test('continuation preserves first request timing and clears the prior finish before execution', async () => {
+  const starts = [];
+  const f = setup({ runEngine: async ({ state, persist }) => {
+    starts.push(copy(state)); state.status = 'completed'; state.completedAt = new Date(); await persist();
+  } });
+  const first = await f.start(); await f.runner.waitForIdle(first._id);
+  const original = f.AISession.store.get(first._id).reproduction.firstSubmittedAt;
+  assert.ok(original);
+  await f.start({ sessionId: first._id, requestId: 'request-timing-12345678' }); await f.runner.waitForIdle(first._id);
+  assert.equal(starts.length, 2); assert.equal(starts[1].firstSubmittedAt, original); assert.equal(starts[1].completedAt, null);
+  const publicCase = f.runner.publicState(f.AISession.store.get(first._id));
+  assert.equal(publicCase.timing.available, true); assert.equal(publicCase.timing.firstSubmissionSource, 'recorded_request');
 });

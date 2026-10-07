@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk').default;
 const config = require('../config');
 const codexCli = require('./codex-cli');
+const { providerTimeout } = require('./ai-provider-timeout');
 
 const MODELS = {
   FAST: config.ai.modelFast,
@@ -74,8 +75,12 @@ async function chat(messages, tools = [], options = {}) {
   if (options.system) params.system = options.system;
   if (tools.length > 0) params.tools = tools;
 
-  const response = await client.messages.create(params);
-  return response;
+  try {
+    return await client.messages.create(params, options.timeoutMs === undefined ? undefined : { timeout: options.timeoutMs, maxRetries: 0 });
+  } catch (error) {
+    if (options.timeoutMs !== undefined && error instanceof Anthropic.APIConnectionTimeoutError) throw providerTimeout('The model service', options.timeoutMs);
+    throw error;
+  }
 }
 
 /**

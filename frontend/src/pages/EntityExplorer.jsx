@@ -4,7 +4,9 @@ import {
   ArrowLeft, ChevronRight, ExternalLink, GitBranch, LoaderCircle, Search, X,
 } from 'lucide-react'
 import Layout from '../components/Layout'
+import RecordOrigin from '../components/RecordOrigin'
 import client from '../api/client'
+import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { StatusDot } from '@/components/ui/status'
@@ -120,6 +122,7 @@ function ResultsTable({ type, records, selectedId, onOpen, compact }) {
             return (
               <tr
                 key={record.Id}
+                data-record-id={record.Id}
                 tabIndex={0}
                 aria-selected={selected}
                 onClick={() => onOpen(record)}
@@ -241,7 +244,7 @@ function RawFields({ record }) {
     <details className="group rounded-lg border border-[var(--line)]">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[12.5px] font-medium text-[var(--ink-2)] hover:text-[var(--ink)]">
         <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
-        Every field QuickBooks stores
+        Fields returned by QuickBooks
       </summary>
       <dl className="max-h-[420px] overflow-auto border-t border-[var(--line)] px-3 py-2 font-mono text-[11.5px] leading-relaxed">
         {Object.entries(record).map(([key, val]) => (
@@ -257,28 +260,30 @@ function RawFields({ record }) {
   )
 }
 
-function RecordPanel({ type, id, preview, environment, canGoBack, onBack, onClose, onOpen }) {
+function RecordPanel({ type, id, preview, realmId, environment, canGoBack, onBack, onClose, onOpen }) {
   const [record, setRecord] = useState(preview || null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [chain, setChain] = useState(null)
   const [chainState, setChainState] = useState('idle')
+  const alive = useRef(true)
 
   // The panel is keyed by type and id, so each record starts with fresh state.
   useEffect(() => {
     let cancelled = false
+    alive.current = true
     client.get(`/explore/${type.toLowerCase()}/${encodeURIComponent(id)}`)
-      .then((res) => { if (!cancelled) setRecord(res.data.record) })
+      .then((res) => { if (cancelled) return; if (res.data.scope?.realmId !== realmId || res.data.scope?.environment !== environment) throw new Error('Company changed'); setRecord(res.data.record) })
       .catch((err) => { if (!cancelled) setError(errorText(err, "QuickBooks didn't return this record.")) })
       .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [type, id])
+    return () => { cancelled = true; alive.current = false }
+  }, [type, id, realmId, environment])
 
   const traceChain = () => {
     setChainState('loading')
     client.get(`/explore/${type}/${encodeURIComponent(id)}/chain`)
-      .then((res) => { setChain(res.data); setChainState('done') })
-      .catch((err) => { setChain({ error: errorText(err, "The linked records couldn't be traced.") }); setChainState('error') })
+      .then((res) => { if (!alive.current) return; if (res.data.scope?.realmId !== realmId || res.data.scope?.environment !== environment) throw new Error('Company changed'); setChain(res.data); setChainState('done') })
+      .catch((err) => { if (!alive.current) return; setChain({ error: errorText(err, "The linked records couldn't be traced.") }); setChainState('error') })
   }
 
   const status = recordStatus(type, record)
@@ -330,6 +335,8 @@ function RecordPanel({ type, id, preview, environment, canGoBack, onBack, onClos
               </dl>
             )}
 
+            <RecordOrigin key={[type, id, realmId, environment].join(':')} type={type} id={id} realmId={realmId} environment={environment} />
+
             <LinesTable record={record} />
 
             <section>
@@ -338,7 +345,7 @@ function RecordPanel({ type, id, preview, environment, canGoBack, onBack, onClos
                 {chainState !== 'done' && (
                   <Button size="xs" variant="ghost" onClick={traceChain} disabled={chainState === 'loading' || loading}>
                     {chainState === 'loading' ? <LoaderCircle className="animate-spin" /> : <GitBranch />}
-                    {chainState === 'loading' ? 'Tracing…' : 'Trace full chain'}
+                    {chainState === 'loading' ? 'Tracing…' : 'Trace linked records'}
                   </Button>
                 )}
               </div>
@@ -360,7 +367,7 @@ function RecordPanel({ type, id, preview, environment, canGoBack, onBack, onClos
                   ))}
                 </ul>
               ) : (
-                <p className="text-[12.5px] text-[var(--ink-3)]">{loading ? 'Loading…' : 'This record doesn’t point at any others. Trace the chain to also find records that point at it.'}</p>
+                <p className="text-[12.5px] text-[var(--ink-3)]">{loading ? 'Loading…' : 'This record has no outgoing transaction links. Chain tracing follows links returned on each record.'}</p>
               )}
             </section>
 
@@ -380,12 +387,24 @@ function RecordPanel({ type, id, preview, environment, canGoBack, onBack, onClos
 
 export default function EntityExplorer() {
   const connection = useConnection()
+  const { user } = useAuth()
+  return <ExplorerContent key={[connection?.status?.realmId, connection?.environment, connection?.ready, user?._id || user?.id].join(':')} connection={connection} />
+}
+
+function ExplorerContent({ connection }) {
+  const realmId = connection?.status?.realmId
+  const environment = connection?.environment
   const ready = connection?.ready === true
   const [searchParams, setSearchParams] = useSearchParams()
   const urlType = RECORD_TYPES[searchParams.get('type')] ? searchParams.get('type') : DEFAULT_TYPE
 
   const [type, setType] = useState(urlType)
   const [query, setQuery] = useState(() => searchParams.get('q') || '')
+  const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get('offset')) || 0))
+  const [from, setFrom] = useState(() => searchParams.get('from') || '')
+  const [through, setThrough] = useState(() => searchParams.get('through') || '')
+  const [active, setActive] = useState(() => searchParams.get('active') || 'all')
+  const [attempt, setAttempt] = useState(0)
   const [results, setResults] = useState({ type: null, records: [], state: 'idle', error: null })
   // Open records, newest last, so links can be followed and walked back.
   const [stack, setStack] = useState(() => {
@@ -403,10 +422,14 @@ export default function EntityExplorer() {
   useEffect(() => {
     const next = { type }
     if (query.trim()) next.q = query.trim()
+    if (offset) next.offset = String(offset)
+    if (!RECORD_TYPES[type].isList && from) next.from = from
+    if (!RECORD_TYPES[type].isList && through) next.through = through
+    if (RECORD_TYPES[type].isList && active !== 'all') next.active = active
     if (current) { next.open = current.type; next.id = current.id }
     if (current && current.type === type) delete next.open
     setSearchParams(next, { replace: true })
-  }, [type, query, current, setSearchParams])
+  }, [type, query, current, offset, from, through, active, setSearchParams])
 
   // Clicking Records in the menu lands on a bare /explorer: start over.
   const bareUrl = searchParams.toString() === ''
@@ -414,52 +437,54 @@ export default function EntityExplorer() {
     if (!bareUrl) return undefined
     const timer = setTimeout(() => {
       setType(DEFAULT_TYPE)
-      setQuery('')
+      setQuery(''); setOffset(0); setFrom(''); setThrough(''); setActive('all')
       setStack([])
     }, 0)
     return () => clearTimeout(timer)
   }, [bareUrl])
 
-  const runSearch = useCallback((searchType, text) => {
+  const filters = JSON.stringify({ type, query, offset, from: config.isList ? '' : from, through: config.isList ? '' : through, active: config.isList ? active : '' })
+  const runSearch = useCallback((criteria, signal) => {
+    const request = JSON.parse(criteria)
     const id = ++requestId.current
-    setResults((prev) => ({ ...prev, type: searchType, state: 'loading', error: null }))
-    const params = { type: searchType }
-    if (text.trim() && RECORD_TYPES[searchType].search) params.q = text.trim()
-    client.get('/explore/search', { params })
+    setResults({ type: request.type, filters: criteria, records: [], state: 'loading', error: null })
+    const params = { type: request.type, offset: request.offset }
+    if (request.query.trim() && RECORD_TYPES[request.type].search) params.q = request.query.trim()
+    if (RECORD_TYPES[request.type].isList) params.active = request.active
+    else { if (request.from) params.from = request.from; if (request.through) params.through = request.through }
+    client.get('/explore/search', { params, signal })
       .then((res) => {
-        if (id !== requestId.current) return
+        if (signal.aborted || id !== requestId.current) return
+        if (res.data.scope?.realmId !== realmId || res.data.scope?.environment !== environment) throw new Error('Company changed')
         const records = res.data.records || []
-        setResults({ type: searchType, records, state: 'done', error: null })
-        // Arriving from a case with a document number opens the match directly.
+        setResults({ ...res.data, type: request.type, filters: criteria, records, state: 'done', error: null })
         if (autoOpen.current) {
           autoOpen.current = false
-          if (records.length === 1) setStack([{ type: searchType, id: String(records[0].Id), preview: records[0] }])
+          if (records.length === 1 && !res.data.hasMore && request.offset === 0) setStack([{ type: request.type, id: String(records[0].Id), preview: records[0] }])
         }
       })
       .catch((err) => {
-        if (id !== requestId.current) return
-        setResults({ type: searchType, records: [], state: 'error', error: errorText(err, 'The search failed.') })
+        if (signal.aborted || id !== requestId.current) return
+        setResults({ type: request.type, filters: criteria, records: [], state: 'error', error: errorText(err, 'The search failed.') })
       })
-  }, [])
+  }, [realmId, environment])
 
-  // Load as soon as the connection works, when the kind changes, and shortly
-  // after typing stops.
   useEffect(() => {
     if (!ready) return undefined
-    const timer = setTimeout(() => runSearch(type, query), query ? 350 : 0)
-    return () => clearTimeout(timer)
-  }, [ready, type, query, runSearch])
+    const controller = new AbortController()
+    const timer = setTimeout(() => runSearch(filters, controller.signal), query ? 350 : 0)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [ready, filters, query, runSearch, attempt])
 
   const chooseType = (next) => {
     if (next === type) return
-    setType(next)
-    setQuery('')
+    setType(next); setQuery(''); setOffset(0)
   }
 
   const openFromList = (record) => setStack([{ type, id: String(record.Id), preview: record }])
   const followLink = (linkType, id) => setStack((prev) => [...prev, { type: linkType, id: String(id) }])
 
-  const showing = results.type === type
+  const showing = results.type === type && results.filters === filters
   const records = showing ? results.records : []
 
   let body
@@ -473,11 +498,11 @@ export default function EntityExplorer() {
     body = (
       <div className="flex flex-wrap items-center gap-3 px-5 py-4">
         <p className="flex-1 text-[13px] text-[var(--danger-ink)]">{results.error}</p>
-        <Button size="sm" variant="outline" onClick={() => runSearch(type, query)}>Try again</Button>
+        <Button size="sm" variant="outline" onClick={() => setAttempt(value => value + 1)}>Try again</Button>
       </div>
     )
   } else if (!records.length) {
-    body = <Muted>{query.trim() ? `No ${config.plural.toLowerCase()} match “${query.trim()}”.` : `The company has no ${config.plural.toLowerCase()} yet.`}</Muted>
+    body = <Muted>{query.trim() ? `No ${config.plural.toLowerCase()} match “${query.trim()}”.` : 'No records on this page match the selected filters.'}</Muted>
   } else {
     body = <ResultsTable type={type} records={records} selectedId={current?.type === type ? current.id : null} onOpen={openFromList} compact={!!current} />
   }
@@ -485,8 +510,8 @@ export default function EntityExplorer() {
   const noun = records.length === 1 ? config.one.toLowerCase() : config.plural.toLowerCase()
   const order = config.isList ? 'A to Z' : 'newest first'
   const countText = !showing || !records.length || results.state === 'error' ? ''
-    : records.length >= 50 ? `First 50 ${noun}, ${order}.${config.search ? ' Search to narrow them down.' : ''}`
-      : `${records.length} ${noun}, ${order}`
+    : 'Showing ' + (offset + 1) + '–' + (offset + records.length) + ' ' + noun + ', ' + order
+
 
   return (
     <Layout>
@@ -518,13 +543,21 @@ export default function EntityExplorer() {
                   id="record-search"
                   type="search"
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  maxLength={120}
+                  onChange={(e) => { setQuery(e.target.value); setOffset(0) }}
                   placeholder={`${config.search}…`}
                   className="h-8 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface)] pl-8 pr-3 text-[13px] text-[var(--ink)] placeholder:text-[var(--ink-3)]"
                 />
               </div>
             ) : <span className="ml-auto text-[12.5px] text-[var(--ink-3)]">QuickBooks can't search these by number.</span>}
           </header>
+          <div className="flex flex-wrap items-end gap-3 border-b border-[var(--line)] px-5 py-3 text-[12px]">
+            {config.isList ? <label className="grid gap-1">Status<select aria-label="Record status" value={active} onChange={event => { setActive(event.target.value); setOffset(0) }} className="rounded border border-[var(--line)] bg-[var(--surface)] px-2 py-1"><option value="all">Active and inactive</option><option value="active">Active only</option><option value="inactive">Inactive only</option></select></label> : <>
+              <label className="grid gap-1">From<input type="date" aria-label="Records from date" value={from} onChange={event => { setFrom(event.target.value); setOffset(0) }} className="rounded border border-[var(--line)] bg-[var(--surface)] px-2 py-1" /></label>
+              <label className="grid gap-1">Through<input type="date" aria-label="Records through date" value={through} onChange={event => { setThrough(event.target.value); setOffset(0) }} className="rounded border border-[var(--line)] bg-[var(--surface)] px-2 py-1" /></label>
+            </>}
+            <Button size="sm" variant="ghost" onClick={() => { setOffset(0); setAttempt(value => value + 1) }}>Refresh from first page</Button>
+          </div>
           {countText && (
             <p className="flex items-center gap-2 border-b border-[var(--line)] px-5 py-1.5 text-[12px] text-[var(--ink-3)]">
               {countText}
@@ -532,16 +565,21 @@ export default function EntityExplorer() {
             </p>
           )}
           {body}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] px-5 py-3">
+            <p className="text-[12px] text-[var(--ink-3)]">Live results can move between pages when QuickBooks records change.</p>
+            <div className="flex gap-2"><Button size="sm" variant="outline" disabled={offset === 0 || results.state === 'loading'} onClick={() => setOffset(value => Math.max(0, value - 50))}>Previous</Button><Button size="sm" variant="outline" disabled={!showing || results.state !== 'done' || !results.hasMore} onClick={() => setOffset(results.nextOffset)}>Next</Button></div>
+          </div>
         </section>
 
-        {current && (
+        {ready && current && (
           <div className="min-w-0 lg:col-span-2 xl:col-span-1">
             <RecordPanel
               key={`${current.type}:${current.id}`}
               type={current.type}
               id={current.id}
               preview={current.preview}
-              environment={connection?.environment}
+              realmId={realmId}
+              environment={environment}
               canGoBack={stack.length > 1}
               onBack={() => setStack((prev) => prev.slice(0, -1))}
               onClose={() => setStack([])}

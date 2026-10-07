@@ -607,17 +607,22 @@ function checkTargetRef(toolInput, resultsByStep) {
   }
 }
 
+// Requests from reproduction cases to change existing records (step.approval) are
+// decided only through reproduction-approvals, never by the legacy plan routes.
+const CASE_APPROVAL = (plan) => (plan.steps || []).some((step) => step.approval);
+
 async function executePlan(planId, userId) {
   const existing = await AIPlan.findById(planId);
   if (!existing) throw new Error('Plan not found');
   if (existing.userId.toString() !== userId.toString()) throw new Error('Unauthorized');
+  if (CASE_APPROVAL(existing)) throw new Error('Changes to existing records in a case are decided on the case page.');
   if (!['approved', 'partially_approved'].includes(existing.status)) {
     throw new Error(`Plan status is "${existing.status}" — must be approved or partially_approved`);
   }
 
   // Claim the plan atomically so a second click, tab or retry cannot run it twice.
   const plan = await AIPlan.findOneAndUpdate(
-    { _id: planId, userId, status: { $in: ['approved', 'partially_approved'] } },
+    { _id: planId, userId, status: { $in: ['approved', 'partially_approved'] }, 'steps.approval': { $exists: false } },
     { $set: { status: 'executing' } },
     { new: true },
   );
@@ -764,6 +769,7 @@ async function approvePlan(planId, userId, stepApprovals) {
   const plan = await AIPlan.findById(planId);
   if (!plan) throw new Error('Plan not found');
   if (plan.userId.toString() !== userId.toString()) throw new Error('Unauthorized');
+  if (CASE_APPROVAL(plan)) throw new Error('Changes to existing records in a case are decided on the case page.');
   if (plan.status !== 'proposed') {
     throw new Error(`Plan status is "${plan.status}" — can only approve proposed plans`);
   }
@@ -834,6 +840,7 @@ async function rejectPlan(planId, userId) {
   const plan = await AIPlan.findById(planId);
   if (!plan) throw new Error('Plan not found');
   if (plan.userId.toString() !== userId.toString()) throw new Error('Unauthorized');
+  if (CASE_APPROVAL(plan)) throw new Error('Changes to existing records in a case are decided on the case page.');
   if (!['proposed', 'partially_approved'].includes(plan.status)) {
     throw new Error(`Plan status is "${plan.status}" — can only reject proposed or partially_approved plans`);
   }

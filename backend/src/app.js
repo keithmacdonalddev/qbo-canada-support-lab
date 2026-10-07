@@ -15,6 +15,19 @@ function createApp(options = {}) {
   app.use(cors())
   app.use(express.json())
 
+  // Browser companion redeems a one-use, short-lived case capability, never a JWT.
+  // This exact endpoint grants no general app or QBO access.
+  app.post('/api/screen-reader/capability', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!/^chrome-extension:\/\/[a-p]{32}$/.test(req.get('origin') || '') || !['redeem', 'validate'].includes(req.body?.stage)) {
+      return res.status(404).json({ error: 'Screen capability unavailable.' });
+    }
+    try {
+      const request = await require('./modules/reproduction-screen').screenBroker.capability(req.body.nonce, req.body.stage === 'redeem');
+      return res.json({ request });
+    } catch { return res.status(404).json({ error: 'Screen capability unavailable.' }); }
+  });
+
   // Company routes run in the shared company's workspace for its members (see
   // middleware/companyScope.js). Auth, settings and QuickBooks connect/disconnect
   // stay per account; only the connection status read is shared.
@@ -22,7 +35,7 @@ function createApp(options = {}) {
   app.use([
     '/api/company', '/api/seed', '/api/audit', '/api/generate', '/api/checkpoint', '/api/explore',
     '/api/coverage', '/api/issuepacks', '/api/ai', '/api/context', '/api/capabilities', '/api/reports',
-    '/api/blueprints', '/api/volume-profiles',
+    '/api/blueprints', '/api/volume-profiles', '/api/business-operations',
   ], companyScope)
   app.get('/api/qbo/status', companyScope)
 
@@ -35,6 +48,7 @@ function createApp(options = {}) {
   app.use('/api/checkpoint', require('./routes/checkpoint'))
   app.use('/api/explore', require('./routes/explore'))
   app.use('/api/coverage', require('./routes/coverage'))
+  app.use('/api/business-operations', options.businessOperationsRouter || require('./routes/business-operations').createBusinessOperationsRouter())
   app.use('/api/issuepacks', require('./routes/issuepacks'))
   // Codex CLI runs call this app's AI tools here (per-run token, no JWT).
   app.use('/api/ai-tools/mcp', require('./routes/ai-tools-mcp'))

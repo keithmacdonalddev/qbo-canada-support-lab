@@ -1,6 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import client from '../api/client'
+import { useConnection } from '../context/ConnectionContext'
+import { useAuth } from '../context/AuthContext'
 import { cn } from '@/lib/utils'
 
 // Shared pieces for showing coverage: which parts of QuickBooks the company
@@ -124,51 +126,54 @@ const isMissingRoute = (err) => err.response?.status === 404 && err.response?.da
  * state: 'loading' | 'checking' | 'ready' | 'unavailable' | 'error'
  */
 export function useCoverage(enabled) {
-  const [result, setResult] = useState(null)
-  const [state, setState] = useState('loading')
-  const [error, setError] = useState(null)
+  const connection = useConnection()
+  const { user } = useAuth()
+  const realmId = connection?.status?.realmId
+  const scope = [user?._id || user?.id, realmId, connection?.environment, enabled].join(':')
+  const [view, setView] = useState({ scope: null, result: null, state: 'loading', error: null })
+  const requestId = useRef({ value: 0 })
 
   const check = useCallback(async ({ refresh = false } = {}) => {
-    setState('checking')
-    setError(null)
+    if (!enabled || !realmId) return
+    const requests = requestId.current
+    const request = ++requests.value
+    setView(old => ({ scope, result: old.scope === scope ? old.result : null, state: 'checking', error: null }))
     try {
       const res = await client.get('/coverage', { params: refresh ? { refresh: 'true' } : {} })
-      setResult(res.data?.data || null)
-      setState('ready')
+      if (request !== requests.value) return
+      const result = res.data?.data
+      if (!result || String(result.realmId) !== String(realmId)) throw new Error('The company changed during the check. Check again.')
+      setView({ scope, result, state: 'ready', error: null })
     } catch (err) {
-      const message = typeof err.response?.data?.error === 'string' ? err.response.data.error : null
-      if (isMissingRoute(err)) {
-        setState('unavailable')
-      } else {
-        setError(message || 'QuickBooks did not answer.')
-        setState('error')
-      }
+      if (request !== requests.value) return
+      const message = typeof err.response?.data?.error === 'string' ? err.response.data.error : err.message
+      setView(old => ({ scope, result: old.scope === scope ? old.result : null,
+        state: isMissingRoute(err) ? 'unavailable' : 'error', error: message || 'QuickBooks did not answer.' }))
     }
-  }, [])
+  }, [enabled, realmId, scope])
 
   useEffect(() => {
-    if (!enabled) return
-    let cancelled = false
+    const requests = requestId.current
+    const request = ++requests.value
+    if (!enabled || !realmId) return () => { requests.value++ }
     client.get('/coverage', { params: { cached: 'true' } })
       .then((res) => {
-        if (cancelled) return
-        const cached = res.data?.data || null
-        if (cached) {
-          setResult(cached)
-          setState('ready')
-        } else {
-          check()
-        }
+        if (request !== requests.value) return
+        const cached = res.data?.data
+        const age = cached ? Date.now() - new Date(cached.checkedAt).getTime() : Infinity
+        if (cached && String(cached.realmId) === String(realmId) && age >= 0 && age < 10 * 60 * 1000) {
+          setView({ scope, result: cached, state: 'ready', error: null })
+        } else check()
       })
       .catch((err) => {
-        if (cancelled) return
-        if (isMissingRoute(err)) setState('unavailable')
+        if (request !== requests.value) return
+        if (isMissingRoute(err)) setView({ scope, result: null, state: 'unavailable', error: null })
         else check()
       })
-    return () => { cancelled = true }
-  }, [enabled, check])
+    return () => { requests.value++ }
+  }, [enabled, realmId, scope, check])
 
-  return { result, state, error, check }
+  return { ...(view.scope === scope ? view : { result: null, state: 'loading', error: null }), check }
 }
 
 export function CoverageUnavailable({ className }) {

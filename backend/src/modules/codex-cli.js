@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const config = require('../config');
+const { providerTimeout } = require('./ai-provider-timeout');
 
 const WORK_DIR = path.join(os.tmpdir(), 'test-data-lab-codex');
 const STATUS_CACHE_MS = 60 * 1000;
@@ -332,7 +333,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
 
     const timer = setTimeout(() => {
       child.kill();
-      finish(reject, providerError(`Codex did not finish within ${Math.round(timeoutMs / 1000)} seconds.`, 504));
+      finish(reject, providerTimeout('Codex', timeoutMs));
     }, timeoutMs);
 
     child.on('error', (err) => finish(reject, providerError(`Codex CLI could not start: ${err.message}`, 503)));

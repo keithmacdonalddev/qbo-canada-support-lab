@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Test Data Lab Screen Reader",
+  "version": "0.2.0",
+  "description": "Read labelled purchase order quantities for Test Data Lab cases.",
+  "permissions": [
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Test Data Lab screen checks connect automatically"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost:5173/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "http://localhost:5173/*",
+    "https://qbo.intuit.com/*",
+    "https://app.sandbox.qbo.intuit.com/*"
+  ]
+}

@@ -58,6 +58,13 @@ function isQboError(err) {
  * @returns {boolean} true if a QBO error response was sent
  */
 function respondQboError(res, err) {
+  if (['write_admission', 'write_receipt'].includes(err?.qboStage)) {
+    res.status(err.qboStage === 'write_receipt' ? 503 : 409).json({
+      error: err.message, code: err.qboStage === 'write_receipt' ? 'QBO_WRITE_OUTCOME_UNKNOWN' : 'QBO_WRITE_NOT_ADMITTED',
+      outcomeUnknown: err.outcomeUnknown === true, intuit_tid: err.intuit_tid || null, qboStatus: null,
+    });
+    return true;
+  }
   if (!isQboError(err)) return false;
 
   const httpStatus = err.status === 429 ? 429 : 502;
@@ -66,6 +73,7 @@ function respondQboError(res, err) {
     error: err.message || 'QBO API error',
     intuit_tid: err.intuit_tid || null,
     qboStatus: typeof err.status === 'number' ? err.status : null,
+    ...(err.outcomeUnknown === true ? { outcomeUnknown: true, code: 'QBO_WRITE_OUTCOME_UNKNOWN' } : {}),
   });
   return true;
 }

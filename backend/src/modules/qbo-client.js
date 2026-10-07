@@ -3,6 +3,9 @@ const config = require('../config');
 const Connection = require('../models/Connection');
 const { refreshTokenExpiryFrom } = require('./connection-health');
 const { redactLogSecrets } = require('./log-diagnostic');
+const { freezeWriteRequest, consumeBusinessWritePermit, denied } = require('./qbo-write-contract');
+const { getQboWriteGate } = require('./qbo-write-gate');
+const { currentActorId } = require('./actor-context');
 
 const refreshFlights = new Map();
 // Keep a rotated refresh token in memory until MongoDB confirms it was saved.
@@ -225,6 +228,13 @@ class QBOClient {
    */
   async apiCall(method, endpoint, body, _retryCount = 0, _authRetryCount = 0) {
     const MAX_RETRIES = 5;
+    method = String(method).toUpperCase();
+    // Freeze the exact bytes and consume local permission before any await.
+    const writeRequest = method === 'GET' ? null : freezeWriteRequest({ environment: config.qbo.environment, realmId: String(this.realmId), connectionId: String(this.connection?._id) }, method, endpoint, body);
+    const permit = writeRequest ? consumeBusinessWritePermit() : null;
+    if (writeRequest) { endpoint = writeRequest.endpoint; body = JSON.parse(writeRequest.body); }
+    const writeGate = writeRequest ? (this.writeGate || getQboWriteGate()) : null;
+    let writeTicket = null;
 
     const url = `${this.apiBase}/${endpoint}`;
     const endpointType = String(endpoint).split(/[/?]/)[0] || 'unknown';
@@ -249,7 +259,12 @@ class QBOClient {
         method,
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       };
-      if (body) opts.body = JSON.stringify(body);
+      if (writeRequest) opts.body = writeRequest.body;
+      else if (body) opts.body = JSON.stringify(body);
+      if (writeGate) {
+        try { writeTicket = await writeGate.begin({ request: writeRequest, permit, ownerId: String(this.connection.userId), actorId: String(currentActorId() || this.connection.userId) }); }
+        catch (error) { if (error.qboStage) throw error; throw denied('Write coordination could not be recorded. No request was sent.'); }
+      }
 
       // Past token refresh and setup: any throw from here is the API call
       // itself (QBO 5xx or a network failure), which intuit-oauth rejects
@@ -268,6 +283,7 @@ class QBOClient {
       const status =
         err.authResponse?.response?.status || err.statusCode || err.status || codeStatus || 'unknown';
       err.qboStage ||= reachedApiCall ? 'api' : 'refresh';
+      if (reachedApiCall && writeTicket?.coordinated) err.outcomeUnknown = true;
       // Attach a numeric status so route-level QBO error mapping (-> 502) works.
       if (typeof status === 'number' && typeof err.status !== 'number') {
         err.status = status;
@@ -304,11 +320,17 @@ class QBOClient {
 
     // makeApiCall resolved. Inspect the HTTP status to decide success vs error.
     // axios lowercases header keys, so intuit_tid lives at headers.intuit_tid.
-    const headers =
-      (typeof response.headers === 'function' ? response.headers() : response.headers) ||
-      response.response?.headers;
-    const status = response.status;
-    const intuitTid = this._extractIntuitTid(headers, response.intuit_tid);
+    let headers;
+    try { headers = (typeof response?.headers === 'function' ? response.headers() : response?.headers) || response?.response?.headers; } catch { /* trace metadata is optional */ }
+    const status = response?.status;
+    const intuitTid = this._extractIntuitTid(headers, response?.intuit_tid);
+
+    if (writeTicket?.coordinated) {
+      let outcome;
+      try { outcome = await writeGate.complete(writeTicket, writeRequest, response, intuitTid); }
+      catch { throw denied('QuickBooks responded, but its write receipt could not be saved. Recover this request before sending another.', true); }
+      if (outcome.outcome === 'unknown') throw denied('The response did not prove the write outcome. Recover this request before sending another.', true);
+    }
 
     if (status === 401 && method === 'GET' && _authRetryCount === 0) {
       console.warn('[qbo-client] API rejected access token; refreshing once before retry', {
@@ -319,7 +341,7 @@ class QBOClient {
     }
 
     // ---- 429: rate limited -> existing backoff/retry mechanism ----
-    if (status === 429) {
+    if (status === 429 && !writeTicket?.coordinated) {
       if (_retryCount >= MAX_RETRIES) {
         const err = new Error(
           `QBO API rate limit exceeded after ${MAX_RETRIES} retries (HTTP 429)`

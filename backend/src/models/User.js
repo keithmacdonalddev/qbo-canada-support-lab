@@ -25,6 +25,8 @@ const userSchema = new mongoose.Schema(
     anthropicApiKey: {
       type: String,
     },
+    // Transaction conflict fence for retained company observations.
+    businessObservationVersion: { type: Number, default: 0 },
     connectionSwitchVersion: {
       type: Number,
       default: 0,
@@ -36,6 +38,7 @@ const userSchema = new mongoose.Schema(
       transform(_doc, ret) {
         delete ret.password;
         delete ret.connectionSwitchVersion;
+        delete ret.businessObservationVersion;
         // Mask API key — show only last 4 chars
         if (ret.anthropicApiKey) {
           ret.hasAnthropicKey = true;

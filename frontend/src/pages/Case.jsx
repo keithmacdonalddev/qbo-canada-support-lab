@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { qboRecordUrl } from '@/lib/qbo-links'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/ui/markdown'
+import ScreenVerification from '@/components/reproduction/ScreenVerification'
+import CaseTiming from '@/components/reproduction/CaseTiming'
 
 // A case runs from description through execution, observation and evidence.
 const STAGES = ['Describe', 'Recreate', 'Check results', 'Result']
@@ -213,13 +215,66 @@ const STATUS = {
   queued: { Icon: CircleDashed, label: 'Next in line', cls: 'text-[var(--ink-3)] border-transparent' },
   pending: { Icon: CircleDashed, label: 'Not made', cls: 'text-[var(--ink-3)] border-transparent' },
   skipped: { Icon: Minus, label: 'Not made', cls: 'text-[var(--ink-3)] border-[var(--line)]' },
+  approval: { Icon: CircleDashed, label: 'Needs your approval', cls: 'text-[var(--ink)] border-[var(--line-strong)]' },
+  declined: { Icon: Minus, label: 'Declined', cls: 'text-[var(--ink-3)] border-[var(--line)]' },
+}
+
+const VERB = { delete: 'Delete', void: 'Void', update: 'Edit' }
+
+// Changes the agent asked to make to records that existed before the case. They
+// run only when the company owner approves them here, and only if the record is
+// unchanged since it was proposed.
+export function ApprovalRequests({ changes, active, onDecide, deciding, error }) {
+  if (!changes.length) return null
+  return (
+    <section className="rounded-[12px] border border-[var(--line-strong)] bg-[var(--attention-soft)]" aria-label="Changes waiting for your approval">
+      <header className="border-b border-[var(--line)] px-4 py-3">
+        <h2 className="text-[14px] font-semibold text-[var(--ink)]">Needs your approval</h2>
+        <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-2)]">
+          {changes.length === 1 ? 'The agent asked to change a record' : 'The agent asked to change records'} that existed before this case. Nothing happens until you approve.
+        </p>
+      </header>
+      <ul className="divide-y divide-[var(--line)]">
+        {changes.map((c) => {
+          const name = `${typeInfo(c.entityType).singular}${c.docNumber ? ` ${c.docNumber}` : ''}`
+          const busy = deciding === c.key
+          return (
+            <li key={c.key} className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-[13.5px] font-medium text-[var(--ink)]">
+                  <span className="mr-1.5 rounded bg-[var(--surface)] px-1.5 py-px text-[11px] font-semibold uppercase text-[var(--ink-2)]">{VERB[c.action] || c.action}</span>
+                  {name}{c.party && <span className="font-normal text-[var(--ink-2)]"> · {c.party}</span>}
+                </p>
+                <p className="mt-0.5 text-[12.5px] text-[var(--ink-2)] tabular">
+                  {[c.date && `Dated ${shortDate(c.date)}`, c.amount !== null && c.amount !== undefined && money(c.amount),
+                    c.approval?.record?.balance !== null && c.approval?.record?.balance !== undefined && `${money(c.approval.record.balance)} owing`,
+                    c.approval?.record?.createdAt && `entered ${new Date(c.approval.record.createdAt).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`]
+                    .filter(Boolean).join(' · ')}
+                </p>
+                {c.summary && <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--ink-2)]">{c.summary}</p>}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button variant="ghost" onClick={() => onDecide(c, 'decline')} disabled={active || Boolean(deciding)} aria-label={`Decline: ${VERB[c.action] || c.action} ${name}`}>Decline</Button>
+                <Button onClick={() => onDecide(c, 'approve')} disabled={active || Boolean(deciding)} aria-label={`Approve: ${VERB[c.action] || c.action} ${name}`}>
+                  {busy && <LoaderCircle className="animate-spin" />}
+                  {busy ? 'Working…' : `Approve ${(VERB[c.action] || c.action).toLowerCase()}`}
+                </Button>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      {active && <p className="border-t border-[var(--line)] px-4 py-2.5 text-[12.5px] text-[var(--ink-2)]">You can decide once the case run finishes.</p>}
+      {error && <p role="alert" className="border-t border-[var(--line)] px-4 py-2.5 text-[12.5px] text-[var(--danger-ink)]">{error}</p>}
+    </section>
+  )
 }
 
 function ChangeRow({ change, step, environment, showType = false, nested = false }) {
   const [open, setOpen] = useState(false)
   const status = STATUS[change.status] || STATUS.pending
-  const verb = change.action === 'delete' ? 'Delete' : change.action === 'void' ? 'Void' : change.action === 'update' ? 'Edit' : null
-  const url = change.status === 'done' && change.recordId ? qboRecordUrl(change.entityType, change.recordId, environment) : null
+  const verb = VERB[change.action] || null
+  const url = change.status === 'done' && change.recordId && change.action !== 'delete' ? qboRecordUrl(change.entityType, change.recordId, environment) : null
   const muted = ['skipped', 'pending'].includes(change.status)
   const name = `${change.party || typeInfo(change.entityType).plural}${change.docNumber ? ` #${change.docNumber}` : ''}`
   return (
@@ -295,7 +350,7 @@ export function ChangesLedger({ view, plans, environment, loading, onReload }) {
         </h2>
         {counts && (
           <div className="flex flex-wrap items-center gap-2 text-[12px]">
-            {counts.done > 0 && <span className="rounded-full bg-[var(--ok-soft)] px-2 py-0.5 font-medium text-[var(--ok)]">{counts.done} made</span>}
+            {counts.done > 0 && <span className="rounded-full bg-[var(--ok-soft)] px-2 py-0.5 font-medium text-[var(--ok)]">{counts.done} changes saved</span>}
             {counts.waiting > 0 && <span className="rounded-full bg-[var(--attention-soft)] px-2 py-0.5 font-medium text-[var(--ink)]">{counts.waiting} proposed earlier</span>}
             {counts.failed > 0 && <span className="rounded-full bg-[var(--danger-soft)] px-2 py-0.5 font-medium text-[var(--danger-ink)]">{counts.failed} failed</span>}
             {counts.running > 0 && <span className="rounded-full bg-[var(--sunken)] px-2 py-0.5 text-[var(--ink-2)]">{counts.running} in progress</span>}
@@ -326,17 +381,15 @@ export function ChangesLedger({ view, plans, environment, loading, onReload }) {
           </div>
           {groups.map(([type, changes]) => {
             const { plural, Icon } = typeInfo(type)
-            const total = changes.reduce((sum, c) => sum + (Number(c.amount) || 0), 0)
-            const showTotal = changes.some((c) => c.amount !== null && c.amount !== undefined)
             return (
               <div key={type}>
                 <div className="flex items-center justify-between gap-3 bg-[var(--surface-muted)] px-4 py-2">
                   <h3 className="flex items-center gap-2 text-[12.5px] font-semibold text-[var(--ink)]">
                     <Icon className="size-3.5 text-[var(--ink-3)]" aria-hidden="true" />
                     {plural}
-                    <span className="font-normal text-[var(--ink-3)]">{changes.length}</span>
+                    <span className="font-normal text-[var(--ink-3)]">{changes.length} {changes.length === 1 ? 'action' : 'actions'}</span>
                   </h3>
-                  {showTotal && <span className="text-[12.5px] font-medium text-[var(--ink-2)] tabular">{money(total)}</span>}
+
                 </div>
                 <ul className="divide-y divide-[var(--line)]">
                   {changes.map((c) => <ChangeRow key={c.key} change={c} step={steps.get(`${c.planId}:${c.stepNumber}`)} environment={environment} />)}
@@ -412,30 +465,45 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, busy, er
       <div className="flex items-center justify-between gap-4">
         <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[var(--ink)]" role="status">
           {active && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
-          {active ? (run.phase === 'checking' ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
+          {active ? (run.phase === 'continuing' ? 'Continuing from saved progress' : run.phase === 'checking' || run.verificationOnly ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
             : labels[run?.outcome] || 'Ready to continue this case'}
         </h2>
         {active && <Button variant="outline" size="sm" onClick={onStop} disabled={stopping || run.stopRequested}>{run.stopRequested ? 'Stopping…' : 'Stop'}</Button>}
       </div>
       {active ? (
         <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">
-          {run.stopRequested ? 'Finishing any change already sent, then stopping.' : 'The agent is creating the test records, making the relevant changes and checking what QuickBooks saved. You can leave this page; the case keeps running.'}
+          {run.stopRequested ? 'Finishing any change already sent, then stopping.' : run.phase === 'continuing' ? 'The model reached its time limit. The agent is continuing automatically using saved records and results.' : run.verificationOnly ? 'The agent is checking the saved results and recording any unfinished tests.' : 'The agent is creating the test records, making the relevant changes and checking what QuickBooks saved. You can leave this page; the case keeps running.'}
         </p>
       ) : (
         <>
           <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">{run?.summary || 'Continue the original request automatically. The agent will create its own test records and check the results.'}</p>
-          {(!run || run.status === 'interrupted') && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue reproduction'}</Button>}
+          {(!run || run.status === 'interrupted' || (run.outcome === 'unverified' && !run.outcomeUnknown && !active)) && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue reproduction'}</Button>}
         </>
+      )}
+      {active && run?.progress?.currentStep && (
+        <div className="mt-3 text-[13px] text-[var(--ink-2)]">
+          <p><span className="font-semibold">Agent’s saved plan: </span>{run.progress.currentStep}</p>
+          {run.progress.remainingSteps?.length > 0 && <p className="mt-1">Remaining: {run.progress.remainingSteps.join(' · ')}</p>}
+        </div>
       )}
       {run?.conditions?.length > 0 && (
         <div className="mt-4 border-t border-[var(--line)] pt-3">
           <h3 className="text-[12px] font-semibold text-[var(--ink-2)]">What the agent is checking</h3>
           <ul className="mt-2 space-y-2 text-[13px]">
             {run.conditions.map((label) => {
-              const check = [...(run.checks || [])].reverse().find((c) => c.label === label && c.revision === run.revision);
+              const result = run.conditionResults?.find((entry) => entry.label === label);
               return <li key={label} className="flex items-start gap-2">
-                {check?.available ? (check.passed ? <Check className="mt-0.5 size-4 shrink-0 text-[var(--ok)]" /> : <Minus className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />) : <CircleDashed className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />}
-                <span>{label}{check?.available && <span className="block text-[12px] text-[var(--ink-3)]">Observed: {String(check.actual)} · Expected: {String(check.expected)}</span>}</span>
+                {result?.available ? (result.passed ? <Check className="mt-0.5 size-4 shrink-0 text-[var(--ok)]" /> : <Minus className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />) : <CircleDashed className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />}
+                <span>{label}{result?.checks.map((check, index) => {
+                  const fields = [...new Set((check.sources || []).map((source) => source.path?.split('.').at(-1)))];
+                  const names = { Qty: 'Quantity', TxnLineId: 'Linked transaction line', TxnId: 'Linked transaction', TotalAmt: 'Total amount', Received: 'Received quantity', billedQuantity: 'Screen billed quantity', receivedQuantity: 'Screen received quantity' };
+                  const measurement = fields.map((field) => names[field] || field).filter(Boolean).join(', ') || 'Check';
+                  return <span key={index} className="block text-[12px] text-[var(--ink-3)]">
+                    {measurement}: {!check.current ? 'Needs checking after the latest change' : check.available
+                      ? `Observed: ${String(check.actual)} · Expected: ${String(check.expected)}${check.passed ? ' · Matched' : ' · Did not match'}`
+                      : (check.reason || 'Not available')}
+                  </span>;
+                })}</span>
               </li>;
             })}
           </ul>
@@ -464,6 +532,8 @@ export default function Case() {
   const [reply, setReply] = useState('');
   const [version, setVersion] = useState(0);
   const [stopping, setStopping] = useState(false);
+  const [deciding, setDeciding] = useState(null);
+  const [decisionError, setDecisionError] = useState(null);
   const started = useRef(false);
   const submission = useRef({ text: initialMessage, requestId: location.state?.requestId || crypto.randomUUID() });
 
@@ -538,7 +608,23 @@ export default function Case() {
     finally { setStopping(false); }
   };
 
+  const decide = async (change, decision) => {
+    setDeciding(change.key);
+    setDecisionError(null);
+    try {
+      const res = await client.post('/ai/sessions/' + id + '/approvals', { planId: change.planId, stepNumber: change.stepNumber, decision });
+      const outcome = res.data?.data;
+      if (outcome?.error) setDecisionError(outcome.error);
+    } catch (err) {
+      setDecisionError(err.response?.data?.error || 'The decision could not be sent. Nothing was changed.');
+    } finally {
+      setDeciding(null);
+      setVersion((v) => v + 1);
+    }
+  };
+
   const plans = useMemo(() => session?.plans || [], [session]);
+  const waitingForOwner = (view?.changes || []).filter((c) => c.status === 'approval');
   const messages = (session?.messages || []).filter((m) => ['user', 'assistant'].includes(m.role) && m.content?.trim());
   const opening = messages.find((m) => m.role === 'user')?.content || initialMessage || session?.title;
   const title = run?.title || caseTitle(opening) || 'New case';
@@ -551,14 +637,18 @@ export default function Case() {
         <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> All cases</Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <h1 className="line-clamp-2 max-w-[60ch] text-[22px] font-semibold leading-snug text-[var(--ink)]">{title}</h1>
-          <Stepper current={stage} />
+          {(session || isNew) && <Stepper current={stage} />}
         </div>
+        <CaseTiming timing={session?.timing} />
         {loadError ? <p className="mt-8 text-[13px]" role="alert">{loadError} <button onClick={() => setVersion((v) => v + 1)} className="text-[var(--link)]">Try again</button></p> : (
           <div className="mt-5 grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
             <div className="flex min-w-0 flex-col gap-5">
-              {!isNew && <ReproductionStatus run={run} onStop={stop} stopping={stopping} busy={busy}
+              {!isNew && !session && <p role="status" className="text-[13px] text-[var(--ink-2)]">Loading case…</p>}
+              {!isNew && session && <ReproductionStatus run={run} onStop={stop} stopping={stopping} busy={busy}
                 error={chatError}
-                onContinue={() => startCase('Complete the original reproduction request automatically, including setup, supported experiments and verification. Do not stop for repeated approvals or manual setup. Supersede the earlier proposal.', id)} />}
+                onContinue={() => startCase('Complete the original reproduction request automatically, including supported experiments and verification. Reuse the saved records from this case and resume unfinished tests. Do not stop for repeated approvals or manual setup. Supersede the earlier proposal.', id)} />}
+              {!isNew && run && <ScreenVerification sessionId={id} run={run} />}
+              <ApprovalRequests changes={waitingForOwner} active={active} onDecide={decide} deciding={deciding} error={decisionError} />
               <ChangesLedger view={view} plans={plans} environment={run?.environment || connection?.environment}
                 loading={!view && !isNew} onReload={() => setVersion((v) => v + 1)} />
               {run && !active && <CaseNote sessionId={id} />}

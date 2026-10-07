@@ -208,3 +208,94 @@ test('runReport validates input and flattens report rows', async () => {
   assert.equal(ok.data.dataRows, 1);
   assert.deepEqual(ok.data.lines, ['Harbourview Dental | 1250.00', 'TOTAL | 1250.00']);
 });
+
+
+test('future transactions never establish current activity', () => {
+  const data = baseData();
+  data.SalesReceipt.records = [{ Id: 'future', TxnDate: '2026-10-03' }];
+  const result = coverage.scoreCoverage(data, { today: TODAY });
+  const receipt = signal(result, 'sales.receivables-lifecycle', 'sales-receipts');
+  assert.equal(receipt.status, 'missing');
+  assert.equal(receipt.recent, 0);
+  assert.equal(receipt.last, null);
+  assert.equal(receipt.future, 1);
+});
+
+test('missing source data is unknown, never an empty successful read', () => {
+  const data = baseData();
+  delete data.Invoice;
+  const result = coverage.scoreCoverage(data, { today: TODAY });
+  assert.equal(signal(result, 'sales.receivables-lifecycle', 'invoices').status, 'error');
+  assert.equal(result.evidence.complete, false);
+});
+
+test('incomplete pages cannot prove a feature is missing', () => {
+  const data = baseData();
+  data.Purchase = { records: [], truncated: true };
+  const result = coverage.scoreCoverage(data, { today: TODAY });
+  assert.equal(signal(result, 'expenses.payables-lifecycle', 'card-credits').status, 'error');
+  assert.equal(result.evidence.complete, false);
+  assert.equal(result.evidence.incompleteSources[0].source, 'Purchase');
+});
+
+test('coverage reads past 1000 records and finds evidence on later pages', async () => {
+  const calls = [];
+  const qbo = { async query(q) {
+    calls.push(q);
+    return { QueryResponse: { Invoice: calls.length === 1
+      ? Array.from({ length: 1000 }, (_, i) => ({ Id: String(i), TxnDate: '2026-09-30' }))
+      : [{ Id: '1001', TxnDate: '2026-09-20', LinkedTxn: [{ TxnType: 'Estimate', TxnId: 'est' }] }] } };
+  } };
+  const source = await coverage._internal.readSource(qbo, 'Invoice', '2025-10-02');
+  assert.equal(source.records.length, 1001);
+  assert.equal(source.truncated, false);
+  assert.match(calls[1], /STARTPOSITION 1001 MAXRESULTS 1000/);
+  const data = baseData(); data.Invoice = source;
+  assert.equal(signal(coverage.scoreCoverage(data, { today: TODAY }), 'sales.receivables-lifecycle', 'estimate-to-invoice').status, 'ok');
+});
+
+test('repeated pages and later-page failures do not become complete evidence', async () => {
+  const page = Array.from({ length: 1000 }, (_, i) => ({ Id: String(i) }));
+  const repeated = await coverage._internal.readSource({ query: async () => ({ QueryResponse: { Bill: page } }) }, 'Bill', '2025-10-02');
+  assert.equal(repeated.truncated, true);
+  assert.equal(repeated.records.length, 1000);
+  let calls = 0;
+  const failed = await coverage._internal.readSource({ query: async () => {
+    if (++calls === 2) throw new Error('Read failed');
+    return { QueryResponse: { Bill: page } };
+  } }, 'Bill', '2025-10-02');
+  assert.equal(failed.truncated, true);
+  assert.equal(failed.records.length, 1000);
+  assert.match(failed.error, /Read failed/);
+});
+
+test('malformed upstream response is a read error', async () => {
+  const source = await coverage._internal.readSource({ query: async () => ({}) }, 'Bill', '2025-10-02');
+  assert.match(source.error, /no query response/);
+});
+
+
+test('incomplete project and preference reads do not become setup gaps', () => {
+  const data = baseData();
+  data.customers = { records: [], truncated: true };
+  data.Invoice = { records: [{ TxnDate: '2026-09-30', CustomerRef: { value: 'unread-project' } }] };
+  let result = coverage.scoreCoverage(data, { today: TODAY });
+  assert.equal(signal(result, 'projects.project-lifecycle', 'project-invoices').status, 'error');
+  delete data.preferences;
+  result = coverage.scoreCoverage(data, { today: TODAY });
+  assert.equal(signal(result, 'company.dimensions', 'class-tagged-sales').status, 'error');
+  assert.equal(signal(result, 'company.preferences', 'class-tracking').status, 'error');
+  assert.equal(result.evidence.complete, false);
+});
+
+
+test('one shared budget bounds all concurrent coverage readers', async () => {
+  let calls = 0;
+  const qbo = { query: async () => { calls++; return { QueryResponse: {} }; } };
+  const sources = await coverage._internal.readAll(qbo, ['Invoice', 'Bill', 'Payment', 'Purchase'], '2025-10-02', { pages: 2, records: 10000, deadline: Date.now() + 60000 });
+  assert.equal(calls, 2);
+  assert.equal(Object.values(sources).filter(source => source.truncated).length, 2);
+  const expired = await coverage._internal.readAll(qbo, ['Invoice'], '2025-10-02', { pages: 2, records: 10000, deadline: Date.now() - 1 });
+  assert.equal(calls, 2);
+  assert.equal(expired.Invoice.truncated, true);
+});

@@ -12,6 +12,7 @@ const ROLE_PERMISSIONS = Object.freeze({
     'reports.validate',
     'qbo_data.read',
     'operations.preview',
+    'operations.execute',
     'schedule.read',
     'reconciliation.read',
     'app_data.read',

@@ -36,6 +36,10 @@ const connectionSchema = new mongoose.Schema(
       enum: ['active', 'expired', 'revoked', 'error'],
       default: 'active',
     },
+    // Write fence for explicitly reviewed local business-storage setup.
+    businessSetupVersion: { type: Number, default: 0 },
+    // Transaction conflict fence for retained company observations.
+    businessObservationVersion: { type: Number, default: 0 },
     lastRefreshedAt: {
       type: Date,
     },

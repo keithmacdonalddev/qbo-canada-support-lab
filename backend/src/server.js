@@ -41,7 +41,10 @@ async function start() {
   }
 
   const app = createApp();
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
+    const execution = require('./modules/business-execution-service').getBusinessExecutionService();
+    execution.start();
+    server.on('close', () => execution.close());
     console.log(`Server running on port ${config.port}`);
   });
 }

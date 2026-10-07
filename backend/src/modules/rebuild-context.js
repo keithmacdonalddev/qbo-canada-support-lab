@@ -40,6 +40,7 @@ function createContextService(dependencies = {}) {
         connection: connection
           ? {
               connected: true,
+              connectionId: connection._id ? String(connection._id) : null,
               realmId: connection.realmId,
               companyName: connection.companyName || null,
               status: connection.status,
@@ -48,6 +49,7 @@ function createContextService(dependencies = {}) {
             }
           : {
               connected: false,
+              connectionId: null,
               realmId: null,
               companyName: null,
               status: 'disconnected',
