@@ -78,6 +78,8 @@ function setup(options = {}) {
   let starts = 0;
   const runner = createRunner({
     AISession, AIPlan, config, instance: 'test-instance',
+    // null selects the runner's default provider check.
+    preflight: options.preflight === undefined ? async () => null : options.preflight,
     ...(options.providerDependencies || {}),
     Connection: { findOne: async () => connection, exists: async () => connection.status === 'active' },
     CompanyMembership: { findOne: async () => membership },
@@ -274,4 +276,104 @@ test('continuation preserves first request timing and clears the prior finish be
   assert.equal(starts.length, 2); assert.equal(starts[1].firstSubmittedAt, original); assert.equal(starts[1].completedAt, null);
   const publicCase = f.runner.publicState(f.AISession.store.get(first._id));
   assert.equal(publicCase.timing.available, true); assert.equal(publicCase.timing.firstSubmissionSource, 'recorded_request');
+});
+
+test('a failed tool-access check stops the run before any model pass or write', async () => {
+  let engineRuns = 0; const checks = [];
+  const f = setup({ preflight: null, providerDependencies: {
+    aiProvider: { resolveProvider: async () => 'codex', chat: async () => assert.fail('no model call') },
+    codexCli: { run: async () => assert.fail('no model call'), verifyToolAccess: async (options) => {
+      checks.push(options);
+      return { ok: false, status: 'failed', reason: 'Codex did not list the case tools.', codexVersion: '0.161.0', model: 'fixture-model', checkedAt: '2026-10-08T00:00:00.000Z' };
+    } },
+  }, runEngine: async () => { engineRuns += 1; } });
+  const started = await f.start(); await f.runner.waitForIdle(started._id);
+  const saved = f.AISession.store.get(started._id);
+  assert.equal(engineRuns, 0); assert.equal(checks.length, 1);
+  assert.equal(saved.reproduction.status, 'stopped'); assert.equal(saved.reproduction.outcome, 'unverified');
+  assert.equal(saved.reproduction.summary, 'Codex did not list the case tools.');
+  assert.deepEqual(saved.reproduction.toolAccess, { ok: false, status: 'failed', codexVersion: '0.161.0', model: 'fixture-model', checkedAt: '2026-10-08T00:00:00.000Z' });
+  assert.deepEqual(saved.messages.at(-1).role + ':' + saved.messages.at(-1).content, 'assistant:Codex did not list the case tools.');
+  assert.equal(f.AIPlan.store.get(saved.reproduction.planId).steps.length, 0);
+});
+
+test('the tool-access check applies only to Codex and a passing check lets the run start', async () => {
+  const anthropic = setup({ preflight: null, providerDependencies: {
+    aiProvider: { resolveProvider: async () => 'anthropic' }, codexCli: { verifyToolAccess: async () => assert.fail('not for Anthropic') } } });
+  const a = await anthropic.start(); await anthropic.runner.waitForIdle(a._id);
+  assert.equal(anthropic.starts, 1);
+  const codex = setup({ preflight: null, providerDependencies: {
+    aiProvider: { resolveProvider: async () => 'codex' }, codexCli: { verifyToolAccess: async () => ({ ok: true, codexVersion: '0.161.0' }) } } });
+  const c = await codex.start(); await codex.runner.waitForIdle(c._id);
+  assert.equal(codex.starts, 1);
+  assert.equal(codex.AISession.store.get(c._id).reproduction.toolAccess.ok, true);
+});
+
+test('an operator question ends the run and the reply continues the case with the question in its history', async () => {
+  const { runEngine } = require('../src/modules/reproduction-engine');
+  const transcripts = []; let call = 0;
+  const question = 'Which account should the $40,000 transfer come from?';
+  const chat = async (messages) => {
+    call += 1;
+    transcripts.push(copy(messages));
+    if (call === 1) return { content: [{ type: 'tool_use', id: 't1', name: 'askOperator', input: { question, options: ['Chequing', 'Savings'] } }] };
+    if (call === 3) return { content: [{ type: 'tool_use', id: 't2', name: 'finishCase', input: { outcome: 'unverified', summary: 'Fixture stop', tests: [], limitations: [] } }] };
+    return { content: [{ type: 'text', text: 'Done for now.' }] };
+  };
+  const f = setup({ runEngine, providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat } } });
+  const first = await f.start({ message: 'need to create an owners distributions account and transfer $40000 to it for April 21, 2026' });
+  await f.runner.waitForIdle(first._id);
+  let saved = f.AISession.store.get(first._id);
+  assert.equal(call, 2);
+  assert.equal(saved.reproduction.outcome, 'needs_input'); assert.equal(saved.reproduction.status, 'completed');
+  assert.equal(saved.reproduction.awaitingOperator.question, question);
+  assert.equal(saved.messages.at(-1).role, 'assistant');
+  assert.equal(saved.messages.at(-1).content, question + '\n\nOptions:\n1. Chequing\n2. Savings');
+  assert.equal(f.runner.publicState(saved).reproduction.outcome, 'needs_input');
+
+  await f.start({ sessionId: first._id, requestId: 'request-answer-12345678', message: 'Use Chequing' });
+  await f.runner.waitForIdle(first._id);
+  saved = f.AISession.store.get(first._id);
+  const texts = transcripts[2].filter((m) => typeof m.content === 'string').map((m) => m.role + ':' + m.content);
+  const asked = texts.findIndex((t) => t.startsWith('assistant:' + question));
+  assert.ok(asked > 0, 'the question is replayed to the model');
+  assert.ok(texts.indexOf('user:Use Chequing') > asked, 'the answer follows the question');
+  assert.equal(saved.reproduction.awaitingOperator, null);
+  assert.equal(saved.reproduction.outcome, 'unverified');
+  assert.equal(saved.reproduction.agentReplies.length, 2);
+  assert.deepEqual(saved.reproduction.toolTrace.map((t) => t.tool), ['askOperator', 'finishCase']);
+});
+
+test('a run left by an earlier backend process can continue at once, unless a write is unresolved', async () => {
+  const f = setup();
+  const first = await f.start(); await f.runner.waitForIdle(first._id);
+  const saved = f.AISession.store.get(first._id);
+  saved.reproduction.status = 'running'; saved.reproduction.instance = 'previous-server';
+  saved.reproduction.leaseExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  assert.equal(f.runner.publicState(saved).reproduction.status, 'interrupted');
+  const plan = f.AIPlan.store.get(saved.reproduction.planId);
+  plan.steps = [{ stepNumber: 1, toolName: 'createRecord', toolInput: { entityType: 'Bill' }, status: 'executing' }];
+  await assert.rejects(() => f.start({ sessionId: first._id, requestId: 'request-h1-unresolved-1' }), /unresolved external write/);
+  plan.steps = [{ stepNumber: 1, toolName: 'createRecord', toolInput: { entityType: 'Bill' }, status: 'completed', result: { data: { id: '9' } } }];
+  await f.start({ sessionId: first._id, requestId: 'request-h1-continue-12' }); await f.runner.waitForIdle(first._id);
+  assert.equal(f.starts, 2);
+});
+
+test('an Anthropic reply cut off at the output limit never runs its partial tool call', async () => {
+  const replies = [
+    { stop_reason: 'max_tokens', content: [{ type: 'text', text: 'Creating the transfer' }, { type: 'tool_use', id: 'cut', name: 'createRecord', input: { entityType: 'Tra' } }] },
+    { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Resent in smaller steps.' }] },
+  ];
+  const f = setup({ providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat: async () => replies.shift() } } });
+  const executed = []; const messages = [{ role: 'user', content: 'Build it' }];
+  const text = await f.runner.runProvider(messages, 'system', async (...call) => { executed.push(call); return { success: true }; }, [], undefined, { deadline: Date.now() + 60000 });
+  assert.equal(text, 'Resent in smaller steps.');
+  assert.deepEqual(executed, []);
+  assert.deepEqual(messages[1].content, [{ type: 'text', text: 'Creating the transfer' }]);
+  assert.match(messages[2].content, /output limit/);
+
+  const cut = { stop_reason: 'max_tokens', content: [{ type: 'tool_use', id: 'cut', name: 'createRecord', input: {} }] };
+  const g = setup({ providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat: async () => cut } } });
+  const repeated = await g.runner.runProvider([{ role: 'user', content: 'Build it' }], 'system', async () => assert.fail('never run'), [], undefined, { deadline: Date.now() + 60000 });
+  assert.match(repeated, /repeatedly cut off/);
 });

@@ -15,6 +15,7 @@ const { isQboError, respondQboError } = require('../modules/qbo-error');
 const caseChanges = require('../modules/case-changes');
 const reproduction = require('../modules/reproduction-runner');
 const approvals = require('../modules/reproduction-approvals');
+const reconciler = require('../modules/reproduction-reconcile');
 const { screenBroker } = require('../modules/reproduction-screen');
 const { createQBOClient } = require('../modules/qbo-client');
 
@@ -145,6 +146,24 @@ router.post('/sessions/:id/approvals', async (req, res) => {
   }
 });
 
+// The company owner settles case writes whose outcome is unknown, by reading
+// QuickBooks only (never re-sending a write), so the case can continue.
+// Body: { selections?: [{ planId, stepNumber, recordId | 'none' }] } for creates
+// the server could not match on its own.
+router.post('/sessions/:id/reconcile', async (req, res) => {
+  try {
+    const result = await reconciler.reconcile({ userId: req.user.id, actorId: req.user.actorId || req.user.id,
+      sessionId: req.params.id, selections: req.body?.selections || [] });
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id }).populate('plans');
+    return res.json({ success: true, data: { ...result, session: session ? reproduction.publicState(session) : null } });
+  } catch (err) {
+    if (err.caseReconcile) return res.status(err.status).json({ success: false, error: err.message });
+    if (isQboError(err)) return respondQboError(res, err);
+    console.error('[ai/sessions/reconcile]', err.message);
+    return res.status(500).json({ success: false, error: 'The case could not be reconciled. Nothing was changed in QuickBooks.' });
+  }
+});
+
 router.post('/sessions/:id/stop', async (req, res) => {
   try {
     const session = await reproduction.stopCase(req.user.id, req.params.id);
@@ -175,7 +194,11 @@ router.get('/config', authenticate, async (req, res) => {
     // Codex CLI = the owner's ChatGPT subscription through the signed-in codex
     // program; no API key needed. ?refresh=true re-checks the sign-in now.
     const codexCli = require('../modules/codex-cli');
-    const codex = await codexCli.getStatus({ refresh: req.query.refresh === 'true' });
+    // ?verifyTools=true runs the tool-access check now; otherwise toolAccess is
+    // the last check in this process (or null). codex carries version and toolAccess.
+    const verified = req.query.verifyTools === 'true' ? await codexCli.verifyToolAccess({ refresh: true }) : null;
+    const codex = await codexCli.getStatus({ refresh: req.query.refresh === 'true' || !!verified });
+    if (verified) codex.toolAccess = verified;
     const provider = await aiProvider.resolveProvider();
     const anthropicAvailable =
       (keyConfig.userKeysEnabled && hasUserKey) ||

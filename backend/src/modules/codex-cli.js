@@ -31,11 +31,18 @@ const SELF_TEXT_ARGS = Object.freeze([
   '-c', 'skills.include_instructions=false',
 ]);
 
+// Codex rejects unknown feature names, so a name removed by an upgrade stops
+// every run (see run()). Check with `codex features list --disable <name>`.
+// Codex 0.161.0 keeps `unified_exec` on whatever is passed here; the
+// ALLOWED_ITEM_TYPES check below stops a run that executes a command.
 const DISABLED_FEATURES = Object.freeze([
   'shell_tool', 'unified_exec', 'apps', 'plugins', 'remote_plugin', 'hooks', 'memories',
   'multi_agent', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser',
   'image_generation', 'view_image', 'skill_search', 'skill_mcp_dependency_install',
   'code_mode_host', 'sleep_tool', 'tool_suggest', 'goals',
+  // Stable and on by default since 0.161.0; none is needed for inference-only
+  // runs, and the daemon would outlive the run.
+  'daemon_auto_start', 'shell_snapshot', 'workspace_dependencies', 'guardian_approval',
 ]);
 
 const ISOLATION_ARGS = Object.freeze([
@@ -50,6 +57,7 @@ const ISOLATION_ARGS = Object.freeze([
 const ALLOWED_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 
 let statusCache = null;
+let versionCache = null;
 
 // Launch codex.exe directly on Windows: going through cmd.exe mangles quoted
 // -c values.
@@ -69,32 +77,70 @@ function tomlString(value) {
   return JSON.stringify(String(value).replace(/\\/g, '/'));
 }
 
+// Identifies one installed Codex binary; changes when Codex is upgraded.
+function executableKey(executable) {
+  try {
+    const stat = fs.statSync(executable);
+    return `${executable}|${stat.size}|${stat.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The installed Codex version (e.g. "0.161.0"), cached per binary.
+ * @returns {Promise<string|null>}
+ */
+function getCodexVersion(executable = resolveExecutable()) {
+  const key = executable && executableKey(executable);
+  if (!key) return Promise.resolve(null);
+  if (versionCache?.key === key) return Promise.resolve(versionCache.version);
+  return new Promise((resolve) => {
+    try {
+      execFile(executable, ['--version'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout) => {
+        const version = err ? null : (/(\d+\.\d+\.\d+\S*)/.exec(String(stdout || ''))?.[1] || null);
+        if (version) versionCache = { key, version };
+        resolve(version);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 /**
  * Is the Codex CLI installed and signed in? Cached for a minute.
- * @returns {Promise<{ installed: boolean, loggedIn: boolean, method: string|null, model: string }>}
+ * `toolAccess` is the last tool check result in this process (see
+ * verifyToolAccess), or null; getStatus never starts a check.
+ * @returns {Promise<{ installed: boolean, loggedIn: boolean, method: string|null, model: string,
+ *   version: string|null, toolAccess: Object|null }>}
  */
 function getStatus({ refresh = false } = {}) {
   if (!refresh && statusCache && Date.now() - statusCache.at < STATUS_CACHE_MS) {
-    return Promise.resolve(statusCache.value);
+    return Promise.resolve({ ...statusCache.value, toolAccess: lastToolAccess() });
   }
   const executable = resolveExecutable();
-  const base = { installed: false, loggedIn: false, method: null, model: config.ai.codex.model };
+  const base = { installed: false, loggedIn: false, method: null, model: config.ai.codex.model, version: null };
   if (!executable) {
     statusCache = { at: Date.now(), value: base };
-    return Promise.resolve(base);
+    return Promise.resolve({ ...base, toolAccess: null });
   }
-  return new Promise((resolve) => {
-    const done = (value) => { statusCache = { at: Date.now(), value }; resolve(value); };
+  const login = new Promise((resolve) => {
     try {
       execFile(executable, ['login', 'status'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout, stderr) => {
         const text = `${stdout || ''}\n${stderr || ''}`;
         const loggedIn = !err && /logged in/i.test(text) && !/not logged in/i.test(text);
         const method = /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api-key' : null;
-        done({ ...base, installed: !(err && err.code === 'ENOENT'), loggedIn, method: loggedIn ? method : null });
+        resolve({ installed: !(err && err.code === 'ENOENT'), loggedIn, method: loggedIn ? method : null });
       });
     } catch {
-      done(base);
+      resolve({});
     }
+  });
+  return Promise.all([login, getCodexVersion(executable)]).then(([signIn, version]) => {
+    const value = { ...base, ...signIn, version };
+    statusCache = { at: Date.now(), value };
+    return { ...value, toolAccess: lastToolAccess() };
   });
 }
 
@@ -138,7 +184,9 @@ function sweepStaleFiles(now = Date.now()) {
   let names = [];
   try { names = fs.readdirSync(WORK_DIR); } catch { return; }
   for (const name of names) {
-    if (!name.startsWith('instructions-') && !name.startsWith('run-')) continue;
+    // Other processes' catalog copies are removed by age; this process's own copy is kept.
+    const otherCatalog = name.startsWith('model-catalog-') && !name.includes(`-${process.pid}.json`);
+    if (!name.startsWith('instructions-') && !name.startsWith('run-') && !otherCatalog) continue;
     const target = path.join(WORK_DIR, name);
     try {
       if (now - fs.statSync(target).mtimeMs > STALE_FILE_MS) fs.rmSync(target, { recursive: true, force: true });
@@ -168,18 +216,31 @@ function stripCodingCatalogFields(catalog) {
     if (model.tool_mode === 'code_mode_only') delete model.tool_mode;
     if (model.model_messages) delete model.model_messages.multi_agent;
     model.experimental_supported_tools = [];
+    // Since Codex 0.161.0 this hides every MCP tool behind a `tool_search`
+    // tool, and the model never found this app's tools (runs made no calls).
+    model.supports_search_tool = false;
+    // The Node REPL belongs to the code-mode host, which is disabled anyway.
+    model.node_repl_disabled = true;
   }
   return catalog;
 }
 
+// Concurrent runs share one build (single flight). Each process writes its own
+// file atomically, so a Codex child never reads a half-written catalog from
+// another run or another process (seen as "EOF while parsing" under load).
+let catalogInFlight = null;
+const CATALOG_FAILURE_RETRY_MS = 60 * 1000;
+
 function modelCatalogFile(executable) {
-  let stat;
-  try { stat = fs.statSync(executable); } catch { return Promise.resolve(null); }
-  const key = `${executable}|${stat.size}|${stat.mtimeMs}`;
-  if (catalogCache?.key === key && (catalogCache.file === null || fs.existsSync(catalogCache.file))) {
+  const key = executableKey(executable);
+  if (!key) return Promise.resolve(null);
+  if (catalogCache?.key === key && (catalogCache.file === null
+    ? Date.now() - (catalogCache.at || 0) < CATALOG_FAILURE_RETRY_MS
+    : fs.existsSync(catalogCache.file))) {
     return Promise.resolve(catalogCache.file);
   }
-  return new Promise((resolve) => {
+  if (catalogInFlight?.key === key) return catalogInFlight.promise;
+  const promise = new Promise((resolve) => {
     const onResult = (err, stdout) => {
       try {
         if (err) throw err;
@@ -187,13 +248,15 @@ function modelCatalogFile(executable) {
         if (!Array.isArray(catalog?.models) || catalog.models.length === 0) throw new Error('empty model list');
         fs.mkdirSync(WORK_DIR, { recursive: true });
         const hash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
-        const file = path.join(WORK_DIR, `model-catalog-${hash}.json`);
-        fs.writeFileSync(file, JSON.stringify(catalog));
-        catalogCache = { key, file };
+        const file = path.join(WORK_DIR, `model-catalog-${hash}-${process.pid}.json`);
+        const temp = `${file}.${crypto.randomUUID()}.tmp`;
+        fs.writeFileSync(temp, JSON.stringify(catalog));
+        fs.renameSync(temp, file);
+        catalogCache = { key, file, at: Date.now() };
         resolve(file);
       } catch (catalogErr) {
         console.warn('[codex-cli] model catalog unavailable; tools may not reach code-mode-only models:', catalogErr.code || catalogErr.message);
-        catalogCache = { key, file: null };
+        catalogCache = { key, file: null, at: Date.now() };
         resolve(null);
       }
     };
@@ -203,6 +266,9 @@ function modelCatalogFile(executable) {
       onResult(err);
     }
   });
+  catalogInFlight = { key, promise };
+  promise.finally(() => { if (catalogInFlight?.promise === promise) catalogInFlight = null; });
+  return promise;
 }
 
 function bridgeArgs(bridge, timeoutMs) {
@@ -233,11 +299,16 @@ function errorPreview(stdout, stderr) {
  * @param {Object} options
  * @param {string} options.system - replaces Codex's coding-agent prompt
  * @param {string} options.prompt - user content, sent on stdin (never argv)
- * @param {Object|null} [options.bridge] - { serverName, url, token, tokenEnv }
+ * @param {Object|null} [options.bridge] - { serverName, url, token, tokenEnv, stats? }
  * @param {number} [options.timeoutMs]
- * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number }, toolCalls: number }>}
+ * @param {string} [options.effort] - overrides the configured reasoning effort
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number },
+ *   toolCalls: number, toolsListed: boolean }>} With a bridge that reports
+ *   stats, `toolsListed` says whether Codex asked this run's bridge for its
+ *   tools and `toolCalls` counts calls that reached it; otherwise toolCalls
+ *   counts Codex's MCP tool-call events and toolsListed is false.
  */
-async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs }) {
+async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs, effort: effortOverride }) {
   const executable = resolveExecutable();
   if (!executable) {
     throw providerError('Codex CLI is not installed. Install it with `npm install -g @openai/codex`, then run `codex login`.', 503);
@@ -251,7 +322,10 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
   }
 
   sweepStaleFiles();
-  const effort = ALLOWED_EFFORTS.has(config.ai.codex.effort) ? config.ai.codex.effort : 'medium';
+  const requestedEffort = effortOverride || config.ai.codex.effort;
+  const effort = ALLOWED_EFFORTS.has(requestedEffort) ? requestedEffort : 'medium';
+  const bridgeStats = typeof bridge?.stats === 'function' ? bridge.stats : null;
+  const statsBefore = bridgeStats ? bridgeStats() : null;
   const instructionsFile = writeInstructionsFile(system);
   let cwd = null;
   const cleanup = () => {
@@ -344,10 +418,12 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
       if (code !== 0) {
         const preview = errorPreview(stdout, stderr);
         const notSignedIn = /not logged in|log ?in required|codex login|401|unauthorized/i.test(preview);
+        const unknownSetting = /unknown feature flag/i.test(preview);
         if (notSignedIn) statusCache = null;
-        finish(reject, providerError(notSignedIn
-          ? 'Codex CLI is not signed in. Run `codex login` in a terminal, then try again.'
-          : `Codex CLI failed (exit ${code})${preview ? `: ${preview}` : ''}`, notSignedIn ? 503 : 502));
+        let message = `Codex CLI failed (exit ${code})${preview ? `: ${preview}` : ''}`;
+        if (notSignedIn) message = 'Codex CLI is not signed in. Run `codex login` in a terminal, then try again.';
+        if (unknownSetting) message = `The installed Codex CLI no longer accepts one of this app's isolation settings (${preview}), so the assistant was not started. The app needs an update for this Codex version.`;
+        finish(reject, providerError(message, notSignedIn || unknownSetting ? 503 : 502));
         return;
       }
       const text = messages.join('\n\n').trim();
@@ -355,7 +431,12 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
         finish(reject, providerError('Codex finished without a reply. Try again.', 502));
         return;
       }
-      finish(resolve, { text, usage, toolCalls });
+      if (bridgeStats) {
+        const after = bridgeStats();
+        finish(resolve, { text, usage, toolsListed: after.listed > statsBefore.listed, toolCalls: after.calls - statsBefore.calls });
+        return;
+      }
+      finish(resolve, { text, usage, toolCalls, toolsListed: false });
     });
 
     // Codex can exit before reading stdin (e.g. a rejected flag); without a
@@ -365,4 +446,174 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
   });
 }
 
-module.exports = { getStatus, run, resolveExecutable, childEnv, ISOLATION_ARGS, ALLOWED_ITEM_TYPES };
+// A Codex upgrade can silently stop the model from seeing this app's tools
+// (0.161.0 did: runs finished without a single tool call). Before work that
+// depends on tools, a tiny probe gives Codex one dummy echo tool through the
+// real bridge and checks that the model called it with the expected text. The
+// probe sends no company data. Results are keyed on the Codex binary, the
+// model and this file's isolation settings, so it reruns after an upgrade or
+// a change here.
+const TOOL_CHECK_TOOL = 'echoProbe';
+const TOOL_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
+const TOOL_CHECK_TTL_MS = {
+  passed: 24 * 60 * 60 * 1000, // also re-checks server-side model changes daily
+  error: 60 * 1000, // sign-in, network or timeout problems are often brief
+  failed: 10 * 60 * 1000,
+};
+const TOOL_CHECK_FILE = path.join(WORK_DIR, 'tool-check.json');
+const ISOLATION_FINGERPRINT = crypto.createHash('sha256')
+  .update(JSON.stringify([ISOLATION_ARGS, SELF_TEXT_ARGS, stripCodingCatalogFields.toString()]))
+  .digest('hex').slice(0, 16);
+
+async function identifyCodex() {
+  const executable = resolveExecutable();
+  const binary = executable && executableKey(executable);
+  if (!binary) return null;
+  const model = config.ai.codex.model;
+  return {
+    key: crypto.createHash('sha256').update(`${binary}|${model}|${ISOLATION_FINGERPRINT}`).digest('hex').slice(0, 24),
+    model,
+    codexVersion: await getCodexVersion(executable),
+  };
+}
+
+// Only a pass is kept on disk, so a restart does not repeat a good probe.
+const toolCheckFile = {
+  read(key) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(TOOL_CHECK_FILE, 'utf8'));
+      return saved?.key === key && saved.value?.ok === true ? saved.value : null;
+    } catch {
+      return null;
+    }
+  },
+  write(key, value) {
+    try {
+      fs.mkdirSync(WORK_DIR, { recursive: true });
+      fs.writeFileSync(TOOL_CHECK_FILE, JSON.stringify({ key, value }));
+    } catch { /* the in-memory result still applies */ }
+  },
+};
+
+/**
+ * Build a tool access check. Arguments exist for tests; the app uses the
+ * default instance through verifyToolAccess().
+ */
+function createToolAccessCheck({
+  runCodex = (options) => run(options),
+  createSession = (options) => require('./ai-tool-bridge').createToolSession(options),
+  identify = identifyCodex,
+  store = toolCheckFile,
+  now = Date.now,
+} = {}) {
+  let cached = null; // { key, expiresAt, value }
+  let inFlight = null;
+
+  async function probeOnce(nonce) {
+    const received = [];
+    const session = createSession({
+      tools: [{
+        name: TOOL_CHECK_TOOL,
+        description: 'Connectivity check. Returns the given text unchanged.',
+        input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      }],
+      execute: async (_name, input) => {
+        received.push(input?.text);
+        return { success: true, text: String(input?.text ?? '') };
+      },
+      maxAgeMs: TOOL_CHECK_TIMEOUT_MS + 60 * 1000,
+      maxCalls: 3,
+    });
+    try {
+      const result = await runCodex({
+        system: `You are a connectivity check. Use the ${TOOL_CHECK_TOOL} tool exactly as the user asks.`,
+        prompt: `Call the ${TOOL_CHECK_TOOL} tool once with text "${nonce}", then reply with the text it returned.`,
+        bridge: session.bridge,
+        timeoutMs: TOOL_CHECK_TIMEOUT_MS,
+        effort: 'low',
+      });
+      return { listed: result.toolsListed === true, called: received.includes(nonce), calls: received.length };
+    } finally {
+      await session.close();
+    }
+  }
+
+  async function probe(identity) {
+    const codex = identity.codexVersion ? `Codex CLI (${identity.codexVersion})` : 'Codex CLI';
+    const done = (status, reason) => ({
+      ok: status === 'passed', status, reason, codexVersion: identity.codexVersion, model: identity.model,
+      checkedAt: new Date(now()).toISOString(),
+    });
+    const nonce = `check-${crypto.randomBytes(4).toString('hex')}`;
+    let outcome;
+    try {
+      // One retry when the tools were offered but unused, in case the model
+      // simply ignored the instruction.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        outcome = await probeOnce(nonce);
+        if (outcome.called || !outcome.listed) break;
+      }
+    } catch (err) {
+      return done('error', `Codex could not finish its tool check, so the assistant was not started: ${err.message}`);
+    }
+    if (outcome.called) return done('passed', null);
+    if (!outcome.listed) return done('failed', `The installed ${codex} did not load this app's tools, so the assistant was not started.`);
+    if (outcome.calls > 0) return done('failed', `The installed ${codex} passed the wrong input to this app's check tool, so the assistant was not started.`);
+    return done('failed', `The installed ${codex} did not expose this app's tools to the model, so the assistant was not started.`);
+  }
+
+  /**
+   * @param {{ refresh?: boolean }} [options] - refresh skips cached results
+   * @returns {Promise<{ ok: boolean, status: 'passed'|'failed'|'error'|'not-installed',
+   *   reason: string|null, codexVersion: string|null, model: string, checkedAt: string }>}
+   */
+  function verify({ refresh = false } = {}) {
+    if (inFlight) return inFlight; // concurrent callers share one probe
+    inFlight = (async () => {
+      const identity = await identify();
+      if (!identity) {
+        return {
+          ok: false, status: 'not-installed', reason: 'Codex CLI is not installed, so the assistant was not started.',
+          codexVersion: null, model: config.ai.codex.model, checkedAt: new Date(now()).toISOString(),
+        };
+      }
+      if (!refresh) {
+        if (cached?.key === identity.key && now() < cached.expiresAt) return cached.value;
+        const saved = store?.read(identity.key);
+        const savedAt = Date.parse(saved?.checkedAt);
+        if (saved && now() - savedAt < TOOL_CHECK_TTL_MS.passed) {
+          cached = { key: identity.key, expiresAt: savedAt + TOOL_CHECK_TTL_MS.passed, value: saved };
+          return saved;
+        }
+      }
+      const value = await probe(identity);
+      cached = { key: identity.key, expiresAt: now() + TOOL_CHECK_TTL_MS[value.status], value };
+      if (value.ok) store?.write(identity.key, value);
+      return value;
+    })().finally(() => { inFlight = null; });
+    return inFlight;
+  }
+
+  return { verify, last: () => cached?.value || null };
+}
+
+const toolAccessCheck = createToolAccessCheck();
+
+/**
+ * Check, once per Codex binary and model, that the model can see and call
+ * this app's tools. Call before Codex work that depends on tools; a result
+ * with ok: false means do not start that work and show `reason`.
+ */
+function verifyToolAccess(options) {
+  return toolAccessCheck.verify(options);
+}
+
+/** The last tool check result in this process, without starting one. */
+function lastToolAccess() {
+  return toolAccessCheck.last();
+}
+
+module.exports = {
+  getStatus, getCodexVersion, run, verifyToolAccess, lastToolAccess, createToolAccessCheck,
+  resolveExecutable, childEnv, stripCodingCatalogFields, ISOLATION_ARGS, ALLOWED_ITEM_TYPES,
+};

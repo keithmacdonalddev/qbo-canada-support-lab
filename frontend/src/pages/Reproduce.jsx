@@ -395,9 +395,13 @@ export default function Reproduce() {
                   <li key={c._id}>
                     <Link to={`/cases/${c._id}`} className="flex items-center gap-4 px-5 py-3 no-underline hover:bg-[var(--surface-muted)]">
                       <span className="min-w-0 flex-1 truncate text-[13.5px] text-[var(--ink)]">{c.title || 'Untitled case'}</span>
-                      <span className="shrink-0 text-[12px] text-[var(--ink-3)]">
-                        {(c.plans?.length || 0) > 0 ? 'Changes proposed' : 'Conversation'}
-                      </span>
+                      {c.reproduction?.outcome === 'needs_input' && c.reproduction?.status !== 'running' ? (
+                        <span className="shrink-0 rounded-full bg-[var(--attention-soft)] px-2 py-0.5 text-[12px] font-medium text-[var(--attention)]">Waiting for your answer</span>
+                      ) : (
+                        <span className="shrink-0 text-[12px] text-[var(--ink-3)]">
+                          {(c.plans?.length || 0) > 0 ? 'Changes proposed' : 'Conversation'}
+                        </span>
+                      )}
                       <span className="w-20 shrink-0 text-right text-[12px] text-[var(--ink-3)] tabular">{relativeTime(c.updatedAt)}</span>
                     </Link>
                   </li>

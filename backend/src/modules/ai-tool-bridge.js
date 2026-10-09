@@ -39,6 +39,7 @@ function createToolSession({
   let queue = Promise.resolve();
   let revoked = false;
   let calls = 0;
+  let listed = 0;
   const expiresAt = Date.now() + maxAgeMs;
 
   // Tool calls arrive on the MCP request, not the one that started the run;
@@ -47,7 +48,11 @@ function createToolSession({
 
   const session = {
     get active() { return !revoked && Date.now() < expiresAt; },
+    // How often Codex asked for the tool list and called a tool, so a run
+    // that had tools but never saw or used them can be detected.
+    stats() { return { listed, calls }; },
     listForModel() {
+      listed += 1;
       return tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -68,7 +73,7 @@ function createToolSession({
       queue = runCall.catch(() => {});
       return runCall;
     },
-    bridge: { serverName: SERVER_NAME, url: bridgeUrl(), token, tokenEnv: TOKEN_ENV },
+    bridge: { serverName: SERVER_NAME, url: bridgeUrl(), token, tokenEnv: TOKEN_ENV, stats: () => session.stats() },
     async close() {
       session.revoke();
       await queue; // Preserve receipts from an external write already in flight.

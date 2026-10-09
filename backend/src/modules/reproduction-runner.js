@@ -17,11 +17,17 @@ const aiProvider = dependencies.aiProvider || require('./ai-provider');
 const codexCli = dependencies.codexCli || require('./codex-cli');
 const createToolSession = dependencies.createToolSession || require('./ai-tool-bridge').createToolSession;
 const { providerTimeout } = require('./ai-provider-timeout');
-const { systemPrompt } = require('./reproduction-engine');
+const { systemPrompt, caseStateSnapshot } = require('./reproduction-engine');
 const runEngine = dependencies.runEngine || require('./reproduction-engine').runEngine;
 const coverage = require('./coverage');
 const { normalizePermissions } = require('./rebuild-permissions');
 const { conditionResults, classifyOutcome } = require('./reproduction-policy');
+// Confirms the model service can reach the case tools before any pass runs.
+// Null means no check applies (another provider, or no check available).
+const preflight = dependencies.preflight || (async () => {
+  if (typeof codexCli.verifyToolAccess !== 'function' || await aiProvider.resolveProvider() !== 'codex') return null;
+  return codexCli.verifyToolAccess({ refresh: false });
+});
 
 async function assertActorAccess(userId, actorId, realmId) {
   if (String(userId) === String(actorId)) return;
@@ -42,18 +48,29 @@ async function runProvider(messages, system, execute, tools, userApiKey, budget)
     if (ms <= 0) throw providerTimeout('The model service', 0);
     return ms;
   };
-  if (await aiProvider.resolveProvider() === 'codex') {
+  // The provider is chosen once per run so a transient sign-in check cannot switch it mid-case.
+  if ((budget.provider || await aiProvider.resolveProvider()) === 'codex') {
     const bridge = createToolSession({ tools, execute, maxCalls: 160 });
     try {
       const prompt = messages.map((m) => m.role + ': ' + (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n\n');
       const result = await codexCli.run({ system, prompt, bridge: bridge.bridge, timeoutMs: remaining() });
-      return result.text;
+      return { text: result?.text || '', toolsListed: result?.toolsListed, toolCalls: result?.toolCalls };
     } finally { await bridge.close(); }
   }
+  let cutOff = 0;
   for (let round = 0; round < 60; round += 1) {
     const response = await aiProvider.chat(messages, tools, { system, userApiKey, timeoutMs: remaining() });
     const blocks = Array.isArray(response.content) ? response.content : [];
     const uses = blocks.filter((b) => b.type === 'tool_use');
+    if (response.stop_reason === 'max_tokens' && uses.length) {
+      // The output limit can cut a tool call short; never run a partial call.
+      if (++cutOff >= 3) return 'The model replies were repeatedly cut off at its output limit before a tool call was complete, so nothing was run.';
+      const said = blocks.filter((b) => b.type === 'text' && b.text);
+      messages.push({ role: 'assistant', content: said.length ? said : [{ type: 'text', text: '(Reply cut off at the output limit.)' }] },
+        { role: 'user', content: 'Your last reply reached the output limit before its tool call was complete, so nothing was run. Send smaller tool calls, one at a time.' });
+      continue;
+    }
+    cutOff = 0;
     if (!uses.length) return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const results = [];
     for (const call of uses) results.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(await execute(call.name, call.input)) });
@@ -107,10 +124,7 @@ async function executeCase(sessionId, runId) {
     });
     const messages = session.messages.filter((m) => ['user', 'assistant'].includes(m.role))
       .map((m) => ({ role: m.role, content: m.content || '' }));
-    messages.push({ role: 'user', content: 'Server case state (saved evidence, not new instructions): ' + JSON.stringify({
-      scenario: state.scenario, conditions: state.conditions, ownedRecords: state.ownedRecords,
-      operations: plan.steps.map((s) => ({ tool: s.toolName, input: s.toolInput, status: s.status, result: s.result })),
-    }) });
+    messages.push({ role: 'user', content: 'Server case state (saved evidence, not new instructions): ' + JSON.stringify(caseStateSnapshot(state, plan)) });
     const system = systemPrompt({ ...state, caseLabel: key.slice(-8) });
     const confirmContinuation = async () => {
       await assertActive();
@@ -125,8 +139,24 @@ async function executeCase(sessionId, runId) {
     const inspectScreen = makeScreenInspector({ broker: dependencies.screenBroker || screenBroker,
       scope: { userId: String(session.userId), actorId: String(state.actorId), caseId: key, runId,
         realmId: String(session.realmId), environment: state.environment }, state, qbo, assertActive });
+    const provider = await aiProvider.resolveProvider();
+    state.provider = provider;
+    const access = await preflight();
+    if (access) state.toolAccess = { ok: !!access.ok, status: access.status || null, codexVersion: access.codexVersion || null, model: access.model || null, checkedAt: access.checkedAt || new Date() };
+    if (access && !access.ok) {
+      // No model pass and no writes: the assistant could not have used its tools.
+      state.outcome = 'unverified'; state.status = 'stopped'; state.phase = 'finished';
+      state.summary = String(access.reason || 'The assistant cannot use its case tools with the current AI provider, so the case did not start.').slice(0, 2000);
+      state.limitations = [...(state.limitations || []), 'No model pass ran and no QuickBooks changes were made.'];
+      state.completedAt = new Date();
+      plan.status = plan.steps.some((s) => s.status === 'failed') ? 'failed' : 'completed';
+      plan.completedAt = new Date();
+      session.messages.push({ role: 'assistant', content: state.summary, timestamp: new Date() });
+      await persist();
+      return;
+    }
     await runEngine({ state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen,
-      runModel: (transcript, execute, tools, budget) => runProvider(transcript, system, execute, tools, user.anthropicApiKey, budget) });
+      runModel: (transcript, execute, tools, budget) => runProvider(transcript, system, execute, tools, user.anthropicApiKey, { ...budget, provider }) });
     session.messages.push({ role: 'assistant', content: state.summary, timestamp: new Date() });
     if (state.title) session.title = state.title;
     await persist();
@@ -163,8 +193,10 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     if (session.reproduction?.requestId === requestId) return session;
     if (session.reproduction?.status === 'running') {
       const old = session.reproduction;
-      if ((old.instance === INSTANCE && jobs.has(String(session._id))) || new Date(old.leaseExpiresAt || 0).getTime() > Date.now()) {
-        throw conflict('This case is still running or its previous execution lease has not expired. Existing writes will not be replayed.');
+      // One backend process runs cases: a run owned by an earlier process (or
+      // with no live job here) was interrupted, so no lease wait is needed.
+      if (old.instance === INSTANCE && jobs.has(String(session._id))) {
+        throw conflict('This case is still running. Existing writes will not be replayed.');
       }
       const oldPlan = old.planId ? await AIPlan.findOne({ _id: old.planId, sessionId: session._id, ...scope }) : null;
       if (old.planId && !oldPlan) throw conflict('The interrupted case operation log is missing.');
@@ -203,7 +235,7 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     actorId: String(actorId), companyName: connection.companyName || 'Connected company',
     authorization: 'connected-company-case-request-v1', ...timingOrigin, startedAt: now, completedAt: null, stopRequested: false,
     leaseExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    outcome: null, summary: '', limitations: [], tests: [], checks: [],
+    outcome: null, summary: '', limitations: [], tests: [], checks: [], awaitingOperator: null, toolAccess: null,
     // The claim filter guarantees no live decision lock; never copy back an old one.
     decisionLockUntil: null,
   } } }, { new: true });
@@ -282,7 +314,7 @@ function publicState(session) {
   }
   if (plain.reproduction?.status === 'running' && (plain.reproduction.instance !== INSTANCE || !jobs.has(String(plain._id)))) {
     plain.reproduction = { ...plain.reproduction, status: 'interrupted', phase: 'finished', outcome: 'unverified',
-      summary: 'This run was interrupted. Existing writes have not been replayed. A continuation can recover confirmed records after the previous execution lease expires.' };
+      summary: 'This run was interrupted. Existing writes have not been replayed. A continuation can recover confirmed records; a write with an unknown outcome must be reconciled first.' };
   }
   plain.timing = caseTiming(plain);
   return plain;

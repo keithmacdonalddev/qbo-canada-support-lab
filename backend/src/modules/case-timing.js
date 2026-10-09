@@ -29,7 +29,7 @@ function caseTiming(session, now = Date.now()) {
     measuredThrough: end !== null ? new Date(end).toISOString() : null,
     elapsedMs: end !== null ? end - first : null, latestRunMs: end !== null && started !== null && started <= end ? end - started : null,
     includesWaiting: true, running,
-    verifiedResult: !running && run.status === 'completed' && ['reproduced', 'not_reproduced'].includes(run.outcome),
+    verifiedResult: !running && run.status === 'completed' && ['reproduced', 'not_reproduced', 'completed'].includes(run.outcome),
   };
 }
 module.exports = { firstRequest, caseTiming };

@@ -51,6 +51,20 @@ test('tools/call runs through the session executor', async () => {
   }
 });
 
+test('a session counts tool list requests and tool calls for its run', async () => {
+  const s = session();
+  try {
+    assert.deepEqual(s.bridge.stats(), { listed: 0, calls: 0 });
+    await handleMcpRequest(s.bridge.token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    await handleMcpRequest(s.bridge.token, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'lookupCustomer', arguments: { name: 'A' } } });
+    await handleMcpRequest(s.bridge.token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'runShell', arguments: {} } });
+    assert.deepEqual(s.stats(), { listed: 1, calls: 1 });
+    assert.deepEqual(s.bridge.stats(), { listed: 1, calls: 1 });
+  } finally {
+    s.revoke();
+  }
+});
+
 test('unknown tools and non-object arguments are refused without running', async () => {
   const calls = [];
   const s = session(async (name) => { calls.push(name); return { success: true }; });

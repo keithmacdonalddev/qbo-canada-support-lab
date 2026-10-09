@@ -1,0 +1,95 @@
+/* Keep icons anchored while the rail and workspace settle together. */
+.app-sidebar {
+  --sidebar-motion: 260ms;
+  --sidebar-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  width: 220px;
+  padding-inline: 12px;
+  transition: width var(--sidebar-motion) var(--sidebar-ease);
+}
+
+.app-sidebar[data-collapsed="true"] { width: 64px; }
+
+.sidebar-item {
+  min-height: 36px;
+  min-width: 0;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.sidebar-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-sidebar .sidebar-label {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 160ms ease, visibility 160ms;
+}
+
+.app-sidebar[data-collapsed="true"] .sidebar-label {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-sidebar .sidebar-item { padding-inline: 11.5px; }
+.app-sidebar .sidebar-item > svg,
+.app-sidebar .sidebar-toggle-icon,
+.app-sidebar .sidebar-toggle-icon svg,
+.app-sidebar .sidebar-logout svg { width: 16px; height: 16px; }
+.app-sidebar .sidebar-brand { padding-inline: 7.5px; }
+.app-sidebar .sidebar-brand > span:first-child { width: 24px; height: 24px; }
+.sidebar-toggle { text-align: left; }
+.sidebar-toggle:active .sidebar-toggle-icon { transform: scale(0.92); }
+.sidebar-toggle-icon { transition: transform 160ms var(--sidebar-ease); }
+.sidebar-toggle-icon svg { transition: opacity 160ms ease; }
+.sidebar-open-icon { opacity: 0; }
+.app-sidebar[data-collapsed="true"] .sidebar-close-icon { opacity: 0; }
+.app-sidebar[data-collapsed="true"] .sidebar-open-icon { opacity: 1; }
+.sidebar-disclosure { transition: transform 200ms var(--sidebar-ease); }
+.sidebar-legacy { transition: padding-left var(--sidebar-motion) var(--sidebar-ease); }
+.app-sidebar[data-collapsed="true"] .sidebar-legacy { padding-left: 0; }
+
+/* Let a short desktop scroll its footer too, without clipping popup hints. */
+.app-sidebar { overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.sidebar-scroll { scrollbar-width: thin; }
+.sidebar-account { position: relative; }
+.sidebar-logout { transition: background-color 160ms ease, color 160ms ease; }
+.app-sidebar .sidebar-logout {
+  position: absolute;
+  right: 0;
+  width: 39px;
+}
+.app-sidebar .sidebar-account > .sidebar-label { padding-right: 26px; }
+
+.sidebar-tooltip {
+  max-width: min(240px, calc(100vw - 24px));
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 6px 10px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: var(--shadow-md);
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.sidebar-tooltip[data-starting-style],
+.sidebar-tooltip[data-ending-style] { opacity: 0; transform: translateX(-3px); }
+.sidebar-tooltip[data-instant] { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar,
+  .app-sidebar .sidebar-label,
+  .sidebar-toggle-icon,
+  .sidebar-toggle-icon svg,
+  .sidebar-disclosure,
+  .sidebar-legacy,
+  .sidebar-logout,
+  .sidebar-item,
+  .sidebar-tooltip { transition: none; }
+  .sidebar-toggle:active .sidebar-toggle-icon { transform: none; }
+}

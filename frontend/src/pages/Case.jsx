@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, ArrowLeftRight, ArrowUp, Banknote, BookOpen, Check, ChevronDown, CircleDashed, CircleX, Clock, Copy,
+  ArrowLeft, ArrowLeftRight, ArrowUp, Banknote, BookOpen, Check, ChevronDown, CircleDashed, CircleHelp, CircleX, Clock, Copy,
   CreditCard, ExternalLink, FileText, HandCoins, Landmark, LoaderCircle, Minus, Package, Receipt, Users, Wallet,
 } from 'lucide-react'
 import Layout from '../components/Layout'
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { qboRecordUrl } from '@/lib/qbo-links'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/ui/markdown'
+import { Alert } from '@/components/ui/alert'
 import ScreenVerification from '@/components/reproduction/ScreenVerification'
 import CaseTiming from '@/components/reproduction/CaseTiming'
 
@@ -35,26 +36,56 @@ const shortDate = (d) => {
   return Number.isNaN(date.getTime()) ? String(d) : date.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })
 }
 
-function Stepper({ current }) {
+// Each stage is ticked only from evidence: a saved change for Recreate (or checks
+// made without needing one), checks at the latest revision for Check results.
+// A finished run that lacks that evidence stops at the first unproven stage.
+function stageStates(run, savedChanges) {
+  if (!run) return ['current', 'todo', 'todo', 'todo']
+  const checked = (run.checks || []).some((c) => c.revision === run.revision)
+  const recreated = savedChanges > 0 || (run.revision || 0) > 0 || checked
+  const proven = [true, recreated, checked]
+  const states = proven.map((ok) => (ok ? 'done' : 'todo')).concat('todo')
+  if (run.status === 'running') {
+    states[run.phase === 'checking' || run.verificationOnly ? 2 : 1] = 'current'
+    return states
+  }
+  const decided = ['reproduced', 'not_reproduced', 'completed'].includes(run.outcome)
+  const gap = proven.indexOf(false)
+  const reached = decided || gap < 0 ? 3 : gap
+  states[reached] = decided ? 'current' : run.outcome === 'needs_input' ? 'waiting' : 'stopped'
+  for (let i = reached + 1; i < states.length; i += 1) states[i] = 'todo'
+  return states
+}
+
+const STAGE_NOTE = { waiting: 'waiting for you', stopped: 'not finished' }
+
+function Stepper({ states }) {
   return (
     <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]" aria-label="Case progress">
-      {STAGES.map((label, i) => (
-        <li key={label} className="flex items-center gap-2">
-          <span
-            aria-current={i === current ? 'step' : undefined}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5',
-              i < current && 'text-[var(--ok)]',
-              i === current && 'bg-[var(--link-soft)] font-medium text-[var(--link)]',
-              i > current && 'text-[var(--ink-3)]',
-            )}
-          >
-            {i < current && <Check className="size-3" strokeWidth={3} aria-hidden="true" />}
-            {label}
-          </span>
-          {i < STAGES.length - 1 && <span className="h-px w-4 bg-[var(--line-strong)]" aria-hidden="true" />}
-        </li>
-      ))}
+      {STAGES.map((label, i) => {
+        const state = states[i]
+        return (
+          <li key={label} className="flex items-center gap-2">
+            <span
+              aria-current={['current', 'waiting', 'stopped'].includes(state) ? 'step' : undefined}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5',
+                state === 'done' && 'text-[var(--ok)]',
+                state === 'current' && 'bg-[var(--link-soft)] font-medium text-[var(--link)]',
+                (state === 'waiting' || state === 'stopped') && 'bg-[var(--attention-soft)] font-medium text-[var(--attention)]',
+                state === 'todo' && 'text-[var(--ink-3)]',
+              )}
+            >
+              {state === 'done' && <Check className="size-3" strokeWidth={3} aria-hidden="true" />}
+              {state === 'waiting' && <CircleHelp className="size-3" strokeWidth={2.5} aria-hidden="true" />}
+              {label}
+              {STAGE_NOTE[state] && <span className="font-normal">· {STAGE_NOTE[state]}</span>}
+              {state === 'done' && <span className="sr-only">(done)</span>}
+            </span>
+            {i < STAGES.length - 1 && <span className="h-px w-4 bg-[var(--line-strong)]" aria-hidden="true" />}
+          </li>
+        )
+      })}
     </ol>
   )
 }
@@ -114,7 +145,7 @@ function Thinking({ since }) {
   )
 }
 
-function Conversation({ messages, pending, failedText, chatError, onRetry, loading, isNew, reply, setReply, onSend, canSend, busy }) {
+function Conversation({ messages, pending, failedText, chatError, onRetry, loading, isNew, reply, setReply, onSend, canSend, busy, inputRef, awaitingAnswer }) {
   const bottomRef = useRef(null)
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'nearest' })
@@ -152,14 +183,15 @@ function Conversation({ messages, pending, failedText, chatError, onRetry, loadi
       {!isNew && (
         <form onSubmit={onSend} className="border-t border-[var(--line)] p-3">
           <div className="flex items-end gap-2 rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] p-2 focus-within:border-[var(--ink-3)]">
-            <label htmlFor="case-reply" className="sr-only">Reply to the assistant</label>
+            <label htmlFor="case-reply" className="sr-only">{awaitingAnswer ? "Answer the assistant's question" : 'Reply to the assistant'}</label>
             <textarea
               id="case-reply"
+              ref={inputRef}
               rows={2}
               value={reply}
               onChange={(e) => setReply(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) onSend(e) }}
-              placeholder="Ask for different changes or add detail"
+              placeholder={awaitingAnswer ? "Answer the assistant's question" : 'Ask for different changes or add detail'}
               className="min-h-[40px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[13.5px] text-[var(--ink)] outline-none placeholder:text-[var(--ink-3)]"
               disabled={!canSend}
             />
@@ -457,16 +489,173 @@ function CaseNote({ sessionId }) {
   )
 }
 
-export function ReproductionStatus({ run, onStop, stopping, onContinue, busy, error }) {
-  const active = run?.status === 'running';
-  const labels = { reproduced: 'Issue reproduced', not_reproduced: 'Not reproduced in these tests', unverified: 'Result not fully verified' };
+const textOf = (value) => (typeof value === 'string' ? value : value === null || value === undefined ? '' : JSON.stringify(value))
+const nameOf = (call) => (typeof call === 'string' ? call : call?.tool || call?.name || call?.toolName || '')
+
+// The model's own replies and tool results, for working out why a run ended as it did.
+function AssistantActivity({ replies, trace }) {
+  const list = Array.isArray(replies) ? replies.filter(Boolean) : []
+  const calls = Array.isArray(trace) ? trace.filter(Boolean) : []
+  if (!list.length && !calls.length) return null
   return (
-    <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4" aria-label="Reproduction progress">
+    <details className="mt-3 text-[13px]">
+      <summary className="cursor-pointer font-medium">
+        Assistant activity <span className="font-normal text-[var(--ink-3)]">
+          {[list.length && `${list.length} ${list.length === 1 ? 'reply' : 'replies'}`, calls.length && `${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'}`].filter(Boolean).join(' · ')}
+        </span>
+      </summary>
+      <div className="mt-2 max-h-80 space-y-3 overflow-y-auto rounded-[8px] bg-[var(--sunken)] p-2.5 text-[12px] text-[var(--ink-2)]">
+        {list.length > 0 && (
+          <ol className="space-y-2.5">
+            {list.map((r, i) => {
+              const tools = Array.isArray(r.toolCalls) ? r.toolCalls.map(nameOf).filter(Boolean) : []
+              const at = r.at && !Number.isNaN(new Date(r.at).getTime()) ? new Date(r.at).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : null
+              return (
+                <li key={i}>
+                  <p className="text-[11.5px] text-[var(--ink-3)]">
+                    {[r.pass !== null && r.pass !== undefined ? `Pass ${r.pass}` : `Reply ${i + 1}`, at,
+                      tools.length ? `Tools: ${tools.join(', ')}` : Number.isFinite(r.toolCalls) && r.toolCalls > 0 ? `${r.toolCalls} tool calls` : null].filter(Boolean).join(' · ')}
+                  </p>
+                  <pre className="mt-0.5 whitespace-pre-wrap break-words font-sans leading-relaxed text-[var(--ink)]">{textOf(r.text).trim() || 'No text in this reply.'}</pre>
+                </li>
+              )
+            })}
+          </ol>
+        )}
+        {calls.length > 0 && (
+          <ul className={cn('space-y-1', list.length > 0 && 'border-t border-[var(--line)] pt-2.5')} aria-label="Tool calls">
+            {calls.map((t, i) => {
+              const ok = t.ok ?? t.success
+              const error = typeof t.error === 'string' ? t.error : t.error ? textOf(t.error.message || t.error) : null
+              return (
+                <li key={i} className="flex items-start gap-2">
+                  {ok === true ? <Check className="mt-0.5 size-3.5 shrink-0 text-[var(--ok)]" aria-label="Succeeded" />
+                    : ok === false ? <CircleX className="mt-0.5 size-3.5 shrink-0 text-[var(--danger-ink)]" aria-label="Failed" />
+                      : <Minus className="mt-0.5 size-3.5 shrink-0 text-[var(--ink-3)]" aria-label="Result not recorded" />}
+                  <span className="min-w-0 break-words"><span className="font-mono text-[11.5px] text-[var(--ink)]">{nameOf(t) || 'Unnamed tool'}</span>
+                    {error && <span className="block text-[var(--danger-ink)]">{error}</span>}</span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </details>
+  )
+}
+
+// A question the assistant needs answered before it can go on. Options reply
+// through the same path as the conversation box.
+function OperatorQuestion({ run, onAnswer, canAnswer, busy }) {
+  const question = textOf(run.awaitingOperator?.question).trim() || textOf(run.summary).trim()
+  const options = (Array.isArray(run.awaitingOperator?.options) ? run.awaitingOperator.options : [])
+    .map((o) => textOf(o).trim()).filter(Boolean)
+  const summary = textOf(run.summary).trim()
+  return (
+    <>
+      {summary && !summary.includes(question) && <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">{summary}</p>}
+      <div className="mt-3 rounded-[10px] border border-[var(--line-strong)] bg-[var(--attention-soft)] px-3.5 py-3">
+        <p className="text-[11.5px] font-semibold uppercase tracking-[0.04em] text-[var(--attention)]">The assistant asks</p>
+        <div className="mt-1 text-[13.5px] leading-relaxed text-[var(--ink)]">{question ? <Markdown text={question} /> : 'The assistant needs more detail to go on.'}</div>
+        {options.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2" aria-label="Suggested answers">
+            {options.map((option) => (
+              <Button key={option} variant="outline" size="sm" className="h-auto min-h-7 whitespace-normal py-1 text-left" onClick={() => onAnswer(option)} disabled={busy || !canAnswer}>{option}</Button>
+            ))}
+          </div>
+        )}
+        <p className="mt-2.5 text-[12.5px] text-[var(--ink-2)]">
+          {options.length > 0 ? 'Choose an answer or write your own' : 'Write your answer'} in the conversation box. Answering continues the case.
+        </p>
+      </div>
+    </>
+  )
+}
+
+// A write whose result is unknown blocks the case until someone checks what
+// QuickBooks actually saved and picks the matching record (or none).
+function ReconcileWrites({ sessionId, onSession, disabled }) {
+  const [result, setResult] = useState(null)
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState(null)
+
+  const reconcile = async (key, body) => {
+    setBusy(key)
+    setError(null)
+    try {
+      const res = await client.post('/ai/sessions/' + sessionId + '/reconcile', body)
+      if (res.data?.success === false) throw new Error(res.data.error || '')
+      setResult(res.data?.data || null)
+      if (res.data?.data?.session) onSession(res.data.data.session)
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'QuickBooks could not be checked. Nothing was changed.')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const choose = (entry, recordId) => reconcile(`${entry.planId}:${entry.stepNumber}:${recordId}`,
+    { selections: [{ planId: entry.planId, stepNumber: entry.stepNumber, recordId }] })
+
+  const unresolved = Array.isArray(result?.unresolved) ? result.unresolved : []
+  return (
+    <section className="rounded-[12px] border border-[var(--line-strong)] bg-[var(--attention-soft)] p-4" aria-label="Unconfirmed QuickBooks changes">
+      <h2 className="text-[14px] font-semibold text-[var(--ink)]">A change may or may not have reached QuickBooks</h2>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--ink-2)]">The case can continue once each unconfirmed change is matched to what QuickBooks saved. Checking does not change any records.</p>
+      {result?.resolved?.length > 0 && <p className="mt-2 text-[12.5px] text-[var(--ok)]">{result.resolved.length} {result.resolved.length === 1 ? 'change was' : 'changes were'} confirmed.</p>}
+      {unresolved.length > 0 && (
+        <ul className="mt-3 space-y-3">
+          {unresolved.map((entry) => (
+            <li key={`${entry.planId}:${entry.stepNumber}`} className="rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-3.5 py-3">
+              <p className="text-[13px] font-medium text-[var(--ink)]">{typeInfo(entry.entityType || entry.toolName || 'Record').singular}{entry.id ? ` ${entry.id}` : ''}</p>
+              {entry.reason && <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-2)]">{textOf(entry.reason)}</p>}
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {(Array.isArray(entry.candidates) ? entry.candidates : []).map((c) => (
+                  <Button key={c.id} variant="outline" size="sm" className="h-auto min-h-7 whitespace-normal py-1 text-left" disabled={disabled || Boolean(busy)} onClick={() => choose(entry, c.id)}>
+                    {busy === `${entry.planId}:${entry.stepNumber}:${c.id}` && <LoaderCircle className="animate-spin" />}
+                    {[c.docNumber && `#${c.docNumber}`, c.name, `ID ${c.id}`].filter(Boolean).join(' · ')}
+                  </Button>
+                ))}
+                <Button variant="ghost" size="sm" disabled={disabled || Boolean(busy)} onClick={() => choose(entry, 'none')}>
+                  {busy === `${entry.planId}:${entry.stepNumber}:none` && <LoaderCircle className="animate-spin" />}
+                  None was created
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!unresolved.length && (
+        <Button className="mt-3" onClick={() => reconcile('check', {})} disabled={disabled || Boolean(busy)}>
+          {busy === 'check' && <LoaderCircle className="animate-spin" />}
+          {busy === 'check' ? 'Checking…' : 'Check what reached QuickBooks'}
+        </Button>
+      )}
+      {error && <Alert variant="error" className="mt-3">{error}</Alert>}
+    </section>
+  )
+}
+
+const OUTCOME_LABELS = {
+  reproduced: 'Issue reproduced',
+  not_reproduced: 'Not reproduced in these tests',
+  completed: 'Done — ready for you to check',
+  needs_input: 'Waiting for your answer',
+  unverified: 'Not finished — result not verified',
+}
+
+export function ReproductionStatus({ run, onStop, stopping, onContinue, onAnswer, canAnswer, busy, error }) {
+  const active = run?.status === 'running';
+  const asking = !active && run?.outcome === 'needs_input';
+  const lastReply = [...(Array.isArray(run?.agentReplies) ? run.agentReplies : [])].reverse().find((r) => textOf(r?.text).trim());
+  const said = !active && run?.outcome === 'unverified' && lastReply && textOf(lastReply.text).trim() !== textOf(run.summary).trim() ? textOf(lastReply.text).trim() : null;
+  return (
+    <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4" aria-label="Case status">
       <div className="flex items-center justify-between gap-4">
         <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[var(--ink)]" role="status">
           {active && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
+          {asking && <CircleHelp className="size-4 text-[var(--attention)]" aria-hidden="true" />}
           {active ? (run.phase === 'continuing' ? 'Continuing from saved progress' : run.phase === 'checking' || run.verificationOnly ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
-            : labels[run?.outcome] || 'Ready to continue this case'}
+            : OUTCOME_LABELS[run?.outcome] || 'Ready to continue this case'}
         </h2>
         {active && <Button variant="outline" size="sm" onClick={onStop} disabled={stopping || run.stopRequested}>{run.stopRequested ? 'Stopping…' : 'Stop'}</Button>}
       </div>
@@ -474,10 +663,18 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, busy, er
         <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">
           {run.stopRequested ? 'Finishing any change already sent, then stopping.' : run.phase === 'continuing' ? 'The model reached its time limit. The agent is continuing automatically using saved records and results.' : run.verificationOnly ? 'The agent is checking the saved results and recording any unfinished tests.' : 'The agent is creating the test records, making the relevant changes and checking what QuickBooks saved. You can leave this page; the case keeps running.'}
         </p>
+      ) : asking ? (
+        <OperatorQuestion run={run} onAnswer={onAnswer} canAnswer={canAnswer} busy={busy} />
       ) : (
         <>
           <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">{run?.summary || 'Continue the original request automatically. The agent will create its own test records and check the results.'}</p>
-          {(!run || run.status === 'interrupted' || (run.outcome === 'unverified' && !run.outcomeUnknown && !active)) && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue reproduction'}</Button>}
+          {said && (
+            <div className="mt-3 border-t border-[var(--line)] pt-3">
+              <h3 className="mb-1 text-[12px] font-semibold text-[var(--ink-2)]">What the assistant said</h3>
+              <div className="text-[13px] leading-relaxed text-[var(--ink)]"><AssistantText text={said} /></div>
+            </div>
+          )}
+          {(!run || run.status === 'interrupted' || (run.outcome === 'unverified' && !run.outcomeUnknown)) && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue this case'}</Button>}
         </>
       )}
       {active && run?.progress?.currentStep && (
@@ -511,6 +708,7 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, busy, er
       )}
       {run?.tests?.length > 0 && <details className="mt-3 text-[13px]"><summary className="cursor-pointer font-medium">Tests performed</summary><ul className="mt-2 list-disc space-y-1 pl-5">{run.tests.map((test, i) => <li key={i}>{test}</li>)}</ul></details>}
       {run?.limitations?.length > 0 && <div className="mt-3 text-[13px] text-[var(--ink-2)]"><p className="font-medium">What remains unverified</p><ul className="mt-1 list-disc space-y-1 pl-5">{run.limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul></div>}
+      <AssistantActivity replies={run?.agentReplies} trace={run?.toolTrace} />
       {error && <p role="alert" className="mt-3 text-[13px] text-[var(--danger-ink)]">{error}</p>}
     </section>
   );
@@ -593,13 +791,25 @@ export default function Case() {
     return () => { clearInterval(timer); window.removeEventListener('focus', refresh); };
   }, [isNew, active]);
 
+  // Replies, including answers to the assistant's question, continue the case.
+  const submitReply = (value) => {
+    const text = String(value || '').trim();
+    if (!text || pending || active) return false;
+    startCase(text, id);
+    return true;
+  };
   const sendReply = (event) => {
     event.preventDefault();
-    const text = reply.trim();
-    if (!text || pending || active) return;
-    setReply('');
-    startCase(text, id);
+    if (submitReply(reply)) setReply('');
   };
+
+  // Invite an answer once each time the assistant asks a new question.
+  const replyBox = useRef(null);
+  const asking = !active && run?.outcome === 'needs_input';
+  const questionKey = asking ? String(run.awaitingOperator?.askedAt || run.awaitingOperator?.question || 'asked') : null;
+  useEffect(() => {
+    if (questionKey) replyBox.current?.focus({ preventScroll: true });
+  }, [questionKey]);
   const stop = async () => {
     setStopping(true);
     setChatError(null);
@@ -628,7 +838,7 @@ export default function Case() {
   const messages = (session?.messages || []).filter((m) => ['user', 'assistant'].includes(m.role) && m.content?.trim());
   const opening = messages.find((m) => m.role === 'user')?.content || initialMessage || session?.title;
   const title = run?.title || caseTitle(opening) || 'New case';
-  const stage = !run ? 0 : active ? (run.phase === 'checking' ? 2 : 1) : 3;
+  const stages = stageStates(run, view?.counts?.done || 0);
   const busy = Boolean(pending) || active;
 
   return (
@@ -637,7 +847,7 @@ export default function Case() {
         <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> All cases</Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <h1 className="line-clamp-2 max-w-[60ch] text-[22px] font-semibold leading-snug text-[var(--ink)]">{title}</h1>
-          {(session || isNew) && <Stepper current={stage} />}
+          {(session || isNew) && <Stepper states={stages} />}
         </div>
         <CaseTiming timing={session?.timing} />
         {loadError ? <p className="mt-8 text-[13px]" role="alert">{loadError} <button onClick={() => setVersion((v) => v + 1)} className="text-[var(--link)]">Try again</button></p> : (
@@ -645,8 +855,9 @@ export default function Case() {
             <div className="flex min-w-0 flex-col gap-5">
               {!isNew && !session && <p role="status" className="text-[13px] text-[var(--ink-2)]">Loading case…</p>}
               {!isNew && session && <ReproductionStatus run={run} onStop={stop} stopping={stopping} busy={busy}
-                error={chatError}
+                error={chatError} onAnswer={submitReply} canAnswer={Boolean(connection?.ready)}
                 onContinue={() => startCase('Complete the original reproduction request automatically, including supported experiments and verification. Reuse the saved records from this case and resume unfinished tests. Do not stop for repeated approvals or manual setup. Supersede the earlier proposal.', id)} />}
+              {!isNew && run?.outcomeUnknown && !active && <ReconcileWrites sessionId={id} onSession={setSession} disabled={busy} />}
               {!isNew && run && <ScreenVerification sessionId={id} run={run} />}
               <ApprovalRequests changes={waitingForOwner} active={active} onDecide={decide} deciding={deciding} error={decisionError} />
               <ChangesLedger view={view} plans={plans} environment={run?.environment || connection?.environment}
@@ -657,7 +868,8 @@ export default function Case() {
               <Conversation messages={messages} pending={pending} failedText={failedText}
                 chatError={chatError} onRetry={() => startCase(failedText, isNew ? undefined : id)}
                 loading={!session && !pending && !chatError && !isNew} isNew={isNew}
-                reply={reply} setReply={setReply} onSend={sendReply} canSend={Boolean(connection?.ready) && !active} busy={busy} />
+                reply={reply} setReply={setReply} onSend={sendReply} canSend={Boolean(connection?.ready) && !active} busy={busy}
+                inputRef={replyBox} awaitingAnswer={asking} />
             </aside>
           </div>
         )}

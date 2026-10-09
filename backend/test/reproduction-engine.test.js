@@ -55,7 +55,15 @@ function fixture() {
 }
 const define = (tool, conditions = ['Observed quantity']) => tool('defineCase', { title: 'Test case', scenario: 'A supported reproduction', conditions });
 const create = (tool, entityType, record) => tool('createRecord', { entityType, record, summary: 'Create ' + entityType });
-const finish = (tool, outcome) => tool('finishCase', { outcome, summary: 'Result', tests: ['Executed test'], limitations: [] });
+// An unsupported finish is refused twice with the missing conditions; the third attempt finishes downgraded.
+const finish = async (tool, outcome) => {
+  let result;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    result = await tool('finishCase', { outcome, summary: 'Result', tests: ['Executed test'], limitations: [] });
+    if (!result.notFinished) break;
+  }
+  return result;
+};
 const line = (qty, po) => ({ Amount: qty * 100, DetailType: 'ItemBasedExpenseLineDetail',
   ItemBasedExpenseLineDetail: { Qty: qty, UnitPrice: 100 },
   ...(po ? { LinkedTxn: [{ TxnId: po, TxnType: 'PurchaseOrder', TxnLineId: '1' }] } : {}) });
@@ -325,7 +333,7 @@ test('QBO metadata permits case-owned update, void and delete without entering t
   await runEngine({ ...f.options, runModel: async (_messages, tool) => {
     await define(tool);
     const bill = await create(tool, 'Bill', { Line: [line(5)] });
-    const updated = await tool('updateRecord', { entityType: 'Bill', id: bill.data.id, changes: { Line: [line(3.5)] }, summary: 'Reduce hours' });
+    const updated = await tool('updateRecord', { entityType: 'Bill', id: bill.data.id, changes: { Line: [line(3.5)] }, replaceAllLines: true, summary: 'Reduce hours' });
     assert.equal(updated.success, true);
     assert.equal(updated.savedRecord.Line[0].ItemBasedExpenseLineDetail.Qty, 3.5);
     const invoice = await create(tool, 'Invoice', { Line: [{ Amount: 10 }] });
@@ -348,7 +356,7 @@ test('compound quantity and link checks preserve failure through finishCase', as
       sources: [{ entityType: 'Bill', id: bill.data.id, path }] });
     assert.equal((await compare('Line.0.ItemBasedExpenseLineDetail.Qty', 3.5)).passed, false);
     assert.equal((await compare('Line.0.LinkedTxn.0.TxnLineId', '1')).passed, true);
-    await finish(tool, 'reproduced');
+    await finish(tool, 'completed');
   } });
   assert.equal(f.state.checks.length, 2);
   assert.equal(f.state.outcome, 'unverified');
@@ -570,4 +578,360 @@ test('new dispatch receipts persist server scope before QBO and ignore supplied 
   assert.deepEqual(snapshots.find(steps => steps[0]?.status === 'executing')[0].executionScope, scope);
   assert.deepEqual(f.plan.steps[0].executionScope, scope);
   assert.equal(f.calls.filter(call => call[0] === 'create').length, 1);
+});
+
+const { systemPrompt, companyToday, caseStateSnapshot } = require('../src/modules/reproduction-engine');
+test('the prompt and tools are general, not tuned to one purchase-order case', () => {
+  const prompt = systemPrompt({ companyName: 'Fixture Co', environment: 'production', caseLabel: 'abcd1234' });
+  assert.match(prompt, /Fixture Co/); assert.match(prompt, /REPRO-abcd1234/);
+  assert.match(prompt, new RegExp('Today: ' + companyToday() + '\\.'));
+  // 02:30 UTC on October 9 is still October 8 in Toronto.
+  assert.equal(companyToday(new Date('2026-10-09T02:30:00Z')), '2026-10-08');
+  assert.match(prompt, /askOperator/); assert.match(prompt, /not moving real money/);
+  assert.doesNotMatch(prompt, /PurchaseOrder|purchase-order|TxnLineId|discrepanc|billed quantit|mixed-PO/i);
+  const tools = Object.fromEntries(reproductionTools.map((t) => [t.name, t]));
+  assert.ok(reproductionTools.every((t) => !/Queued for user approval/.test(t.description)));
+  assert.doesNotMatch(tools.defineCase.description + tools.checkCase.description, /discrepanc|billed/i);
+  assert.match(tools.checkScreen.description, /only screen value/);
+  assert.deepEqual(tools.finishCase.input_schema.properties.outcome.enum, ['completed', 'reproduced', 'not_reproduced', 'unverified']);
+  assert.deepEqual(tools.askOperator.input_schema.required, ['question']);
+});
+
+test('askOperator ends the run before defineCase and saves the question with options', async () => {
+  const f = fixture(); let turns = 0; const results = [];
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    turns += 1;
+    results.push(await tool('askOperator', { question: 'x'.repeat(1001) }));
+    results.push(await tool('askOperator', { question: 'Which account?', options: Array(9).fill('A') }));
+    results.push(await tool('askOperator', { question: ' Which account should the transfer come from? ', options: ['Chequing (1000)', 'Savings (1010)'] }));
+    results.push(await tool('createRecord', { entityType: 'Vendor', record: {}, summary: 'after asking' }));
+    return 'Waiting for the operator.';
+  } });
+  assert.equal(turns, 1);
+  assert.equal(results[0].success, false); assert.equal(results[1].success, false); assert.equal(results[2].success, true);
+  assert.match(results[3].error, /finished/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.state.outcome, 'needs_input'); assert.equal(f.state.status, 'completed');
+  assert.equal(f.state.awaitingOperator.question, 'Which account should the transfer come from?');
+  assert.deepEqual(f.state.awaitingOperator.options, ['Chequing (1000)', 'Savings (1010)']);
+  assert.equal(f.state.awaitingOperator.source, 'askOperator');
+  assert.ok(f.state.awaitingOperator.askedAt instanceof Date);
+  assert.equal(f.state.summary, 'Which account should the transfer come from?\n\nOptions:\n1. Chequing (1000)\n2. Savings (1010)');
+});
+
+test('a pass without tool calls hands its reply to the operator instead of looping', async () => {
+  const f = fixture(); let turns = 0;
+  await runEngine({ ...f.options, runModel: async () => { turns += 1; return 'Which bank account should the $40,000 come from?'; } });
+  assert.equal(turns, 1);
+  assert.equal(f.state.outcome, 'needs_input'); assert.equal(f.state.status, 'completed');
+  assert.equal(f.state.summary, 'Which bank account should the $40,000 come from?');
+  assert.equal(f.state.awaitingOperator.source, 'reply');
+  assert.equal(f.state.agentReplies.length, 1);
+  assert.equal(f.state.agentReplies[0].text, 'Which bank account should the $40,000 come from?');
+  assert.equal(f.state.agentReplies[0].toolCalls, 0); assert.equal(f.state.agentReplies[0].pass, 1);
+
+  const silent = fixture();
+  await runEngine({ ...silent.options, runModel: async () => ({ text: '', toolsListed: false, toolCalls: 0 }) });
+  assert.equal(silent.state.outcome, 'needs_input');
+  assert.match(silent.state.summary, /may not have received them/);
+  assert.equal(silent.state.awaitingOperator.source, 'no_reply');
+  assert.equal(silent.state.agentReplies[0].toolsListed, false);
+});
+
+test('model replies and the tool trace are saved, bounded and not looped indefinitely', async () => {
+  const f = fixture(); let turns = 0;
+  f.state.toolTrace = Array.from({ length: 199 }, (_, i) => ({ tool: 'old' + i, ok: true }));
+  await runEngine({ ...f.options, maxPasses: 15, runModel: async (_m, tool) => {
+    turns += 1;
+    await tool('saveProgress', { currentStep: 'Step ' + turns, remainingSteps: [] });
+    if (turns === 1) await tool('checkCase', { label: 'Undefined', sources: [], aggregate: 'single', operator: 'equal', expected: 1 });
+    return 'Reply ' + turns + ' ' + 'y'.repeat(5000);
+  } });
+  assert.equal(turns, 15);
+  assert.equal(f.state.agentReplies.length, 12);
+  assert.equal(f.state.agentReplies.at(-1).pass, 15);
+  assert.ok(f.state.agentReplies.every((r) => r.text.length <= 4000 && r.toolCalls >= 1));
+  assert.equal(f.state.toolTrace.length, 200);
+  assert.equal(f.state.toolTrace.at(-1).tool, 'saveProgress');
+  assert.ok(!f.state.toolTrace.some((t) => t.tool === 'old0'));
+  const failed = f.state.toolTrace.find((t) => t.tool === 'checkCase');
+  assert.equal(failed.ok, false); assert.match(failed.error, /defined condition/);
+  assert.equal(f.state.outcome, 'unverified');
+  assert.match(f.state.summary, /stopped before establishing a verified result\. Its last reply: Reply 15/);
+});
+
+test('completed requires current passing checks for every condition', async () => {
+  const label = 'Transfer of 40000 on 2026-04-21';
+  const current = { label, available: true, passed: true, revision: 3, sources: [] };
+  assert.equal(classifyOutcome('completed', [label], [current], 3), 'completed');
+  assert.equal(classifyOutcome('completed', [label], [current], 4), 'unverified');
+  assert.equal(classifyOutcome('completed', [label, 'Account exists'], [current], 3), 'unverified');
+  assert.equal(classifyOutcome('completed', [label], [{ ...current, passed: false }], 3), 'unverified');
+  assert.equal(classifyOutcome('needs_input', [], [], 0), 'needs_input');
+  assert.equal(classifyOutcome('anything', [label], [current], 3), 'unverified');
+
+  const f = fixture();
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Invoice total is 120']);
+    const customer = (await create(tool, 'Customer', { DisplayName: 'REPRO customer' })).data.id;
+    const invoice = await create(tool, 'Invoice', { CustomerRef: { value: customer }, TotalAmt: 120 });
+    await tool('checkCase', { label: 'Invoice total is 120', sources: [{ entityType: 'Invoice', id: invoice.data.id, path: 'TotalAmt' }], expected: 120, aggregate: 'single', operator: 'equal' });
+    await finish(tool, 'completed');
+  } });
+  assert.equal(f.state.outcome, 'completed');
+
+  const claimed = fixture();
+  await runEngine({ ...claimed.options, runModel: async (_m, tool) => { await define(tool); await finish(tool, 'needs_input'); } });
+  assert.equal(claimed.state.outcome, 'unverified');
+  assert.equal(claimed.state.awaitingOperator, null);
+});
+
+test('defineCase can be rewritten before changes and only extended after changes in the same run', async () => {
+  const f = fixture(); const results = [];
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Transfer from Chequing']);
+    results.push(await define(tool, ['Transfer from Savings']));
+    await create(tool, 'Vendor', { DisplayName: 'REPRO vendor' });
+    results.push(await define(tool, ['Something else']));
+    results.push(await define(tool, ['Transfer from Savings', 'Memo mentions the case']));
+    await finish(tool, 'unverified');
+  } });
+  assert.equal(results[0].success, true);
+  assert.equal(results[1].success, false); assert.match(results[1].error, /must be kept/);
+  assert.equal(results[2].success, true);
+  assert.deepEqual(f.state.conditions, ['Transfer from Savings', 'Memo mentions the case']);
+  assert.equal(f.state.definitionHistory.length, 2);
+  assert.deepEqual(f.state.definitionHistory[0].conditions, ['Transfer from Chequing']);
+});
+
+test('a new operator turn may rewrite an earlier definition before its first change, but not drop checked conditions', async () => {
+  const earlier = () => {
+    const f = fixture();
+    f.state.conditions = ['Transfer of 40000']; f.state.title = 'Old'; f.state.scenario = 'Old request'; f.state.revision = 1;
+    f.state.ownedRecords = [{ entityType: 'Vendor', id: '20', stepNumber: 1 }];
+    f.records.set('Vendor:20', { Id: '20', DisplayName: 'REPRO vendor' });
+    f.plan.steps.push({ stepNumber: 1, toolName: 'createRecord', toolInput: { entityType: 'Vendor' }, status: 'completed', result: { data: { id: '20' } } });
+    return f;
+  };
+  const rewrite = (tool) => tool('defineCase', { title: 'New', scenario: 'Operator changed the amount', conditions: ['Transfer of 50000'], reason: 'Operator changed the amount' });
+  const f = earlier(); let result;
+  await runEngine({ ...f.options, runModel: async (_m, tool) => { result = await rewrite(tool); await finish(tool, 'unverified'); } });
+  assert.equal(result.success, true);
+  assert.deepEqual(f.state.conditions, ['Transfer of 50000']);
+  assert.equal(f.state.definitionHistory[0].reason, 'Operator changed the amount');
+
+  const afterWrite = earlier();
+  await runEngine({ ...afterWrite.options, runModel: async (_m, tool) => {
+    await create(tool, 'Vendor', { DisplayName: 'Another' }); result = await rewrite(tool); await finish(tool, 'unverified');
+  } });
+  assert.equal(result.success, false);
+
+  const checked = earlier();
+  await runEngine({ ...checked.options, runModel: async (_m, tool) => {
+    await tool('checkCase', { label: 'Transfer of 40000', sources: [{ entityType: 'Vendor', id: '20', path: 'DisplayName' }], expected: 'REPRO vendor', aggregate: 'single', operator: 'equal' });
+    result = await rewrite(tool); await finish(tool, 'unverified');
+  } });
+  assert.equal(result.success, false);
+  assert.deepEqual(checked.state.conditions, ['Transfer of 40000']);
+});
+
+test('an operator question whose save fails ends as an unverified stop, not a pending question', async () => {
+  const f = fixture(); let saves = 0;
+  await runEngine({ ...f.options, persist: async () => { if (++saves === 1) throw new Error('database down'); }, runModel: async (_m, tool) => {
+    await tool('askOperator', { question: 'Which account?' }).catch(() => {});
+  } });
+  assert.equal(f.state.outcome, 'unverified'); assert.equal(f.state.status, 'stopped');
+  assert.equal(f.state.awaitingOperator, null);
+});
+
+const balanceSheet = {
+  Header: { ReportName: 'BalanceSheet', StartPeriod: '2026-01-01', EndPeriod: '2026-04-21', ReportBasis: 'Accrual' },
+  Columns: { Column: [{ ColTitle: '', ColType: 'Account' }, { ColTitle: 'Total', ColType: 'Money' }] },
+  Rows: { Row: [
+    { Header: { ColData: [{ value: 'Equity' }, { value: '' }] }, Rows: { Row: [
+      { ColData: [{ value: 'Owner Distributions', id: '91' }, { value: '-40,000.00' }] },
+      { ColData: [{ value: 'Retained Earnings' }, { value: '' }] },
+    ] }, Summary: { ColData: [{ value: 'Total Equity' }, { value: '(40,000.00)' }] } },
+    { Header: { ColData: [{ value: 'Bank' }] }, Rows: { Row: [{ ColData: [{ value: 'Chequing' }, { value: '10000' }] }] } },
+    { Header: { ColData: [{ value: 'Savings' }] }, Rows: { Row: [{ ColData: [{ value: 'Chequing' }, { value: '5' }] }] } },
+  ] },
+};
+test('checkReport records labelled report values as current evidence', async () => {
+  const f = fixture(); const paths = []; const results = {};
+  f.qbo.apiCall = async (method, path) => { paths.push([method, path]); return structuredClone(balanceSheet); };
+  const conditions = ['Owner Distributions is -40000', 'Total equity is -40000'];
+  const report = (tool, extra) => tool('checkReport', { report: 'BalanceSheet', reportDate: '2026-04-21', operator: 'equal', label: conditions[0], ...extra });
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, conditions);
+    results.distributions = await report(tool, { row: 'owner distributions', expected: -40000 });
+    results.total = await report(tool, { label: conditions[1], row: 'Total Equity', column: 'Total', expected: -40000 });
+    results.empty = await report(tool, { row: 'Retained Earnings', expected: 0 });
+    results.ambiguous = await report(tool, { row: 'Chequing', expected: 5 });
+    results.section = await report(tool, { row: 'Chequing', section: 'Savings', expected: 5 });
+    results.column = await report(tool, { row: 'Chequing', section: 'Savings', column: 'Nope', expected: 5 });
+    results.undefinedLabel = await report(tool, { label: 'Not defined', row: 'Chequing', expected: 5 });
+    results.badDate = await report(tool, { reportDate: 'April 21', row: 'Chequing', expected: 5 });
+    await finish(tool, 'completed');
+  } });
+  assert.deepEqual(paths[0], ['GET', 'reports/BalanceSheet?report_date=2026-04-21']);
+  assert.equal(results.distributions.passed, true); assert.equal(results.distributions.actual, -40000);
+  assert.equal(results.total.passed, true);
+  assert.equal(results.empty.available, false); assert.match(results.empty.reason, /empty/);
+  assert.equal(results.ambiguous.available, false); assert.match(results.ambiguous.reason, /Several/);
+  assert.equal(results.section.actual, 5);
+  assert.equal(results.column.available, false); assert.deepEqual(results.column.columns, ['Account', 'Total']);
+  assert.equal(results.undefinedLabel.success, false);
+  assert.match(results.badDate.error, /YYYY-MM-DD/);
+  const saved = f.state.checks.find((c) => c.label === conditions[1]);
+  assert.deepEqual(saved.sources[0], { entityType: 'Report', id: 'BalanceSheet?reportDate=2026-04-21', path: 'row:Total Equity|column:Total', values: [-40000] });
+  assert.equal(saved.evidence.kind, 'report'); assert.equal(saved.evidence.text, '(40,000.00)');
+  // Unavailable cells under the first condition keep the result unverified.
+  assert.equal(f.state.outcome, 'unverified');
+});
+
+test('checkReport evidence alone can verify a completed report request', async () => {
+  const f = fixture();
+  f.qbo.apiCall = async () => structuredClone(balanceSheet);
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Owner Distributions is -40000']);
+    await tool('checkReport', { label: 'Owner Distributions is -40000', report: 'BalanceSheet', row: 'Owner Distributions', operator: 'equal', expected: -40000 });
+    await finish(tool, 'completed');
+  } });
+  assert.equal(f.state.outcome, 'completed');
+});
+
+test('a write that failed before leaving the server is definite; an unconfirmed receipt is not', async () => {
+  for (const [error, unknown] of [
+    [Object.assign(new Error('Token refresh failed'), { qboStage: 'refresh' }), false],
+    [Object.assign(new Error('Refresh response incomplete'), { qboStage: 'refresh_response', status: 502 }), false],
+    [Object.assign(new Error('Tokens not saved'), { qboStage: 'storage_save' }), false],
+    [Object.assign(new Error('Receipt not saved'), { qboStage: 'write_receipt', status: 503, outcomeUnknown: true }), true],
+    [Object.assign(new Error('Gateway'), { qboStage: 'api', status: 502 }), true],
+  ]) {
+    const f = fixture(); let attempts = 0;
+    const createOriginal = f.qbo.create;
+    f.qbo.create = async (...args) => { if (++attempts === 1) throw error; return createOriginal(...args); };
+    await runEngine({ ...f.options, runModel: async (_m, tool) => {
+      await define(tool);
+      await create(tool, 'Vendor', { DisplayName: 'REPRO vendor' });
+      await create(tool, 'Vendor', { DisplayName: 'REPRO vendor' });
+      await finish(tool, 'unverified');
+    } });
+    assert.equal(f.plan.steps[0].result.outcomeUnknown, unknown, error.message);
+    assert.equal(!!f.state.outcomeUnknown, unknown, error.message);
+    assert.equal(attempts, unknown ? 1 : 2, error.message);
+  }
+});
+
+test('an existing bundle cannot be referenced through GroupItemRef', async () => {
+  const f = fixture(); let result;
+  f.records.set('Item:7', { Id: '7', Type: 'Group' });
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool);
+    result = await create(tool, 'Invoice', { Line: [{ DetailType: 'GroupLineDetail', GroupLineDetail: { GroupItemRef: { value: '7' } } }] });
+    await finish(tool, 'unverified');
+  } });
+  assert.match(result.error, /bundle/);
+  assert.equal(f.calls.filter((c) => c[0] === 'create').length, 0);
+});
+
+test('the per-pass case state is compact', () => {
+  const big = 'x'.repeat(5000);
+  const plan = { steps: Array.from({ length: 70 }, (_, i) => ({ stepNumber: i + 1, toolName: 'createRecord', status: 'completed',
+    toolInput: { entityType: 'Bill', record: { PrivateNote: big } }, result: { success: true, data: { id: String(i), note: big } } })) };
+  const state = { scenario: 's', conditions: ['c'], ownedRecords: plan.steps.map((s) => ({ entityType: 'Bill', id: String(s.stepNumber) })),
+    checks: [{ label: 'c', sources: [{ entityType: 'Bill', id: '1', path: 'Line.*.Amount', values: Array(1000).fill(1) }], actual: 1, revision: 1 }] };
+  const snapshot = caseStateSnapshot(state, plan);
+  assert.equal(snapshot.operations.length, 60); assert.equal(snapshot.earlierOperations, 10);
+  assert.equal(snapshot.operations[0].step, 11);
+  assert.equal(snapshot.operations[0].input.clipped, true);
+  assert.equal(snapshot.ownedRecords.length, 70);
+  assert.deepEqual(snapshot.checks[0].sources, [{ entityType: 'Bill', id: '1', path: 'Line.*.Amount' }]);
+  assert.ok(JSON.stringify(snapshot).length < 200000);
+});
+
+test('evidence tools accept a condition by exact text, loose text or number, and list conditions on a mismatch', async () => {
+  const f = fixture(); const results = [];
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Invoice total is 120', 'Customer exists']);
+    const customer = (await create(tool, 'Customer', { DisplayName: 'REPRO customer' })).data.id;
+    const invoice = (await create(tool, 'Invoice', { CustomerRef: { value: customer }, TotalAmt: 120 })).data.id;
+    const total = (extra) => tool('checkCase', { sources: [{ entityType: 'Invoice', id: invoice, path: 'TotalAmt' }], expected: 120, aggregate: 'single', operator: 'equal', ...extra });
+    results.push(await total({ label: '  invoice TOTAL is 120 ' }));
+    results.push(await total({ condition: 1 }));
+    results.push(await total({ label: 'Something else' }));
+    results.push(await total({ condition: 3 }));
+    results.push(await tool('checkCase', { condition: 2, sources: [{ entityType: 'Customer', id: customer, path: 'exists' }], expected: true, aggregate: 'single', operator: 'equal' }));
+    await finish(tool, 'completed');
+  } });
+  assert.equal(results[0].passed, true); assert.equal(results[1].passed, true);
+  assert.equal(f.state.checks.filter((c) => c.label === 'Invoice total is 120').length, 1, 'the same measurement is refreshed, not duplicated');
+  for (const refused of [results[2], results[3]]) {
+    assert.equal(refused.success, false);
+    assert.match(refused.error, /1\. Invoice total is 120 2\. Customer exists/);
+  }
+  assert.equal(results[4].passed, true);
+  assert.equal(f.state.outcome, 'completed');
+});
+
+test('finishCase names unsupported conditions twice before finishing downgraded', async () => {
+  const f = fixture(); const attempts = [];
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Invoice total is 120', 'Invoice date is 2026-04-21']);
+    const customer = (await create(tool, 'Customer', { DisplayName: 'REPRO customer' })).data.id;
+    const invoice = (await create(tool, 'Invoice', { CustomerRef: { value: customer }, TotalAmt: 120, TxnDate: '2026-04-20' })).data.id;
+    await tool('checkCase', { condition: 1, sources: [{ entityType: 'Invoice', id: invoice, path: 'TotalAmt' }], expected: 120, aggregate: 'single', operator: 'equal' });
+    attempts.push(await tool('finishCase', { outcome: 'completed', summary: 'Built', tests: [], limitations: [] }));
+    await tool('checkCase', { condition: 2, sources: [{ entityType: 'Invoice', id: invoice, path: 'TxnDate' }], expected: '2026-04-21', aggregate: 'single', operator: 'equal' });
+    attempts.push(await tool('finishCase', { outcome: 'completed', summary: 'Built', tests: [], limitations: [] }));
+    attempts.push(await tool('finishCase', { outcome: 'completed', summary: 'Built', tests: [], limitations: [] }));
+  } });
+  assert.equal(attempts[0].success, false); assert.match(attempts[0].error, /2\. Invoice date is 2026-04-21: not checked/);
+  assert.doesNotMatch(attempts[0].error, /1\. Invoice total/);
+  assert.match(attempts[1].error, /2\. Invoice date is 2026-04-21: a check did not pass/);
+  assert.equal(attempts[2].success, true); assert.equal(attempts[2].outcome, 'unverified');
+  assert.equal(f.state.outcome, 'unverified'); assert.equal(f.state.status, 'completed');
+});
+
+test('not_reproduced is accepted when every condition has current evidence, even if all checks passed', async () => {
+  const f = fixture();
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Credit memo reduces the balance to 0']);
+    const customer = (await create(tool, 'Customer', { DisplayName: 'REPRO customer' })).data.id;
+    const invoice = (await create(tool, 'Invoice', { CustomerRef: { value: customer }, Balance: 0 })).data.id;
+    await tool('checkCase', { condition: 1, sources: [{ entityType: 'Invoice', id: invoice, path: 'Balance' }], expected: 0, aggregate: 'single', operator: 'equal' });
+    await finish(tool, 'not_reproduced');
+  } });
+  assert.equal(f.state.outcome, 'not_reproduced');
+});
+
+test('a historical check survives later changes and a deleted case record reads as absent', async () => {
+  const f = fixture(); let absent;
+  await runEngine({ ...f.options, runModel: async (_m, tool) => {
+    await define(tool, ['Before deletion the bill total is 150', 'The bill is gone afterwards']);
+    const bill = (await create(tool, 'Bill', { TotalAmt: 150, Line: [line(1.5)] })).data.id;
+    await tool('checkCase', { condition: 1, historical: true, sources: [{ entityType: 'Bill', id: bill, path: 'TotalAmt' }], expected: 150, aggregate: 'single', operator: 'equal' });
+    await tool('deleteRecord', { entityType: 'Bill', id: bill, summary: 'Delete test bill' });
+    const refused = await tool('checkCase', { condition: 1, sources: [{ entityType: 'Bill', id: bill, path: 'TotalAmt' }], expected: 150, aggregate: 'single', operator: 'equal' });
+    assert.match(refused.error, /path exists/);
+    absent = await tool('checkCase', { condition: 2, sources: [{ entityType: 'Bill', id: bill, path: 'exists' }], expected: false, aggregate: 'single', operator: 'equal' });
+    await finish(tool, 'completed');
+  } });
+  assert.equal(absent.passed, true); assert.equal(absent.actual, false);
+  assert.equal(f.state.checks[0].historical, true);
+  assert.equal(f.state.outcome, 'completed');
+});
+
+test('a record QuickBooks no longer finds reads as absent; other read errors stay errors', async () => {
+  for (const [error, expected] of [[Object.assign(new Error('QBO API error (HTTP 400): Object Not Found'), { status: 400 }), { passed: true }], [Object.assign(new Error('QBO API error (HTTP 500)'), { status: 500 }), { success: false }]]) {
+    const f = fixture(); let result;
+    await runEngine({ ...f.options, runModel: async (_m, tool) => {
+      await define(tool, ['The vendor is gone']);
+      const vendor = (await create(tool, 'Vendor', { DisplayName: 'REPRO vendor' })).data.id;
+      f.qbo.read = async () => { throw error; };
+      result = await tool('checkCase', { condition: 1, sources: [{ entityType: 'Vendor', id: vendor, path: 'exists' }], expected: false, aggregate: 'single', operator: 'equal' });
+      await finish(tool, 'unverified');
+    } });
+    for (const [key, value] of Object.entries(expected)) assert.equal(result[key], value, error.message);
+  }
 });

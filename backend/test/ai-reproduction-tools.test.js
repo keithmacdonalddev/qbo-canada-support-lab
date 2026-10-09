@@ -56,12 +56,13 @@ test('every writable type can be looked up, with the right search field', async 
   for (const [type, query] of [['Employee', 'Sam'], ['Term', 'Net'], ['Bill', '80395'], ['TimeActivity', 'x'], ['Term', '']]) {
     assert.equal((await toolHandlers.searchEntities({ type, query }, { qbo })).success, true);
   }
+  // One extra row shows whether there is another page; sortable types come newest first.
   assert.deepEqual(queries, [
-    "SELECT * FROM Employee WHERE DisplayName LIKE '%Sam%' MAXRESULTS 10",
-    "SELECT * FROM Term WHERE Name LIKE '%Net%' MAXRESULTS 10",
-    "SELECT * FROM Bill WHERE DocNumber LIKE '%80395%' MAXRESULTS 10",
-    'SELECT * FROM TimeActivity MAXRESULTS 10',
-    'SELECT * FROM Term MAXRESULTS 10',
+    "SELECT * FROM Employee WHERE DisplayName LIKE '%Sam%' ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 11",
+    "SELECT * FROM Term WHERE Name LIKE '%Net%' MAXRESULTS 11",
+    "SELECT * FROM Bill WHERE DocNumber LIKE '%80395%' ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 11",
+    'SELECT * FROM TimeActivity ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 11',
+    'SELECT * FROM Term MAXRESULTS 11',
   ]);
 });
 

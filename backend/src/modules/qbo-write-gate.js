@@ -31,7 +31,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
   async function policyState(scope, session) {
     const [policy, writer] = session ? [await read(Policies, company(scope), session), await read(Writers, company(scope), session)] : await Promise.all([read(Policies, company(scope)), read(Writers, company(scope))]);
     if (!policy && !writer) return null;
-    if (!policy || !writer || policy.contractVersion !== 1 || writer.contractVersion !== 1 || !validRevision(policy.revision) || !validRevision(writer.revision) || !same(policy.connectionId, scope.connectionId) || !same(writer.connectionId, scope.connectionId)) throw denied('Company write coordination needs recovery before another request.');
+    if (!policy || !writer || policy.contractVersion !== 1 || writer.contractVersion !== 1 || !validRevision(policy.revision) || !validRevision(writer.revision) || !same(policy.connectionId, scope.connectionId) || !same(writer.connectionId, scope.connectionId)) throw denied('Company write coordination needs recovery before another request. Nothing was sent to QuickBooks; recover the business operation on the Company page, then try again.');
     return { policy, writer };
   }
   async function audit(id, input, outcome, details, session) {
@@ -46,7 +46,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     const initial = await policyState(scope);
     if (!initial && !permit) return { coordinated: false };
     if (!initial) throw denied('Business dispatch requires prepared company write coordination.');
-    if (initial.policy.state !== 'active') throw denied('Company writes are paused while coordination is prepared.');
+    if (initial.policy.state !== 'active') throw denied('Company writes are paused while business write coordination is being prepared. Nothing was sent to QuickBooks; finish or resume that setup, then try again.');
     if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
     await assertReady();
     const dispatchKey = permit?.dispatchKey || hash({ scope, requestHash: request.requestHash, nonce: nonce() });

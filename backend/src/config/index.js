@@ -22,9 +22,11 @@ const config = {
   },
   ai: {
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
-    modelFast: process.env.AI_MODEL_FAST || 'claude-sonnet-4-6',
-    modelDeep: process.env.AI_MODEL_DEEP || 'claude-opus-4-6',
-    maxTokens: parseInt(process.env.AI_MAX_TOKENS) || 4096,
+    modelFast: process.env.AI_MODEL_FAST || 'claude-sonnet-5-5',
+    modelDeep: process.env.AI_MODEL_DEEP || 'claude-opus-5-5',
+    // Room for a tool-using turn (several tool calls plus reasoning text). Stays
+    // under the SDK's 10-minute non-streaming estimate (about 21,000 tokens).
+    maxTokens: parseInt(process.env.AI_MAX_TOKENS) || 16000,
     maxToolRounds: parseInt(process.env.AI_MAX_TOOL_ROUNDS) || 10,
     // Feature flags — control which API key source is available
     //   AI_GLOBAL_KEY_ENABLED=true  → all users share the server ANTHROPIC_API_KEY
