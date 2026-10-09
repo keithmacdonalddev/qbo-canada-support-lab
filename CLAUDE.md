@@ -27,6 +27,8 @@ OpenAI Codex sessions use `AGENTS.md` as the primary project guidance. Claude Co
 
 Claude Code, subagents, and workers inherit the shared `AGENTS.md` Git And Branch Workflow.
 
+- For coding requests, commit and push your owned changes promptly at a coherent checkpoint or before completion, unless the user explicitly asks to leave them local. This applies to the Claude main agent and implementation subagents; reviewers remain read-only. Follow the shared ownership, branch and staged-diff safeguards.
+
 - Work in the canonical checkout at `C:\Projects\qbo` on `main` by default.
 - Do not use `.claude/worktrees/`, create Git worktrees, switch/create branches, or push non-`main`/`master` branches unless the user explicitly asks for that in the current conversation.
 - Before committing or pushing, run `git status --short --branch`. If the session is on anything other than `main` or `master`, is detached, or is inside a worktree path, stop and ask the user before changing branch state.

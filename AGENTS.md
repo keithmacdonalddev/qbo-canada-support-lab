@@ -2,7 +2,7 @@
 
 ## Shared workflow and project routing
 
-Git closeout is explicit-request only: commit and push when the user asks, using existing authorization without repeated confirmation. Project branch, PR, DCO and upstream restrictions still apply. Both tools have optional `harness-worker`, `harness-reviewer`, and `harness-security-reviewer` roles; see [the operational contract](docs/agent-harness/OPERATIONAL_CONTRACT.md).
+Coding work is committed and pushed by default: commit coherent owned changes promptly or before task completion, then push to the configured upstream. This applies to the main agent and implementation subagents; obey an explicit user request to leave changes local. Reviewers remain read-only. Project branch, PR, DCO and upstream restrictions still apply. Both tools have optional `harness-worker`, `harness-reviewer`, and `harness-security-reviewer` roles; see [the operational contract](docs/agent-harness/OPERATIONAL_CONTRACT.md).
 
 For code or Git work, explicitly read the applicable file under `.agents/rules/` before editing. These reference files are not automatically loaded as Codex instructions.
 
@@ -110,7 +110,7 @@ This rule applies to Codex, Claude Code, Claude subagents, and any worker/review
 - Default workspace is the canonical checkout at `C:\Projects\qbo`. Do not create, use, or continue work inside Git worktrees, `.claude/worktrees/`, alternate clones, temp checkouts, or detached worktrees unless the user explicitly asks for that in the current conversation.
 - Default branch target is this repo's normal default branch: `main` for this checkout, or `master` only if a future checkout is configured that way. Do not create, switch to, commit on, or push from feature branches without explicit user instruction.
 - Before committing or pushing, run `git status --short --branch` and confirm the current branch is `main` or `master`. If it is any other branch, a detached HEAD, or a worktree path, stop and ask the user before changing branch state.
-- When the user asks to commit or push without naming a branch, commit on the current `main`/`master` checkout and push to the matching upstream (`origin/main` or `origin/master`). Do not invent a PR branch, worktree branch, or alternate remote target.
+- Commit owned coding-task changes on the current permitted checkout as soon as a coherent unit is ready, and push them promptly; otherwise close out before reporting completion. Push to the already configured upstream (normally `origin/main` or `origin/master`). Do not invent a PR branch, worktree branch, or alternate remote target. An explicit user instruction to keep changes local overrides this default.
 - If the user explicitly asks for a worktree or non-default branch, treat that permission as scoped to that task only; document the branch/worktree in the handoff and return future work to `main`/`master` unless instructed again.
 
 ## Safety Rules
@@ -187,7 +187,7 @@ Before reporting completion:
 - For commit/push tasks, report the branch/upstream verified before the commit or push.
 - Report commands run and any commands skipped because they would start services or mutate QBO/database state.
 - Mention any repo state that remains local-only or intentionally untracked.
-- Commit and push only when explicitly requested; preserve existing authorization, project branch/upstream rules, and unrelated work.
+- Commit and push owned changes by default as described above; preserve project branch/upstream rules and unrelated work. Report any changes that must remain local and why.
 
 ## Codex defaults moved from the global file
 

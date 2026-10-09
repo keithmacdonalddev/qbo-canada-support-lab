@@ -10,7 +10,7 @@ Only verified `gpt-6-luna` executes existing deterministic test, build, lint, sy
 
 For substantial QBO outcomes, use direct company/report/audit evidence where authorized; mark unavailable live proof unverified. Obtain independent implementation and safety review for sensitive paths, and inspect rendered material UI changes under the project outcome and review gates.
 
-Commit and push only when explicitly requested. Preserve existing task authorization, project branch/upstream rules, and other sessions' staged, unstaged, and untracked changes. Stage exact owned paths or hunks. Never interpret a file-edit request as permission to publish or deploy.
+Commit and push your own coding-task changes by default. Make a commit when a coherent unit is ready; otherwise commit and push before reporting completion. This standing project instruction applies to the main agent and implementation subagents, so do not ask again. Honor an explicit request to keep changes local or skip closeout. Reviewers remain read-only. Check branch/upstream and full status, stage only owned paths or hunks, inspect the staged diff, and keep concurrent work, secrets, local settings and unintended generated files out. Push to the configured upstream promptly. Do not change remotes, rewrite history, create branches/worktrees, or deploy/publish as part of Git closeout. If safe push is blocked, state exactly what remains local.
 
 The user owns persistent services and real data. Verify the target and existing authorization before controlling a service, changing a company/database, publishing, or using external accounts. Read-only discovery and isolated tests remain available. Do not reveal secrets or private records.
 

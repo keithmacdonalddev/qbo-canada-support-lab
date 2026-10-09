@@ -4,7 +4,7 @@
 
 [MODEL_SELECTION.md](docs/agent-harness/MODEL_SELECTION.md) guides task-specific coding-agent model choice. The standing [Luna execution contract](docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md) is a specific exception for deterministic checks; it is an instruction, not hook enforcement or an application model setting.
 
-[OPERATIONAL_CONTRACT.md](docs/agent-harness/OPERATIONAL_CONTRACT.md) is the current authority for shared hook wiring, explicit-request Git closeout, core role definitions, and activation limits. The layer inventory below reflects this baseline.
+[OPERATIONAL_CONTRACT.md](docs/agent-harness/OPERATIONAL_CONTRACT.md) is the current authority for shared hook wiring, default commit-and-push closeout, core role definitions, and activation limits. The layer inventory below reflects this baseline.
 
 
 ## Shared experience and current inventory
@@ -46,8 +46,8 @@ This document explains where coding-agent guidance belongs and what each layer d
 ## Hook Rules
 
 - `workflow.cjs session-start` checks essential harness files and emits orientation.
-- `workflow.cjs prompt` emits the shared reminder and the project-specific addendum.
-- `workflow.cjs pre-tool-use` blocks recognized secret dumps, destructive Git, broad staging, and root/ancestor deletion. It emits authorization reminders for service and data operations; valid existing user authorization is reused.
+- `workflow.cjs prompt` emits the shared reminder and the project-specific addendum, including default commit-and-push closeout for main and implementation workers.
+- `workflow.cjs pre-tool-use` blocks recognized secret dumps, destructive Git, broad staging, and root/ancestor deletion. It reminds coding agents to commit/push owned changes by default and emits authorization reminders for service and data operations; valid existing user authorization is reused.
 - Old PM/runtime/workspace hook paths are compatibility wrappers and are removed from active settings to avoid duplicate handlers.
 - The pre-tool helper returns a generic denial on malformed input or internal inspection errors. Startup and prompt failures report configuration problems. Existing freshness hooks keep their own failure behavior.
 - Hook checks are bounded command-pattern checks, not a complete shell sandbox or application authorization system. See the operational contract for activation and coverage limits.
@@ -72,7 +72,7 @@ Both clients define the same optional roles; existing domain specialists remain 
 
 | Role | Purpose | Declared permission boundary |
 | --- | --- | --- |
-| `harness-worker` | Bounded implementation and focused checks | Inherits the parent boundary |
+| `harness-worker` | Bounded implementation, focused checks, and prompt commit/push of assigned changes | Inherits the parent boundary |
 | `harness-reviewer` | Independent correctness and regression review | Codex read-only default; Claude Read/Glob/Grep only |
 | `harness-security-reviewer` | Independent security, privacy and integrity review | Codex read-only default; Claude Read/Glob/Grep only |
 

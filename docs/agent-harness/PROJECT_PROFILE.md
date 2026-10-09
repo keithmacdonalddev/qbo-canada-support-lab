@@ -2,10 +2,10 @@
 
 ## Current operational setup
 
-Both clients now have the same three optional core roles and shared SessionStart, UserPromptSubmit and PreToolUse handlers. Git closeout requires an explicit request. See [OPERATIONAL_CONTRACT.md](OPERATIONAL_CONTRACT.md) for the actual coverage and remaining trust/session limits. Project safeguards below remain in force.
+Both clients have the same three optional core roles and shared SessionStart, UserPromptSubmit and PreToolUse handlers. Coding work is committed and pushed by default by the main agent or implementation worker, with read-only reviewers excluded. See [OPERATIONAL_CONTRACT.md](OPERATIONAL_CONTRACT.md) for the closeout rules and hook-reinforcement limits. Project safeguards below remain in force.
 
 
-Inspected: 2026-09-24. This is the project-specific companion to [the shared workflow](../../AGENT_WORKFLOW.md) and [the harness map](../../AGENT_HARNESS.md). Current source and configuration must be checked before treating a dated inventory as live behavior.
+Inspected: 2026-10-09. This is the project-specific companion to [the shared workflow](../../AGENT_WORKFLOW.md) and [the harness map](../../AGENT_HARNESS.md). Current source and configuration must be checked before treating a dated inventory as live behavior.
 
 ## Purpose
 

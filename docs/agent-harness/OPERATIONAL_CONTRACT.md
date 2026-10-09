@@ -1,6 +1,6 @@
 # Operational coding-agent contract
 
-Version: 2026-09-24. Both Codex and Claude use the same core behavior, with the project-specific profile and safety focus retained.
+Version: 2026-10-09. Both Codex and Claude use the same core behavior, with the project-specific profile and safety focus retained.
 
 ## Model selection and check execution
 
@@ -10,11 +10,13 @@ Use [ACCEPTANCE_AND_REVIEW.md](ACCEPTANCE_AND_REVIEW.md) for direct QBO outcome 
 
 ## Git closeout
 
-Commit and push only when the user explicitly requests them. Existing authorization persists within its stated scope; do not ask again. Before an authorized closeout, inspect current branch/upstream, review the staged diff, and stage exact owned files or hunks. Preserve concurrent work. The project's branch, PR, DCO and upstream restrictions still apply. Deployments and external messages require their own authorization.
+Coding requests authorize default Git closeout for the changes the coding agent makes in this repository. The main agent and implementation subagents commit a coherent owned unit promptly when practical; otherwise they commit and push before reporting task completion. No per-task confirmation is needed. An explicit user instruction to leave work local or skip commit/push takes precedence. Read-only reviewers never edit or commit.
+
+Before editing and at closeout, inspect full status, branch and upstream. Stage exact owned paths/hunks, inspect the staged diff, and exclude pre-existing/concurrent work, secrets, local settings and unintended generated files. Push to the already configured upstream promptly. Do not change remotes, rewrite history, create branches/worktrees, or deploy/publish as Git closeout. If unrelated ahead commits, branch policy or a push failure prevents safe remote completion, report what remains local and why. This policy is project authorization for routine commits and pushes, not for unrelated external actions.
 
 ## Core specialists
 
-Both clients define `harness-worker`, `harness-reviewer`, and `harness-security-reviewer`. They inherit the selected model rather than pinning a dated one. The worker inherits the parent permission boundary; Codex reviewers use a read-only sandbox, and Claude reviewers have only Read/Glob/Grep tools. Native tool availability still needs verification in the loaded client. Codex parent runtime overrides can supersede a role sandbox default; check effective permissions before relying on read-only enforcement. Existing domain and design specialists remain available.
+Both clients define `harness-worker`, `harness-reviewer`, and `harness-security-reviewer`. They inherit the selected model rather than pinning a dated one. The implementation worker follows the default closeout policy for its assigned changes; reviewers remain read-only. The worker inherits the parent permission boundary; Codex reviewers use a read-only sandbox, and Claude reviewers have only Read/Glob/Grep tools. Native tool availability still needs verification in the loaded client. Codex parent runtime overrides can supersede a role sandbox default; check effective permissions before relying on read-only enforcement. Existing domain and design specialists remain available.
 
 Use these roles for bounded authorized work or required independent review. Their availability does not mandate delegation beyond the Luna check exception. Give the child the parent outcome, exclusions, assigned scope and evidence requirements; the parent verifies the integrated result. QBO company and database safeguards remain in force.
 

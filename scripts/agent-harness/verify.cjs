@@ -19,7 +19,7 @@ for(const event of ['SessionStart','UserPromptSubmit','PreToolUse']){
  check(cx.hooks[event]?.some(g=>g.hooks.some(h=>h.command?.includes('workflow.cjs'))),'Codex event '+event);
  check(cl.hooks[event]?.some(g=>g.hooks.some(h=>h.command==='node'&&h.args?.some(a=>a.includes('workflow.cjs')))),'Claude event '+event);
 }
-check(read('AGENT_WORKFLOW.md').includes('Commit and push only when explicitly requested'),'Git policy');
+check(read('AGENT_WORKFLOW.md').includes('coding requests authorize committing and pushing'),'Git policy');
 check(read('CLAUDE.md').includes('@AGENT_WORKFLOW.md'),'Claude import');
 check(read('AGENTS.md').includes('AGENT_WORKFLOW.md'),'Codex route');
 check(read('AGENTS.md').includes('ACCEPTANCE_AND_REVIEW.md'),'Outcome and review route');
@@ -29,7 +29,9 @@ check(fs.existsSync(path.join(root,'scripts/agent-harness/luna-exec.mjs')),'Luna
 const policy=JSON.parse(read('scripts/agent-harness/project-policy.json'));
 check(typeof policy.safety_focus==='string'&&policy.safety_focus.length>30,'Project safety focus');
 const helper=require('./workflow.cjs');
-check(helper.promptText(root).includes('Commit and push only when explicitly requested'),'Live prompt output');
-check(helper.promptText(root).includes('independent implementation and safety review'),'Live review reminder');
+check(helper.promptText(root).includes('Commit and push your own coding-task changes by default'),'Live prompt closeout policy');
+check(helper.promptText(root).includes('implementation subagents'),'Live subagent closeout reminder');
+check(read('.codex/agents/harness-worker.toml').includes('commit and push your assigned changes'),'Codex worker closeout');
+check(read('.claude/agents/harness-worker.md').includes('commit and push your assigned changes'),'Claude worker closeout');
 check(!helper.sessionStart(root).hookSpecificOutput.additionalContext.includes('files missing'),'Essential files');
 console.log(JSON.stringify({ok:true,checks,project:policy.project,scope:'static wiring plus direct helper output; not client activation'}));

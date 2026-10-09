@@ -21,7 +21,7 @@ Use this file to orient future coding agents on current repo-specific workflow.
 
 1. Read `AGENTS.md`.
 2. Read `.codex/memory/PROJECT_MEMORY.md`.
-3. For commit/push or repo-state work, run `git status --short --branch`; continue only from the canonical checkout on `main`/`master` unless the user explicitly instructed a branch/worktree.
+3. For coding work, commit and push owned changes promptly or before completion unless the user explicitly says to leave them local. For repo-state work, run full `git status --short --branch --untracked-files=all`; continue only from the canonical checkout on `main` unless the user explicitly instructed a branch/worktree.
 4. Select the smallest relevant source files for the request.
 5. Avoid live server starts and QBO/database mutations unless the user explicitly asks.
 6. Run non-mutating verification before reporting completion.

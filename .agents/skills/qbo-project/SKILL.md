@@ -26,7 +26,7 @@ Use this skill to get grounded in the QBO Support Lab before changing or reviewi
 ## Safe Defaults
 
 - For docs/agent changes, use `git diff --check`.
-- For commit/push work, use `git status --short --branch` and push only to the matching `origin/main` or `origin/master` unless explicitly instructed otherwise.
+- For coding work, commit and push owned changes by default at a coherent checkpoint or before completion. Check full status, branch and upstream, stage exact owned paths/hunks, inspect the staged diff, and push to the configured `origin/main` or `origin/master`. Honor an explicit instruction to leave changes local; keep concurrent work and secrets out.
 - For frontend changes, prefer `npm run build --workspace=frontend` and `npm run lint --workspace=frontend`.
 - For backend changes, prefer `node --check` on touched files or all `backend/src/**/*.js`.
 - For live QBO/API checks, state the exact command/route and wait for approval.

@@ -77,7 +77,7 @@ function commandDecision(command, root = ROOT, depth = 0, policy = {}) {
       if (sub === 'add' && rest.some(a => ['.', ':', ':/.', ':/', '*', '--all', '-A'].includes(a))) return { block: 'Broad Git staging blocked: stage exact owned paths or hunks and inspect the staged diff.' };
       if (sub === 'show' && rest.some(sensitiveFile)) return { block: 'Secret-file dump blocked. Inspect setting names or a sanitized example instead of printing credentials.' };
       if (['commit', 'push', 'checkout', 'switch', 'restore', 'reset', 'branch', 'worktree', 'merge', 'rebase'].includes(sub)) {
-        warning ||= 'Git boundary: commit and push only when the user requested them. Existing authorization persists; do not ask again. Preserve the project branch/upstream policy and inspect only owned staged changes.';
+        warning ||= 'Git closeout: commit and push owned coding-task changes by default at a coherent checkpoint or before completion. Honor an explicit request to keep changes local. Preserve branch/upstream rules, inspect the staged diff, and exclude concurrent work and secrets.';
       }
     }
     if (['cat', 'type', 'more', 'get-content', 'gc', 'head', 'tail', 'bat'].includes(exe) && args.some(sensitiveFile)) {
@@ -140,7 +140,7 @@ function sessionStart(root = ROOT) {
   const missing = required.filter(file => !fs.existsSync(path.join(root, file)));
   return context('SessionStart', missing.length
     ? 'Coding harness files missing: ' + missing.join(', ') + '. Report the missing capability; do not claim the full harness is available.'
-    : 'Shared coding harness files are present. Read AGENT_WORKFLOW.md and relevant project rules. Core roles: ' + CORE_ROLES.join(', ') + '. File presence is not role-discovery or permission proof. Commit and push only when requested.');
+    : 'Shared coding harness files are present. Read AGENT_WORKFLOW.md and relevant project rules. Core roles: ' + CORE_ROLES.join(', ') + '. File presence is not role-discovery or permission proof. Main agents and implementation workers commit and push owned changes promptly by default; reviewers stay read-only.');
 }
 
 async function main(mode = process.argv[2], root = ROOT) {

@@ -26,7 +26,7 @@ for (const command of ['npm run dev', 'Stop-Process -Id 1234', 'git commit -m do
   test('reminds without overriding prior authorization: ' + command, () => {
     const result=preToolUse({tool_name:'Bash',tool_input:{command}});
     assert.equal(result.hookSpecificOutput.permissionDecision, undefined);
-    assert.match(result.hookSpecificOutput.additionalContext,/authoriz|requested/);
+    assert.match(result.hookSpecificOutput.additionalContext,/Git closeout|Service\/data/);
   });
 }
 test('read tool protects secret path',()=>assert.equal(preToolUse({tool_name:'Read',tool_input:{file_path:'C:/a/.env'}}).hookSpecificOutput.permissionDecision,'deny'));
