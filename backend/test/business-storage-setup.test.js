@@ -295,3 +295,19 @@ test('continual setup explicitly prepares and verifies case submission uniquenes
   await f.apply(plan.planHash, continual); assert.equal(f.data().aisessions.docs[0]._id, 'retained-case');
   const actual = require('../src/models/AISession').schema.indexes(); for (const [key, options] of actual) assert.ok(identity.indexes.some(row => exactIndex(row, { key, ...options })));
 });
+
+test('master preparation adds its own profile to populated v4 storage without reinstalling or changing it', async () => {
+  const f = fixture(), continual = await f.preview('continual-business'); await f.apply(continual.planHash, 'continual-business');
+  f.data().operationruns.docs.push({ _id: 'retained-operation' }); f.data().businessauthorities.docs.push({ _id: 'retained-authority' });
+  const before = Object.fromEntries(CONTINUAL_COLLECTIONS.map(item => [item.name, clone(f.data()[item.name])]));
+  const writes = f.writes, master = await f.preview('master-preparation'); assert.equal(f.writes, writes); assert.equal(master.version, 5); assert.deepEqual(master.collections.map(row => row.name), ['masterpreparationruns']); assert.equal(master.permissionChange, null); assert.equal(master.qboWrites, 0);
+  await f.apply(master.planHash, 'master-preparation');
+  for (const [name, value] of Object.entries(before)) assert.deepEqual(f.data()[name], value);
+  assert.equal((await f.apply(master.planHash, 'master-preparation')).status, 'already-complete');
+});
+test('master installation requires a completed v4 receipt and refuses pre-existing master runs', async () => {
+  const f = fixture(); await assert.rejects(f.preview('master-preparation')); assert.equal(f.writes, 0);
+  const continual = await f.preview('continual-business'); await f.apply(continual.planHash, 'continual-business');
+  f.data().masterpreparationruns = { docs: [{ _id: 'unexpected-master' }], indexes: [{ name: '_id_', key: { _id: 1 } }], options: {} };
+  const writes = f.writes; await assert.rejects(f.preview('master-preparation'), /empty/); assert.equal(f.writes, writes);
+});

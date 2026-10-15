@@ -46,7 +46,7 @@ const LIST_SOURCES = {
   departments: { entity: 'Department' },
   terms: { entity: 'Term' },
   taxCodes: { entity: 'TaxCode' },
-  employees: { entity: 'Employee' },
+  employees: { entity: 'Employee', where: 'WHERE Active IN (true, false)' },
   budgets: { entity: 'Budget' },
   recurring: { entity: 'RecurringTransaction' },
   attachments: { entity: 'Attachable' },

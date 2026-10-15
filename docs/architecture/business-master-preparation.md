@@ -1,0 +1,39 @@
+# Business master preparation
+
+Status: foundation implemented and verified non-live, 2026-10-15; approval, execution, recovery, draft application and the normal UI remain in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
+
+The normal business setup currently requires exact accounts, customers, suppliers, products and a time-entry worker, but only offers selection of records that already exist. The legacy seeder creates an unrelated population and cannot satisfy this outcome. The intended result is an owner action on Company: prepare the missing roles for the saved business, review the exact proposed creates, execute that approved plan, then explicitly use verified IDs in a new draft. Publication and financial baseline acceptance remain separate actions.
+
+## Authority and prerequisites
+
+Preparation derives from one exact saved contract-v2 draft and complete fresh CA/CAD company, setup and active/inactive master evidence. Invalid existing choices block; they are not silently replaced. Ordinary Bank/Income/Expense/Inventory-asset/COGS accounts may be prepared. AR/AP, Undeposited Funds, Canadian tax and system preferences need explicit compatible existing selections. No workflow silently enables inventory, changes preferences or protection, supplies opening balances, edits existing records or sends messages.
+
+Inventory needs confirmed quantity tracking and a separately displayed elapsed Halifax InvStartDate compatible with the first planned stock activity and current protected dates. Opening quantity is exactly zero. A protected or unsupported date is a blocker before unrelated parties/accounts are created; it is never moved forward to obtain a passing check. Parent account IDs, active/type/currency fields and feature availability are reread before dependent creates. Accepted IDs alone do not establish compatibility.
+
+## Storage and duplicate prevention
+
+Use a dedicated typed MasterPreparationRun with a bounded immutable hashed plan, embedded ordinal/attempt history, exact scope/owner/draft, approval, worker lease/stop, per-record receipts and local apply/close decisions. A separate explicit additive master-preparation storage contract prepares its collection/indexes and audits its target. Existing continual-business v4 definitions, hashes, setup receipts and initial-empty installation rules retain their meaning. No startup migration, incidental DDL or live preparation is authorized by this code task.
+
+A unique open claim per environment/company covers proposed, active, partial and completed-but-unapplied work. Refreshing or changing a draft cannot create another role set. Existing created IDs stay discoverable. A changed draft stops further dispatch; the owner can review verified IDs against the current draft, apply a compatible exact subset into a new version, or retain created records unassigned and retire only the proved-unsent tail. Every saved ID and attempt remains in origin/audit evidence when the claim closes. Uncertain or possibly-sent attempts retain both the company barrier and the claim.
+
+## Dispatch and recovery
+
+Master setup has its own prepublication gate branch; it cannot borrow published financial-operation authority or the reproduction permission. Current owner/account/membership, active company write policy, protected dates, exact approved plan, latest draft, stop/lease, ordinal and parent IDs are checked at admission. A real BlueprintSequence increment fences concurrent draft saves in the same transaction as the mandatory receipt and master attempt binding. An already admitted request may finish after a new draft is saved; every subsequent create must stop. A postcommit callback acknowledges a binding, never creates its only durable correlation.
+
+The bounded preparation owns the company writer while creating records. Each accepted ID is retained transactionally with its mandatory transport result, then read back against an entity-specific projection before any dependent create or draft application. This is independent of later audit/UI acknowledgement. No name lookup grants ownership.
+
+Recovery distinguishes: exact no-receipt/proved-unsent attempts; known accepted IDs; definite reviewed ValidationFault refusals with fresh attempt identities; terminal unknown outcomes needing exact-ID owner attribution; and possibly-sent requests without terminal evidence. The last state remains blocked. Absence, name matches or lease age never grant replay. Unknown attribution checks immutable payload/parent IDs, preplan complete ID inventory and all-company/environment creation ownership. Account, Item, Customer, Vendor and Employee use their own minimal projections; transaction markers and financial readback cannot be assumed. Stop never clears an uncertain barrier or undoes an admitted accounting request.
+
+## Apply, visibility and proof
+
+Using created IDs writes a new immutable draft and the exact preparation apply receipt in one transaction against the current base hash/sequence. Exact retries return that same version. Existing drafts, accepted baselines and published authorities are preserved. Changed mappings require fresh compatibility checks; saved records remain available for explicit selection instead of recreation.
+
+Integrate this workflow explicitly into write-coordination quiescence, Explorer origin, cross-workflow ownership exclusions, retained automation review and Company recovery/status. Legacy SeedRun routes and startup rewrites keep their original domain. The UI must distinguish prepared, approved, saved, verified, uncertain and applied, and recover lost acknowledgements through current-state reads.
+
+Safe proof: actual authenticated routes and transport gate with isolated storage and simulated SDK/readback; missing prerequisite, current owner/account, changed draft, duplicate submission, stop, restart/lease, lost acknowledgement, per-record persistence, rejection, unknown attribution and rollback cases. Demonstrate that newly prepared IDs pass the normal mapping/master validators and publication fixture. Run checks through verified gpt-6-luna/low and obtain distinct implementation/safety reviews; inspect rendered desktop decisions. Commit/push coherent owned changes on main → origin/main.
+
+Live QBO creates, database preparation, paid providers, credential changes and persistent service control still require explicit target-specific approval. Non-live fixtures cannot establish live API capability or business realism.
+
+## Primary API references
+
+Intuit's [basic billing implementation](https://developer.intuit.com/app/developer/qbo/docs/develop/basic-implementations/basic-billing-implementation) requires referenced entities to exist before transactions. Its [official concepts sample](https://github.com/IntuitDeveloper/QBOConceptsTutorial-PHP/blob/master/LandingTheJob.php) demonstrates account references and inventory-item fields. The [Item API reference](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/item) and [Employee schema reference](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippphpdevkitv3/entities/files/IPPEmployee.html) inform field validation; older SDK references do not certify current Canadian live capability. Direct entity documentation was partly unavailable through the text browser during research. Canadian behavior remains a live acceptance question until an explicitly approved run returns independent record/report evidence.
