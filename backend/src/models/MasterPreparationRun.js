@@ -42,6 +42,7 @@ const schema = new mongoose.Schema({
   stopRequested: { type: Boolean, required: true, default: false },
   leaseToken: { type: String, default: null }, leaseExpiresAt: { type: Date, default: null },
   records: { type: [record], required: true, validate: value => value.length > 0 && value.length <= 100 },
+  lastFailure: { type: mixed, default: null },
   applied: { type: mixed, default: null }, disposition: { type: mixed, default: null },
   lastAuditId: { type: objectId, required: true },
 }, { timestamps: true, autoCreate: false, autoIndex: false });

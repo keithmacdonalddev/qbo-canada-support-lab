@@ -7,6 +7,7 @@ const { assertMasterPlan, compileMasterEntry, verifyMasterReadback } = require('
 const { assertMasterRun, assertMasterApproval, verifiedParents, dispatchKeyFor } = require('./business-master-preparation-transport');
 const { assertMasterDispatchEvidence } = require('./business-master-dispatch-evidence');
 const { fenceBusinessOwner } = require('./business-owner-fence');
+const { assertMasterFailure } = require('./business-master-preparation-failure');
 const same = (a, b) => String(a) === String(b);
 const validWorkerLease = (run, now) => Boolean(run.leaseToken && Number.isFinite(new Date(run.leaseExpiresAt).getTime()) && new Date(run.leaseExpiresAt).getTime() > now);
 const activeLease = (run, now) => Boolean(run.leaseToken && (!Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() > now));
@@ -89,7 +90,7 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       await assertQuiescent({ scope, runId: String(run._id), session });
       const leaseToken = token(), lastAuditId = await audit(run, 'Business master worker claimed', { leaseTokenHash: hash(leaseToken), resume }, session);
       await updateWriter(writer, { operationId: run._id, planHash: run.planHash, workflowKind: 'master-preparation' }, session);
-      return change(run, { state: 'running', stopRequested: false, leaseToken, leaseExpiresAt: new Date(now() + 300000), lastAuditId }, session);
+      return change(run, { state: 'running', stopRequested: false, lastFailure: null, leaseToken, leaseExpiresAt: new Date(now() + 300000), lastAuditId }, session);
     });
   }
   async function reserve(id, leaseToken, ordinal, preflight) {
@@ -144,15 +145,16 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
   }
   // Private worker cleanup retains exact lease and plan correlation even after
   // account revocation. It never dispatches or releases an unresolved company request.
-  async function releaseWorker(id, leaseToken) {
+  async function releaseWorker(id, leaseToken, failure = null) {
+    failure = assertMasterFailure(failure);
     if (typeof leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(leaseToken)) throw denied('Exact worker settlement is required.');
     return transaction(async session => {
       await assertReady({ scope, ownerId, session }); const run = await load(id, session);
       if (run.leaseToken !== leaseToken || ['complete', 'closed'].includes(run.state)) return run;
       const { writer } = await coordination(session); owns(writer, run);
       const state = writer.unresolved ? 'blocked' : run.stopRequested ? 'stopped' : 'blocked';
-      const lastAuditId = await audit(run, 'Business master worker settled', { state, unresolved: Boolean(writer.unresolved), acceptedRecords: run.records.filter(row => row.qboId).length }, session);
-      return change(run, { state, leaseToken: null, leaseExpiresAt: null, lastAuditId }, session);
+      const lastAuditId = await audit(run, 'Business master worker settled', { state, unresolved: Boolean(writer.unresolved), acceptedRecords: run.records.filter(row => row.qboId).length, failure }, session);
+      return change(run, { state, leaseToken: null, leaseExpiresAt: null, lastFailure: failure, lastAuditId }, session);
     });
   }
   return { propose, approve, claim, reserve, verify, stop, finish, releaseWorker, load };
