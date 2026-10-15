@@ -10,6 +10,7 @@ const schema = new mongoose.Schema({
   revision: { type: Number, min: 0, required: true },
   // Separate from CompanyWriter, so a missing writer never restores legacy bypass.
   preparationEvidenceHash: String,
+  periodControl: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1 }, { unique: true });
 module.exports = mongoose.model('CompanyWritePolicy', schema);

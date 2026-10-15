@@ -27,7 +27,7 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
           // Read the original correlated transport receipt, never search by name/amount.
           await authority('operations.recover');
           const recovery = await steps.recover(scope, operationId, logicalKey);
-          if (!recovery.recovered) return summary('recovery_required');
+          if (!recovery.recovered) return summary(recovery.notSent ? 'not_sent' : 'recovery_required');
           evidence = await steps.evidence(scope, operationId, logicalKey);
         }
         if (evidence.state === 'rejected') return summary('rejected');
@@ -72,7 +72,7 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       // Do not race the request against a timer or forward cancellation to a POST.
       try {
         check(); checkClient();
-        await withBusinessWritePermit({ scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, ...(leaseToken !== undefined ? { leaseToken } : {}) }, () => client.apiCall(request.method, request.endpoint, JSON.parse(request.body)));
+        await withBusinessWritePermit({ scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: marked.revision, stepLeaseToken: marked.leaseToken, ...(leaseToken !== undefined ? { leaseToken } : {}) }, () => client.apiCall(request.method, request.endpoint, JSON.parse(request.body)));
       } catch { /* A raw result/error cannot prove whether a transaction was saved. */ }
       return reconcile();
     });

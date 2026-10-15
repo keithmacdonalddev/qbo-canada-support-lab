@@ -32,8 +32,8 @@ function freezeWriteRequest(scope, method, endpoint, body) {
   return Object.freeze({ scope: Object.freeze(scope), method, endpoint: normalized, entity, operation, targetId, body: serialized, requestHash });
 }
 function withBusinessWritePermit(permit, work) {
-  if (!permit || (permit.leaseToken !== undefined && (typeof permit.leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(permit.leaseToken))) || !ID.test(permit.operationId || '') || !HASH.test(permit.logicalKey || '') || !HASH.test(permit.dispatchKey || '') || !HASH.test(permit.requestHash || '') || typeof work !== 'function') throw denied('A saved business dispatch permission is required.');
-  const normalized = Object.freeze({ scope: Object.freeze(scoped(permit.scope)), operationId: permit.operationId, logicalKey: permit.logicalKey, dispatchKey: permit.dispatchKey, requestHash: permit.requestHash, ...(permit.leaseToken !== undefined ? { leaseToken: permit.leaseToken } : {}) });
+  if (!permit || !Number.isSafeInteger(permit.dispatchRevision) || permit.dispatchRevision < 1 || typeof permit.stepLeaseToken !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(permit.stepLeaseToken) || (permit.leaseToken !== undefined && (typeof permit.leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(permit.leaseToken))) || !ID.test(permit.operationId || '') || !HASH.test(permit.logicalKey || '') || !HASH.test(permit.dispatchKey || '') || !HASH.test(permit.requestHash || '') || typeof work !== 'function') throw denied('A saved business dispatch permission is required.');
+  const normalized = Object.freeze({ scope: Object.freeze(scoped(permit.scope)), operationId: permit.operationId, logicalKey: permit.logicalKey, dispatchKey: permit.dispatchKey, requestHash: permit.requestHash, dispatchRevision: permit.dispatchRevision, stepLeaseToken: permit.stepLeaseToken, ...(permit.leaseToken !== undefined ? { leaseToken: permit.leaseToken } : {}) });
   return storage.run({ permit: normalized, consumed: false }, work);
 }
 function consumeBusinessWritePermit() {

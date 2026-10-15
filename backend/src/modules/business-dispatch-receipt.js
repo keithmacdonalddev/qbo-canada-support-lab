@@ -32,7 +32,7 @@ function assertBusinessTransportAudits(row, evidence, audits) {
     if (matches.length !== 1 || audit.realmId !== evidence.scope.realmId || !same(audit.userId, row.ownerId) || !same(audit.actorUserId || audit.userId, row.actorId) || audit.action !== expected.action || audit.actionType !== 'manual' || audit.outcome !== expected.outcome || canonical(audit.inputParams) !== canonical(evidence.params) || canonical(audit.afterState) !== canonical(expected.afterState)) fail('The original transport audit is unavailable or changed.');
   }
 }
-function createBusinessDispatchReceiptReader({ Receipts, Audits, transaction, authorize, assertReady }) {
+function createBusinessDispatchReceiptReader({ Receipts, Audits, transaction, authorize, assertReady, settleUnsent }) {
   if (!Receipts || !Audits || [transaction, authorize, assertReady].some(fn => typeof fn !== 'function')) throw new TypeError('Receipt recovery needs explicit trusted storage and authority');
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
   // Compatible with the step store's loadRecovery adapter. This reads the exact
@@ -43,10 +43,10 @@ function createBusinessDispatchReceiptReader({ Receipts, Audits, transaction, au
     await assertReady(scope);
     const actor = await authorize(scope, 'operations.recover'); if (!ID.test(actor?.actorId || '')) fail('Company recovery permission is required.');
     const receiptId = hash({ scope, dispatchKey: dispatch.key });
-    return transaction(async session => {
+    const result = await transaction(async session => {
       const current = await authorize(scope, 'operations.recover'); if (current?.actorId !== actor.actorId) fail('The recovery actor changed.');
       const row = await read(Receipts, { _id: receiptId, ...scope, operationId, logicalKey, kind: 'business', operation: 'create', dispatchKey: dispatch.key, requestHash: dispatch.requestHash }, session);
-      if (!row) return { status: 'unresolved', replayAllowed: false };
+      if (!row) return { status: 'unresolved', neverAdmittedCandidate: true, replayAllowed: false };
       const evidence = businessTransportEvidence(input, row);
       if (!evidence) return { status: 'unresolved', replayAllowed: false };
       const audits = [];
@@ -55,6 +55,13 @@ function createBusinessDispatchReceiptReader({ Receipts, Audits, transaction, au
       const last = await authorize(scope, 'operations.recover'); if (last?.actorId !== actor.actorId) fail('The recovery actor changed.');
       return evidence.result;
     });
+    // A separate atomic reset rechecks absence and fences the transport. Never
+    // hold a transaction open while starting another transaction.
+    if (result.neverAdmittedCandidate && typeof settleUnsent === 'function') {
+      const settled = await settleUnsent({ scope, operationId, logicalKey, dispatchKey: dispatch.key, ownerId: actor.ownerId, actorId: actor.actorId });
+      return { status: settled?.released ? 'not-sent' : 'unresolved', replayAllowed: false };
+    }
+    return result;
   };
 }
 module.exports = { createBusinessDispatchReceiptReader, businessTransportEvidence, assertBusinessTransportAudits };

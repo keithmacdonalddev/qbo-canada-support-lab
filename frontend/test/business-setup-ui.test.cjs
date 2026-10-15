@@ -36,6 +36,7 @@ test('rendered owner setup separates review, storage, coordination and acknowled
         if (key.endsWith('/preview')) body = { data: { planHash: 'a'.repeat(64), permissionChange: { to: 'lab-owner' } } };
         else if (key.endsWith('/apply')) { view.storage.ready = true; body = { data: { status: 'complete' } }; }
         else if (key.endsWith('/prepare')) { view.coordination.state = 'preparing'; body = { data: { state: 'preparing', preparationEvidenceHash: 'c'.repeat(64) } }; }
+        else if (key.endsWith('/period-controls')) { view.coordination.periodControl = request.postDataJSON(); body = { data: { periodControl: view.coordination.periodControl } }; }
         else if (key.endsWith('/activate')) { view.coordination.state = 'active'; status = 503; body = { error: 'Fixture lost activation acknowledgement' }; }
         else throw new Error('Unexpected setup write');
       } else { status = 503; body = { error: 'Other panel is outside this isolated setup fixture.' }; }
@@ -52,12 +53,17 @@ test('rendered owner setup separates review, storage, coordination and acknowled
     await panel.getByRole('button', { name: 'Prepare company write coordination', exact: true }).waitFor(); assert.equal(writes.length, 2);
     await panel.getByRole('button', { name: 'Prepare company write coordination', exact: true }).click();
     await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).waitFor();
+    assert.equal(await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).isDisabled(), true);
+    await panel.getByLabel('Closed through', { exact: true }).fill('2026-09-30');
+    await panel.getByLabel('Evidence note', { exact: true }).fill('Owner reviewed the September close evidence.');
+    await panel.getByRole('button', { name: 'Record protected dates', exact: true }).click();
+    await panel.getByText(/Saved protection: closed through 2026-09-30/).waitFor();
     await panel.screenshot({ path: path.join(artifacts, 'setup-preparing.png') });
     await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).click();
     await panel.getByText('Fixture lost activation acknowledgement', { exact: true }).waitFor();
     await page.waitForFunction(() => document.querySelector('[aria-label="Business access and preparation"]')?.textContent.includes('Company write coordination is ready.'));
     await panel.screenshot({ path: path.join(artifacts, 'setup-recovered.png') });
-    assert.equal(writes.length, 4); assert.equal(await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).count(), 0);
+    assert.equal(writes.length, 5); assert.equal(await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).count(), 0);
     view = { ...view, owner: false, storage: { ready: false }, coordination: { state: 'unprepared' } }; await page.reload();
     await panel.getByText('The connected company owner must complete this step.', { exact: true }).waitFor();
     assert.equal(await panel.getByRole('button', { name: 'Review preparation', exact: true }).count(), 0);

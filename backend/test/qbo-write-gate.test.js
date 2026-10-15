@@ -4,15 +4,16 @@ const assert = require('node:assert/strict');
 const { createQboWriteGate } = require('../src/modules/qbo-write-gate');
 const { freezeWriteRequest } = require('../src/modules/qbo-write-contract');
 const { hash } = require('../src/modules/business-calendar');
+const { controls } = require('./helpers/period-controls');
 const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) };
 const ownerId = 'b'.repeat(24), operationId = 'c'.repeat(24), logicalKey = hash('invoice');
-const request = freezeWriteRequest(scope, 'POST', 'invoice', { CustomerRef: { value: '1' }, Line: [] });
+const request = freezeWriteRequest(scope, 'POST', 'invoice', { TxnDate: '2026-10-06', CustomerRef: { value: '1' }, Line: [] });
 const clone = value => structuredClone(value);
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
 const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => value && typeof value === 'object' && !(value instanceof Date) ? ('$in' in value ? value.$in.includes(at(row, key)) : '$exists' in value ? (at(row, key) !== undefined) === value.$exists : false) : value instanceof Date ? new Date(at(row, key)).getTime() === value.getTime() : at(row, key) === value);
 function harness(business = false) {
   const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [] }, sequence: 0 };
-  h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active' });
+  h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active', periodControl: controls(scope, ownerId, h.clock) });
   h.data.Writers.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, operationId: null, planHash: null, unresolved: null });
   h.data.Connections.push({ _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' });
   h.data.Memberships.push({ _id: 'membership', userId: ownerId, realmId: scope.realmId, status: 'active', role: 'lab-owner', permissionOverrides: [], businessSetupVersion: 0 });
@@ -34,11 +35,14 @@ function harness(business = false) {
   let queue = Promise.resolve();
   h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let output; try { output = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } if (h.loseReply) { h.loseReply = false; throw new Error('commit reply lost'); } return output; }); queue = result.catch(() => {}); return result; };
   h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
+  h.rawGate = h.gate;
+  h.periodClient = { query: async () => ({ QueryResponse: { Preferences: [{ AccountingInfoPrefs: {} }] } }) };
+  h.gate = { ...h.rawGate, begin: async input => h.rawGate.begin({ ...input, periodEvidence: input.periodEvidence === undefined ? await h.rawGate.preflight({ request: input.request, client: h.periodClient }) : input.periodEvidence }) };
   h.input = { request, ownerId, actorId: ownerId };
   if (business) {
     const dispatchKey = hash('dispatch'), planHash = hash('plan'), blueprintHash = hash('blueprint'), baselineHash = hash('baseline');
-    h.input.permit = { scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash };
-    Object.assign(h.writer(), { revision: 1, operationId, planHash, unresolved: { key: dispatchKey, logicalKey, requestHash: request.requestHash, actorId: ownerId, evidenceHash: hash('observations'), compilationHash: hash('compilation'), observationWriterRevision: 0, observedAt: new Date(h.clock).toISOString() } });
+    h.input.permit = { scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: 2, stepLeaseToken: 'lease' };
+    Object.assign(h.writer(), { revision: 1, operationId, planHash, unresolved: { key: dispatchKey, logicalKey, requestHash: request.requestHash, actorId: ownerId, evidenceHash: hash('observations'), compilationHash: hash('compilation'), observationWriterRevision: 0, stepRevision: 2, observedAt: new Date(h.clock).toISOString() } });
     h.data.Runs.push({ _id: operationId, ...scope, planHash, approval: { actorId: ownerId, planHash, fenceHash: hash('approval fence'), auditId: 'approval-audit', approvedAt: new Date(h.clock).toISOString() }, blueprintHash, baselineHash, status: 'running', expectedCursor: '2026-09-30', expectedRevision: 1, writerRevision: 0, evidenceRevision: 1, verificationCandidateHash: hash('old proof') });
     h.data.Calendars.push({ _id: 'calendar', ...scope, currentOperationId: operationId, blueprintHash, baseline: { status: 'verified', evidenceHash: baselineHash }, verifiedThrough: '2026-09-30', revision: 1, writerRevision: 0, stopRequested: false, pendingCommit: null });
     h.data.Steps.push({ _id: 'step', ...scope, operationId, logicalKey, planHash, entity: 'Invoice', state: 'dispatched', revision: 2, leaseToken: 'lease', receipt: null, dispatch: { key: dispatchKey, requestHash: request.requestHash, evidenceHash: hash('observations'), compilationHash: hash('compilation'), observationWriterRevision: 0, observedAt: new Date(h.clock).toISOString() } });
@@ -248,4 +252,27 @@ test('case settlement rechecks the current owner and selected workspace', async 
     assert.equal(saved, false); assert.ok(h.writer().unresolved);
     await assert.rejects(h.gate.assertCaseSettled({ scope, ownerId, sessionId: caseWorkflow.sessionId }));
   }
+});
+
+test('period admission rejects missing proof and concurrent writer or policy changes',async()=>{
+ for(const change of [h=>{h.writer().revision++;},h=>{h.data.Policies[0].revision++;},h=>{h.data.Policies[0].periodControl=controls(scope,ownerId,h.clock,'2026-10-05');}]){
+  const h=harness(),periodEvidence=await h.rawGate.preflight({request,client:h.periodClient});change(h);
+  await assert.rejects(h.rawGate.begin({...h.input,periodEvidence}),/changed during reading/);assert.equal(h.data.Receipts.length,0);
+ }
+ const h=harness();await assert.rejects(h.rawGate.begin(h.input),/changed during reading/);assert.equal(h.data.Receipts.length,0);
+});
+test('preflight refuses a writer changing while QBO preferences are being read',async()=>{
+ const h=harness();h.periodClient.query=async()=>{h.writer().revision++;return{QueryResponse:{Preferences:[{AccountingInfoPrefs:{}}]}}};
+ await assert.rejects(h.rawGate.preflight({request,client:h.periodClient}),/changed during reading/);assert.equal(h.data.Receipts.length,0);
+});
+test('a saved receipt retains the bounded period evidence and exact owner choices',async()=>{
+ const h=harness();await h.gate.begin(h.input);const proof=h.data.Receipts[0].periodProof;
+ assert.equal(proof.evidence.coordination.policyRevision,0);assert.equal(proof.controls.ownerId,ownerId);assert.equal(hash(proof.controls),hash(h.data.Policies[0].periodControl));
+ assert.equal(proof.evidence.requestHash,request.requestHash);assert.equal(proof.evidence.observedAt,new Date(h.clock).toISOString());assert.ok(Buffer.byteLength(JSON.stringify(proof))<70000);
+});
+
+test('a delayed old permission cannot consume a newly prepared marker with the same request key',async()=>{
+ const h=harness(true),old=structuredClone(h.input.permit);h.writer().unresolved.stepRevision=4;h.data.Steps[0].revision=4;h.data.Steps[0].leaseToken='fresh-lease';h.input.permit.dispatchRevision=4;h.input.permit.stepLeaseToken='fresh-lease';
+ await assert.rejects(h.gate.begin({...h.input,permit:old}),/changed before sending/);assert.equal(h.data.Receipts.length,0);
+ await h.gate.begin(h.input);assert.equal(h.data.Receipts.length,1);
 });

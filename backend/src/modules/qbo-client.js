@@ -264,7 +264,9 @@ class QBOClient {
       if (writeRequest) opts.body = writeRequest.body;
       else if (body) opts.body = JSON.stringify(body);
       if (writeGate) {
-        try { writeTicket = await writeGate.begin({ request: writeRequest, permit, ownerId: String(this.connection.userId), actorId: String(currentActorId() || this.connection.userId), workflow: workflowContext?.workflow });
+        if (typeof writeGate.preflight !== 'function') throw denied('The company write gate has no protected-period verifier. Nothing was sent.');
+        const periodEvidence = await writeGate.preflight({ request: writeRequest, client: this });
+        try { writeTicket = await writeGate.begin({ request: writeRequest, permit, ownerId: String(this.connection.userId), actorId: String(currentActorId() || this.connection.userId), workflow: workflowContext?.workflow, periodEvidence });
           if (writeTicket.coordinated && workflowContext) await workflowContext.onDispatch({ version: 1, scope: writeTicket.scope, receiptId: writeTicket.receiptId, dispatchKey: writeTicket.dispatchKey, requestHash: writeTicket.requestHash });
         }
         catch (error) { if (writeTicket?.coordinated || (workflowContext && !error.qboStage)) throw denied('A dispatch may have been reserved but its case receipt could not be saved. Recover this request before trying again.', true); if (error.qboStage) throw error; throw denied('Write coordination could not be recorded. No request was sent.'); }

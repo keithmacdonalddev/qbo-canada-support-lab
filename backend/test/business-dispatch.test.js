@@ -29,11 +29,11 @@ test('competing dispatchers cannot send the same activity twice', async () => {
   const h = harness(); const results = await Promise.allSettled([h.execute(), h.execute()]);
   assert.ok(results.some(value => value.status === 'fulfilled')); assert.equal(h.sent.length, 1); assert.equal(h.data.Receipts.length, 1);
 });
-test('lost dispatch acknowledgement never sends and later recovery never replays it', async () => {
+test('lost dispatch acknowledgement is proved never admitted before a new attempt', async () => {
   const h = harness(), begin = h.steps.beginDispatch;
   h.steps.beginDispatch = async (...args) => { await begin(...args); throw new Error('marker reply lost'); };
   await assert.rejects(h.execute(), /marker reply lost/); assert.equal(h.sent.length, 0); assert.equal(h.row().state, 'dispatched');
-  const result = await h.execute(); assert.equal(result.state, 'recovery_required'); assert.equal(h.sent.length, 0);
+  const result = await h.execute(); assert.equal(result.state, 'not_sent'); assert.equal(h.sent.length, 0); assert.equal(h.writer().unresolved, null); assert.equal(h.row().state, 'claimed');
 });
 test('lost response-storage acknowledgement recovers the saved receipt without repeating the POST', async () => {
   const h = harness(), complete = h.gate.complete;
@@ -140,4 +140,15 @@ test('takeover during compilation leaves no dispatched marker or provider reques
   h.onObserve = async () => { h.data.Runs[0].leaseToken = 'replacement-worker-000001'; };
   await assert.rejects(h.execute({ leaseToken }), /worker lease/);
   assert.equal(h.row().state, 'claimed'); assert.equal(h.row().dispatch, null); assert.equal(h.writer().unresolved, null); assert.equal(h.sent.length, 0);
+});
+
+for (const mode of ['closed', 'read-failure', 'race']) test('actual dispatcher releases an exact never-admitted '+mode+' request without POST',async()=>{
+ const h=harness();if(mode==='closed')h.periodClosedThrough='2026-10-06';if(mode==='read-failure')h.periodFailure=true;if(mode==='race')h.periodRace=true;
+ const result=await h.execute();assert.equal(result.state,'not_sent');assert.equal(h.sent.filter(row=>row.method==='POST').length,0);assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);assert.equal(h.row().state,'claimed');assert.equal(h.row().dispatch,null);assert.ok(h.data.Audits.some(row=>row.action==='Business dispatch proved never admitted'));
+ h.periodClosedThrough=null;h.periodFailure=false;h.periodRace=false;assert.equal((await h.execute()).state,'verified');assert.equal(h.sent.filter(row=>row.method==='POST').length,1);
+});
+test('failed never-admitted audit keeps the barrier until the same recovery can be saved',async()=>{
+ const h=harness();h.periodFailure=true;const create=h.models.Audits.create;h.models.Audits.create=async(rows,opts)=>{if(rows.some(row=>row.action==='Business dispatch proved never admitted'))throw Error('Unsent audit unavailable');return create(rows,opts);};
+ await assert.rejects(h.execute(),/Unsent audit/);assert.ok(h.writer().unresolved);assert.equal(h.data.Receipts.length,0);assert.equal(h.sent.length,0);
+ h.models.Audits.create=create;assert.equal((await h.execute()).state,'not_sent');assert.equal(h.writer().unresolved,null);assert.equal(h.sent.length,0);
 });

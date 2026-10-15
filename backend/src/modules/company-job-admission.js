@@ -3,6 +3,7 @@ const { scoped, denied } = require('./qbo-write-contract');
 const { currentActorId } = require('./actor-context');
 const { createBusinessRuntimeAccess } = require('./business-runtime-access');
 const { createBusinessTransaction } = require('./business-transaction');
+const { assertPeriodControl } = require('./qbo-write-period');
 const setup = require('./business-storage-setup');
 function createCompanyJobAdmission({ Policies, Users, Connections, Memberships, transaction, assertReady, accessFor = createBusinessRuntimeAccess, environment = () => require('../config').qbo.environment }) {
   return async function admit(connection, action, work) {
@@ -23,6 +24,7 @@ function createCompanyJobAdmission({ Policies, Users, Connections, Memberships, 
       // A competing job claim conflicts and retries against the preparing state.
       const policy = await Policies.findOneAndUpdate({ ...scope, contractVersion: 1, state: 'active' }, { $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!policy || !/^[a-f0-9]{64}$/.test(policy.preparationEvidenceHash || '')) throw denied('Prepare and enable company write coordination on the Company page before starting work.');
+      assertPeriodControl(policy.periodControl, scope, ownerId);
       return work(session);
     });
   };

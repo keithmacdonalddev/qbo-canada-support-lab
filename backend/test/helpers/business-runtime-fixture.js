@@ -9,6 +9,7 @@ const { createBusinessStepStore } = require('../../src/modules/business-step-sto
 const { createBusinessWriterFence } = require('../../src/modules/business-writer-fence');
 const { createQboWriteGate } = require('../../src/modules/qbo-write-gate');
 const { QBOClient } = require('../../src/modules/qbo-client');
+const { controls } = require('./period-controls');
 const { hash, canonical } = require('../../src/modules/business-calendar');
 const { fixture, scope, now, clone } = require('./business-transaction-fixtures');
 const operationId = 'b'.repeat(24), ownerId = 'c'.repeat(24), actorId = 'd'.repeat(24);
@@ -22,7 +23,7 @@ function harness() {
   h.data.Runs.push(run);
   h.data.Calendars.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, businessKey: run.businessKey, blueprintId: run.blueprintId, blueprintHash, baseline: { status: 'verified', evidenceHash: baselineHash }, revision: 0, writerRevision: 0, currentOperationId: operationId, verifiedThrough: run.expectedCursor, stopRequested: false, pendingCommit: null });
   h.data.Writers.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, operationId, planHash, unresolved: null });
-  h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active' });
+  h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active', periodControl: controls(scope, ownerId, now) });
   h.data.Connections.push({ _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' });
   h.data.Memberships.push({ _id: 'membership', userId: actorId, realmId: scope.realmId, role: 'lab-owner', status: 'active', permissionOverrides: [], businessSetupVersion: 0 });
   h.row = () => h.data.Steps[0]; h.writer = () => h.data.Writers[0];
@@ -39,7 +40,7 @@ function harness() {
   h.intent = { version: 1, scope, operationId, logicalKey: key, entity: f.step.entity, kind: 'create', planHash, fingerprint: hash(f.step), dependencies: f.step.dependencies, step: f.step, policy: f.policy };
   h.fixture = f; h.referenceRecords = clone(f.referenceEvidence);
   h.loadIntent = async () => clone(h.intent);
-  h.reader = createBusinessDispatchReceiptReader({ ...h.models, transaction: h.transaction, authorize: h.authorize, assertReady: h.assertReady });
+  h.reader = createBusinessDispatchReceiptReader({ ...h.models, transaction: h.transaction, authorize: h.authorize, assertReady: h.assertReady, settleUnsent: input => h.gate.releaseUnsent(input) });
   h.writerFence = createBusinessWriterFence({ ...h.models, now: () => h.clock, assertIntegration: async () => {} });
   h.store = createBusinessStepStore({ ...h.models, transaction: h.transaction, loadIntent: h.loadIntent, authorize: h.authorize, assertReady: h.assertReady, fence: h.writerFence.fenceStep, now: () => h.clock, token: () => 'test-lease-' + String(++h.sequence).padStart(10, '0'),
     writeAudit: async (eventKey, details) => { if (h.failRecovery && details.phase === 'recover') throw new Error('receipt persistence unavailable'); return { eventKey, id: hash(eventKey).slice(0, 24) }; },
@@ -51,7 +52,7 @@ function harness() {
   h.steps = { ...h.store, verifyGraph: async (...args) => { h.graphCalls++; if (h.failGraph) return { complete: false, persisted: false }; await h.store.verifySaved(...args.slice(0, 2), args[2][0]); return { complete: true, persisted: true }; } };
   h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, assertReady: h.assertReady, now: () => h.clock });
   h.client = Object.create(QBOClient.prototype);
-  Object.assign(h.client, { connection: clone(h.data.Connections[0]), realmId: scope.realmId, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, writeGate: h.gate, oauthClient: { makeApiCall: async opts => { h.sent.push(clone(opts)); if (h.onSend) return h.onSend(opts); return { status: 200, json: { Estimate: { Id: '1000', SyncToken: '0' } } }; } } });
+  Object.assign(h.client, { connection: clone(h.data.Connections[0]), realmId: scope.realmId, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, writeGate: h.gate, oauthClient: { makeApiCall: async opts => { if (opts.method === 'GET' && new URL(opts.url).searchParams.get('query')?.startsWith('SELECT * FROM Preferences')) { h.periodReads = (h.periodReads || 0) + 1; if (h.periodFailure) throw new Error('Fixture preferences unavailable'); if (h.periodRace) h.writer().revision++; return { status: 200, json: { QueryResponse: { Preferences: [{ AccountingInfoPrefs: h.periodClosedThrough ? { BookCloseDate: h.periodClosedThrough } : {} }] } } }; } h.sent.push(clone(opts)); if (h.onSend) return h.onSend(opts); return { status: 200, json: { Estimate: { Id: '1000', SyncToken: '0' } } }; } } });
   h.deps = { steps: h.steps, loadIntent: h.loadIntent, assertReady: h.assertReady, authorize: h.authorize, resolveClient: async () => h.client, now: () => h.clock,
   };
   h.deps.loadCompilationEvidence = async () => { if (h.onObserve) await h.onObserve(); const revision = h.writer().revision, values = clone({ referenceEvidence: f.referenceEvidence, parents: f.parents, observationFence: f.observationFence }); for (const value of [...values.referenceEvidence, ...values.parents]) { value.writerRevision = revision; value.observedAt = new Date(h.clock).toISOString(); } Object.assign(values.observationFence, { writerRevision: revision, observedAt: new Date(h.clock).toISOString() }); return values; };

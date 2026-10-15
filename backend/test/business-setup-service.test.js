@@ -18,7 +18,8 @@ function fixture() {
   const deps = { models, transaction, connection: { db: {}, getClient: () => ({}) }, accessFor, assertSetup, inspectStorage: async () => h.storage, legacyWork: async () => [...h.blockers], resolveContext: async () => ({ environment: scope.environment, connection: { connected: true, ...scope, companyName: 'Fixture' } }), previewSetup: async (...args) => { h.setups.push(args); return { planHash: 'd'.repeat(64), qboWrites: 0 }; }, applySetup: async (...args) => { h.setups.push(args); return { status: 'complete' }; } };
   h.service = createBusinessSetupService(deps); h.user = { id: ownerId }; h.models = models; h.transaction = transaction; h.accessFor = accessFor;
   h.prepare = () => h.service.prepareCoordination(h.user);
-  h.activate = preparation => h.service.activateCoordination(h.user, { preparationEvidenceHash: preparation.preparationEvidenceHash });
+  h.record = input => h.service.recordPeriodControls(h.user, input || { closedThrough: null, reconciledThrough: null, evidenceNote: 'Owner reviewed the protected accounting dates.' });
+  h.activate = async preparation => { if (!h.data.Policies[0]?.periodControl) await h.record(); return h.service.activateCoordination(h.user, { preparationEvidenceHash: preparation.preparationEvidenceHash }); };
   h.admit = createCompanyJobAdmission({ ...models, transaction, accessFor, environment: () => scope.environment, assertReady: async () => {} });
   h.job = () => h.admit({ _id: scope.connectionId, realmId: scope.realmId, userId: ownerId }, 'operations.execute', async session => { assert.ok(session.inTransaction()); h.jobs.push({ status: 'running' }); return true; });
   return h;
@@ -33,7 +34,7 @@ test('preparation, quiescence and activation are separate audited local transiti
   const h = fixture(); const preparation = await h.prepare(); assert.equal(preparation.state, 'preparing'); assert.equal(h.data.Audits.length, 1); assert.equal(h.data.Writers[0].unresolved, null);
   await assert.rejects(h.job(), /coordination/); assert.equal(h.jobs.length, 0);
   h.blockers.push('legacy-worker'); await assert.rejects(h.activate(preparation), /earlier worker/); assert.equal(h.data.Policies[0].state, 'preparing');
-  h.blockers = []; await h.activate(preparation); assert.equal(h.data.Policies[0].state, 'active'); assert.equal(h.data.Audits.length, 2);
+  h.blockers = []; await h.activate(preparation); assert.equal(h.data.Policies[0].state, 'active'); assert.equal(h.data.Audits.length, 3);
   await h.job(); assert.equal(h.jobs.length, 1);
 });
 test('current storage/index drift, permission loss and unresolved receipts block activation', async () => {
@@ -72,8 +73,24 @@ test('actual generation start denied during preparation leaves no scope/run and 
   await new Promise(resolve => setImmediate(resolve)); assert.equal(started.status, 'in_progress'); assert.equal(launches, 1); assert.equal(h.data.GenRuns.length, 1); assert.equal(h.data.GenScopes.length, 1);
 });
 test('lost activation acknowledgement retries the saved active result while new work is running', async () => {
-  const h = fixture(), preparation = await h.prepare(); h.loseReply = true;
+  const h = fixture(), preparation = await h.prepare(); await h.record(); h.loseReply = true;
   await assert.rejects(h.activate(preparation), /reply lost/); assert.equal(h.data.Policies[0].state, 'active');
   await h.job(); h.blockers = ['generationruns']; h.data.Writers[0].unresolved = { key: 'new-work' };
-  const retry = await h.activate(preparation); assert.equal(retry.state, 'active'); assert.equal(retry.reused, true); assert.equal(h.data.Audits.length, 2);
+  const retry = await h.activate(preparation); assert.equal(retry.state, 'active'); assert.equal(retry.reused, true); assert.equal(h.data.Audits.length, 3);
+});
+
+test('activation and job claims require an explicit retained period choice',async()=>{
+ const h=fixture(),p=await h.prepare();
+ await assert.rejects(h.service.activateCoordination(h.user,{preparationEvidenceHash:p.preparationEvidenceHash}),/owner must record/);
+ assert.equal(h.data.Policies[0].state,'preparing');assert.equal(h.data.Audits.length,1);
+ await h.record();await h.activate(p);h.data.Policies[0].periodControl=null;await assert.rejects(h.job(),/owner must record/);assert.equal(h.jobs.length,0);
+});
+test('period choices are owner-only, elapsed, monotonic, audited and require a settled writer',async()=>{
+ const h=fixture();await h.prepare();const input={closedThrough:'2026-09-30',reconciledThrough:null,evidenceNote:'Reviewed the September closing evidence.'};
+ await assert.rejects(h.service.recordPeriodControls({id:ownerId,actorId:'e'.repeat(24)},input),/Only/);
+ await assert.rejects(h.record({...input,closedThrough:'2099-01-01'}),/elapsed/);
+ const first=await h.record(input);assert.equal(first.reused,false);assert.equal(h.data.Audits.length,2);assert.equal((await h.record(input)).reused,true);assert.equal(h.data.Audits.length,2);
+ await assert.rejects(h.record({...input,closedThrough:'2026-09-01'}),/backwards/);
+ h.data.Writers[0].unresolved={key:'unknown'};await assert.rejects(h.record({...input,reconciledThrough:'2026-09-30'}),/current operation/);h.data.Writers[0].unresolved=null;
+ h.failAudit=true;const before=clone(h.data);await assert.rejects(h.record({...input,reconciledThrough:'2026-09-30'}),/audit/);assert.deepEqual(h.data,before);
 });

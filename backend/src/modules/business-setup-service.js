@@ -1,10 +1,12 @@
 'use strict';
-const { hash } = require('./business-calendar');
+const { hash, date, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { createContextService } = require('./rebuild-context');
 const { createBusinessRuntimeAccess } = require('./business-runtime-access');
 const { createBusinessTransaction } = require('./business-transaction');
 const setup = require('./business-storage-setup');
+const { assertPeriodControl } = require('./qbo-write-period');
+const { businessDate } = require('./business-activity-preview');
 const PROFILE = 'continual-business';
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_SETUP_REQUIRED' }); }
 function createBusinessSetupService(dependencies = {}) {
@@ -45,7 +47,7 @@ function createBusinessSetupService(dependencies = {}) {
     catch { storage = { ready: false, reason: 'Review and complete business storage preparation.' }; }
     const policy = await read(models.Policies, { environment: scope.environment, realmId: scope.realmId });
     return { ...scope, companyName: bound.companyName, owner: bound.actorId === bound.ownerId, storage, setupReceipt,
-      coordination: policy ? { state: policy.state, revision: policy.revision, sameConnection: String(policy.connectionId) === scope.connectionId } : { state: 'unprepared' },
+      coordination: policy ? { state: policy.state, revision: policy.revision, sameConnection: String(policy.connectionId) === scope.connectionId, periodControl: policy.periodControl || null } : { state: 'unprepared' },
       profile: PROFILE, qboWrites: 0, calendarVerified: false };
   }
   async function preview(user) {
@@ -89,6 +91,33 @@ function createBusinessSetupService(dependencies = {}) {
     for (const [collection, filter] of queries) if (await connection.db.collection(collection).findOne(filter, { session, projection: { _id: 1 }, maxTimeMS: 3000 })) blockers.push(collection);
     return blockers;
   }
+  async function recordPeriodControls(user, input) {
+    if (!input || Object.keys(input).sort().join(',') !== 'closedThrough,evidenceNote,reconciledThrough' || typeof input.evidenceNote !== 'string' || input.evidenceNote.trim().length < 10 || input.evidenceNote.length > 2000) fail('Record both protected dates (or none) and a short evidence note.', 400);
+    for (const key of ['closedThrough', 'reconciledThrough']) if (input[key] !== null) {
+      try { date(input[key]); } catch { fail('Choose a valid protected accounting date.', 400); }
+      if (input[key] > businessDate(new Date(now()))) fail('Protected dates must be elapsed business days.', 400);
+    }
+    const bound = await bind(user, true), { scope, ownerId } = bound;
+    const choice = { version: 1, status: 'owner-recorded', scope, ownerId, closedThrough: input.closedThrough, reconciledThrough: input.reconciledThrough, evidenceNote: input.evidenceNote.trim() };
+    return transaction(async session => {
+      await fence(bound, session); await receipt(bound, session);
+      const company = { environment: scope.environment, realmId: scope.realmId }, policy = await read(models.Policies, company, session), writer = await read(models.Writers, company, session);
+      if (!policy || !writer || String(policy.connectionId) !== scope.connectionId || String(writer.connectionId) !== scope.connectionId || !['preparing', 'active'].includes(policy.state)) fail('Prepare company write coordination first.');
+      const previous = policy.periodControl;
+      if (previous) {
+        assertPeriodControl(previous, scope, ownerId);
+        const { contentHash, recordedAt, ...oldChoice } = previous;
+        if (canonical(oldChoice) === canonical(choice)) return { periodControl: previous, reused: true };
+        for (const key of ['closedThrough', 'reconciledThrough']) if (previous[key] && (!choice[key] || choice[key] < previous[key])) fail('Protected dates cannot move backwards through this action. A reviewed reopening process is required.');
+      }
+      if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) fail('Finish the current operation or recover its uncertain request before changing protected dates.');
+      const value = { ...choice, recordedAt: new Date(now()).toISOString() }, periodControl = { ...value, contentHash: hash(value) };
+      const saved = await models.Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: policy.state, revision: policy.revision }, { $set: { periodControl }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!saved) fail('Company protected dates changed while saving.');
+      await models.Audits.create([{ _id: hash({ periodControl: periodControl.contentHash }).slice(0, 24), userId: ownerId, realmId: scope.realmId, action: 'Company protected accounting dates recorded', actionType: 'manual', outcome: 'success', beforeState: { periodControl: previous || null }, afterState: { periodControl, qboWrites: 0, reconciliationVerifiedByApi: false } }], { session });
+      return { periodControl, reused: false };
+    });
+  }
   async function activateCoordination(user, input) {
     if (!input || Object.keys(input).join(',') !== 'preparationEvidenceHash' || !/^[a-f0-9]{64}$/.test(input.preparationEvidenceHash || '')) fail('Activate the exact reviewed write-coordination preparation.', 400);
     const bound = await bind(user, true), { scope, ownerId } = bound;
@@ -98,6 +127,7 @@ function createBusinessSetupService(dependencies = {}) {
       if (!policy || !writer || String(policy.connectionId) !== scope.connectionId || String(writer.connectionId) !== scope.connectionId || policy.preparationEvidenceHash !== input.preparationEvidenceHash) fail('Exact company coordination is required.');
       if (policy.state === 'active') return { state: 'active', reused: true };
       if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) fail('Exact settled company coordination is required.');
+      assertPeriodControl(policy.periodControl, scope, ownerId);
       const blockers = await legacyWork(scope, session);
       if (blockers.length || await read(models.Receipts, { ...scope, state: { $in: ['possibly-sent', 'unknown'] } }, session)) fail('An earlier worker or uncertain request still needs recovery. Finish it before enabling company writes.');
       if (policy.state !== 'preparing') fail('Company preparation changed.');
@@ -107,6 +137,6 @@ function createBusinessSetupService(dependencies = {}) {
       return { state: 'active', reused: false };
     });
   }
-  return { status, preview, apply, prepareCoordination, activateCoordination };
+  return { status, preview, apply, prepareCoordination, recordPeriodControls, activateCoordination };
 }
 module.exports = { createBusinessSetupService };

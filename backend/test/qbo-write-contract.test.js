@@ -7,11 +7,11 @@ const { hash } = require('../src/modules/business-calendar');
 const { QBOClient } = require('../src/modules/qbo-client');
 const config = require('../src/config');
 const scope = { environment: config.qbo.environment, realmId: '123', connectionId: 'a'.repeat(24) };
-const permission = request => ({ scope, operationId: 'c'.repeat(24), logicalKey: hash('invoice'), dispatchKey: hash('dispatch'), requestHash: request.requestHash });
+const permission = request => ({ scope, operationId: 'c'.repeat(24), logicalKey: hash('invoice'), dispatchKey: hash('dispatch'), requestHash: request.requestHash, dispatchRevision: 2, stepLeaseToken: 'lease' });
 const request = freezeWriteRequest(scope, 'POST', 'invoice', { CustomerRef: { value: '1' } });
 function clientFor(send, gate) {
   const client = Object.create(QBOClient.prototype);
-  Object.assign(client, { realmId: scope.realmId, connection: { _id: scope.connectionId, userId: 'b'.repeat(24) }, _requestLog: [], _windowMs: 60000, _retryAfterUntil: 0, ensureFreshToken: async () => {}, _sleep: async () => { throw new Error('no write retry allowed'); }, oauthClient: { makeApiCall: send }, writeGate: gate });
+  Object.assign(client, { realmId: scope.realmId, connection: { _id: scope.connectionId, userId: 'b'.repeat(24) }, _requestLog: [], _windowMs: 60000, _retryAfterUntil: 0, ensureFreshToken: async () => {}, _sleep: async () => { throw new Error('no write retry allowed'); }, oauthClient: { makeApiCall: send }, writeGate: { preflight: async () => null, ...gate } });
   return client;
 }
 async function quiet(work) { const original = console.error; console.error = () => {}; try { return await work(); } finally { console.error = original; } }

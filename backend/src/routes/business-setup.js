@@ -10,7 +10,7 @@ function createBusinessSetupRouter(dependencies = {}) {
     if (Object.keys(req.query).length) return res.status(400).json({ error: 'Setup actions do not accept company overrides.' }); next();
   });
   const action = work => async (req, res) => { try { res.json({ data: await work(req) }); } catch (error) {
-    const local = /^BUSINESS_/.test(error.code || '') || error.setupError;
+    const local = /^BUSINESS_/.test(error.code || '') || error.setupError || error.qboStage === 'write_admission';
     const status = local && [400, 403, 409].includes(error.status) ? error.status : error.setupError ? 409 : 500;
     res.status(status).json({ error: status === 500 ? 'Company setup could not finish. Saved preparation remains available for recovery.' : error.message, code: error.code || 'BUSINESS_SETUP_REQUIRED' });
   } };
@@ -19,6 +19,7 @@ function createBusinessSetupRouter(dependencies = {}) {
   router.post('/preview', action(req => { empty(req); return service().preview(req.user); }));
   router.post('/apply', action(req => service().apply(req.user, req.body)));
   router.post('/coordination/prepare', action(req => { empty(req); return service().prepareCoordination(req.user); }));
+  router.post('/period-controls', action(req => service().recordPeriodControls(req.user, req.body)));
   router.post('/coordination/activate', action(req => service().activateCoordination(req.user, req.body)));
   return router;
 }

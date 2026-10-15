@@ -4,6 +4,7 @@ const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
 const { denied, scoped, classifyWriteResponse } = require('./qbo-write-contract');
 const { normalizePermissions } = require('./rebuild-permissions');
+const { readWritePeriodEvidence, assertWritePeriod } = require('./qbo-write-period');
 const { normalizeWorkflow } = require('./qbo-write-workflow');
 const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
@@ -41,7 +42,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       inputParams: { environment: input.scope.environment, connectionId: input.scope.connectionId, dispatchKey: input.dispatchKey, requestHash: input.requestHash, entity: input.entity, operation: input.operation }, afterState: details,
     }], { session });
   }
-  async function begin({ request, permit, ownerId, actorId, workflow }) {
+  async function begin({ request, permit, ownerId, actorId, workflow, periodEvidence }) {
     const scope = scoped(request.scope);
     workflow = workflow ? normalizeWorkflow(workflow) : null;
     if (!ID.test(ownerId || '') || !ID.test(actorId || '')) throw denied('The actual write actor and company owner are required.');
@@ -68,13 +69,16 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         if (!authorized) throw denied('Business execution permission changed before dispatch.');
       }
       const { writer, policy } = state;
+      const fence = periodEvidence?.coordination;
+      if (!fence || fence.policyRevision !== policy.revision || fence.writerRevision !== writer.revision || fence.controlHash !== policy.periodControl?.contentHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
+      const periodProof = assertWritePeriod(request, periodEvidence, policy.periodControl, now(), ownerId);
       let unresolved;
       if (permit) {
         if (!same(permit.scope?.connectionId, scope.connectionId) || permit.scope?.realmId !== scope.realmId || permit.scope?.environment !== scope.environment || permit.requestHash !== request.requestHash || !same(writer.operationId, permit.operationId) || writer.unresolved?.key !== dispatchKey || writer.unresolved?.logicalKey !== permit.logicalKey || writer.unresolved?.requestHash !== request.requestHash || writer.unresolved?.actorId !== actorId || writer.unresolved?.transportConsumed || request.operation !== 'create') throw denied('This permission does not match the exact unsent business request.');
         const step = await read(Steps, { ...scope, logicalKey: permit.logicalKey, operationId: permit.operationId, state: 'dispatched' }, session);
         const run = await read(Runs, { _id: permit.operationId, ...scope, planHash: writer.planHash, status: { $in: ['reserved', 'running'] } }, session);
         const calendar = await read(Calendars, { ...scope, currentOperationId: permit.operationId, stopRequested: false, pendingCommit: null }, session);
-        if (!step || !run || !calendar || !fresh(step.dispatch?.observedAt, now()) || !HASH.test(step.dispatch?.compilationHash || '') || step.dispatch?.compilationHash !== writer.unresolved?.compilationHash || !HASH.test(step.dispatch?.evidenceHash || '') || step.dispatch?.evidenceHash !== writer.unresolved?.evidenceHash || !validRevision(step.dispatch?.observationWriterRevision) || writer.revision !== step.dispatch.observationWriterRevision + 1 || step.entity.toLowerCase() !== request.entity || step.planHash !== run.planHash || step.dispatch?.key !== dispatchKey || step.dispatch?.requestHash !== request.requestHash || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.status !== 'verified' || calendar.baseline.evidenceHash !== run.baselineHash || calendar.verifiedThrough !== run.expectedCursor || calendar.revision !== run.expectedRevision || !validRevision(run.writerRevision) || !validRevision(run.evidenceRevision) || !validRevision(calendar.writerRevision)) throw denied('Business step, stop state or calendar changed before sending.');
+        if (!step || step.revision !== permit.dispatchRevision || step.leaseToken !== permit.stepLeaseToken || writer.unresolved?.stepRevision !== permit.dispatchRevision || !run || !calendar || !fresh(step.dispatch?.observedAt, now()) || !HASH.test(step.dispatch?.compilationHash || '') || step.dispatch?.compilationHash !== writer.unresolved?.compilationHash || !HASH.test(step.dispatch?.evidenceHash || '') || step.dispatch?.evidenceHash !== writer.unresolved?.evidenceHash || !validRevision(step.dispatch?.observationWriterRevision) || writer.revision !== step.dispatch.observationWriterRevision + 1 || step.entity.toLowerCase() !== request.entity || step.planHash !== run.planHash || step.dispatch?.key !== dispatchKey || step.dispatch?.requestHash !== request.requestHash || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.status !== 'verified' || calendar.baseline.evidenceHash !== run.baselineHash || calendar.verifiedThrough !== run.expectedCursor || calendar.revision !== run.expectedRevision || !validRevision(run.writerRevision) || !validRevision(run.evidenceRevision) || !validRevision(calendar.writerRevision)) throw denied('Business step, stop state or calendar changed before sending.');
         assertRunApproval(run);
         if (run.leaseToken && (permit.leaseToken !== run.leaseToken || !Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() <= now())) throw denied('The operation worker lease changed or expired before sending.');
         if (permit.leaseToken && !run.leaseToken) throw denied('The operation worker lease is no longer held.');
@@ -89,7 +93,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const policyTouched = await Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
       const writerTouched = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId: writer.operationId, planHash: writer.planHash }, { $set: { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!policyTouched || !writerTouched) throw denied('Company write admission changed.');
-      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : {}), dispatchKey, requestHash: request.requestHash, entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
+      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : {}), dispatchKey, requestHash: request.requestHash, periodProof, entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
       await audit(startAuditId, { ...ticket, scope }, 'started', { state: 'possibly-sent', receiptId }, session);
       return ticket;
     });
@@ -178,7 +182,50 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       return true;
     });
   }
-  return { begin, complete, settleCase, assertCaseSettled };
+  async function preflight({ request, client }) {
+    if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
+    const state = await policyState(scoped(request.scope));
+    if (!state || state.policy.state !== 'active' || !state.policy.periodControl) throw denied('Complete explicit write coordination setup and record protected-period choices on the Company page before writing.');
+    try {
+      const coordination = { policyRevision: state.policy.revision, writerRevision: state.writer.revision, controlHash: state.policy.periodControl.contentHash };
+      const evidence = await readWritePeriodEvidence(request, client, now, coordination);
+      const current = await policyState(scoped(request.scope));
+      if (!current || current.policy.state !== 'active' || current.policy.revision !== coordination.policyRevision || current.writer.revision !== coordination.writerRevision || current.policy.periodControl?.contentHash !== coordination.controlHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
+      return evidence;
+    }
+    catch (error) { if (error.qboStage === 'write_admission') throw error; const failure = denied('Protected periods or linked record dates could not be verified. Nothing was sent.'); if (error.intuit_tid) failure.intuit_tid = error.intuit_tid; throw failure; }
+  }
+  // Absence of the mandatory transport receipt is meaningful only while fencing
+  // its exact writer/step in this transaction. A racing begin then conflicts and
+  // must re-read the reset step, so it cannot send using the superseded marker.
+  async function releaseUnsent({ scope, operationId, logicalKey, dispatchKey, ownerId, actorId }) {
+    scope = scoped(scope);
+    if (![ownerId, actorId, operationId].every(value => ID.test(value || '')) || !HASH.test(logicalKey || '') || !HASH.test(dispatchKey || '')) throw denied('Exact unsent operation identity is required.');
+    await assertReady();
+    return transaction(async session => {
+      await fenceWorkspace(scope, ownerId, actorId, session);
+      const member = await read(Memberships, { userId: actorId, realmId: scope.realmId, status: 'active' }, session);
+      if (!member || !normalizePermissions(member.role, member.permissionOverrides || []).includes('operations.execute')) throw denied('Current operation recovery permission is required.');
+      const authorized = await Memberships.findOneAndUpdate({ _id: member._id, userId: actorId, realmId: scope.realmId, status: 'active', role: member.role }, { $inc: { businessSetupVersion: 1 } }, { new: true, session }).lean();
+      if (!authorized) throw denied('Recovery permission changed before settlement.');
+      const state = await policyState(scope, session), writer = state?.writer;
+      const receiptId = hash({ scope, dispatchKey });
+      if (await read(Receipts, { _id: receiptId }, session)) return { released: false };
+      const step = await read(Steps, { ...scope, operationId, logicalKey, state: { $in: ['dispatched', 'unknown'] }, 'dispatch.key': dispatchKey, receipt: null }, session);
+      const run = await read(Runs, { _id: operationId, ...scope, status: { $in: ['reserved', 'running', 'blocked', 'stopped'] } }, session);
+      const calendar = await read(Calendars, { ...scope, currentOperationId: operationId, pendingCommit: null }, session);
+      if (!step || !run || !calendar || !writer || !same(writer.operationId, operationId) || writer.planHash !== run.planHash || writer.unresolved?.key !== dispatchKey || writer.unresolved?.logicalKey !== logicalKey || writer.unresolved?.requestHash !== step.dispatch?.requestHash || writer.unresolved?.transportConsumed || step.qboId || !validRevision(step.revision) || !validRevision(run.writerRevision) || !validRevision(run.evidenceRevision) || !validRevision(calendar.writerRevision)) throw denied('The dispatch is not an exact never-admitted request.');
+      const auditId = hash({ receiptId, event: 'never-admitted', stepRevision: step.revision }).slice(0, 24);
+      const saved = await Steps.findOneAndUpdate({ _id: step._id, ...scope, operationId, logicalKey, state: step.state, revision: step.revision, 'dispatch.key': dispatchKey, receipt: null }, { $set: { state: 'claimed', dispatch: null, compilation: null, leaseExpiresAt: new Date(now()), lastAuditId: auditId }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const released = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId, planHash: run.planHash, 'unresolved.key': dispatchKey }, { $set: { unresolved: null }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const changedRun = await Runs.findOneAndUpdate({ _id: run._id, ...scope, status: run.status, writerRevision: run.writerRevision, evidenceRevision: run.evidenceRevision }, { $set: { verificationCandidateHash: null }, $inc: { writerRevision: 1, evidenceRevision: 1 } }, { new: true, session }).lean();
+      const changedCalendar = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, currentOperationId: operationId, writerRevision: calendar.writerRevision }, { $inc: { writerRevision: 1 } }, { new: true, session }).lean();
+      if (!saved || !released || !changedRun || !changedCalendar) throw denied('The unsent dispatch changed during recovery.');
+      await Audits.create([{ _id: auditId, userId: ownerId, actorUserId: actorId !== ownerId ? actorId : undefined, realmId: scope.realmId, action: 'Business dispatch proved never admitted', actionType: 'manual', outcome: 'success', beforeState: { ...scope, operationId, logicalKey, dispatch: step.dispatch }, afterState: { state: 'claimed', noTransportReceipt: receiptId, qboWrites: 0 } }], { session });
+      return { released: true, state: 'claimed' };
+    });
+  }
+  return { preflight, begin, complete, settleCase, assertCaseSettled, releaseUnsent };
 }
 let defaultGate;
 function getQboWriteGate() {

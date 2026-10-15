@@ -192,6 +192,11 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     if (!['dispatched', 'unknown'].includes(row.state)) fail('Only an unresolved dispatch requires recovery');
     const proof = await loadRecovery(proofRequest(row));
     // Absence, multiple matches and guesses NEVER make this activity replayable.
+    if (proof?.status === 'not-sent') {
+      const current = await read(ctx); assertIdentity(current, ctx.intent);
+      if (current.state !== 'claimed' || current.dispatch || current.receipt) fail('The never-admitted step changed during recovery');
+      return { state: 'claimed', recovered: false, notSent: true, replayAllowed: false };
+    }
     if (!proof || proof.status !== 'found') return { state: row.state, recovered: false, replayAllowed: false };
     const saved = await saveReceipt(ctx, publicHandle(row), proof.receipt, 'recover');
     return { ...publicHandle(saved), state: saved.state, recovered: true, replayAllowed: false };

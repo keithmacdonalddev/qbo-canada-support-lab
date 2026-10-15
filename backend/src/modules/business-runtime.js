@@ -54,7 +54,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   const state = createBusinessRunState({ ...models, transaction, authorize, assertReady, writeAudit, now });
   let verification;
   const steps = createBusinessStepStore({ ...models, transaction, authorize, assertReady, writeAudit, now, loadIntent: plans.loadIntent, fence: writerFence.fenceStep,
-    loadRecovery: createBusinessDispatchReceiptReader({ ...models, transaction, authorize, assertReady }),
+    loadRecovery: createBusinessDispatchReceiptReader({ ...models, transaction, authorize, assertReady, settleUnsent: gate.releaseUnsent }),
     loadGraphReadback: input => verification.loadGraphReadback(input), graphSnapshot: input => verification.graphSnapshot(input),
   });
   let boundPlanHash = null;

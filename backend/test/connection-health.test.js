@@ -413,7 +413,7 @@ test('API 401 does not retry a production write', async () => {
   const client = Object.create(QBOClient.prototype);
   client.realmId = '123';
   client.connection = { _id: 'a'.repeat(24), userId: 'b'.repeat(24) };
-  client.writeGate = { begin: async () => ({ coordinated: false }) };
+  client.writeGate = { preflight: async () => null, begin: async () => ({ coordinated: false }) };
   client._retryAfterUntil = 0;
   client._requestLog = [];
   client._windowMs = 60_000;
