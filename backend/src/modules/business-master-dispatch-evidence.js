@@ -22,6 +22,7 @@ function assertMasterDispatchEvidence(run, ordinal, requestHash, proof, controls
   const scope = scoped({ environment: run.environment, realmId: run.realmId, connectionId: String(run.connectionId) });
   assertPeriodControl(controls, scope, String(run.ownerId));
   const { evidenceHash, ...content } = proof || {};
+  if (Buffer.byteLength(canonical(proof || null)) > 8192) throw denied('Master dispatch evidence exceeds its compact storage budget.');
   if (!HASH.test(evidenceHash || '') || hash(content) !== evidenceHash || content.version !== 1 || canonical(content.scope) !== canonical(scope) || content.runId !== String(run._id) || content.planHash !== run.planHash || content.ordinal !== ordinal || content.requestHash !== requestHash || content.periodControlHash !== controls.contentHash || !fresh(content.setupObservedAt, now) || !fresh(content.countryObservedAt, now) || !fresh(content.observedAt, now) || !HASH.test(content.setupHash || '') || !HASH.test(content.countryHash || '') || content.country !== 'CA' || content.setupComplete !== true || content.homeCurrency !== 'CAD') throw denied('Fresh complete Canadian master-dispatch evidence is required.');
   assertSelections(run, content.selections);
   const stockRemains = run.plan.entries.some(entry => entry.entity === 'Item' && entry.itemType === 'Inventory' && run.records[entry.ordinal].state !== 'verified');

@@ -1,5 +1,5 @@
 'use strict';
-const { hash } = require('./business-calendar');
+const { hash, date } = require('./business-calendar');
 const { readSource } = require('./coverage');
 const SOURCE = { Customer: 'customers', Vendor: 'vendors', Item: 'items', Employee: 'employees' };
 function fail(message) { return Object.assign(new Error(message), { status: 400, businessPlanError: true }); }
@@ -43,7 +43,7 @@ async function readBusinessMasters(qbo, scope, now = () => Date.now()) {
     completeness[entity] = !observed.error && !observed.truncated && observed.records.every(valid);
     options[entity] = observed.records.filter(valid).map(record => ({ id: record.Id, name: String(record.DisplayName || record.Name || ''),
       active: typeof record.Active === 'boolean' ? record.Active : null, currency: record.CurrencyRef?.value || null,
-      itemType: record.Type || null, project: record.IsProject === true,
+      itemType: record.Type || null, inventoryStartDate: record.InvStartDate ?? null, project: record.IsProject === true,
       accountRefs: Object.fromEntries(['IncomeAccountRef', 'AssetAccountRef', 'ExpenseAccountRef'].map(key => [key, record[key]?.value || null])),
       syncToken: record.SyncToken == null ? null : String(record.SyncToken) }));
   }));
@@ -64,6 +64,10 @@ function inspectBusinessMasters(view, observed) {
     if (requirement.currency && record.currency !== requirement.currency) return result(record.currency ? 'incompatible' : 'unverified', 'This role requires an explicitly verified CAD record.', record);
     if (requirement.entity === 'Customer' && record.project) return result('incompatible', 'Choose the customer identity; project setup is a separate requirement.', record);
     if (requirement.itemType && record.itemType !== requirement.itemType) return result('incompatible', 'This role requires item type ' + requirement.itemType + '.', record);
+    if (requirement.itemType === 'Inventory') {
+      try { date(record.inventoryStartDate); } catch { return result('unverified', 'The inventory starting date must be explicitly readable.', record); }
+      if (record.inventoryStartDate > source.business.openingDate) return result('incompatible', 'Inventory must exist by the first planned stock activity at business opening.', record);
+    }
     for (const [reference, mapping] of Object.entries(requirement.accountMappings || {})) {
       if (!source.mappings[mapping]) return result('unverified', 'First assign the business account for ' + mapping + '.', record);
       if (record.accountRefs[reference] !== source.mappings[mapping]) return result('incompatible', 'The product account does not match the saved ' + mapping + ' choice.', record);

@@ -18,7 +18,19 @@ function clone(value) {
   return value;
 }
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
-const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => key === '$or' ? value.some(branch => matches(row, branch)) : value && typeof value === 'object' && !(value instanceof Types.ObjectId) && !(value instanceof Date) ? ('$in' in value ? value.$in.some(item => String(at(row, key)) === String(item)) : '$exists' in value ? (at(row, key) !== undefined) === value.$exists : false) : String(at(row, key)) === String(value));
+const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => {
+  if (key === '$or') return value.some(branch => matches(row, branch));
+  if (key === '$and') return value.every(branch => matches(row, branch));
+  const actual = at(row, key);
+  if (value && typeof value === 'object' && !(value instanceof Types.ObjectId) && !(value instanceof Date)) {
+    if ('$elemMatch' in value) return Array.isArray(actual) && actual.some(item => matches(item, value.$elemMatch));
+    if ('$type' in value) return value.$type === 'string' && typeof actual === 'string';
+    if ('$in' in value) return value.$in.some(item => String(actual) === String(item));
+    if ('$exists' in value) return (actual !== undefined) === value.$exists;
+    return false;
+  }
+  return String(actual) === String(value);
+});
 function harness() {
   const f = fixture(), plan = prepareMasterPlan(f), runId = '000000000000000000000010', leaseToken = 'master-worker-lease-000001';
   const h = { source: f, clock: now, sent: [], commits: 0, data: Object.fromEntries(['MasterRuns', 'Versions', 'Sequences', 'Policies', 'Writers', 'Receipts', 'Audits', 'Connections', 'Memberships', 'Runs', 'Calendars', 'Steps', 'Users'].map(key => [key, []])) };
@@ -33,9 +45,10 @@ function harness() {
   h.data.Audits.push({ _id: approval.auditId, userId: ownerId, realmId: scope.realmId, action: 'Business master preparation approved', outcome: 'success', afterState: { runId, planHash: plan.planHash, approvalHash: hash(approval) } });
   h.models = Object.fromEntries(Object.keys(h.data).map(name => [name, {
     find(filter) { let maximum = Infinity; const query = { limit(value) { maximum = value; return query; }, select() { return query; }, session() { return query; }, maxTimeMS() { return query; }, lean: async () => clone(h.data[name].filter(row => matches(row, filter)).slice(0, maximum)) }; return query; },
-    findOne(filter) { let sort; const query = { sort(value) { sort = value; return query; }, select() { return query; }, session() { return query; }, maxTimeMS() { return query; }, lean: async () => { const rows = h.data[name].filter(row => matches(row, filter)); if (sort) rows.sort((a, b) => { for (const [key, direction] of Object.entries(sort)) if (at(a, key) !== at(b, key)) return (at(a, key) < at(b, key) ? -1 : 1) * direction; return 0; }); return clone(rows[0] || null); } }; return query; },
+    findOne(filter) { let sort; const query = { sort(value) { sort = value; return query; }, select() { return query; }, session() { return query; }, maxTimeMS() { return query; }, lean: async () => { const rows = h.data[name].filter(row => matches(row, filter)); if (sort) rows.sort((a, b) => { for (const [key, direction] of Object.entries(sort)) if (at(a, key) !== at(b, key)) return (at(a, key) < at(b, key) ? -1 : 1) * direction; return 0; }); return clone(rows[0] || null); } }; query.then = (resolve, reject) => query.lean().then(resolve, reject); return query; },
     findOneAndUpdate(filter, change, options) { return { select() { return this; }, lean: async () => { assert.ok(options.session?.inTransaction()); const row = h.data[name].find(value => matches(value, filter)); if (!row || h.conflictModel === name) return null; Object.assign(row, clone(change.$set || {})); for (const [key, value] of Object.entries(change.$inc || {})) row[key] = (row[key] ?? 0) + value; return clone(row); } }; },
-    async create(rows, options) { assert.ok(options.session?.inTransaction()); if (name === 'Audits' && h.failAudit) throw new Error('fixture audit unavailable'); for (const row of rows) { if (h.data[name].some(value => String(value._id) === String(row._id))) throw new Error('duplicate fixture ID'); h.data[name].push(clone(row)); } },
+    async updateOne(filter, change, options) { assert.ok(options.session?.inTransaction()); let row = h.data[name].find(value => matches(value, filter)); if (!row && options.upsert) { row = clone(filter); h.data[name].push(row); } if (!row) return { matchedCount: 0 }; Object.assign(row, clone(change.$set || {})); for (const [key, value] of Object.entries(change.$max || {})) row[key] = Math.max(row[key] ?? 0, value); for (const [key, value] of Object.entries(change.$inc || {})) row[key] = (row[key] ?? 0) + value; return { matchedCount: 1 }; },
+    async create(rows, options) { assert.ok(options.session?.inTransaction()); if (name === 'Audits' && h.failAudit) throw new Error('fixture audit unavailable'); for (const row of rows) { if (h.data[name].some(value => String(value._id) === String(row._id))) throw new Error('duplicate fixture ID'); h.data[name].push(clone(row)); } return clone(rows); },
   }]));
   let queue = Promise.resolve();
   h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let answer; try { answer = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } h.commits++; if (h.loseCommitReply === h.commits) throw new Error('fixture commit acknowledgement lost'); return answer; }); queue = result.catch(() => {}); return result; };

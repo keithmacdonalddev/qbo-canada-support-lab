@@ -19,7 +19,7 @@ function createMasterPreparationRunner({ scope, ownerId, store, clientFor, autho
     return value;
   }
   const result = (run, error) => ({ runId: String(run._id), state: run.state, complete: run.state === 'complete', recordCount: run.records.length, acceptedRecords: run.records.filter(row => row.qboId).length, verifiedRecords: run.records.filter(row => row.state === 'verified').length, ...(error && run.state !== 'complete' ? { needsReview: true, failure: run.lastFailure || error } : {}) });
-  return async function execute(id, { resume = false } = {}) {
+  const execute = async function execute(id, { resume = false } = {}) {
     let leaseToken = null, error = null, stage = 'claim';
     try {
       let run = await store.load(id);
@@ -72,5 +72,22 @@ function createMasterPreparationRunner({ scope, ownerId, store, clientFor, autho
     try { return result(await store.load(id), error); }
     catch { return { runId: id, state: 'unavailable', complete: false, needsReview: true, error: 'Current saved master progress could not be read. Refresh before taking another action.' }; }
   };
+  execute.recover = async id => {
+    let leaseToken = null, error = null, stage = 'claim';
+    try {
+      let run = await store.claimRecovery(id); leaseToken = run.leaseToken;
+      const row = run.records.find(value => value.state !== 'verified');
+      if (row) {
+        stage = 'readback';
+        const body = await readPhase('operations.recover', qbo => qbo.apiCall('GET', row.entity.toLowerCase() + '/' + row.qboId));
+        stage = 'verify'; run = await store.verify(id, row.ordinal, leaseToken, body?.[row.entity]);
+      }
+      if (run.records.every(value => value.state === 'verified')) { stage = 'finish'; await store.finish(id, leaseToken); }
+    } catch (caught) { error = masterFailure(stage, caught); }
+    finally { if (leaseToken) { try { await store.releaseWorker(id, leaseToken, error); } catch { /* Retained barrier and lease remain authoritative. */ } } }
+    try { return result(await store.load(id), error); }
+    catch { return { runId: id, state: 'unavailable', complete: false, needsReview: true }; }
+  };
+  return execute;
 }
 module.exports = { createMasterPreparationRunner };

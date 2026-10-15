@@ -1,6 +1,6 @@
 # Business master preparation
 
-Status: foundation and transport adapters implemented non-live, 2026-10-15; the public approval/worker/recovery/apply workflow and normal UI remain in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
+Status: private planning, owner decisions, transport, worker, no-effect/accepted-ID recovery and atomic draft application implemented non-live, 2026-10-15; terminal-unknown attribution, public composition and normal UI remain in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
 
 The normal business setup currently requires exact accounts, customers, suppliers, products and a time-entry worker, but only offers selection of records that already exist. The legacy seeder creates an unrelated population and cannot satisfy this outcome. The intended result is an owner action on Company: prepare the missing roles for the saved business, review the exact proposed creates, execute that approved plan, then explicitly use verified IDs in a new draft. Publication and financial baseline acceptance remain separate actions.
 

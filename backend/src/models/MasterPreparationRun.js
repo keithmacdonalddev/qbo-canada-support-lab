@@ -22,10 +22,11 @@ const record = new mongoose.Schema({
   entity: { type: String, enum: ['Account', 'Customer', 'Vendor', 'Employee', 'Item'], required: true },
   state: { type: String, enum: ['pending', 'reserved', 'possibly-sent', 'saved', 'verified', 'rejected', 'unknown', 'retired'], required: true },
   attempts: { type: [attempt], default: [], validate: value => value.length <= 10 },
-  qboId: { type: String, default: null }, readback: { type: mixed, default: null },
+  qboId: { type: String, default: null }, readback: { type: mixed, default: null }, retryApproval: { type: mixed, default: null },
 }, { _id: false });
 const schema = new mongoose.Schema({
   contractVersion: { type: Number, enum: [1], required: true, immutable: true },
+  requestKey: { type: String, required: true, immutable: true }, requestHash: { type: String, required: true, immutable: true },
   environment: { type: String, enum: ['sandbox', 'production'], required: true, immutable: true },
   realmId: { type: String, required: true, immutable: true },
   connectionId: { type: objectId, required: true, immutable: true },

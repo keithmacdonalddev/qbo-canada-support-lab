@@ -4,6 +4,7 @@ const { denied, scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { assertMasterPlan, compileMasterEntry, verifyMasterReadback } = require('./business-master-preparation-plan');
 const { draftView } = require('./blueprint-draft');
 const { assertMasterDispatchEvidence } = require('./business-master-dispatch-evidence');
+const { assertMasterReceiptAudits } = require('./business-master-receipt');
 const ID = /^[a-f0-9]{24}$/, QBO_ID = /^\d{1,30}$/;
 const same = (a, b) => String(a) === String(b);
 const storedScope = row => scoped({ environment: row?.environment, realmId: row?.realmId, connectionId: String(row?.connectionId) });
@@ -35,7 +36,7 @@ function assertMasterRun(run, scope, ownerId) {
       if (attempt.number !== index + 1 || attempt.dispatchKey !== dispatchKeyFor(String(run._id), ordinal, index + 1) || canonical(attempt.payload) !== canonical(compiled.payload) || attempt.requestHash !== freezeWriteRequest(scope, 'POST', entry.entity.toLowerCase(), attempt.payload).requestHash || (index < record.attempts.length - 1 && !['rejected', 'proved-unsent'].includes(attempt.state))) throw denied('Prepared master attempts do not match the approved payload.');
     }
     const last = record.attempts.at(-1);
-    if (record.state === 'pending' ? Boolean(record.qboId || (last && last.state !== 'proved-unsent')) : record.state === 'retired' ? Boolean(record.qboId || (last && !['rejected', 'proved-unsent'].includes(last.state))) : !last || last.state !== record.state || (record.qboId || null) !== (last.qboId || null)) throw denied('Prepared master progress does not match its retained attempt.');
+    if (record.state === 'pending' ? Boolean(record.qboId || (last && (last.state !== 'proved-unsent' && !(last.state === 'rejected' && record.retryApproval)))) : record.state === 'retired' ? Boolean(record.qboId || (last && !['rejected', 'proved-unsent'].includes(last.state))) : !last || last.state !== record.state || (record.qboId || null) !== (last.qboId || null)) throw denied('Prepared master progress does not match its retained attempt.');
   }
   return run;
 }
@@ -70,6 +71,7 @@ function createMasterPreparationTransport({ MasterRuns, Versions, Sequences, Aud
     } else {
       const receipt = priorReceipts[0];
       if (priorReceipts.length !== 1 || receipt._id !== previous.receiptId || receipt.kind !== 'master-preparation' || canonical(storedScope(receipt)) !== canonical(scope) || !same(receipt.ownerId, ownerId) || receipt.state !== 'rejected' || receipt.requestHash !== previous.requestHash || receipt.dispatchKey !== previous.dispatchKey || receipt.workflow?.runId !== String(run._id) || receipt.workflow?.ordinal !== record.ordinal || receipt.workflow?.attempt !== previous.number || canonical(receipt.observed) !== canonical(previous.outcome) || receipt.observed?.outcome !== 'rejected' || receipt.observed.httpStatus !== 400 || !Array.isArray(receipt.observed.faultCodes) || !receipt.observed.faultCodes.length) throw denied('Only the exact definite master refusal can authorize this fresh attempt.');
+      await assertMasterReceiptAudits({ Audits }, receipt, session);
     }
   }
   async function admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, startAuditId, session }) {

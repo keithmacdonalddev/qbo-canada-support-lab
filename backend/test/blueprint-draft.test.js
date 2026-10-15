@@ -27,7 +27,7 @@ function harness() {
   };
   const Audits = { create: async (records, options) => { assert.ok(options.session); if (fixture.failAudit) throw new Error('audit unavailable'); data.audits.push(...clone(records)); } };
   const deps = { Versions, Sequences, Audits, resolve: async () => clone(fixture.currentContext), storageReady: async () => ({ ready: true }), transaction: work => {
-    const result = queue.then(async () => { const before = clone(data); fixture.transactionCalls++; try { return await work({ fixtureSession: true }); } catch (error) { data = before; throw error; } });
+    const result = queue.then(async () => { const before = clone(data); fixture.transactionCalls++; try { return await work({ fixtureSession: true, inTransaction: () => true }); } catch (error) { data = before; throw error; } });
     queue = result.catch(() => {}); return result;
   } };
   fixture.deps = deps; fixture.service = createBlueprintDraftService(deps); fixture.data = () => data; return fixture;

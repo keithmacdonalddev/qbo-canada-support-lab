@@ -9,7 +9,7 @@ const { freezeWriteRequest } = require('../../src/modules/qbo-write-contract');
 const { hash } = require('../../src/modules/business-calendar');
 function scenario() {
   const h = harness(), plan = prepareMasterPlan(h.source); h.data.MasterRuns = []; h.data.Audits = []; Object.assign(h.writer(), { operationId: null, planHash: null, workflowKind: null });
-  const access = createBusinessRuntimeAccess({ ...h.models, ownerId, actorId: ownerId, environment: () => scope.environment });
+  const access = createBusinessRuntimeAccess({ ...h.models, ownerId, actorId: ownerId, environment: () => scope.environment, createClient: async () => h.client });
   h.access = access;
   h.store = createMasterPreparationStore({ models: h.models, scope, ownerId, actorId: ownerId, access, transaction: h.transaction, assertReady: async () => {}, transport: h.master, assertQuiescent: async () => { if (h.busy) throw new Error('fixture active work'); }, now: () => h.clock, token: () => 'master-private-worker-00001' });
   h.propose = () => h.store.propose(plan); h.approve = () => h.store.approve(String(h.run()._id), plan.planHash, true, prepareMasterPlan(h.source)); h.claim = () => h.store.claim(String(h.run()._id));

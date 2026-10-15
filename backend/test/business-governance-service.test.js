@@ -8,8 +8,8 @@ test('owner publishes complete opening evidence while original draft and observa
  assert.equal((await h.service.publish(h.user,h.publicationInput)).reused,true);assert.equal(h.data.Authorities.length,1);
 });
 test('unassigned drafts, protected opening dates, other country, changed source and audit failure cannot activate a business',async()=>{
- for(const mode of ['unassigned','protected','country','drift','audit']){
-  const h=fixture();if(mode==='unassigned'){h.data.Versions[0].definition.mappings.operatingBank=null;h.data.Versions[0].contentHash=hash(h.data.Versions[0].definition);}if(mode==='protected')h.closedThrough='2026-10-01';if(mode==='country')h.country='US';
+ for(const mode of ['unassigned','protected','country','drift','audit','late-stock']){
+  const h=fixture();if(mode==='unassigned'){h.data.Versions[0].definition.mappings.operatingBank=null;h.data.Versions[0].contentHash=hash(h.data.Versions[0].definition);}if(mode==='protected')h.closedThrough='2026-10-01';if(mode==='country')h.country='US';if(mode==='late-stock')[...h.records.values()].find(row=>row.entity==='Item'&&row.record.Type==='Inventory').record.InvStartDate='2099-01-01';
   if(mode==='drift'){const original=h.service.publish;h.service.publish=async(...args)=>{h.records.get('account:1').record.Name='Changed bank definition';return original(...args);};}if(mode==='audit')h.failCreate='Authorities';
   await assert.rejects(h.publish());assert.equal(h.data.Authorities.length,0,mode);assert.equal(h.data.Calendars.length,0,mode);assert.equal(h.posts,0,mode);
  }

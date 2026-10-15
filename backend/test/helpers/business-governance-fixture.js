@@ -31,7 +31,7 @@ function fixture() {
  put('TaxRate',{Id:'950',SyncToken:'0',Active:true,RateValue:13,EffectiveTaxRate:[{EffectiveDate:'2020-01-01T00:00:00-04:00',RateValue:13}]});
  for(const[ordinal,role]of masterRequirements(business).entries()){
  const id=String(100+ordinal);masterBindings[role.key]=id;
- put(role.entity,{Id:id,SyncToken:'0',Active:true,Name:role.key,DisplayName:role.key,CurrencyRef:{value:'CAD'},...(role.entity==='Item'?{Type:role.itemType,...(role.itemType==='Inventory'?{QtyOnHand:0}:{}),...Object.fromEntries(Object.entries(role.accountMappings).map(([field,key])=>[field,{value:mappings[key]}]))}:{})});
+ put(role.entity,{Id:id,SyncToken:'0',Active:true,Name:role.key,DisplayName:role.key,CurrencyRef:{value:'CAD'},...(role.entity==='Item'?{Type:role.itemType,...(role.itemType==='Inventory'?{QtyOnHand:0,InvStartDate:business.openingDate}:{}),...Object.fromEntries(Object.entries(role.accountMappings).map(([field,key])=>[field,{value:mappings[key]}]))}:{})});
  }
  const definition=buildDraftDefinition({requestKey:'11111111-1111-4111-8111-111111111111',connectionId:scope.connectionId,baseHash:null,business,mappings,masterBindings}),blueprintHash=hash(definition);
  h.data.Versions.push({_id:blueprintId,contractVersion:2,...scope,status:'draft',definition,contentHash:blueprintHash,auditId:'draft-audit',version:1});h.mappings=mappings;

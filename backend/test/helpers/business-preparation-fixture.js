@@ -15,7 +15,7 @@ function fixture() {
   const masters = { ...scope, observedAt: now.toISOString(), sourceHash: hash('masters'), completeness: { Customer: true, Vendor: true, Item: true, Employee: true }, options: { Customer: [], Vendor: [], Item: [], Employee: [] } };
   for (const [index, role] of masterRequirements(proposal.business).entries()) {
     const id = String(index + 100); draft.masterBindings[role.key] = id;
-    masters.options[role.entity].push({ id, active: true, currency: 'CAD', project: false, itemType: role.itemType || null, syncToken: '0', accountRefs: Object.fromEntries(Object.entries(role.accountMappings || {}).map(([reference, key]) => [reference, draft.mappings[key]])) });
+    masters.options[role.entity].push({ id, active: true, currency: 'CAD', project: false, itemType: role.itemType || null, inventoryStartDate: draft.business.openingDate, syncToken: '0', accountRefs: Object.fromEntries(Object.entries(role.accountMappings || {}).map(([reference, key]) => [reference, draft.mappings[key]])) });
   }
   const view = { ...scope, draft, proposal };
   const input = { connectionId: scope.connectionId, baseHash: draft.contentHash, fromDate: '2026-10-01', throughDate: '2026-10-06' };

@@ -8,6 +8,8 @@ const { assertMasterRun, assertMasterApproval, verifiedParents, dispatchKeyFor }
 const { assertMasterDispatchEvidence } = require('./business-master-dispatch-evidence');
 const { fenceBusinessOwner } = require('./business-owner-fence');
 const { assertMasterFailure } = require('./business-master-preparation-failure');
+const { createMasterPreparationRecovery } = require('./business-master-preparation-recovery');
+const { createMasterApply } = require('./business-master-apply');
 const same = (a, b) => String(a) === String(b);
 const validWorkerLease = (run, now) => Boolean(run.leaseToken && Number.isFinite(new Date(run.leaseExpiresAt).getTime()) && new Date(run.leaseExpiresAt).getTime() > now);
 const activeLease = (run, now) => Boolean(run.leaseToken && (!Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() > now));
@@ -48,15 +50,22 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
     assertMasterPlan(plan); const observed = Date.parse(plan.observedAt);
     if (observed > now() || now() - observed > 300000) throw denied('Refresh master prerequisites before saving or approving this plan.');
   }
-  async function propose(plan) {
+  async function propose(plan, requestKey = randomUUID()) {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(requestKey)) throw denied('An exact proposal request identifier is required.');
+    requestKey = requestKey.toLowerCase();
     assertMasterPlan(plan);
     if (plan.ownerId !== ownerId || canonical(plan.scope) !== canonical(scope)) throw denied('The master proposal belongs to another owner or company.');
     return transaction(async session => {
       await authorize('operations.preview', session); const { policy } = await coordination(session, true); await touchPolicy(policy, session);
+      const requestHash = hash({ source: plan.source, inventoryStartDate: plan.inventoryStartDate }), id = hash({ masterPreparation: scope, ownerId, requestKey }).slice(0, 24);
+      const prior = await read(MasterRuns, { _id: id, ...scope, ownerId }, session);
+      if (prior) { if (prior.requestHash !== requestHash) throw denied('This proposal identifier was already used for different business choices.'); return { existing: true, run: assertMasterRun(prior, scope, ownerId) }; }
       const existing = await read(MasterRuns, { ...company, claim: 'open' }, session);
       if (existing) return { existing: true, run: assertMasterRun(existing, scope, ownerId) };
       assertFreshPlan(plan);
-      const id = hash({ masterPreparation: plan.planHash }).slice(0, 24), run = { _id: id, contractVersion: 1, ...scope, ownerId, sourceDraftId: plan.source.id, sourceDraftHash: plan.source.contentHash, planHash: plan.planHash, plan, claim: 'open', state: 'proposed', revision: 0, approval: null, stopRequested: false, leaseToken: null, leaseExpiresAt: null, records: plan.entries.map(entry => ({ ordinal: entry.ordinal, key: entry.key, entity: entry.entity, state: 'pending', attempts: [], qboId: null, readback: null })) };
+      const retained = await read(MasterRuns, { ...company, records: { $elemMatch: { qboId: { $type: 'string' }, $or: plan.entries.map(entry => ({ key: entry.key, entity: entry.entity })) } } }, session);
+      if (retained) throw denied('Previously prepared IDs exist for unassigned roles. Select those exact IDs or resolve their retained disposition before creating another set.');
+      const run = { _id: id, requestKey, requestHash, contractVersion: 1, ...scope, ownerId, sourceDraftId: plan.source.id, sourceDraftHash: plan.source.contentHash, planHash: plan.planHash, plan, claim: 'open', state: 'proposed', revision: 0, approval: null, stopRequested: false, leaseToken: null, leaseExpiresAt: null, records: plan.entries.map(entry => ({ ordinal: entry.ordinal, key: entry.key, entity: entry.entity, state: 'pending', attempts: [], qboId: null, readback: null })) };
       await transport.fenceSource(run, session);
       run.lastAuditId = await audit(run, 'Business master preparation proposed', { recordCount: run.records.length, qboWrites: 0 }, session);
       await MasterRuns.create([run], { session }); return { existing: false, run };
@@ -98,11 +107,13 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       await authorize('operations.execute', session); const run = await load(id, session); assertMasterApproval(run);
       const { policy, writer } = await coordination(session, true); owns(writer, run);
       if (run.state !== 'running' || run.stopRequested || run.leaseToken !== leaseToken || !validWorkerLease(run, now()) || writer.unresolved !== null || run.records.slice(0, ordinal).some(row => row.state !== 'verified')) throw denied('The current master worker cannot reserve this ordinal.');
-      const record = run.records[ordinal]; if (!record || record.state !== 'pending' || record.attempts.length) throw denied('This master ordinal needs explicit attempt recovery.');
+      const record = run.records[ordinal]; if (!record || record.state !== 'pending' || (record.attempts.length && !record.retryApproval) || record.attempts.length >= 10) throw denied('This master ordinal needs explicit attempt recovery.');
       const compiled = compileMasterEntry(run.plan, ordinal, verifiedParents(run)), request = freezeWriteRequest(scope, 'POST', compiled.entity.toLowerCase(), compiled.payload);
       assertMasterDispatchEvidence(run, ordinal, request.requestHash, preflight, policy.periodControl, now()); await transport.fenceSource(run, session); await touchPolicy(policy, session);
-      record.state = 'reserved'; record.attempts.push({ number: 1, dispatchKey: dispatchKeyFor(String(run._id), ordinal, 1), requestHash: request.requestHash, payload: compiled.payload, preflight, leaseToken, state: 'reserved', receiptId: null, qboId: null, reservedAt: new Date(now()) });
-      const lastAuditId = await audit(run, 'Business master attempt reserved', { ordinal, attempt: 1, dispatchKey: record.attempts[0].dispatchKey }, session);
+      const number = record.attempts.length + 1;
+      record.state = 'reserved'; record.attempts.push({ number, retryApproval: record.retryApproval || null, dispatchKey: dispatchKeyFor(String(run._id), ordinal, number), requestHash: request.requestHash, payload: compiled.payload, preflight, leaseToken, state: 'reserved', receiptId: null, qboId: null, reservedAt: new Date(now()) });
+      record.retryApproval = null;
+      const lastAuditId = await audit(run, 'Business master attempt reserved', { ordinal, attempt: number, dispatchKey: record.attempts.at(-1).dispatchKey }, session);
       return change(run, { records: run.records, leaseExpiresAt: new Date(now() + 300000), lastAuditId }, session);
     });
   }
@@ -157,6 +168,8 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       return change(run, { state, leaseToken: null, leaseExpiresAt: null, lastFailure: failure, lastAuditId }, session);
     });
   }
-  return { propose, approve, claim, reserve, verify, stop, finish, releaseWorker, load };
+  const recovery = createMasterPreparationRecovery({ models, scope, ownerId, transaction, now, token, activeLease, load, authorize, coordination, touchPolicy, change, audit, owns, updateWriter, transport });
+  const applyStore = createMasterApply({ models, scope, ownerId, actorId, access, assertReady, transaction, now, load, authorize, coordination, touchPolicy, change, audit, recovery });
+  return { applyReview: applyStore.review, apply: applyStore.apply, latest: applyStore.latest, propose, approve, claim, reserve, verify, stop, finish, releaseWorker, load, claimRecovery: recovery.claimRecovery, retry: recovery.retry, retain: recovery.retain };
 }
 module.exports = { createMasterPreparationStore, activeLease };

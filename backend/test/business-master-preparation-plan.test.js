@@ -26,7 +26,7 @@ test('created records pass normal mapping and master validators only after indep
       f.setup.options.accounts.push({ id: record.Id, name: record.Name, active: record.Active, type: record.AccountType, subtype: record.AccountSubType, currency: record.CurrencyRef.value });
     } else {
       next.draft.masterBindings[entry.key] = record.Id;
-      f.masters.options[entry.entity].push({ id: record.Id, name: record.DisplayName || record.Name, active: record.Active, currency: record.CurrencyRef?.value || null, itemType: record.Type || null, project: false, accountRefs: Object.fromEntries(['IncomeAccountRef', 'ExpenseAccountRef', 'AssetAccountRef'].map(key => [key, record[key]?.value || null])) });
+      f.masters.options[entry.entity].push({ id: record.Id, name: record.DisplayName || record.Name, active: record.Active, currency: record.CurrencyRef?.value || null, itemType: record.Type || null, inventoryStartDate: record.InvStartDate ?? null, project: false, accountRefs: Object.fromEntries(['IncomeAccountRef', 'ExpenseAccountRef', 'AssetAccountRef'].map(key => [key, record[key]?.value || null])) });
     }
     verified[entry.key] = { ...proof, state: 'verified', planHash: plan.planHash, ordinal: entry.ordinal };
   }
@@ -137,7 +137,7 @@ test('existing stock and missing parties remain runnable when the unused invento
   }
   for (const requirement of masterRequirements(f.view.draft.business).filter(row => row.itemType === 'Inventory')) {
     const itemId = String(id++); f.view.draft.masterBindings[requirement.key] = itemId;
-    f.masters.options.Item.push({ id: itemId, name: requirement.key, active: true, itemType: 'Inventory', accountRefs: Object.fromEntries(Object.entries(requirement.accountMappings).map(([reference, mapping]) => [reference, f.view.draft.mappings[mapping]])) });
+    f.masters.options.Item.push({ id: itemId, name: requirement.key, active: true, itemType: 'Inventory', inventoryStartDate: f.view.draft.business.openingDate, accountRefs: Object.fromEntries(Object.entries(requirement.accountMappings).map(([reference, mapping]) => [reference, f.view.draft.mappings[mapping]])) });
   }
   f.input.inventoryStartDate = '2026-10-01'; const plan = prepareMasterPlan(f);
   assert.equal(plan.runnable, true); assert.ok(!plan.entries.some(row => row.itemType === 'Inventory')); assertMasterPlan(plan);

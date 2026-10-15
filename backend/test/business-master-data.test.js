@@ -48,7 +48,7 @@ test('scope, incomplete lists, missing IDs, activity and currency must be checke
 });
 test('product compatibility requires matching item type and exact mapped accounts', () => {
   const f = fixture(); f.view.draft.masterBindings['workshop-stock-1'] = '9';
-  const record = { id: '9', active: true, itemType: 'Inventory', accountRefs: { IncomeAccountRef: '1', AssetAccountRef: '2', ExpenseAccountRef: '3' } };
+  const record = { id: '9', active: true, itemType: 'Inventory', inventoryStartDate: proposal.business.openingDate, accountRefs: { IncomeAccountRef: '1', AssetAccountRef: '2', ExpenseAccountRef: '3' } };
   f.observed.options.Item.push(record);
   const status = () => f.inspect().rows.find(row => row.key === 'workshop-stock-1').status;
   assert.equal(status(), 'unverified');
@@ -63,4 +63,9 @@ test('master inspection is bounded and minimizes private company fields', async 
   assert.equal(result.options.Customer[0].currency, 'CAD');
   assert.equal(JSON.stringify(result).includes('private'), false); assert.equal(JSON.stringify(result).includes('sensitive'), false);
   assert.ok(calls.every(query => query.includes('MAXRESULTS 1000')));
+});
+
+test('manual inventory binding requires a valid starting date no later than planned opening', () => {
+  const f = fixture(); f.view.draft.masterBindings['workshop-stock-1'] = '9'; Object.assign(f.view.draft.mappings, { supplyIncome: '1', inventoryAsset: '2', costOfGoods: '3' }); const record = { id: '9', active: true, itemType: 'Inventory', accountRefs: { IncomeAccountRef: '1', AssetAccountRef: '2', ExpenseAccountRef: '3' } }; f.observed.options.Item.push(record);
+  const status = () => f.inspect().rows.find(row => row.key === 'workshop-stock-1').status; assert.equal(status(), 'unverified'); record.inventoryStartDate = '2026-99-99'; assert.equal(status(), 'unverified'); record.inventoryStartDate = '2099-01-01'; assert.equal(status(), 'incompatible'); record.inventoryStartDate = f.view.draft.business.openingDate; assert.equal(status(), 'compatible');
 });
