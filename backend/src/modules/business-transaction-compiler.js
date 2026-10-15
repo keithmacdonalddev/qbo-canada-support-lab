@@ -3,6 +3,7 @@ const { hash, canonical, date } = require('./business-calendar');
 const { verifyBusinessReference, validateReferenceBinding } = require('./business-reference');
 const { businessDate } = require('./business-activity-preview');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
+const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment']);
 const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
@@ -32,6 +33,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const details = step.details;
   if (!details || details.version !== 1 || details.currency !== 'CAD' || hash({ calendarFingerprint: step.calendarFingerprint, details }) !== step.detailsHash || !Array.isArray(details.lines) || details.lines.length > 100) fail('The transaction details changed.');
   if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== hash(step) || !HASH.test(policy.evidenceHash || '')) fail('An exact approved Canadian transaction policy is required.');
+  const lifecycle = validateLifecyclePolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || step.txnDate > businessDate(new Date(now))) fail('The transaction is outside its approved elapsed period.');
   if (!Array.isArray(referenceEvidence) || referenceEvidence.length > 100 || !Array.isArray(parents) || parents.length !== step.dependencies.length) fail('Complete current reference and dependency evidence is required.');
@@ -70,9 +72,10 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
-  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: ['Invoice'], BillPayment: ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
+  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], BillPayment: ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
   if (canonical(parentTypes) !== canonical([...expectedParents].sort())) fail('The transaction has unsupported or missing business dependencies.');
   const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey }) };
+  if (lifecycle?.dueDate) payload.DueDate = lifecycle.dueDate;
   if (details.customerKey) payload.CustomerRef = ref(get('Customer', details.customerKey).Id);
   if (details.vendorKey) payload.VendorRef = ref(get('Vendor', details.vendorKey).Id);
   const relationships = [...parentMap.values()].map(value => ({ logicalKey: value.logicalKey, entity: value.entity, qboId: value.qboId, syncToken: value.syncToken, fingerprint: value.fingerprint, kind: 'prerequisite', links: [] }));
@@ -80,7 +83,13 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     const relationship = relationships.find(row => row.logicalKey === value.logicalKey); relationship.kind = 'linked'; relationship.links.push({ path, ...(txnLineId !== undefined ? { txnLineId } : {}) });
     return { TxnId: value.qboId, TxnType: value.entity, ...(txnLineId !== undefined ? { TxnLineId: txnLineId } : {}) };
   };
-  if (SALES.has(step.entity) || PURCHASES.has(step.entity)) {
+  if (lifecycle?.mode === 'operating-expense') {
+    const tax = get('TaxCode', 'purchaseTax');
+    if (step.entity !== 'Bill' || !payload.VendorRef || payload.CustomerRef || policy.tax?.calculation !== 'TaxExcluded' || policy.tax.purchaseTax !== tax.Id) fail('Operating expense requires its exact supplier and purchase-tax policy.');
+    payload.GlobalTaxCalculation = 'TaxExcluded';
+    payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
+    payload.Line = [{ Amount: money(lifecycle.expense.amountCents), DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: ref(account(lifecycle.expense.accountMapping, 'Expense').Id), BillableStatus: 'NotBillable', TaxCodeRef: ref(tax.Id) } }];
+  } else if (SALES.has(step.entity) || PURCHASES.has(step.entity)) {
     if (details.amountRule !== 'lines_before_tax' || !details.lines.length || policy.tax?.calculation !== 'TaxExcluded') fail('These item transactions require the approved before-tax line policy.');
     const sales = SALES.has(step.entity), party = sales ? 'CustomerRef' : 'VendorRef';
     if (!payload[party] || (sales && payload.VendorRef) || (!sales && payload.CustomerRef)) fail('The transaction needs its exact party type.');
@@ -131,7 +140,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     }
     if (step.entity === 'SalesReceipt') {
       const source = parent('Bill'), stocked = sourceItemLines(source.record, 'ItemBasedExpenseLineDetail');
-      if (stocked.length !== payload.Line.length || payload.Line.some(line => stocked.filter(value => value.ItemBasedExpenseLineDetail?.ItemRef?.value === line.SalesItemLineDetail.ItemRef.value && value.ItemBasedExpenseLineDetail.Qty === line.SalesItemLineDetail.Qty).length !== 1)) fail('Stock sale does not match its verified receipt of stock.');
+      if (stocked.length !== payload.Line.length || payload.Line.some(line => stocked.filter(value => value.ItemBasedExpenseLineDetail?.ItemRef?.value === line.SalesItemLineDetail.ItemRef.value && value.ItemBasedExpenseLineDetail.Qty === (lifecycle?.stock?.purchasedQuantity ?? line.SalesItemLineDetail.Qty)).length !== 1)) fail('Stock sale does not match its verified receipt of stock.');
     }
   } else if (step.entity === 'TimeActivity') {
     const estimate = parent('Estimate');
@@ -141,13 +150,26 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (quoted.length !== 1 || quoted[0].SalesItemLineDetail?.ItemRef?.value !== item.Id || quoted[0].SalesItemLineDetail?.Qty !== details.hours) fail('Recorded time does not match the quoted service hours.');
     Object.assign(payload, { NameOf: 'Employee', EmployeeRef: ref(get('Employee', details.workerKey).Id), ItemRef: ref(item.Id), Hours: details.hours, Minutes: 0, BillableStatus: 'Billable', Description: 'Test Data Lab activity ' + step.logicalKey });
   } else {
-    if (details.amountRule !== 'saved_originating_total' || details.lines.length) fail('Settlement must use its saved source total.');
+    if ((!lifecycle?.settlement && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
     const source = parent({ Payment: 'Invoice', BillPayment: 'Bill', Deposit: 'Payment' }[step.entity]);
     if (details.amountSourceKey !== source.logicalKey) fail('Settlement names another originating transaction.');
-    const amount = cents(source.record.TotalAmt); if (!amount) fail('Settlement requires a positive saved total.');
+    const original = cents(source.record.TotalAmt); let amount = original; if (!amount) fail('Settlement requires a positive saved total.');
     const party = step.entity === 'BillPayment' ? 'VendorRef' : 'CustomerRef';
     if (!payload[party] || source.record[party]?.value !== payload[party].value) fail('Settlement party differs from the saved source.');
-    if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
+    if (lifecycle?.settlement) {
+      if (step.entity !== 'Payment') fail('Installments can only settle the original managed invoice.');
+      const first = installmentCents(original);
+      if (first <= 0 || first >= original) fail('The accepted total cannot be split into two positive installments.');
+      if (lifecycle.settlement.stage === 'first') {
+        if (cents(source.record.Balance) !== original || links(source.record).some(link => ['Payment', 'CreditMemo'].includes(link.TxnType))) fail('The installment source was already settled.');
+        amount = first;
+      } else {
+        const prior = parent('Payment');
+        const invoiceLinks = links(source.record).filter(link => ['Payment', 'CreditMemo'].includes(link.TxnType));
+        if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || prior.record.ARAccountRef?.value !== source.record.ARAccountRef?.value || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
+        amount = original - first;
+      }
+    } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
     payload.TotalAmt = money(amount); payload.Line = [{ Amount: money(amount), LinkedTxn: [relate(source, 'Line.0.LinkedTxn')] }];
     if (step.entity === 'Payment') {
       const destination = details.destination === 'undeposited_funds' ? account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds') : details.destination === 'operating_bank' ? account(details.bankMapping, 'Bank') : null;

@@ -248,3 +248,13 @@ test('saving older draft choices fills new control accounts as unassigned withou
   assert.equal(revised.draft.mappings.accountsReceivable, '56'); assert.equal(revised.draft.mappings.accountsPayable, '57'); assert.equal(revised.draft.mappings.undepositedFunds, '58');
   assert.equal(h.data().versions[0].definition.mappings.accountsReceivable, null);
 });
+
+test('master choices follow the saved schedule and both selectable versions without upgrading old drafts',async()=>{
+ for(const selected of [undefined,2]){
+  const h=harness(),body=input();if(selected===undefined)delete body.business.activityTemplateVersion;else body.business.activityTemplateVersion=selected;
+  await h.service.save(user,body);const view=await h.service.read(user);
+  assert.deepEqual(view.masterDefinitions,view.masterDefinitionsByTemplate[selected??1]);
+  for(const volume of ['development','flagship']){assert.equal(view.masterDefinitionsByTemplate[1][volume].filter(row=>row.key.startsWith('overhead-supplier')).length,0);assert.equal(view.masterDefinitionsByTemplate[2][volume].filter(row=>row.key.startsWith('overhead-supplier')).length,3);}
+  assert.equal(view.draft.business.activityTemplateVersion,selected);assert.equal(h.data().versions[0].definition.activityTemplateVersion,selected);
+ }
+});

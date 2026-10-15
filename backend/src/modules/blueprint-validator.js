@@ -26,6 +26,9 @@ function validateBlueprintDefinition(definition) {
   if (!definition.calendar || !Number.isInteger(definition.calendar.historicalMonths) || definition.calendar.historicalMonths < 1) {
     errors.push({ path: '/calendar/historicalMonths', message: 'historicalMonths must be a positive integer' })
   }
+  if (definition.activityTemplateVersion !== undefined && ![1, 2].includes(definition.activityTemplateVersion)) {
+    errors.push({ path: '/activityTemplateVersion', message: 'Unsupported business activity template version' })
+  }
   if (!Array.isArray(definition.divisions) || definition.divisions.length === 0) {
     errors.push({ path: '/divisions', message: 'At least one operating division is required' })
   }

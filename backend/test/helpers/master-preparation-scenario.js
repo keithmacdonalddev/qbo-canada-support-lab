@@ -7,8 +7,8 @@ const { prepareMasterDispatchEvidence } = require('../../src/modules/business-ma
 const { verifiedParents } = require('../../src/modules/business-master-preparation-transport');
 const { freezeWriteRequest } = require('../../src/modules/qbo-write-contract');
 const { hash } = require('../../src/modules/business-calendar');
-function scenario() {
-  const h = harness(), plan = prepareMasterPlan(h.source); h.data.MasterRuns = []; h.data.Audits = []; Object.assign(h.writer(), { operationId: null, planHash: null, workflowKind: null });
+function scenario(options = {}) {
+  const h = harness(options), plan = prepareMasterPlan(h.source); h.data.MasterRuns = []; h.data.Audits = []; Object.assign(h.writer(), { operationId: null, planHash: null, workflowKind: null });
   const access = createBusinessRuntimeAccess({ ...h.models, ownerId, actorId: ownerId, environment: () => scope.environment, createClient: async () => h.client });
   h.access = access; h.tokenSequence = 0; h.ownershipQueries = [];
   h.db = { collection: name => ({ find: (filter, options) => { h.ownershipQueries.push({ name, filter, options }); return { limit() { return this; }, toArray: async () => h.legacyOwner && name === 'seedruns' ? [{ _id: 'other-legacy-owner' }] : [] }; } }) };

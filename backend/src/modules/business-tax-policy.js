@@ -1,5 +1,6 @@
 'use strict';
 const { hash, date } = require('./business-calendar');
+const { lifecyclePolicy } = require('./business-lifecycle-policy');
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
 function rateDate(value) {
@@ -49,7 +50,8 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
   for (const entry of assembly.candidate.entries) {
     if (entry.kind !== 'create') continue;
     const step = entry.step, refs = Object.fromEntries(step.references.filter(ref => ref.entity === 'TaxCode').map(ref => [ref.key, ref.id]));
-    const policy = { version: 1, scope: assembly.candidate.scope, status: 'approved', country: 'CA', currency: 'CAD', fromDate: assembly.candidate.fromDate, throughDate: assembly.candidate.throughDate, stepHash: hash(step), authorityHash,
+    const lifecycle = lifecyclePolicy(step);
+    const policy = { ...(lifecycle ? { lifecycle } : {}), version: 1, scope: assembly.candidate.scope, status: 'approved', country: 'CA', currency: 'CAD', fromDate: assembly.candidate.fromDate, throughDate: assembly.candidate.throughDate, stepHash: hash(step), authorityHash,
       tax: { calculation: 'TaxExcluded', ...refs } };
     if (TAXED.has(step.entity)) {
       const sales = ['Estimate', 'Invoice', 'SalesReceipt'].includes(step.entity), codeId = refs[sales ? 'salesTax' : 'purchaseTax'];

@@ -31,6 +31,7 @@ function validateEntry(entry, scope, fromDate, throughDate) {
   if (!Array.isArray(step.dependencies) || step.dependencies.length > 20 || new Set(step.dependencies.map(link => link.logicalKey)).size !== step.dependencies.length || step.dependencies.some(link => !validHash(link.logicalKey) || !validHash(link.fingerprint) || !ENTITIES.has(link.entity) || link.logicalKey === step.logicalKey)) fail('Every dependency needs its exact saved identity');
   if (!Array.isArray(step.details.references) || canonical(step.details.references.map(link => ({ logicalKey: link.logicalKey, entity: link.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Activity and detail dependencies differ');
   if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== hash(step) || !validHash(policy.evidenceHash)) fail('Each activity requires its exact approved Canadian business policy');
+  require('./business-lifecycle-policy').validateLifecyclePolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || policy.fromDate > policy.throughDate) fail('The business policy does not cover its activity date');
   return { logicalKey: step.logicalKey, entity: step.entity, fingerprint: hash(step), policyHash: hash(policy), kind: entry.kind, relationships: step.dependencies.map(link => link.logicalKey).sort() };
@@ -60,7 +61,12 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
     }
     visiting.delete(key); done.add(key); ordered.push(key);
   };
-  for (const key of [...byKey.keys()].sort()) visit(key);
+  // New continuing-business plans execute dates in order while preserving the
+  // original immutable ordinal contract for every version1 plan.
+  const roots = [...byKey.keys()];
+  if (copy.businessKey === 'harbour-pine-v2') roots.sort((a, b) => byKey.get(a).step.txnDate.localeCompare(byKey.get(b).step.txnDate) || a.localeCompare(b));
+  else roots.sort();
+  for (const key of roots) visit(key);
   // Earlier entries must actually belong to a new activity's dependency closure.
   const needed = new Set();
   const retain = key => { if (needed.has(key)) return; needed.add(key); for (const link of byKey.get(key).step.dependencies) retain(link.logicalKey); };

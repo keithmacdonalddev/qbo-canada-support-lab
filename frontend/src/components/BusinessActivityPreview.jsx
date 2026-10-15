@@ -2,13 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import client from '../api/client'
 import { Button } from '@/components/ui/button'
 import { typeLabel } from '@/lib/records'
+import BusinessActivityTerms from './BusinessActivityTerms'
 
 const money = cents => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(cents / 100)
-function amountLabel(details) {
-  if (details.baseAmountCents !== null) return money(details.baseAmountCents)
-  if (details.amountRule === 'time_only') return details.hours + ' hours'
-  return 'Uses saved originating total'
-}
 function todayInHalifax() {
   const fields = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(part => [part.type, part.value]))
   return fields.year + '-' + fields.month + '-' + fields.day
@@ -82,7 +78,7 @@ function PreviewContent({ view }) {
       <p className="text-[12px]">The full-month planning target is {result.monthlyTarget} records. Opening periods and partial months can differ because follow-ups fall in later periods. No company records have been changed.</p>
       <details><summary className="cursor-pointer text-[var(--ink)]">Scheduled records by date</summary>
         <div className="mt-2 overflow-x-auto rounded-md border border-[var(--line)]"><table className="w-full text-left text-[12px]"><thead className="bg-[var(--surface-muted)]"><tr><th className="p-2 font-medium">Date</th><th className="p-2 font-medium">Record</th><th className="p-2 font-medium">Activity</th><th className="p-2 font-medium">Before tax / settlement</th><th className="p-2 font-medium">Earlier steps</th></tr></thead><tbody>
-          {result.events.slice(page * 50, (page + 1) * 50).map(event => <tr key={event.logicalKey} className="border-t border-[var(--line)]"><td className="whitespace-nowrap p-2">{event.txnDate}</td><td className="p-2">{typeLabel(event.entity)}</td><td className="p-2">{event.intent.purpose}<span className="ml-1 text-[var(--ink-3)]">· {event.ruleKey}</span></td><td className="p-2"><span>{amountLabel(result.detailProposal.byLogicalKey[event.logicalKey].details)}</span>{result.detailProposal.byLogicalKey[event.logicalKey].details.lines.map(line => <p key={line.key} className="mt-1 text-[var(--ink-3)]">{line.quantity} {line.unit} × {money(line.unitPriceCents)} · {line.itemKey}</p>)}</td><td className="p-2">{event.dependsOn.length}</td></tr>)}
+          {result.events.slice(page * 50, (page + 1) * 50).map(event => <tr key={event.logicalKey} className="border-t border-[var(--line)]"><td className="whitespace-nowrap p-2">{event.txnDate}</td><td className="p-2">{typeLabel(event.entity)}</td><td className="p-2">{event.intent.purpose}<span className="ml-1 text-[var(--ink-3)]">· {event.ruleKey}</span></td><td className="p-2"><BusinessActivityTerms details={result.detailProposal.byLogicalKey[event.logicalKey].details} /></td><td className="p-2">{event.dependsOn.length}</td></tr>)}
         </tbody></table></div>
         {!result.events.length ? <p className="mt-2">No activities fall in this period.</p> : <div className="mt-2 flex items-center justify-between"><span className="text-[12px]">Showing {page * 50 + 1}–{Math.min((page + 1) * 50, result.events.length)} of {result.events.length}</span><div className="flex gap-2"><Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(value => value - 1)}>Previous activities</Button><Button size="xs" variant="ghost" disabled={(page + 1) * 50 >= result.events.length} onClick={() => setPage(value => value + 1)}>Next activities</Button></div></div>}
       </details>

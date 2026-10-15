@@ -25,7 +25,7 @@ function validateDraftInput(input) {
   if (typeof input.requestKey !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.requestKey)) throw problem('A save request identifier is required');
   if (typeof input.connectionId !== 'string' || !/^[a-f0-9]{24}$/.test(input.connectionId)) throw problem('Reload the business plan before saving it');
   if (input.baseHash !== null && (typeof input.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.baseHash))) throw problem('The previously loaded plan version is required');
-  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile'], 'Business settings');
+  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile', 'activityTemplateVersion'], 'Business settings');
   const business = input.business;
   if (typeof business.displayName !== 'string' || business.displayName.trim().length < 2 || business.displayName.length > 120 || /[\u0000-\u001f]/.test(business.displayName)) throw problem('Use a business name of 2 to 120 characters');
   try { date(business.openingDate); } catch { throw problem('Choose a valid business opening date'); }
@@ -33,6 +33,7 @@ function validateDraftInput(input) {
   if (!Number.isInteger(business.historicalMonths) || business.historicalMonths < 1 || business.historicalMonths > 60) throw problem('Choose 1 to 60 months of planned history');
   if (!Number.isInteger(business.fiscalYearStartMonth) || business.fiscalYearStartMonth < 1 || business.fiscalYearStartMonth > 12) throw problem('Choose a valid fiscal-year starting month');
   if (!['development', 'flagship'].includes(business.volumeProfile)) throw problem('Choose a supported business volume');
+  if (business.activityTemplateVersion !== undefined && ![1, 2].includes(business.activityTemplateVersion)) throw problem('Choose a supported business schedule.');
   strict(input.mappings, Object.keys(MAPPINGS), 'Company mappings');
   const mappings = {};
   for (const key of Object.keys(MAPPINGS)) {
@@ -49,6 +50,7 @@ function buildDraftDefinition(input, proposal = createDefinitionsService().getFl
     publicSafeIdentity: { ...proposal.publicSafeIdentity, displayName: value.business.displayName, legalName: value.business.displayName },
     calendar: { openingDate: value.business.openingDate, historicalMonths: value.business.historicalMonths, fiscalYearStartMonth: value.business.fiscalYearStartMonth, timeZone: 'America/Halifax' },
     divisions: proposal.divisions.map(division => ({ ...division })), realismRules: [...proposal.realismRules],
+    ...(value.business.activityTemplateVersion === 2 ? { activityTemplateVersion: 2 } : {}),
     generationSeed: proposal.generationSeed, volumeProfile: value.business.volumeProfile, mappings: value.mappings, masterBindings: value.masterBindings,
   };
 }
@@ -56,13 +58,13 @@ function draftView(doc, connectionId) {
   if (!doc) return null;
   const definition = doc.definition;
   return { id: String(doc._id), version: doc.version, contentHash: doc.contentHash, savedAt: doc.createdAt, status: 'draft', connectionMatches: String(doc.connectionId) === String(connectionId),
-    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile },
+    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile, ...(definition.activityTemplateVersion !== undefined ? { activityTemplateVersion: definition.activityTemplateVersion } : {}) },
     mappings: definition.mappings, masterBindings: definition.masterBindings || {}, divisions: definition.divisions,
   };
 }
 function proposalView() {
   const proposal = createDefinitionsService().getFlagshipProfile();
-  return { business: { displayName: proposal.publicSafeIdentity.displayName, openingDate: proposal.calendar.openingDate, historicalMonths: proposal.calendar.historicalMonths, fiscalYearStartMonth: proposal.calendar.fiscalYearStartMonth, volumeProfile: 'flagship' }, masterBindings: {}, mappings: Object.fromEntries(Object.keys(MAPPINGS).map(key => [key, null])), divisions: proposal.divisions };
+  return { business: { displayName: proposal.publicSafeIdentity.displayName, openingDate: proposal.calendar.openingDate, historicalMonths: proposal.calendar.historicalMonths, fiscalYearStartMonth: proposal.calendar.fiscalYearStartMonth, volumeProfile: 'flagship', activityTemplateVersion: 2 }, masterBindings: {}, mappings: Object.fromEntries(Object.keys(MAPPINGS).map(key => [key, null])), divisions: proposal.divisions };
 }
 function hasRates(list) {
   return Array.isArray(list?.TaxRateDetail) && list.TaxRateDetail.length > 0 && list.TaxRateDetail.every(detail => typeof detail?.TaxRateRef?.value === 'string' && detail.TaxRateRef.value.trim().length > 0);

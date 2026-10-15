@@ -6,6 +6,7 @@ const { hash } = require('../../src/modules/business-calendar');
 const now = new Date('2026-10-06T12:00:00Z');
 function fixture() {
   const scope = { realmId: '123', environment: 'sandbox', connectionId: 'a'.repeat(24) }, proposal = proposalView();
+  delete proposal.business.activityTemplateVersion; // Historical version1 preparation scenario.
   const draft = { ...proposal, id: 'e'.repeat(24), contentHash: 'b'.repeat(64), connectionMatches: true, masterBindings: {} };
   draft.mappings = Object.fromEntries(Object.keys(MAPPINGS).map((key, index) => [key, String(index + 1)]));
   const setup = { ...scope, observedAt: now.toISOString(), sourceHash: hash('setup'), completeness: { accounts: true, taxCodes: true, preferences: true }, observations: { homeCurrency: 'CAD' }, options: {

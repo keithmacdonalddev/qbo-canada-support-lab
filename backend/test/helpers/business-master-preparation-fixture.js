@@ -2,8 +2,8 @@
 const { hash } = require('../../src/modules/business-calendar');
 const { proposalView, buildDraftDefinition, draftView } = require('../../src/modules/blueprint-draft');
 const scope = { realmId: '123', environment: 'production', connectionId: '000000000000000000000001' }, ownerId = '000000000000000000000002', now = Date.parse('2026-10-15T12:00:00.000Z'), stamp = new Date(now).toISOString();
-function fixture() {
-  const initial = proposalView(), input = { requestKey: '00000000-0000-0000-0000-000000000001', connectionId: scope.connectionId, baseHash: null, business: { ...initial.business, displayName: 'Harbour Pine Services', openingDate: '2023-10-01', volumeProfile: 'development' }, mappings: { ...initial.mappings, accountsReceivable: '1', accountsPayable: '2', undepositedFunds: '3', salesTax: '4', purchaseTax: '4' }, masterBindings: {} };
+function fixture(options = {}) {
+  const initial = proposalView(), input = { requestKey: '00000000-0000-0000-0000-000000000001', connectionId: scope.connectionId, baseHash: null, business: { ...initial.business, displayName: 'Harbour Pine Services', openingDate: '2023-10-01', volumeProfile: 'development', activityTemplateVersion: options.activityTemplateVersion ?? 1 }, mappings: { ...initial.mappings, accountsReceivable: '1', accountsPayable: '2', undepositedFunds: '3', salesTax: '4', purchaseTax: '4' }, masterBindings: {} };
   const definition = buildDraftDefinition(input), view = { ...scope, draft: draftView({ _id: '000000000000000000000003', version: 1, contentHash: hash(definition), definition, connectionId: scope.connectionId }, scope.connectionId) };
   const setup = { ...scope, observedAt: stamp, complete: true, completeness: { accounts: true, taxCodes: true, preferences: true }, options: { accounts: [
     { id: '1', name: 'Receivables', active: true, type: 'Accounts Receivable', subtype: 'AccountsReceivable', currency: 'CAD' },

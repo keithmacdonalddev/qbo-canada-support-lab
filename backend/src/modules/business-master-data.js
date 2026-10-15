@@ -10,11 +10,11 @@ function masterRequirements(business) {
   const rows = new Map();
   const add = row => { if (!rows.has(row.key)) rows.set(row.key, row); };
   for (const rule of activityDefinition(business).rules) {
-    const value = economicsFor(rule.key);
-    add({ key: value.customerKey, entity: 'Customer', purpose: rule.divisionKey, currency: 'CAD' });
-    if (value.vendorKey) add({ key: value.vendorKey, entity: 'Vendor', purpose: 'Inventory supplier', currency: 'CAD' });
+    const value = economicsFor(rule.key, { templateVersion: business.activityTemplateVersion });
+    if (value.customerKey) add({ key: value.customerKey, entity: 'Customer', purpose: rule.divisionKey, currency: 'CAD' });
+    if (value.vendorKey) add({ key: value.vendorKey, entity: 'Vendor', purpose: value.cohort === 'operating-overhead' ? 'Monthly ' + value.expenseCategory + ' supplier' : 'Inventory supplier', currency: 'CAD' });
     const stock = value.cohort === 'supply-order';
-    add({ key: value.itemKey, entity: 'Item', purpose: rule.divisionKey, itemType: stock ? 'Inventory' : 'Service',
+    if (value.itemKey) add({ key: value.itemKey, entity: 'Item', purpose: rule.divisionKey, itemType: stock ? 'Inventory' : 'Service',
       accountMappings: { IncomeAccountRef: value.incomeMapping, ...(stock ? { AssetAccountRef: 'inventoryAsset', ExpenseAccountRef: 'costOfGoods' } : {}) } });
     if (value.cohort === 'field-job') add({ key: 'field-technician', entity: 'Employee', purpose: 'Time-entry worker' });
   }
@@ -23,7 +23,8 @@ function masterRequirements(business) {
 function validateMasterBindings(bindings, business) {
   if (bindings === undefined) return {};
   if (!bindings || Object.getPrototypeOf(bindings) !== Object.prototype) throw fail('Business record choices must be an object.');
-  const requirements = new Map(masterRequirements({ ...business, volumeProfile: 'flagship' }).map(row => [row.key, row]));
+  // Keep unused, explicitly selected roles when an owner changes draft scale or schedule.
+  const requirements = new Map(masterRequirements({ ...business, volumeProfile: 'flagship', activityTemplateVersion: 2 }).map(row => [row.key, row]));
   const result = {}, physical = new Set();
   for (const [key, id] of Object.entries(bindings)) {
     if (!requirements.has(key) || (id !== null && (typeof id !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(id)))) throw fail('Business record choices contain an unsupported role or record ID.');

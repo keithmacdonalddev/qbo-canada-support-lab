@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { activityDefinition, previewBusinessActivity, businessDate } = require('../src/modules/business-activity-preview');
 const { proposalView } = require('../src/modules/blueprint-draft');
 function fixture() {
-  return { realmId: '123', environment: 'sandbox', connectionId: 'aaaaaaaaaaaaaaaaaaaaaaaa', draft: null, proposal: proposalView() };
+  return { realmId: '123', environment: 'sandbox', connectionId: 'aaaaaaaaaaaaaaaaaaaaaaaa', draft: null, proposal: (() => { const value = proposalView(); delete value.business.activityTemplateVersion; return value; })() };
 }
 const request = { connectionId: 'aaaaaaaaaaaaaaaaaaaaaaaa', baseHash: null, fromDate: '2026-09-01', throughDate: '2026-09-30' };
 test('activity patterns match the approved nominal targets with the same stable cohorts at both scales', () => {

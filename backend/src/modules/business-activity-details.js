@@ -1,30 +1,35 @@
 'use strict';
-const { hash, canonical } = require('./business-calendar');
+const { hash, canonical, shift } = require('./business-calendar');
 const { problem } = require('./blueprint-draft');
 const DETAIL_VERSION = 1;
 // Proposed fixture economics, never approved amounts or QBO write payloads.
-function economicsFor(ruleKey) {
-  const match = /^(field-job|supply-order|care-subscription)-(\d{3})$/.exec(ruleKey);
+function economicsFor(ruleKey, { templateVersion = 1, occurrence, openingDate } = {}) {
+  const match = /^(field-job|supply-order|care-subscription|operating-overhead)-(\d{3})$/.exec(ruleKey);
   if (!match || Number(match[2]) < 1) throw problem('The activity has no supported transaction-detail template.');
   const index = Number(match[2]) - 1, cohort = match[1];
-  if (cohort === 'field-job') return { cohort, customerKey: 'field-client-' + String(1 + Math.floor(index / 2)).padStart(3, '0'), itemKey: 'field-service-hour', quantity: 2 + index % 6, unit: 'hours', unitPriceCents: 12500, incomeMapping: 'serviceIncome' };
+  if (cohort === 'operating-overhead') {
+    if (templateVersion !== 2 || index > 2) throw problem('Unsupported operating overhead.');
+    return { cohort, vendorKey: 'overhead-supplier-' + (index + 1), expenseCategory: ['premises', 'utilities', 'software'][index], expenseCents: [95000, 18000, 9500][index] };
+  }
+  if (cohort === 'field-job') return { cohort, customerKey: 'field-client-' + String(1 + Math.floor(index / 2)).padStart(3, '0'), itemKey: 'field-service-hour', quantity: 2 + index % 6 + (templateVersion === 2 && occurrence && Number(occurrence.slice(5, 7)) >= 4 && Number(occurrence.slice(5, 7)) <= 9 ? 1 : 0), unit: 'hours', unitPriceCents: 12500, incomeMapping: 'serviceIncome' };
   if (cohort === 'care-subscription') return { cohort, customerKey: 'care-client-' + match[2], itemKey: 'care-plan-' + (1 + index % 3), quantity: 1, unit: 'month', unitPriceCents: 14900 + index % 3 * 5000, incomeMapping: 'careIncome' };
   const product = 1 + index % 5, cost = 1800 + product * 250;
-  return { cohort, customerKey: 'wholesale-client-' + String(1 + Math.floor(index / 2)).padStart(3, '0'), vendorKey: 'stock-supplier-' + (1 + index % 3), itemKey: 'workshop-stock-' + product, quantity: 12 + index % 4 * 6, unit: 'units', unitCostCents: cost, unitPriceCents: cost * 2, incomeMapping: 'supplyIncome' };
+  return { cohort, customerKey: 'wholesale-client-' + String(1 + Math.floor(index / 2)).padStart(3, '0'), vendorKey: 'stock-supplier-' + (1 + index % 3), itemKey: 'workshop-stock-' + product, quantity: 12 + index % 4 * 6, unit: 'units', unitCostCents: cost, unitPriceCents: cost * 2, incomeMapping: 'supplyIncome', ...(templateVersion === 2 ? { purchasedQuantity: 12 + index % 4 * 6 + (occurrence && openingDate && occurrence.slice(0, 7) === openingDate.slice(0, 7) ? 6 : 0) } : {}) };
 }
 function activityDetails(event, events) {
-  const economics = economicsFor(event.ruleKey);
+  const templateVersion = event.intent.templateVersion;
+  const economics = economicsFor(event.ruleKey, { templateVersion, occurrence: event.occurrence, openingDate: event.intent.openingDate });
   const parents = event.dependsOn.map(key => events.get(key));
   if (parents.some(parent => !parent || parent.ruleKey !== event.ruleKey || parent.occurrence !== event.occurrence || parent.txnDate > event.txnDate)) throw problem('Transaction details require the complete originating activity.');
   const customerKey = economics.customerKey, vendorKey = economics.vendorKey;
   const references = parents.map(parent => ({ logicalKey: parent.logicalKey, entity: parent.entity }));
-  const common = { version: DETAIL_VERSION, currency: 'CAD', policyStatus: 'proposed', references, baseAmountCents: null, taxStatus: 'not_applicable', lines: [] };
+  const common = { version: DETAIL_VERSION, currency: 'CAD', policyStatus: 'proposed', references, baseAmountCents: null, taxStatus: 'not_applicable', lines: [], ...(templateVersion === 2 ? { activityTemplateVersion: 2, origin: { openingDate: event.intent.openingDate, occurrence: event.occurrence, ruleKey: event.ruleKey, stepKey: event.stepKey } } : {}) };
   const parent = entity => {
     const matches = parents.filter(value => value.entity === entity);
     if (matches.length !== 1) throw problem('Transaction details require one originating ' + entity + '.');
     return matches[0];
   };
-  const line = (rate, mapping) => ({ key: 'primary', itemKey: economics.itemKey, quantity: economics.quantity, unit: economics.unit, unitPriceCents: rate, amountCents: economics.quantity * rate, accountMapping: mapping });
+  const line = (rate, mapping, quantity = economics.quantity) => ({ key: 'primary', itemKey: economics.itemKey, quantity, unit: economics.unit, unitPriceCents: rate, amountCents: quantity * rate, accountMapping: mapping });
   if (event.entity === 'TimeActivity' && economics.cohort === 'field-job') {
     parent('Estimate');
     return { ...common, customerKey, itemKey: economics.itemKey, hours: economics.quantity, billable: true, workerKey: 'field-technician', amountRule: 'time_only' };
@@ -35,7 +40,8 @@ function activityDetails(event, events) {
       bankMapping: event.entity === 'Payment' && economics.cohort === 'field-job' ? null : 'operatingBank',
       cashDirection: event.entity === 'BillPayment' ? 'outflow' : event.entity === 'Deposit' ? 'internal_transfer' : 'inflow',
       ...(event.entity === 'BillPayment' ? { fundingSource: 'operating_bank' } : { destination: event.entity === 'Payment' && economics.cohort === 'field-job' ? 'undeposited_funds' : 'operating_bank' }),
-      amountRule: 'saved_originating_total', amountSourceKey: source.logicalKey,
+      amountRule: event.intent.settlementStage === 'first' ? 'saved_originating_installment' : event.intent.settlementStage === 'remainder' ? 'saved_originating_remainder' : 'saved_originating_total', amountSourceKey: source.logicalKey,
+      ...(event.intent.settlementStage === 'first' ? { settlement: { stage: 'first', basisPoints: 6000 } } : event.intent.settlementStage === 'remainder' ? { settlement: { stage: 'remainder', basisPoints: 6000, priorPaymentKey: parent('Payment').logicalKey } } : {}),
       taxStatus: 'included_in_originating_total' };
   }
   let detail;
@@ -45,10 +51,16 @@ function activityDetails(event, events) {
     if (event.entity === 'SalesReceipt') parent('Bill');
     if (event.entity === 'Invoice' && economics.cohort === 'field-job') { parent('Estimate'); parent('TimeActivity'); }
     detail = { ...common, customerKey, lines: [line(economics.unitPriceCents, economics.incomeMapping)], taxMapping: 'salesTax', ...(event.entity === 'SalesReceipt' ? { bankMapping: 'operatingBank' } : {}) };
+  } else if (event.entity === 'Bill' && economics.cohort === 'operating-overhead' && templateVersion === 2) {
+    detail = { ...common, vendorKey, expenseCategory: economics.expenseCategory, lines: [{ key: 'primary', accountMapping: 'operatingExpense', amountCents: economics.expenseCents, billableStatus: 'NotBillable' }], taxMapping: 'purchaseTax' };
   } else if (['PurchaseOrder', 'Bill'].includes(event.entity) && economics.cohort === 'supply-order') {
     if (event.entity === 'Bill') parent('PurchaseOrder');
-    detail = { ...common, vendorKey, lines: [line(economics.unitCostCents, 'inventoryAsset')], taxMapping: 'purchaseTax' };
+    detail = { ...common, vendorKey, lines: [line(economics.unitCostCents, 'inventoryAsset', economics.purchasedQuantity ?? economics.quantity)], taxMapping: 'purchaseTax' };
   } else throw problem('The activity type has no supported transaction details.');
+  if (templateVersion === 2) {
+    if (['Invoice', 'Bill'].includes(event.entity)) detail.dueDate = shift(event.txnDate, 30);
+    if (economics.cohort === 'supply-order') detail.stockQuantityRule = { purchasedQuantity: economics.purchasedQuantity, retainedQuantity: economics.purchasedQuantity - economics.quantity };
+  }
   detail.baseAmountCents = detail.lines.reduce((sum, item) => sum + item.amountCents, 0);
   detail.taxStatus = 'unresolved'; detail.amountRule = 'lines_before_tax';
   return detail;
@@ -63,6 +75,7 @@ function describeBusinessActivity(plan) {
   };
   const byLogicalKey = Object.fromEntries(all.map(event => [event.logicalKey, enrich(event)]));
   if (Buffer.byteLength(canonical({ plan, byLogicalKey })) > 8000000) throw problem('Transaction details exceed the preview size budget. Shorten the period.');
+  const version2 = plan.businessKey === 'harbour-pine-v2';
   const byEntity = {};
   for (const event of plan.events) {
     const { details } = byLogicalKey[event.logicalKey];
@@ -75,8 +88,9 @@ function describeBusinessActivity(plan) {
     byLogicalKey, fingerprint: hash({ planHash: plan.planHash, byLogicalKey }),
     assumptions: [
       'Illustrative fixture prices and quantities are proposals, not approved business policy or market quotes.',
-      'Field jobs use 2–7 hours at CAD 125/hour. Care plans use CAD 149, 199 or 249 per month.',
-      'Workshop orders buy and sell the same 12–30 units per batch, with proposed unit costs CAD 20.50–30.50 and prices twice cost.',
+      version2 ? 'Field jobs use 2–7 hours in October–March and one additional hour in April–September at CAD 125/hour. Care plans use CAD 149, 199 or 249 per month.' : 'Field jobs use 2–7 hours at CAD 125/hour. Care plans use CAD 149, 199 or 249 per month.',
+      version2 ? 'Workshop sales use 12–30 units per batch. Each opening-month batch buys six additional units as a continuing buffer; later purchases match planned sales. Proposed unit costs are CAD 20.50–30.50 and prices twice cost.' : 'Workshop orders buy and sell the same 12–30 units per batch, with proposed unit costs CAD 20.50–30.50 and prices twice cost.',
+      ...(version2 ? ['Fixed cohorts 001, 006 and every fifth thereafter collect 60% of the accepted taxed field invoice at day 21 and its exact remainder at day 45, with a separate deposit the following day.', 'The same fixed care and stock cohorts settle at day 45. New invoices and bills are due 30 days after posting.', 'Monthly nonbillable premises, utilities and software bills are CAD 950, 180 and 95 before observed purchase tax and are paid after 20 days.'] : []),
       'Payments and deposits must use the originating saved total including its actual tax; no tax rate or final cash amount is assumed.',
       'Customer, supplier, worker and product keys are intended identities, not existing QuickBooks record IDs.',
       'Amounts are shown by record type. Adding quotes, orders, invoices and payments together would double-count the business activity.',

@@ -19,7 +19,7 @@ const { createIncomeExpectation } = require('./business-income-evidence');
 const { readCanadianCompany } = require('./business-country');
 const { assertPublishedBusiness, assertAuthorityDocument } = require('./business-authority');
 const { draftView, proposalView, readDraftSetup } = require('./blueprint-draft');
-const { activityDefinition, TEMPLATE_VERSION, businessDate } = require('./business-activity-preview');
+const { activityDefinition, activityTemplateVersion, businessDate } = require('./business-activity-preview');
 const { readBusinessMasters, inspectBusinessMasters } = require('./business-master-data');
 const { checkBlueprintMappings } = require('./blueprint-mapping-check');
 const { validateOperationRequest, prepareBusinessOperation, operationHistoryRoots } = require('./business-operation-preview');
@@ -83,7 +83,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const blueprint = await read(models.Versions, { _id: checked.payload.blueprint.id, ...scope, contractVersion: 2, contentHash: input.blueprintHash }, session);
     if (!blueprint || !blueprint.auditId || hash(blueprint.definition) !== input.blueprintHash || checked.payload.period.throughDate !== shift(blueprint.definition.calendar.openingDate, -1)) fail('The opening evidence does not match this saved business.');
     const { policy, writer } = await coordination(bound, session), view = draftView(blueprint, scope.connectionId), definition = activityDefinition(view.business);
-    const review = { version: 1, scope, blueprintId: String(blueprint._id), blueprintHash: input.blueprintHash, baselineId: input.baselineId, baselineHash: baseline.evidenceHash, inventoryHash: hash(baseline.inventorySources.records), openingDate: view.business.openingDate, businessKey: definition.businessKey, activityTemplateVersion: TEMPLATE_VERSION, activityRulesHash: hash(definition), periodControlHash: policy.periodControl.contentHash, policyRevision: policy.revision, writerRevision: writer.revision,
+    const review = { version: 1, scope, blueprintId: String(blueprint._id), blueprintHash: input.blueprintHash, baselineId: input.baselineId, baselineHash: baseline.evidenceHash, inventoryHash: hash(baseline.inventorySources.records), openingDate: view.business.openingDate, businessKey: definition.businessKey, activityTemplateVersion: activityTemplateVersion(view.business), activityRulesHash: hash(definition), periodControlHash: policy.periodControl.contentHash, policyRevision: policy.revision, writerRevision: writer.revision,
       recordCount: checked.payload.inventory.count, existingOnOrAfterOpening: Object.values(baseline.inventorySources.records).flat().filter(row => row.transactionDate >= view.business.openingDate).length,
       financialSummary: financialSummary(baseline.sources, acceptanceEvaluation), reportChecks: acceptanceEvaluation.checks, observedAt: checked.payload.observedAt };
     return { review, reviewHash: hash(review), baseline, blueprint, policy, writer };

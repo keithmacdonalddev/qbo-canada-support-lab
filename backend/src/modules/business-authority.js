@@ -1,11 +1,11 @@
 'use strict';
 const { hash, canonical } = require('./business-calendar');
-const { activityDefinition, TEMPLATE_VERSION } = require('./business-activity-preview');
+const { activityDefinition, activityTemplateVersion } = require('./business-activity-preview');
 const { draftView } = require('./blueprint-draft');
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_AUTHORITY_CHANGED' }); }
 function assertAuthorityDocument(row, scope) {
   const value = row?.payload;
-  if (!row || row.contractVersion !== 1 || !row.auditId || hash(value) !== row.contentHash || value?.version !== 1 || value.status !== 'published' || canonical(value.scope) !== canonical(scope) || typeof value.ownerId !== 'string' || value.ownershipDisposition !== 'retain-unmanaged' || value.activityTemplateVersion !== TEMPLATE_VERSION || !/^[a-f0-9]{64}$/.test(value.baselineHash || '') || !/^[a-f0-9]{64}$/.test(value.inventoryHash || '')) fail('The exact published business authority is unavailable.');
+  if (!row || row.contractVersion !== 1 || !row.auditId || hash(value) !== row.contentHash || value?.version !== 1 || value.status !== 'published' || canonical(value.scope) !== canonical(scope) || typeof value.ownerId !== 'string' || value.ownershipDisposition !== 'retain-unmanaged' || ![1, 2].includes(value.activityTemplateVersion) || !/^[a-f0-9]{64}$/.test(value.baselineHash || '') || !/^[a-f0-9]{64}$/.test(value.inventoryHash || '')) fail('The exact published business authority is unavailable.');
   return value;
 }
 async function assertPublishedBusiness({ Authorities, Versions, Calendars, Connections, Audits, scope, manifest, session, fence = false }) {
@@ -21,7 +21,7 @@ async function assertPublishedBusiness({ Authorities, Versions, Calendars, Conne
   const blueprint = await read(Versions, { _id: value.blueprintId, ...scope, contractVersion: 2 });
   if (!blueprint || blueprint.contentHash !== value.blueprintHash || hash(blueprint.definition) !== value.blueprintHash || !blueprint.auditId) fail('The published business definition changed.');
   const view = draftView(blueprint, scope.connectionId);
-  if (hash(activityDefinition(view.business)) !== value.activityRulesHash) fail('The published activity rules no longer match this application version.');
+  if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || hash(activityDefinition(view.business)) !== value.activityRulesHash) fail('The published activity rules no longer match this application version.');
   if (fence) {
     if (!session?.inTransaction?.()) fail('Active business authority requires a transaction fence.');
     const touched = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, authorityHash: row.contentHash, revision: calendar.revision, writerRevision: calendar.writerRevision, currentOperationId: calendar.currentOperationId, pendingCommit: null }, { $inc: { authorityRevision: 1 } }, { new: true, session }).lean();

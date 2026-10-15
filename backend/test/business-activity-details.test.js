@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { previewBusinessActivity } = require('../src/modules/business-activity-preview');
 const { describeBusinessActivity, economicsFor } = require('../src/modules/business-activity-details');
 const { proposalView } = require('../src/modules/blueprint-draft');
-const view = { realmId: '123', environment: 'sandbox', connectionId: 'a'.repeat(24), draft: null, proposal: proposalView() };
+const view = { realmId: '123', environment: 'sandbox', connectionId: 'a'.repeat(24), draft: null, proposal: (() => { const value = proposalView(); delete value.business.activityTemplateVersion; return value; })() };
 const request = { connectionId: view.connectionId, baseHash: null, fromDate: '2026-09-01', throughDate: '2026-09-30' };
 const rawPreview = overrides => previewBusinessActivity(view, { ...request, ...overrides }, '2026-10-06');
 const preview = overrides => { const result = rawPreview(overrides); for (const name of ['events', 'future', 'prerequisites']) result[name] = result[name].map(event => ({ ...event, ...result.detailProposal.byLogicalKey[event.logicalKey] })); return result; };

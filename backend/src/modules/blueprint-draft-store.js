@@ -42,9 +42,12 @@ function createBlueprintDraftService(dependencies = {}) {
     const { masterRequirements } = require('./business-master-data');
     const context = await contextFor(user, 'blueprint.read');
     const [saved, storage] = await Promise.all([latest(context), storageReady()]);
+    const draft = draftView(saved, context.connection.connectionId), proposal = proposalView();
+    const selectedTemplate = require('./business-activity-preview').activityTemplateVersion((draft || proposal).business);
+    const masterDefinitionsByTemplate = Object.fromEntries([1, 2].map(activityTemplateVersion => [activityTemplateVersion, Object.fromEntries(['development', 'flagship'].map(volumeProfile => [volumeProfile, masterRequirements({ ...(draft || proposal).business, volumeProfile, activityTemplateVersion })]))]));
     return { realmId: context.connection.realmId, environment: context.environment, connectionId: context.connection.connectionId, companyName: context.connection.companyName,
-      draft: draftView(saved, context.connection.connectionId), proposal: proposalView(), mappingDefinitions: MAPPINGS,
-      masterDefinitions: Object.fromEntries(['development', 'flagship'].map(volumeProfile => [volumeProfile, masterRequirements({ ...proposalView().business, volumeProfile })])),
+      draft, proposal, mappingDefinitions: MAPPINGS, masterDefinitionsByTemplate,
+      masterDefinitions: masterDefinitionsByTemplate[selectedTemplate],
       canSave: context.membership.permissions.includes('blueprint.manage') && storage.ready, storage,
       permissionToSave: context.membership.permissions.includes('blueprint.manage'), activated: false,
       activationNeeds: ['Verified activity rules and exact company mappings', 'Reviewed starting balances and existing test-record ownership', 'Complete operation execution and report verification'],

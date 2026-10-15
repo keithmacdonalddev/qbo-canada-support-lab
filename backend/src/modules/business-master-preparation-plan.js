@@ -26,6 +26,7 @@ function validateMasterPreparationInput(input) {
 function labelFor(key) {
   const match = /^(field-client|care-client|wholesale-client)-(\d{3})$/.exec(key);
   if (match) return ({ 'field-client': 'Field client', 'care-client': 'Care client', 'wholesale-client': 'Wholesale client' })[match[1]] + ' ' + match[2];
+  if (/^overhead-supplier-[1-3]$/.test(key)) return ['Premises supplier', 'Utilities supplier', 'Software supplier'][Number(key.slice(-1)) - 1];
   if (/^stock-supplier-[1-3]$/.test(key)) return 'Workshop supplier ' + key.slice(-1);
   if (/^care-plan-[1-3]$/.test(key)) return 'Monthly care tier ' + key.slice(-1);
   if (/^workshop-stock-[1-5]$/.test(key)) return 'Workshop supply ' + key.slice(-1);

@@ -14,7 +14,7 @@ function MasterData({ view, form, editable, onChange }) {
   const [page, setPage] = useState(0)
   const active = useRef(null)
   useEffect(() => () => active.current?.abort(), [])
-  const requirements = view.masterDefinitions?.[form.business.volumeProfile] || []
+  const requirements = view.masterDefinitionsByTemplate?.[form.business.activityTemplateVersion ?? 1]?.[form.business.volumeProfile] || view.masterDefinitions?.[form.business.volumeProfile] || []
   const filtered = requirements.filter(row => row.entity === entity)
   const lastPage = Math.max(0, Math.ceil(filtered.length / 12) - 1), currentPage = Math.min(page, lastPage)
   async function inspect() {

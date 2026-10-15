@@ -32,8 +32,8 @@ const matches = (row, filter) => row && Object.entries(filter).every(([key, valu
   }
   return value === null ? actual == null : String(actual) === String(value);
 });
-function harness() {
-  const f = fixture(), plan = prepareMasterPlan(f), runId = '000000000000000000000010', leaseToken = 'master-worker-lease-000001';
+function harness(options = {}) {
+  const f = fixture(options), plan = prepareMasterPlan(f), runId = '000000000000000000000010', leaseToken = 'master-worker-lease-000001';
   const h = { source: f, clock: now, sent: [], commits: 0, data: Object.fromEntries(['MasterRuns', 'Versions', 'Sequences', 'Policies', 'Writers', 'Receipts', 'Audits', 'Connections', 'Memberships', 'Runs', 'Calendars', 'Steps', 'Users'].map(key => [key, []])) };
   const approval = { version: 1, scope, runId, ownerId, planHash: plan.planHash, approvedAt: new Date(now).toISOString(), productionConfirmed: true, auditId: '000000000000000000000011' };
   h.data.MasterRuns.push({ _id: new Types.ObjectId(runId), contractVersion: 1, ...scope, connectionId: new Types.ObjectId(scope.connectionId), ownerId: new Types.ObjectId(ownerId), sourceDraftId: new Types.ObjectId(plan.source.id), sourceDraftHash: plan.source.contentHash, planHash: plan.planHash, plan, claim: 'open', state: 'running', revision: 0, approval: { ...approval, contentHash: hash(approval) }, leaseToken, leaseExpiresAt: new Date(now + 300000), stopRequested: false, records: plan.entries.map(entry => ({ ordinal: entry.ordinal, key: entry.key, entity: entry.entity, state: 'pending', attempts: [], qboId: null, readback: null })) });
