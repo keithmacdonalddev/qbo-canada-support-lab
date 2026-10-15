@@ -60,7 +60,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     const intent = validateIntent(savedIntent, scope, operationId, logicalKey);
     const kind = savedIntent.kind;
     if (!['create', 'existing'].includes(kind)) fail('The saved activity disposition is invalid');
-    return { scope, actorId: actor.actorId, intent, kind, action };
+    return { scope, actorId: actor.actorId, intent, kind, action, policyHash: savedIntent.policy ? hash(savedIntent.policy) : null, policyAmendmentHash: savedIntent.policyAmendmentHash || null };
   }
   const filter = ctx => ({ environment: ctx.scope.environment, realmId: ctx.scope.realmId, logicalKey: ctx.intent.logicalKey });
   async function guarded(ctx, phase, session, dispatch = null, receipt = null, step = null) {
@@ -70,7 +70,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     if (!result || !sameScope(result.scope, ctx.scope) || result.operationId !== ctx.intent.operationId || result.planHash !== ctx.intent.planHash || result.phase !== phase || !validHash(result.fenceHash)) fail('The current company writer could not be fenced');
   }
   async function audit(ctx, row, phase, session) {
-    const eventKey = 'business-step:' + hash({ scope: ctx.scope, logicalKey: row.logicalKey, revision: row.revision, phase });
+    const eventKey = 'business-step:' + hash({ scope: ctx.scope, operationId: String(row.operationId), planHash: row.planHash, logicalKey: row.logicalKey, revision: row.revision, phase });
     const receipt = await writeAudit(eventKey, { ...ctx.scope, actorId: ctx.actorId, operationId: ctx.intent.operationId, logicalKey: row.logicalKey, phase, revision: row.revision, dispatchKey: row.dispatch?.key || null, qboId: row.qboId || null }, session);
     if (!receipt || receipt.eventKey !== eventKey || typeof receipt.id !== 'string' || !receipt.id) fail('Step transition audit was not saved');
     return receipt.id;
@@ -156,7 +156,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
         const expected = row.dependencies.find(value => value.logicalKey === link.logicalKey), parent = parents.get(link.logicalKey);
         return !expected || expected.entity !== link.entity || expected.fingerprint !== link.fingerprint || parent?.qboId !== link.qboId || parent?.verification?.syncToken !== link.syncToken;
       })) fail('The compiled artifact no longer matches the saved parent graph');
-      const dispatch = { key: hash({ ...ctx.scope, operationId, logicalKey, fingerprint: row.fingerprint, requestHash }), requestHash, evidenceHash, compilationHash, observationWriterRevision: writerRevision, observedAt, actorId: ctx.actorId, markedAt: new Date(now()).toISOString() };
+      const dispatch = { key: hash({ ...ctx.scope, operationId, logicalKey, fingerprint: row.fingerprint, requestHash, ...(row.retryGeneration ? { retryGeneration: row.retryGeneration } : {}) }), ...(row.retryGeneration ? { retryGeneration: row.retryGeneration } : {}), requestHash, evidenceHash, compilationHash, observationWriterRevision: writerRevision, observedAt, actorId: ctx.actorId, ...(ctx.policyHash ? { policyHash: ctx.policyHash, policyAmendmentHash: ctx.policyAmendmentHash } : {}), markedAt: new Date(now()).toISOString() };
       await guarded(ctx, 'dispatch', session, dispatch, null, row);
       const saved = await replace(ctx, row, { state: 'dispatched', dispatch, compilation: artifact }, 'dispatch', session);
       return { ...publicHandle(saved), dispatch };
@@ -256,8 +256,21 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     };
     cancelled(); const prepared = envelope(await loadGraphReadback({ scope, roots, signal, mode: 'prepare' }), true); cancelled();
     const contexts = new Map();
-    for (const record of prepared.records) { cancelled(); contexts.set(record.logicalKey, await context(scope, operationId, record.logicalKey, 'operations.verify')); }
+    // Roots must belong to the active approved operation. Closing their saved
+    // graph can also require downstream records from earlier operations which
+    // are not new dependencies in this period's manifest.
+    for (const key of roots) { cancelled(); contexts.set(key, await context(scope, operationId, key, 'operations.verify')); }
     const primary = contexts.get(roots[0]);
+    for (const record of prepared.records) {
+      cancelled(); if (contexts.has(record.logicalKey)) continue;
+      const saved = await Steps.findOne({ ...scope, logicalKey: record.logicalKey, entity: record.entity, fingerprint: record.fingerprint, qboId: record.qboId }).maxTimeMS(3000).lean();
+      if (!saved || !ID.test(String(saved.operationId))) fail('The related original activity is unavailable');
+      const origin = await context(scope, String(saved.operationId), record.logicalKey, 'operations.verify');
+      assertIdentity(saved, origin.intent);
+      // Keep immutable creation ownership on the stored row. Only the
+      // verification fence uses the operation currently holding the company.
+      contexts.set(record.logicalKey, { ...origin, kind: 'existing', intent: { ...origin.intent, operationId, planHash: primary.intent.planHash } });
+    }
     if ([...contexts.values()].some(ctx => ctx.actorId !== primary.actorId || ctx.intent.planHash !== primary.intent.planHash)) fail('Graph actors or approved operation plans differ');
     const snapshot = async (expected, session) => {
       const actor = await authorize(scope, 'operations.verify'); if (actor?.actorId !== primary.actorId) fail('The graph verifier changed', 403);

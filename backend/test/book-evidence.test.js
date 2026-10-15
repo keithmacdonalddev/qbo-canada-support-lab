@@ -124,3 +124,20 @@ test('malformed aging basis values are not equivalent to an omitted basis', () =
     assert.equal(evaluateBooks(reports, period, {}, accounts).checks.find(check => check.key === 'receivables').status, 'unverified');
   }
 });
+
+test('an explicit empty aging report cannot invent a missing or duplicate ledger balance',()=>{
+ for(const duplicate of [false,true]){
+  const reports=fixture();reports.TrialBalance.Rows.Row=reports.TrialBalance.Rows.Row.filter(row=>row.ColData?.[0]?.id!=='ar');
+  if(duplicate)reports.TrialBalance.Rows.Row.push(data('ar','0.00',''),data('ar','0.00',''));
+  reports.BalanceSheet.Rows.Row.push(total('AccountsReceivable',['Total Accounts Receivable (A/R)','100.00']));
+  reports.AgedReceivables.Rows.Row=[];reports.AgedReceivables.Header.Option=[{Name:'NoReportData',Value:'true'}];
+  const result=evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}),check=result.checks.find(row=>row.key==='receivables');assert.equal(check.status,'failed');assert.equal(check.left,100);assert.equal(check.right,0);
+ }
+});
+test('an explicitly empty zero P&L and aging retain scope checks and require independent ledger totals',()=>{
+ const reports=fixture();reports.ProfitAndLoss.Rows.Row=[];reports.ProfitAndLoss.Header.Option=[{Name:'NoReportData',Value:'true'}];
+ assert.equal(evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}).status,'checks-passed');
+ for(const name of ['TrialBalance','BalanceSheet','AgedReceivables','AgedPayables']){reports[name].Rows.Row=[];reports[name].Header.Option=[{Name:'NoReportData',Value:'true'}];}
+ assert.equal(evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}).status,'checks-passed');assert.equal(evaluateBooks(reports,period,{},accounts).status,'verification-incomplete');
+ reports.TrialBalance.Header.Currency='USD';assert.equal(evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}).checks[0].status,'unverified');
+});

@@ -4,16 +4,27 @@ const { validateOperationCandidate } = require('../../src/modules/business-opera
 const { harness: dispatchHarness, scope, operationId, actorId, ownerId } = require('./business-runtime-fixture');
 const { fixture: reportsFixture } = require('./business-report-fixtures');
 const { hash } = require('../../src/modules/business-calendar');
+const { activityDefinition } = require('../../src/modules/business-activity-preview');
 function harness() {
   const h = dispatchHarness(), f = h.fixture, run = h.data.Runs[0];
+  const definition = { publicSafeIdentity: { displayName: 'Fixture business' }, calendar: { openingDate: '2026-10-01', historicalMonths: 36, fiscalYearStartMonth: 1 }, volumeProfile: 'development', mappings: {}, masterBindings: {}, divisions: [] };
+  const blueprintHash = hash(definition), businessKey = 'harbour-pine-v1', payload = { version: 1, status: 'published', scope, ownerId, blueprintId: 'e'.repeat(24), blueprintHash, businessKey, openingDate: '2026-10-01', baselineHash: hash('baseline'), inventoryHash: hash('inventory'), ownershipDisposition: 'retain-unmanaged', activityTemplateVersion: 1, activityRulesHash: hash(activityDefinition({ openingDate: '2026-10-01', volumeProfile: 'development' })) };
+  const authorityHash = hash(payload), authorityAuditId = 'published-fixture-audit';
+  // Register these collections before composing the real runtime models.
+  h.data.Authorities = [{ _id: 'authority', contractVersion: 1, ...scope, contentHash: authorityHash, payload, auditId: authorityAuditId }];
+  h.data.Versions = [{ _id: payload.blueprintId, contractVersion: 2, ...scope, definition, contentHash: blueprintHash, auditId: 'draft-audit', version: 1 }];
+  const originalFind = name => ({ findOne: filter => { const query = { session() { return query; }, maxTimeMS() { return query; }, lean: async () => structuredClone(h.data[name].find(row => Object.entries(filter).every(([key, value]) => row[key] === value)) || null) }; return query; } });
+  h.models.Authorities = originalFind('Authorities'); h.models.Versions = originalFind('Versions');
+  h.data.Audits.push({ _id: authorityAuditId, userId: ownerId, realmId: scope.realmId, action: 'Business published and opening evidence accepted', outcome: 'success', afterState: { authorityHash, blueprintHash, baselineHash: payload.baselineHash, inventoryHash: payload.inventoryHash } });
+
   f.policy.readbackTax = { version: 1, totalTaxCents: 3250, lines: [{ rateId: '950', percent: 13, taxableCents: 25000, amountCents: 3250 }] };
-  const candidate = { version: 1, scope, businessKey: 'business', blueprintId: 'e'.repeat(24), blueprintHash: hash('blueprint'), baselineHash: hash('baseline'), openingDate: '2026-10-01', fromDate: '2026-10-06', throughDate: '2026-10-06', expectedCursor: '2026-10-05', expectedRevision: 1,
+  const candidate = { version: 1, scope, businessKey, authorityHash, blueprintId: 'e'.repeat(24), blueprintHash, baselineHash: hash('baseline'), openingDate: '2026-10-01', fromDate: '2026-10-06', throughDate: '2026-10-06', expectedCursor: '2026-10-05', expectedRevision: 1,
     requiredAssertions: [{ key: 'trial-balance', evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' }], entries: [{ kind: 'create', step: f.step, policy: f.policy }] };
   const { manifest, planHash, entries } = validateOperationCandidate(candidate, scope, h.clock), planId = 'f'.repeat(24);
   Object.assign(run, manifest, { _id: operationId, ...scope, planHash, planId, createdBy: actorId, status: 'approved', nextOrdinal: 0, executionRevision: 0, evidenceRevision: 0, verification: null, approval: { ...run.approval, planHash } }); delete run.scope; delete run.records; delete run.version;
   h.data.Plans.push({ _id: planId, contractVersion: 1, ...scope, operationId, planHash, manifest, createdBy: actorId, auditId: 'retained-preparation' });
   h.data.Intents.push(...entries.map((entry, ordinal) => ({ _id: hash(entry.step).slice(0, 24), contractVersion: 1, ...scope, planId, planHash, ordinal, kind: entry.kind, step: entry.step, policy: entry.policy, logicalKey: entry.step.logicalKey, fingerprint: hash(entry.step) })));
-  Object.assign(h.data.Calendars[0], { currentOperationId: null, verifiedThrough: run.expectedCursor, revision: 1, openingDate: '2026-10-01' }); Object.assign(h.writer(), { operationId: null, planHash: null }); h.data.Policies[0].preparationEvidenceHash = hash('prepared coordination');
+  Object.assign(h.data.Calendars[0], { authorityHash, authorityRevision: 0, businessKey, blueprintHash, currentOperationId: null, verifiedThrough: run.expectedCursor, revision: 1, openingDate: '2026-10-01' }); Object.assign(h.writer(), { operationId: null, planHash: null }); h.data.Policies[0].preparationEvidenceHash = hash('prepared coordination');
   h.posts = 0; h.gets = 0; const reports = reportsFixture(); for (const report of Object.values(reports)) report.Header.StartPeriod = run.fromDate;
   reports.TrialBalance.Rows.Row[0].ColData[0].id = '1'; reports.TrialBalance.Rows.Row[1].ColData[0].id = '2';
   h.onSend = async options => {

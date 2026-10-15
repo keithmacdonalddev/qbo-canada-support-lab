@@ -3,6 +3,8 @@ const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { assertRun, assertRunApproval, validatePeriodProof } = require('./business-period-store');
 const { evaluateBooks } = require('./book-evidence');
+const { reportComplete } = require('./business-financial-summary');
+const { checkIncomeExpectation } = require('./business-income-evidence');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_PERIOD_EVIDENCE_UNVERIFIED' }); }
 const same = (a, b) => String(a) === String(b);
@@ -57,14 +59,17 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, transactio
     const start = Date.parse(source.startedAt), end = Date.parse(source.observedAt);
     if (source.version !== 1 || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || hash(source) !== sourceHash || !Number.isFinite(start) || !Number.isFinite(end) || end < start || end > now() || now() - start > 300000 || observed.records.some(row => Date.parse(row.observedAt) > start) || !Array.isArray(source.accounts)) fail('Report evidence does not follow these exact record observations.');
     // Re-evaluate retained raw sources; a supplied passed flag is never authority.
-    const evaluation = evaluateBooks(source.reports || {}, source.period, {}, { records: source.accounts });
+    const evaluation = evaluateBooks(source.reports || {}, source.period, {}, { records: source.accounts }, { allowExplicitZero: true });
+    if (!reportComplete(evaluation, source)) return { prepared: false, unavailable: ['complete-financial-reports'] };
+    const income = run.requiredAssertions.some(row => row.key === 'profit-and-loss') ? checkIncomeExpectation(observed.manifest.incomeExpectation, scope, source.period, source.reports.ProfitAndLoss) : null;
     const assertions = [], unavailable = [];
     const types = { 'trial-balance': 'accrual-ledger', 'balance-sheet': 'accrual-ledger', receivables: 'open-balances-at-date', payables: 'open-balances-at-date' };
     for (const requirement of run.requiredAssertions) {
       const recordCheck = ['records', 'record-readback'].includes(requirement.key) && requirement.evidenceType === 'record-readback' && requirement.basis == null;
+      const pnlCheck = requirement.key === 'profit-and-loss' && requirement.evidenceType === 'accrual-ledger' && requirement.basis === 'Accrual' && income?.passed === true;
       const reportCheck = types[requirement.key] === requirement.evidenceType && (requirement.evidenceType === 'accrual-ledger' ? requirement.basis === 'Accrual' : requirement.basis == null) && evaluation.checks.some(row => row.key === requirement.key && row.status === 'passed');
-      if (requirement.currency !== 'CAD' || (!recordCheck && !reportCheck)) { unavailable.push(requirement.key); continue; }
-      assertions.push({ ...requirement, status: 'passed', recordSetHash, sourceHash: recordCheck ? hash(observed.records) : sourceHash, observedAt: source.observedAt, fromDate: run.fromDate, throughDate: run.throughDate });
+      if (requirement.currency !== 'CAD' || (!recordCheck && !reportCheck && !pnlCheck)) { unavailable.push(requirement.key); continue; }
+      assertions.push({ ...requirement, ...(pnlCheck ? { income } : {}), status: 'passed', recordSetHash, sourceHash: recordCheck ? hash(observed.records) : sourceHash, observedAt: source.observedAt, fromDate: run.fromDate, throughDate: run.throughDate });
     }
     if (unavailable.length) return { prepared: false, unavailable };
     const proof = { version: 1, ...scope, operationId, planHash: run.planHash, blueprintHash: run.blueprintHash, baselineHash: run.baselineHash, fromDate: run.fromDate, throughDate: run.throughDate, expectedRecordSetHash: run.expectedRecordSetHash, complete: true, observedAt: source.observedAt, records: observed.records, assertions };
@@ -99,6 +104,12 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, transactio
       if (Buffer.byteLength(canonical({ proof: row.proof, sources: row.sources })) > 12000000) fail('Retained period sources exceed their budget.');
       const { sourceHash, ...source } = row.sources || {};
       if (source.version !== 1 || hash(source) !== sourceHash || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || !Array.isArray(source.accounts) || row.proof.assertions.some(check => check.sourceHash !== (check.evidenceType === 'record-readback' ? hash(row.proof.records) : sourceHash))) fail('The original retained report sources changed.');
+      if (row.proof.assertions.some(check => check.key === 'profit-and-loss')) {
+        const plan = await read(Plans, { _id: run.planId, ...scope, operationId, planHash: run.planHash }, session);
+        if (!plan || hash(plan.manifest) !== run.planHash) fail('The retained income plan changed.');
+        const income = checkIncomeExpectation(plan.manifest.incomeExpectation, scope, source.period, source.reports.ProfitAndLoss);
+        if (!income.passed || canonical(row.proof.assertions.find(check => check.key === 'profit-and-loss').income) !== canonical(income)) fail('The original income assertion differs from its sources and planned sales.');
+      }
       validatePeriodProof(run, row.proof, now()); return structuredClone(row.proof);
     });
   }

@@ -4,6 +4,7 @@ import { ArrowRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import Layout from '../components/Layout'
 import BookEvidence from '../components/BookEvidence'
 import BusinessBaseline from '../components/BusinessBaseline'
+import BusinessMaintenance from '../components/BusinessMaintenance'
 import BusinessSetup from '../components/BusinessSetup'
 import BusinessPlan from '../components/BusinessPlan'
 import BusinessOperations from '../components/BusinessOperations'
@@ -102,6 +103,7 @@ function CompanyContent({ connection }) {
   const [health, setHealth] = useState(null)
   const [readVersion, setReadVersion] = useState(0)
   const [setupVersion, setSetupVersion] = useState(0)
+  const [businessState, setBusinessState] = useState(null)
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotError, setSnapshotError] = useState(false)
   const [activity, setActivity] = useState(null)
@@ -152,7 +154,7 @@ function CompanyContent({ connection }) {
               <p>Activity assessed through {currency.asOf || 'an unknown date'}. A finished generation job does not prove the books are current.</p>
               {(currency.stale || currency.checkFailed || currency.incomplete) && <p role="status" className="mt-2 text-[var(--attention)]">{currency.checkFailed ? 'The latest check failed. Earlier findings are shown below.' : currency.stale ? 'These findings need refreshing.' : 'Some records could not be read completely.'}</p>}
               <ul className="mt-3 list-disc space-y-1 pl-5">
-                <li>Business calendar: no verified continuous-through date.</li>
+                <li>Business calendar: {businessState?.calendar?.verifiedThrough ? 'managed records and named accounting checks verified through ' + businessState.calendar.verifiedThrough + '.' : businessState ? 'no managed business period verified yet.' : 'saved calendar has not been confirmed.'}</li>
                 <li>Reports and reconciliation: completeness has not been established.</li>
                 <li>{currency.unanswered} coverage checks still require evidence or a successful read.</li>
               </ul>
@@ -172,6 +174,8 @@ function CompanyContent({ connection }) {
         <BusinessSetup enabled={ready} onChanged={() => setSetupVersion(v => v + 1)} />
 
         <BusinessPlan key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+
+        <BusinessMaintenance realmId={status?.realmId} environment={connection?.environment} enabled={ready} refreshVersion={readVersion} onState={setBusinessState} onChanged={() => setSetupVersion(v => v + 1)} />
 
         <BusinessOperations key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 

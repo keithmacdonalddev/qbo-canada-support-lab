@@ -4,7 +4,7 @@ const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_RUN_UNVERIFIED' }); }
 // Runs an already-approved durable operation. No timers truncate a POST and no
 // in-memory cursor authorizes replay. A process restart reads the saved ordinal.
-function createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence }) {
+function createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence, validateOpening = async () => {} }) {
   if ([state?.inspect, state?.claim, state?.renew, state?.advance, state?.release, plans?.page, steps?.verifyGraph, dispatch, periods?.reserve, periods?.finish, periods?.repair, prepareEvidence].some(value => typeof value !== 'function')) throw new TypeError('Operation runner requires durable runtime and evidence adapters');
   return async function run(scope, operationId, { signal } = {}) {
     scope = scoped(scope); if (!ID.test(operationId || '')) fail('Choose an exact saved operation.');
@@ -13,9 +13,10 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
     if (current.status === 'verified' && current.completion) return result(current, 'verified');
     if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }
     if (current.status === 'previewed') return result(current, 'approval_required');
-    if (current.status === 'stopped') return result(current);
+    if (['stopped', 'retired'].includes(current.status)) return result(current);
     if (signal?.aborted) return result(current, 'interrupted');
     if (current.status === 'approved') { await periods.reserve(operationId, scope); current = await state.inspect(scope, operationId); }
+    if (current.nextOrdinal === 0) await validateOpening({ scope, operationId, signal });
     current = await state.claim(scope, operationId); leaseToken = current.leaseToken;
     const planHash = current.planHash;
     const reconcileOutstanding = async () => {
@@ -84,7 +85,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
         if (current.leaseToken === leaseToken) {
           current = await reconcileOutstanding();
           await release(current.stopRequested && !current.unresolved ? 'stopped' : signal?.aborted && !current.unresolved ? 'yield' : 'blocked');
-          return { ...result(current, current.unresolved ? 'recovery_required' : current.status === 'stopped' ? 'stopped' : signal?.aborted ? 'interrupted' : 'blocked'), error: 'The operation could not finish. Saved progress is retained.', code: error?.code || 'BUSINESS_RUN_UNVERIFIED' };
+          return { ...result(current, current.unresolved ? 'recovery_required' : current.status === 'stopped' ? 'stopped' : signal?.aborted ? 'interrupted' : 'blocked'), error: /^BUSINESS_[A-Z_]+$/.test(error?.code || '') && typeof error.message === 'string' ? error.message.slice(0, 500) : 'The operation could not finish. Saved progress is retained.', code: error?.code || 'BUSINESS_RUN_UNVERIFIED' };
         }
       } catch { /* The durable lease/barrier remains authoritative if storage failed. */ }
       throw error;

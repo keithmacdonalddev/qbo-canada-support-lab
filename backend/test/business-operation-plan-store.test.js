@@ -269,3 +269,9 @@ test('original history retains business lineage for subsequent candidate assembl
   const history = await h.store.history(scope, [po.step.logicalKey]);
   assert.equal(history.entries[0].businessKey, h.current.businessKey);
 });
+
+test('Production plan approval requires literal confirmation and retains exact company, actor and plan consent',async()=>{
+ const value=candidate(),productionScope={...scope,environment:'production'};value.scope=productionScope;for(const entry of value.entries){entry.policy.scope=productionScope;entry.policy.stepHash=hash(entry.step);}const h=harness(value),saved=await h.store.prepare(productionScope,{requestKey:'production-consent-0001',candidateHash:hash(value)});
+ for(const confirmProduction of [undefined,false,'true',1])await assert.rejects(h.store.approve(productionScope,saved.operationId,saved.planHash,{confirmProduction}),/Production/);
+ assert.equal(h.runs.get(saved.operationId).status,'previewed');assert.equal(h.fences,0);await h.store.approve(productionScope,saved.operationId,saved.planHash,{confirmProduction:true});assert.deepEqual(h.runs.get(saved.operationId).approval.productionConsent,{confirmed:true,...productionScope,actorId,planHash:saved.planHash});
+});

@@ -9,8 +9,8 @@ function fail(message) { throw Object.assign(new Error(message), { status: 409, 
 // Fixed read-only report/query surface. Raw bounded sources are retained for audit;
 // totals agreeing never means that the company is realistic or bank-reconciled.
 function createBusinessReportReader({ access, now = () => Date.now(), purpose = 'operation' }) {
-  if (!['operation', 'baseline'].includes(purpose)) throw new TypeError('Choose an explicit report evidence purpose');
-  const action = purpose === 'baseline' ? 'baseline.capture' : 'operations.verify';
+  if (!['operation', 'baseline', 'preparation'].includes(purpose)) throw new TypeError('Choose an explicit report evidence purpose');
+  const action = purpose === 'baseline' ? 'baseline.capture' : purpose === 'preparation' ? 'operations.preview' : 'operations.verify';
   if ([access?.authorize, access?.resolveClient, now].some(fn => typeof fn !== 'function')) throw new TypeError('Report evidence needs scoped company access');
   return async function read(scope, period, { signal } = {}) {
     scope = scoped(scope);

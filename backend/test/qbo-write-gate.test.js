@@ -34,7 +34,7 @@ function harness(business = false) {
   }]));
   let queue = Promise.resolve();
   h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let output; try { output = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } if (h.loseReply) { h.loseReply = false; throw new Error('commit reply lost'); } return output; }); queue = result.catch(() => {}); return result; };
-  h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
+  h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, assertBusinessAuthority: async () => {}, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
   h.rawGate = h.gate;
   h.periodClient = { query: async () => ({ QueryResponse: { Preferences: [{ AccountingInfoPrefs: {} }] } }) };
   h.gate = { ...h.rawGate, begin: async input => h.rawGate.begin({ ...input, periodEvidence: input.periodEvidence === undefined ? await h.rawGate.preflight({ request: input.request, client: h.periodClient }) : input.periodEvidence }) };
@@ -275,4 +275,12 @@ test('a delayed old permission cannot consume a newly prepared marker with the s
  const h=harness(true),old=structuredClone(h.input.permit);h.writer().unresolved.stepRevision=4;h.data.Steps[0].revision=4;h.data.Steps[0].leaseToken='fresh-lease';h.input.permit.dispatchRevision=4;h.input.permit.stepLeaseToken='fresh-lease';
  await assert.rejects(h.gate.begin({...h.input,permit:old}),/changed before sending/);assert.equal(h.data.Receipts.length,0);
  await h.gate.begin(h.input);assert.equal(h.data.Receipts.length,1);
+});
+
+test('final Production transport gate refuses absent or mismatched explicit plan consent',async()=>{
+ for(const change of [null,{confirmed:false},{environment:'sandbox'},{realmId:'999'},{connectionId:'e'.repeat(24)},{actorId:'e'.repeat(24)},{planHash:hash('other')},{}]){
+  const h=harness(true),productionScope={...scope,environment:'production'},current=h.data.Runs[0];for(const name of ['Policies','Writers','Runs','Calendars','Steps'])for(const row of h.data[name])row.environment='production';h.data.Policies[0].periodControl=controls(productionScope,ownerId,h.clock);h.input.request=freezeWriteRequest(productionScope,'POST','invoice',{TxnDate:'2026-10-06',CustomerRef:{value:'1'},Line:[]});h.input.permit.scope=productionScope;h.input.permit.requestHash=h.input.request.requestHash;h.writer().unresolved.requestHash=h.input.request.requestHash;h.data.Steps[0].dispatch.requestHash=h.input.request.requestHash;
+  if(change!==null)current.approval.productionConsent={confirmed:true,...productionScope,actorId:ownerId,planHash:current.planHash,...change};
+  if(change&&Object.keys(change).length===0){const ticket=await h.gate.begin(h.input);assert.equal(ticket.coordinated,true);assert.equal(h.data.Receipts.length,1);}else{await assert.rejects(h.gate.begin(h.input),/Production/);assert.equal(h.data.Receipts.length,0);}
+ }
 });

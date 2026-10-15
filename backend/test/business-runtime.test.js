@@ -5,7 +5,7 @@ const { harness } = require('./helpers/business-assembled-fixture');
 const config = require('../src/config'), previous = config.qbo.environment;
 test.before(() => { config.qbo.environment = 'sandbox'; }); test.after(() => { config.qbo.environment = previous; });
 test('assembled runtime performs one approved operation through actual authority, plans, dispatch, graph, reports and completion', async () => {
-  const h = harness(); assert.equal(h.sent.length, 0); assert.equal(h.data.Audits.length, 0);
+  const h = harness(); assert.equal(h.sent.length, 0); assert.equal(h.data.Audits.length, 1); // Only the retained publication audit exists; composition wrote nothing.
   const before = await h.runtime.inspect(); assert.equal(before.status, 'approved'); assert.equal('leaseToken' in before, false); assert.equal(h.sent.length, 0);
   const result = await h.runtime.execute(); assert.equal(result.complete, true, JSON.stringify(result)); assert.equal(h.posts, 1); assert.ok(h.gets > 6); assert.equal(h.data.Evidence.length, 1); assert.equal(h.data.Calendars[0].verifiedThrough, '2026-10-06');
   assert.ok(h.data.Audits.some(row => row.inputParams?.eventKey?.startsWith('business-period-evidence:')));

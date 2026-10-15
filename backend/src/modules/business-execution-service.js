@@ -50,9 +50,10 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
       // Another worker may have completed while this worker lost its lease. Let
       // recovery obtain the runtime's full completion proof, not an error winner.
       if (error && run.status === 'verified') return;
-      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(error ? { error: 'The operation needs attention before it can continue.' } : {}) };
+      const problem = error || observed, controlled = /^BUSINESS_[A-Z_]+$/.test(problem?.code || '') && typeof (error ? problem.message : problem.error) === 'string' ? { error: (error ? problem.message : problem.error).slice(0, 500), code: problem.code } : null;
+      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(controlled || (error ? { error: 'The operation needs attention before it can continue.' } : {})) };
       await audit(identity, 'settled', result.state, session);
-      const saved = await Runs.findOneAndUpdate({ _id: run._id, ...identity.scope, 'executionRequest.id': identity.request.id, 'executionRequest.pending': true, executionRevision: run.executionRevision, status: run.status }, { $set: { executionRequest: { ...run.executionRequest, pending: false, completedAt: new Date(now()).toISOString(), result } } }, { new: true, session }).lean();
+      const saved = await Runs.findOneAndUpdate({ _id: run._id, ...identity.scope, 'executionRequest.id': identity.request.id, 'executionRequest.pending': true, executionRevision: run.executionRevision, status: run.status }, { $set: { executionRequest: { ...run.executionRequest, pending: false, completedAt: new Date(now()).toISOString(), result }, ...(controlled ? { lastError: controlled.error } : {}) } }, { new: true, session }).lean();
       if (!saved) fail('The execution request changed while settling.');
     });
   }
@@ -90,7 +91,7 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
     const result = await transaction(async session => {
       await selected.access.authorize(selected.scope, 'operations.execute', { session });
       const run = await read({ _id: operationId, ...selected.scope }, session); assertRun(run, selected.scope); assertRunApproval(run);
-      if (run.planHash !== body.planHash || ['previewed', 'stopped'].includes(run.status)) fail('This operation is not an approved runnable plan.');
+      if (run.planHash !== body.planHash || ['previewed', 'stopped', 'retired'].includes(run.status)) fail('This operation is not an approved runnable plan.');
       const request = { version: 1, mode: 'execute', planHash: body.planHash, requestKey: body.requestKey, actorId: selected.actorId, ownerId: selected.ownerId, requestedAt: new Date(now()).toISOString(), pending: true };
       request.id = hash({ scope: selected.scope, operationId, actorId: selected.actorId, ownerId: selected.ownerId, planHash: request.planHash, requestKey: request.requestKey, mode: request.mode });
       if (run.executionRequest?.pending || run.executionRequest?.id === request.id) { requestIdentity(run); return { accepted: true, reused: true, operationId, execution: publicRequest(run.executionRequest) }; }

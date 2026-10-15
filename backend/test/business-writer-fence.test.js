@@ -28,7 +28,7 @@ function harness() {
     if (h.data.Steps.some(item => item.logicalKey !== row.logicalKey && row.qboId && item.environment === row.environment && item.realmId === row.realmId && item.entity === row.entity && item.qboId === row.qboId)) throw new Error('duplicate physical record');
   }
   h.models = Object.fromEntries(Object.keys(h.data).map(name => [name, {
-    findOne(filter) { let session; const query = { session(value) { session = value; return query; }, lean: async () => { if (session) assert.equal(session.inTransaction(), true); return clone(h.data[name].find(row => matches(row, filter)) || null); } }; return query; },
+    findOne(filter) { let session; const query = { maxTimeMS(value) { assert.equal(value,3000); return query; }, session(value) { session = value; return query; }, lean: async () => { if (session) assert.equal(session.inTransaction(), true); return clone(h.data[name].find(row => matches(row, filter)) || null); } }; return query; },
     findOneAndUpdate(filter, change, options) { return { lean: async () => {
       if (name !== 'Runs') assert.ok(options.session); if (name === 'Calendars' && change.$set?.currentOperationId === null && h.failFinalClear) { h.failFinalClear = false; return null; }
       const row = h.data[name].find(row => matches(row, filter)); if (!row) return null;

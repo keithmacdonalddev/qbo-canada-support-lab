@@ -9,6 +9,8 @@ const schema = new mongoose.Schema({
   dependencies: { ...fixed([mongoose.Schema.Types.Mixed]), validate: values => values.length <= 20 },
   state: { type: String, enum: ['claimed', 'dispatched', 'unknown', 'saved', 'verified', 'rejected'], required: true },
   revision: { type: Number, min: 1, required: true }, attempts: { type: Number, min: 1, max: 20, required: true },
+  retryGeneration: { type: Number, default: 0, min: 0, max: 19 },
+  retryHistory: { type: [mongoose.Schema.Types.Mixed], default: [], validate: values => values.length <= 19 },
   leaseToken: String, leaseExpiresAt: Date,
   dispatch: { type: mongoose.Schema.Types.Mixed, default: null },
   compilation: { type: mongoose.Schema.Types.Mixed, default: null },

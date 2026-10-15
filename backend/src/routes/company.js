@@ -9,6 +9,7 @@ const { deriveTokenHealth, isAuthFailure, expireRejectedConnection, describeProb
 const { redactLogSecrets } = require('../modules/log-diagnostic');
 
 const router = express.Router();
+router.use('/business-governance', require('./business-governance').createBusinessGovernanceRouter());
 router.use('/business-setup', require('./business-setup').createBusinessSetupRouter());
 router.use('/business-plan', require('./business-plan').createBusinessPlanRouter());
 router.use('/business-baseline', require('./business-baseline').createBusinessBaselineRouter());

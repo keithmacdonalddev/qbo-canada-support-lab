@@ -81,8 +81,9 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, assertInte
     }
     const change = {};
     if (phase === 'dispatch') {
+      if (state.run.authorityHash && (!validHash(dispatch?.policyHash) || (dispatch.policyAmendmentHash || null) !== (state.run.policyAmendmentHash || null))) fail('The approved policy head changed before dispatch');
       if (!dispatch || !validHash(dispatch.evidenceHash) || !validHash(dispatch.compilationHash) || dispatch.observationWriterRevision !== state.writer.revision) fail('Company observations changed before dispatch; read and compile again');
-      if (current.state !== 'claimed' || current.dispatch || current.receipt || state.writer.unresolved !== null || !dispatch || !validHash(dispatch.key) || !validHash(dispatch.requestHash) || dispatch.actorId !== actorId || dispatch.key !== hash({ ...scopeFilter(scope), operationId: intent.operationId, logicalKey: intent.logicalKey, fingerprint: intent.fingerprint, requestHash: dispatch.requestHash })) fail('A request cannot pass an existing or mismatched dispatch barrier');
+      if (current.state !== 'claimed' || current.dispatch || current.receipt || state.writer.unresolved !== null || !dispatch || !validHash(dispatch.key) || !validHash(dispatch.requestHash) || dispatch.actorId !== actorId || dispatch.key !== hash({ ...scopeFilter(scope), operationId: intent.operationId, logicalKey: intent.logicalKey, fingerprint: intent.fingerprint, requestHash: dispatch.requestHash, ...(current.retryGeneration ? { retryGeneration: current.retryGeneration } : {}) })) fail('A request cannot pass an existing or mismatched dispatch barrier');
       change.unresolved = { ...dispatch, operationId: String(state.run._id), logicalKey: intent.logicalKey, entity: intent.entity, stepRevision: step.revision + 1 };
     } else if (settlement || phase === 'unknown') {
       const barrier = state.writer.unresolved;

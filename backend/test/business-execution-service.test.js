@@ -37,14 +37,16 @@ test('saved pending work resumes in a fresh service; an active runtime lease def
 test('revocation after enqueue prevents any provider request and retains a bounded error', async () => {
   const h = setup(); await h.service.request(user, operationId, h.body); h.data.Memberships[0].status = 'suspended'; await h.flush();
   assert.equal(h.sent.length, 0); assert.equal(h.data.Runs[0].executionRequest.pending, false); assert.equal(h.data.Runs[0].executionRequest.result.complete, false);
-  assert.equal(h.data.Runs[0].executionRequest.result.error, 'The operation needs attention before it can continue.');
+  assert.equal(h.data.Runs[0].executionRequest.result.error, 'Current company membership is unavailable or invalid.');
+  assert.equal(h.data.Runs[0].executionRequest.result.code, 'BUSINESS_ACCESS_DENIED');
+  assert.equal(h.data.Runs[0].lastError, h.data.Runs[0].executionRequest.result.error);
 });
 test('invalid bodies, unapproved plans and unavailable storage never enqueue', async () => {
   for (const mode of ['scope', 'hash', 'approval', 'storage']) {
     const h = setup(); const body = { ...h.body };
     if (mode === 'scope') body.realmId = '456'; if (mode === 'hash') body.planHash = hash('wrong');
     if (mode === 'approval') h.data.Runs[0].approval = null; if (mode === 'storage') h.notReady = true;
-    await assert.rejects(h.service.request(user, operationId, body)); assert.equal(h.data.Runs[0].executionRequest, undefined); assert.equal(h.data.Audits.length, 0); assert.equal(h.deferred.length, 0);
+    await assert.rejects(h.service.request(user, operationId, body)); assert.equal(h.data.Runs[0].executionRequest, undefined); assert.equal(h.data.Audits.length, 1); assert.equal(h.deferred.length, 0);
   }
 });
 test('enqueue audit failure rolls back the durable request', async () => {

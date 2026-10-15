@@ -68,22 +68,24 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   if (needed.size !== byKey.size) fail('The operation contains unrelated earlier records');
   const expectedRecordSetHash = hash(records.map(({ logicalKey, entity, fingerprint, relationships }) => ({ logicalKey, entity, fingerprint, relationships })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)));
   const descriptors = new Map(records.map(row => [row.logicalKey, row]));
-  const manifest = { version: 1, scope, businessKey: copy.businessKey, blueprintId: copy.blueprintId, blueprintHash: copy.blueprintHash, baselineHash: copy.baselineHash,
+  if (copy.authorityHash !== undefined && !validHash(copy.authorityHash)) fail('Published authority must have its exact retained hash');
+  const manifest = { version: 1, scope, ...(copy.authorityHash ? { authorityHash: copy.authorityHash } : {}), businessKey: copy.businessKey, blueprintId: copy.blueprintId, blueprintHash: copy.blueprintHash, baselineHash: copy.baselineHash,
     openingDate: copy.openingDate, fromDate: copy.fromDate, throughDate: copy.throughDate, expectedCursor: copy.expectedCursor, expectedRevision: copy.expectedRevision,
     requiredAssertions: copy.requiredAssertions, recordCount: records.length, createCount: records.filter(row => row.kind === 'create').length, expectedRecordSetHash, records: ordered.map(key => descriptors.get(key)) };
+  if (copy.incomeExpectation !== undefined) manifest.incomeExpectation = require('./business-income-evidence').validateIncomeExpectation(copy.incomeExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };
 }
 function runFields(manifest, planId, actorId) {
-  return { contractVersion: 1, ...manifest.scope, businessKey: manifest.businessKey, blueprintId: manifest.blueprintId, blueprintHash: manifest.blueprintHash, planId, planHash: hash(manifest),
+  return { contractVersion: 1, ...manifest.scope, ...(manifest.authorityHash ? { authorityHash: manifest.authorityHash } : {}), businessKey: manifest.businessKey, blueprintId: manifest.blueprintId, blueprintHash: manifest.blueprintHash, planId, planHash: hash(manifest),
     fromDate: manifest.fromDate, throughDate: manifest.throughDate, expectedCursor: manifest.expectedCursor, expectedRevision: manifest.expectedRevision, baselineHash: manifest.baselineHash,
     expectedRecordSetHash: manifest.expectedRecordSetHash, requiredAssertions: manifest.requiredAssertions, recordCount: manifest.recordCount, createdBy: actorId };
 }
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false }) {
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false }) {
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
   for (const fn of [assertReady, authorize, transaction, now, ...(!readOnly ? [loadCandidate, checkCurrent, writeAudit] : [])]) if (typeof fn !== 'function') throw new TypeError('Operation plans require explicit trusted adapters');
   async function authority(scope, action, session) {
@@ -138,12 +140,14 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, loadCan
       return { operationId, planHash: prepared.planHash, status: 'previewed', persisted: true, reused: false };
     });
   }
-  async function approve(scope, operationId, planHash) {
+  async function approve(scope, operationId, planHash, { confirmProduction = false } = {}) {
     scope = scopeOf(scope); if (!validHash(planHash)) fail('Exact reviewed plan hash is required', 400);
     const actorId = await authority(scope, 'operations.execute');
+    if (scope.environment === 'production' && confirmProduction !== true) fail('Explicit confirmation for this real Production company is required before approving business writes.', 400);
     return transaction(async session => {
       if (await authority(scope, 'operations.execute', session) !== actorId) fail('The operation actor changed', 403);
       const { run, plan } = await read(scope, operationId, session);
+      if (run.status === 'retired') fail('This unsent operation was retired; prepare a fresh plan.');
       if (plan.planHash !== planHash) fail('The reviewed operation plan changed');
       await loadEntries(scope, operationId, 0, MAX_RECORDS, session);
       if (run.status !== 'previewed') {
@@ -154,7 +158,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, loadCan
       const fence = await checkCurrent({ scope, operationId, planHash, manifest: snapshot(plan.manifest), actorId, session });
       if (!fence || !sameScope(fence.scope, scope) || fence.operationId !== operationId || fence.planHash !== planHash || fence.actorId !== actorId || fence.expectedRevision !== run.expectedRevision || !validHash(fence.fenceHash)) fail('Current blueprint, baseline, policies and calendar could not be fenced');
       const auditId = await audit(scope, actorId, operationId, planHash, 'approved', session);
-      const approval = { actorId, planHash, fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString() };
+      const approval = { actorId, planHash, fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString(), ...(scope.environment === 'production' ? { productionConsent: { confirmed: true, ...scope, actorId, planHash } } : {}) };
       const saved = await Runs.findOneAndUpdate({ _id: operationId, ...scope, status: 'previewed', planHash, approval: null }, { $set: { status: 'approved', approval } }, { new: true, session }).lean();
       if (!saved) fail('Operation approval changed concurrently');
       return { operationId, planHash, status: 'approved', approved: true, reused: false };
@@ -178,20 +182,25 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, loadCan
     return transaction(async session => {
       await authority(scope, 'operations.preview', session);
       const { run, plan, rows } = await loadEntries(scope, operationId, offset, limit, session);
+      const cache = new Map(), entries = [];
+      for (const row of rows) entries.push(snapshot({ kind: row.kind, step: row.step, policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, run, row, session, cache) }));
       return { operationId, planHash: plan.planHash, status: run.status, recordCount: plan.manifest.recordCount, offset, nextOffset: offset + rows.length < plan.manifest.recordCount ? offset + rows.length : null,
-        entries: rows.map(row => snapshot({ kind: row.kind, step: row.step, policy: row.policy })) };
+        entries };
     });
   }
-  async function loadIntent(scope, operationId, logicalKey) {
+  async function loadIntent(scope, operationId, logicalKey, options = {}) {
     scope = scopeOf(scope); if (!validHash(logicalKey)) fail('An exact activity key is required', 400);
     await authority(scope, 'operations.preview');
     return transaction(async session => {
       await authority(scope, 'operations.preview', session);
       const { plan } = await read(scope, operationId, session), ordinal = plan.manifest.records.findIndex(row => row.logicalKey === logicalKey);
       if (ordinal < 0) fail('The activity is not part of this operation');
-      const { rows } = await loadEntries(scope, operationId, ordinal, 1, session), row = rows[0];
+      const { run, rows } = await loadEntries(scope, operationId, ordinal, 1, session), row = rows[0];
+      const head = Object.hasOwn(options, 'policyHead') ? options.policyHead : run.policyAmendmentHash || null;
+      if (head !== null && !validHash(head)) fail('Choose the exact retained policy head.');
+      const policyRun = { ...run, policyAmendmentHash: head };
       return { version: 1, scope, operationId, planHash: plan.planHash, logicalKey, entity: row.step.entity, fingerprint: row.fingerprint,
-        dependencies: row.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })), kind: row.kind, step: snapshot(row.step), policy: snapshot(row.policy) };
+        dependencies: row.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })), kind: row.kind, step: snapshot(row.step), ...(head ? { policyAmendmentHash: head } : {}), policy: snapshot(await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, policyRun, row, session)) };
     });
   }
   // Local saved history only. Missing entries do not establish QBO absence.
@@ -263,7 +272,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, loadCan
             const intent = byKey.get(row.logicalKey), expected = saved.byKey.get(row.logicalKey);
             const descriptor = validateEntry(intent, scope, saved.plan.manifest.fromDate, saved.plan.manifest.throughDate);
             if (!expected || intent.contractVersion !== 1 || intent.kind !== 'create' || intent.ordinal !== expected.ordinal || intent.fingerprint !== row.fingerprint || descriptor.fingerprint !== row.fingerprint || intent.step.entity !== row.entity || canonical(descriptor) !== canonical(expected.value) || canonical(row.dependencies) !== canonical(intent.step.dependencies.map(link => ({ logicalKey: link.logicalKey, fingerprint: link.fingerprint, entity: link.entity })))) fail('Saved activity differs from its original immutable creation intent');
-            const value = snapshot({ businessKey: saved.plan.manifest.businessKey, operationId, planHash: row.planHash, runStatus: saved.run.status, logicalKey: row.logicalKey, entity: row.entity, fingerprint: row.fingerprint, state: row.state, revision: row.revision, qboId: row.qboId || null, step: intent.step, policy: intent.policy });
+            const value = snapshot({ businessKey: saved.plan.manifest.businessKey, operationId, planHash: row.planHash, runStatus: saved.run.status, logicalKey: row.logicalKey, entity: row.entity, fingerprint: row.fingerprint, state: row.state, revision: row.revision, qboId: row.qboId || null, step: intent.step, policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, saved.run, intent, session) });
             retainSize(value); entries.set(row.logicalKey, value);
             for (const link of value.step.dependencies) if (!queued.has(link.logicalKey)) {
               if (queued.size >= MAX_RECORDS) fail('Saved dependency history exceeds 1,000 activities');

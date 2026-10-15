@@ -62,7 +62,13 @@ function inspectReport(name, report, period, rows = rowsOf(report)) {
     summariesTruncated: rows.filter(row => row.Summary?.ColData).length > 50,
     limitation: periodMatches && basisMatches && header.ReportName === name && header.Currency === 'CAD' ? null : 'The report did not confirm its required identity, period, accounting scope and CAD currency.' };
 }
-function evaluateBooks(reports, period, failures = {}, accountSource) {
+function explicitZeroReport(report) {
+  if (!report?.Header?.Option?.some(option => option.Name === 'NoReportData' && String(option.Value) === 'true') || !Array.isArray(report.Columns?.Column)) return false;
+  const rows = rowsOf(report);
+  if (rows.some(row => row.ColData && !row.Header && !row.Summary)) return false;
+  return rows.every(row => [row.ColData, row.Summary?.ColData, row.Header?.ColData].filter(Boolean).every(cells => cells.slice(1).every(cell => !cell.value || money(cell.value) === 0)));
+}
+function evaluateBooks(reports, period, failures = {}, accountSource, { allowExplicitZero = false } = {}) {
   const observed = [];
   const usable = {};
   const flattened = new Map();
@@ -76,7 +82,7 @@ function evaluateBooks(reports, period, failures = {}, accountSource) {
       if (failures[name]) throw new Error(failures[name]);
       const evidence = inspectReport(name, reports[name], period, reportRows(reports[name]));
       observed.push(evidence);
-      if (evidence.status === 'populated' && evidence.scopeMatches && evidence.currency === 'CAD') usable[name] = reports[name];
+      if ((evidence.status === 'populated' || (allowExplicitZero && explicitZeroReport(reports[name]))) && evidence.scopeMatches && evidence.currency === 'CAD') usable[name] = reports[name];
     } catch (error) { observed.push({ name, status: 'unavailable', error: error.message }); }
   }
   const checks = [];
@@ -91,11 +97,11 @@ function evaluateBooks(reports, period, failures = {}, accountSource) {
     accountRows.set(id, accountRows.has(id) ? null : row);
   }
   const total = unique(tbRows.filter(row => row.group === 'GrandTotal' && row.Summary?.ColData));
-  const debit = debitIndex >= 0 ? money(total?.Summary.ColData[debitIndex]?.value) : null;
-  const credit = creditIndex >= 0 ? money(total?.Summary.ColData[creditIndex]?.value) : null;
+  const debit = debitIndex >= 0 ? (allowExplicitZero && explicitZeroReport(tb) ? 0 : money(total?.Summary.ColData[debitIndex]?.value)) : null;
+  const credit = creditIndex >= 0 ? (allowExplicitZero && explicitZeroReport(tb) ? 0 : money(total?.Summary.ColData[creditIndex]?.value)) : null;
   checks.push(assertion('trial-balance', 'Trial balance debits equal credits', debit, credit));
   const bs = usable.BalanceSheet;
-  checks.push(assertion('balance-sheet', 'Assets equal liabilities and equity', totalFor(bs, 'Assets', reportRows(bs)), totalFor(bs, 'LiabilitiesAndEquity', reportRows(bs))));
+  checks.push(assertion('balance-sheet', 'Assets equal liabilities and equity', allowExplicitZero && explicitZeroReport(bs) ? 0 : totalFor(bs, 'Assets', reportRows(bs)), allowExplicitZero && explicitZeroReport(bs) ? 0 : totalFor(bs, 'LiabilitiesAndEquity', reportRows(bs))));
   function ledgerBalance(type, reverse) {
     if (!tb || !accountSource || accountSource.error || accountSource.truncated || debitIndex < 0 || creditIndex < 0) return null;
     const accounts = accountSource.records.filter(account => account.AccountType === type);
@@ -103,6 +109,7 @@ function evaluateBooks(reports, period, failures = {}, accountSource) {
     let cents = 0;
     for (const account of accounts) {
       const row = accountRows.get(String(account.Id));
+      if (!accountRows.has(String(account.Id)) && allowExplicitZero && explicitZeroReport(tb)) continue;
       if (!row || !row.ColData[debitIndex] || !row.ColData[creditIndex]) return null;
       const d = row.ColData[debitIndex].value === '' ? 0 : money(row.ColData[debitIndex].value);
       const c = row.ColData[creditIndex].value === '' ? 0 : money(row.ColData[creditIndex].value);
@@ -112,6 +119,7 @@ function evaluateBooks(reports, period, failures = {}, accountSource) {
     return Number.isSafeInteger(cents) ? cents : null;
   }
   function agingTotal(report) {
+    if (allowExplicitZero && report && explicitZeroReport(report)) return 0;
     const index = (report?.Columns?.Column || []).findIndex(column => String(column.ColTitle).toLowerCase() === 'total');
     const row = unique(reportRows(report).filter(row => row.group === 'GrandTotal' && row.Summary?.ColData));
     return index >= 0 ? money(row?.Summary.ColData[index]?.value) : null;
@@ -145,4 +153,4 @@ async function readBookEvidence(qbo, { fromDate, throughDate, today }) {
   const accounts = await accountRead;
   return { checkedAt: new Date().toISOString(), ...evaluateBooks(reports, { fromDate, throughDate }, failures, accounts) };
 }
-module.exports = { readBookEvidence, evaluateBooks, validDate, money, rowsOf };
+module.exports = { readBookEvidence, evaluateBooks, validDate, money, rowsOf, explicitZeroReport };

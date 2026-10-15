@@ -11,6 +11,8 @@ const schema = new mongoose.Schema({
   connectionId: { type: mongoose.Schema.Types.ObjectId, required: true },
   blueprintId: { type: mongoose.Schema.Types.ObjectId, required: true },
   blueprintHash: { type: String, required: true },
+  authorityHash: String,
+  authorityRevision: { type: Number, default: 0, min: 0 },
   baseline: {
     status: { type: String, enum: ['unverified', 'verified', 'drifted'], default: 'unverified' },
     evidenceHash: String,

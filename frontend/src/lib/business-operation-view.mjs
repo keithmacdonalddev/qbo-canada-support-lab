@@ -1,6 +1,6 @@
 const labels = {
   previewed: 'Awaiting plan approval', approved: 'Ready to run', reserved: 'Preparing records',
-  running: 'Creating and checking records', blocked: 'Needs attention', stopped: 'Stopped',
+  retired: 'Retired without QuickBooks effects', running: 'Creating and checking records', blocked: 'Needs attention', stopped: 'Stopped',
   'awaiting-evidence': 'Needs verification', committing: 'Saving verification', verified: 'Verification recorded',
 }
 export function operationStatus(operation) {
@@ -12,8 +12,8 @@ export function operationStatus(operation) {
 export function operationActions(operation, permissions, stale = false) {
   const known = Object.hasOwn(labels, operation?.status || '')
   return {
-    execute: !stale && known && permissions?.execute === true && !operation.execution?.pending && !['previewed', 'stopped', 'verified'].includes(operation.status),
-    stop: !stale && known && permissions?.stop === true && !['previewed', 'stopped', 'verified'].includes(operation.status) && !operation.stopRequested && (operation.status !== 'approved' || operation.execution?.pending === true),
+    execute: !stale && known && permissions?.execute === true && !operation.execution?.pending && !['previewed', 'stopped', 'verified', 'retired'].includes(operation.status),
+    stop: !stale && known && permissions?.stop === true && !['previewed', 'stopped', 'verified', 'retired'].includes(operation.status) && !operation.stopRequested && (operation.status !== 'approved' || operation.execution?.pending === true),
   }
 }
 export function assertOperationScope(value, realmId, environment, connectionId) {

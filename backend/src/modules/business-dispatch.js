@@ -66,7 +66,7 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       await authority('operations.execute'); check(); checkClient();
       // A thrown/ambiguous marker commit never grants permission to send.
       const marked = await steps.beginDispatch(scope, operationId, logicalKey, handle, compiled.dispatchEvidence, { runLeaseToken: leaseToken });
-      const request = compiled.request, dispatchKey = hash({ ...scope, operationId, logicalKey, fingerprint: intent.fingerprint, requestHash: request.requestHash });
+      const request = compiled.request, dispatchKey = hash({ ...scope, operationId, logicalKey, fingerprint: intent.fingerprint, requestHash: request.requestHash, ...(marked?.dispatch?.retryGeneration ? { retryGeneration: marked.dispatch.retryGeneration } : {}) });
       if (marked?.dispatch?.key !== dispatchKey || marked.dispatch.requestHash !== request.requestHash || marked.dispatch.actorId !== actorId) fail('The committed dispatch differs from its compiled request.');
       // Once the marker exists, every failure is reconciled from durable state.
       // Do not race the request against a timer or forward cancellation to a POST.

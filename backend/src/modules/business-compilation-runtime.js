@@ -4,6 +4,7 @@ const { scoped } = require('./qbo-write-contract');
 const { createBusinessReferenceReader } = require('./business-reference');
 const { compileBusinessTransaction } = require('./business-transaction-compiler');
 const { taxExpectation } = require('./business-verification-runtime');
+const { verifyBusinessTaxSources } = require('./business-tax-policy');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
@@ -76,6 +77,10 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         const graph = await call(() => steps.verifyGraph(scope, operationId, roots, { signal: controller.signal })); check();
         if (graph?.complete !== true || graph.persisted !== true) fail('Originating records are not completely verified.');
       }
+      if (intent.policy.authorityHash) {
+        const taxClient = await call(() => resolveClient(scope, { signal: controller.signal }));
+        await call(() => verifyBusinessTaxSources(intent.policy, taxClient)); check();
+      }
       const before = await call(() => verification.readFence(scope, { signal: controller.signal })); check();
       if (!sameScope(before?.scope, scope) || before.operationId !== operationId || before.unresolved !== null || !Number.isSafeInteger(before.revision) || before.revision < 0 || before.revision >= Number.MAX_SAFE_INTEGER) fail('The operation writer is not ready for current observations.');
       const tag = { operationId, writerRevision: before.revision };
@@ -115,6 +120,8 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       }
       const after = await call(() => verification.readFence(scope, { signal: controller.signal })); check();
       if (canonical(before) !== canonical(after)) fail('Company activity changed during compilation observations.');
+      const currentIntent = await call(() => loadIntent(scope, operationId, logicalKey)); check();
+      if (canonical(currentIntent) !== canonical(intent)) fail('The approved tax review changed during compilation. Read and compile again.');
       const current = await call(() => authorize(scope, 'operations.execute', { signal: controller.signal })); check();
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The operation actor changed during observations.');
       referenceEvidence.sort((a, b) => (a.entity + ':' + a.record.Id).localeCompare(b.entity + ':' + b.record.Id)); parents.sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));

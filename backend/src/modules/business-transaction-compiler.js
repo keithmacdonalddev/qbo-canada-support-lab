@@ -42,7 +42,13 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (refs.has(key)) fail('Every record choice needs one unique approved definition.');
     const observed = referenceEvidence.filter(value => value.entity === binding.entity && value.record?.Id === binding.id);
     if (observed.length !== 1 || !currentObservation(observed[0]) || !sameScope(observed[0].scope, scope) || !fresh(observed[0].observedAt, now) || observed[0].record.Active !== true || observed[0].recordHash !== hash(observed[0].record)) fail('A chosen company record changed or is not freshly verified.');
-    const record = verifyBusinessReference({ scope, binding, observed: observed[0], now }); id(record.Id);
+    let approvedBinding = binding;
+    if (binding.entity === 'TaxCode' && policy.taxReferenceDefinitions) {
+      const choices = policy.taxReferenceDefinitions.filter(choice => choice.key === binding.key && choice.id === binding.id && choice.originalDefinitionHash === binding.definition.hash);
+      if (choices.length !== 1 || !HASH.test(choices[0].definition?.hash || '') || choices[0].definition.version !== 1) fail('The owner-reviewed tax-code definition is unavailable.');
+      approvedBinding = { ...binding, definition: choices[0].definition };
+    }
+    const record = verifyBusinessReference({ scope, binding: approvedBinding, observed: observed[0], now }); id(record.Id);
     if (['Customer', 'Vendor'].includes(binding.entity) && record.CurrencyRef?.value !== 'CAD') fail('The transaction party must use CAD.');
     if (binding.entity === 'Customer' && record.IsProject === true) fail('A customer identity cannot silently become a project.');
     refs.set(key, record); physical.add(binding.entity + ':' + record.Id);

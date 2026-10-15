@@ -55,9 +55,11 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     // this operation. loadIntent validates its immutable manifest and policy hash.
     const row = await Steps.findOne({ ...scope, logicalKey: compiled.logicalKey }).select('operationId planHash fingerprint entity state dispatch').maxTimeMS(3000).lean(); checkSignal(signal);
     if (!row || !['saved', 'verified'].includes(row.state) || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || row.entity !== compiled.entity || row.fingerprint !== compiled.intentHash || row.dispatch?.compilationHash !== compiled.compilationHash || row.dispatch?.requestHash !== request.requestHash) fail('The original managed transaction is unavailable.');
-    const intent = await loadIntent(scope, String(row.operationId), compiled.logicalKey); checkSignal(signal);
+    const originalStep = row; // The original scoped lookup already selected the complete dispatch.
+    const intent = await loadIntent(scope, String(row.operationId), compiled.logicalKey, { policyHead: originalStep?.dispatch?.policyAmendmentHash || null }); checkSignal(signal);
     if (!intent || intent.version !== 1 || !sameScope(intent.scope, scope) || intent.operationId !== String(row.operationId) || intent.planHash !== row.planHash || intent.logicalKey !== compiled.logicalKey || intent.entity !== compiled.entity || intent.fingerprint !== compiled.intentHash || hash(intent.step) !== compiled.intentHash) fail('The original transaction intent changed.');
     const policy = intent.policy;
+    if (originalStep?.dispatch?.policyHash && originalStep.dispatch.policyHash !== hash(policy)) fail('The policy differs from the expectation bound at the original dispatch.');
     if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== compiled.intentHash || !HASH.test(policy.evidenceHash || '')) fail('The original approved Canadian policy is unavailable.');
     const expectation = taxExpectation(policy, compiled);
     const current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);

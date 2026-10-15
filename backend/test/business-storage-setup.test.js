@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ObjectId } = require('mongoose').mongo;
-const { previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
+const { previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, CONTINUAL_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
 const { args } = require('../../scripts/rebuild/prepare-business-storage.cjs');
 const target = { environment: 'sandbox', realmId: '123', connectionId: '000000000000000000000001', ownerId: '000000000000000000000002' };
 function clone(value) {
@@ -195,7 +195,7 @@ test('reviewed storage definitions cover actual runtime schemas and satisfy read
   const { loadModels } = require('../src/modules/business-runtime');
   const models = loadModels();
   for (const model of Object.values(models)) {
-    const definition = [...OPERATIONS_COLLECTIONS, ...LEGACY_PREREQUISITES].find(row => row.name === model.collection.name);
+    const definition = [...CONTINUAL_COLLECTIONS, ...LEGACY_PREREQUISITES].find(row => row.name === model.collection.name);
     assert.ok(definition, model.modelName + ' collection is explicitly defined');
     assert.equal(definition.indexes.length, model.schema.indexes().length, model.modelName);
     for (const [key, options] of model.schema.indexes()) assert.ok(definition.indexes.some(value => exactIndex(value, { key, ...options })), model.modelName + ' exact index');
@@ -205,7 +205,7 @@ test('reviewed storage definitions cover actual runtime schemas and satisfy read
     assert.ok(definition); assert.equal(definition.indexes.length, model.schema.indexes().length);
     for (const [key, options] of model.schema.indexes()) assert.ok(definition.indexes.some(value => exactIndex(value, { key, ...options })));
   }
-  const f = fixture(), plan = await f.preview(operations); await f.apply(plan.planHash, operations);
+  const f = fixture(), plan = await f.preview('continual-business'); await f.apply(plan.planHash, 'continual-business');
   const mapped = Object.fromEntries(Object.entries(models).map(([key, model]) => [key, { schema: model.schema, collection: { name: model.collection.name, indexes: () => f.db.collection(model.collection.name).indexes() } }]));
   const { createBusinessStorageReadiness } = require('../src/modules/business-runtime-storage');
   await createBusinessStorageReadiness({ connection: { readyState: 1, db: f.db }, models: mapped })();
