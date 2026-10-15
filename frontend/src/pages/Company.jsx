@@ -173,13 +173,13 @@ function CompanyContent({ connection }) {
 
         <BusinessSetup enabled={ready} onChanged={() => setSetupVersion(v => v + 1)} />
 
-        <BusinessPlan key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessPlan key={`plan:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
         <BusinessMaintenance realmId={status?.realmId} environment={connection?.environment} enabled={ready} refreshVersion={readVersion} onState={setBusinessState} onChanged={() => setSetupVersion(v => v + 1)} />
 
-        <BusinessOperations key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessOperations key={`operations:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
-        <BusinessBaseline key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessBaseline key={`baseline:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
         <BookEvidence realmId={status?.realmId} enabled={ready} />
 

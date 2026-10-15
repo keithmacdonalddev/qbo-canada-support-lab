@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import client from '../api/client'
 import BusinessMasterData from './BusinessMasterData'
+import BusinessMasterPreparation from './BusinessMasterPreparation'
 import BusinessMappingCheck from './BusinessMappingCheck'
 import BusinessActivityPreview from './BusinessActivityPreview'
 import { useAuth } from '../context/AuthContext'
@@ -25,6 +26,11 @@ function PlanContent({ realmId, environment, enabled }) {
   const [setup, setSetup] = useState(null)
   const [checking, setChecking] = useState(false)
   const [setupError, setSetupError] = useState('')
+  const [pendingDraftVersion, setPendingDraftVersion] = useState(null)
+  const preparedDraft = useCallback(version => {
+    setPendingDraftVersion(current => Math.max(current || 0, version))
+    setNotice('Record preparation saved draft v' + version + '. Reload the saved plan to use its choices. Reload replaces unsaved edits.')
+  }, [])
   const alive = useRef(true)
   const saveRequest = useRef(null)
   const inScope = data => data?.realmId === realmId && data?.environment === environment
@@ -39,7 +45,7 @@ function PlanContent({ realmId, environment, enabled }) {
       const data = response.data?.data
       if (data?.realmId !== realmId || data?.environment !== environment) throw new Error('Company changed')
       if (controller.signal.aborted) return
-      setView(data); setForm(structuredClone(data.draft || data.proposal)); setError('')
+      setView(data); setForm(structuredClone(data.draft || data.proposal)); setPendingDraftVersion(null); setSetup(null); setError('')
     }).catch(error => { if (!controller.signal.aborted) setError(message(error)) })
     return () => controller.abort()
   }, [enabled, realmId, environment, attempt])
@@ -72,18 +78,21 @@ function PlanContent({ realmId, environment, enabled }) {
     } catch (error) { if (alive.current) setError(message(error)) }
     finally { if (alive.current) setSaving(false) }
   }
+  const choices = value => JSON.stringify({ business: value?.business, mappings: value?.mappings, masterBindings: value?.masterBindings || {} })
+  const hasUnsavedEdits = Boolean(form && view && choices(form) !== choices(view.draft || view.proposal))
   const editable = view?.permissionToSave && !saving
   const mappingEntries = Object.entries(view?.mappingDefinitions || {})
   const missing = mappingEntries.filter(([key]) => !form?.mappings?.[key]).length
   return <section aria-label="Business plan" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
     <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
       <h2 className="text-[13px] font-semibold text-[var(--ink)]">Business plan</h2>
-      <span className="text-[12px] text-[var(--ink-3)]">{view?.draft ? 'Draft v' + view.draft.version + ' · Not activated' : 'Proposed business'}</span>
+      <span className="text-[12px] text-[var(--ink-3)]">{view?.draft ? 'Saved draft v' + view.draft.version : 'Proposed business'}</span>
     </header>
     <div className="space-y-4 px-5 py-4 text-[13px] text-[var(--ink-2)]">
       {!enabled ? <p>Connect the company to inspect its business plan.</p> : !form && !error ? <p role="status" className="flex items-center gap-2"><LoaderCircle className="size-4 animate-spin" />Loading business plan…</p> : null}
       {error && <div role="alert"><p className="text-[var(--attention)]">{error}</p><button type="button" disabled={saving} className="mt-2 text-[var(--link)]" onClick={() => { saveRequest.current = null; setAttempt(value => value + 1) }}>Reload saved plan</button><p className="mt-1 text-[12px]">Reload replaces unsaved edits.</p></div>}
       {notice && <p role="status" className="text-[var(--ok)]">{notice}</p>}
+      {pendingDraftVersion && <div className="space-y-2"><button type="button" className={buttonVariants({ variant: 'outline', size: 'sm' })} disabled={saving} onClick={() => { saveRequest.current = null; setAttempt(value => value + 1) }}>Reload saved draft v{pendingDraftVersion}</button><p className="text-[12px]">Your current form is preserved until you reload. Saving is paused so these older choices cannot overwrite the newly applied IDs.</p></div>}
       {form && <>
         <p>Define the business this company should represent. A saved draft preserves your choices; activation and business activity are separate steps.</p>
         {view.draft?.connectionMatches === false && <p role="status" className="text-[var(--attention)]">This draft belongs to an earlier connection. Its mappings must be checked again before activation.</p>}
@@ -117,11 +126,12 @@ function PlanContent({ realmId, environment, enabled }) {
           </div>
         </details>
         <BusinessMasterData view={view} form={form} editable={editable} onChange={change} />
+        <BusinessMasterPreparation key={[view.connectionId, view.draft?.contentHash].join(':')} view={view} hasUnsavedEdits={hasUnsavedEdits} onDraftSaved={preparedDraft} />
         <BusinessMappingCheck view={view} />
         <BusinessActivityPreview view={view} />
         <div className="border-t border-[var(--line)] pt-3"><h3 className="font-medium text-[var(--ink)]">Before this can drive business activity</h3><ul className="mt-1 list-disc space-y-1 pl-5">{view.activationNeeds.map(need => <li key={need}>{need}</li>)}</ul></div>
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
+          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving || Boolean(pendingDraftVersion)} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
           {!view.permissionToSave ? <p>Your company role has read-only access to business plans.</p> : !view.storage.ready ? <p>{view.storage.reason}</p> : <p className="text-[12px]">Saved in this app. No QuickBooks transactions are created.</p>}
         </div>
       </>}
