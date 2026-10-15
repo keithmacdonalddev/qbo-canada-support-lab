@@ -8,6 +8,7 @@ const ACTIONS = Object.freeze({
   'baseline.review': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read', 'qbo_data.read']),
   'baseline.read': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read']),
   'baseline.capture': Object.freeze(['reports.validate', 'blueprint.manage', 'qbo_data.read', 'app_data.read', 'reports.read', 'blueprint.read']),
+  'reproduction.run': Object.freeze(['reproduction.run', 'qbo_data.read']),
   'operations.read': Object.freeze(['app_data.read', 'qbo_data.read']),
   'operations.preview': Object.freeze(['operations.preview', 'qbo_data.read']),
   'operations.execute': Object.freeze(['operations.execute']),

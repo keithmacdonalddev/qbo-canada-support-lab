@@ -37,7 +37,7 @@ function applyFields(doc, fields) {
 }
 function collection(initial = []) {
   const docs = new Map(initial.map(doc => [String(doc._id), copy(doc)]));
-  const query = fn => ({ sort() { return this; }, async lean() { return copy(fn()); } });
+  const query = fn => ({ session() { return this; }, sort() { return this; }, async lean() { return copy(fn()); } });
   const store = {
     docs, updates: [], beforeUpdate: null,
     findById(id) { return query(() => docs.get(String(id)) || null); },
@@ -205,7 +205,7 @@ test('pure planner creates linked bounded plan with no database or QBO dependenc
 function serviceHarness(initial = []) {
   const Runs = collection(initial); const Scopes = collection(); const launched = [];
   let sequence = 10;
-  const service = createGenerationService({ Runs, Scopes, environment: 'sandbox', now: () => NOW,
+  const service = createGenerationService({ Runs, Scopes, admitJob: async (_connection, _action, work) => work(null), environment: 'sandbox', now: () => NOW,
     newId: () => (++sequence).toString(16).padStart(24, '0'), execute: async run => { launched.push(copy(run)); } });
   return { Runs, Scopes, launched, service };
 }

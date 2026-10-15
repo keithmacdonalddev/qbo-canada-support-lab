@@ -621,20 +621,16 @@ async function executePlan(planId, userId) {
   }
 
   // Claim the plan atomically so a second click, tab or retry cannot run it twice.
-  const plan = await AIPlan.findOneAndUpdate(
+  const connection = await Connection.findOne({ userId, realmId: existing.realmId, status: 'active' });
+  if (!connection) throw new Error('No active QBO connection');
+  const plan = await require('./company-job-admission').admitCompanyJob(connection, 'operations.execute', session => AIPlan.findOneAndUpdate(
     { _id: planId, userId, status: { $in: ['approved', 'partially_approved'] }, 'steps.approval': { $exists: false } },
     { $set: { status: 'executing' } },
-    { new: true },
-  );
+    { new: true, session },
+  ));
   if (!plan) throw new Error('This plan is already running or has finished.');
 
   // Load connection and QBO client
-  const connection = await Connection.findOne({ userId, realmId: plan.realmId, status: 'active' });
-  if (!connection) {
-    plan.status = existing.status;
-    await plan.save();
-    throw new Error('No active QBO connection');
-  }
   let qbo;
   try {
     qbo = await createQBOClient(connection);

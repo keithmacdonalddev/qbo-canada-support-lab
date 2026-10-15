@@ -295,13 +295,10 @@ router.post('/start', authenticate, requireCompanyWrite, requireProductionConfir
     }
 
     // Create the SeedRun record
-    const seedRun = await SeedRun.create({
-      userId: req.user.id,
-      realmId,
-      status: 'in_progress',
-      startedAt: new Date(),
+    const [seedRun] = await require('../modules/company-job-admission').admitCompanyJob(connection, 'operations.execute', session => SeedRun.create([{
+      userId: req.user.id, realmId, status: 'in_progress', startedAt: new Date(),
       progress: { phase: 'starting', detail: 'Initializing...' },
-    });
+    }], { session }));
 
     // Update CompanyProfile seeding status
     await CompanyProfile.findOneAndUpdate(

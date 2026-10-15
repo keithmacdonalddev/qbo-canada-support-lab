@@ -41,7 +41,7 @@ function memoryModel(kind) {
       return this;
     },
   });
-  const query = (value) => { const promise = Promise.resolve(doc(value)); promise.select = () => promise; return promise; };
+  const query = (value) => { const promise = Promise.resolve(doc(value)); promise.select = () => promise; promise.session = () => promise; return promise; };
   const update = (entry, operation) => {
     for (const [key, value] of Object.entries(operation.$set || {})) set(entry, key, value);
     for (const [key, value] of Object.entries(operation.$push || {})) (entry[key] ||= []).push(copy(value));
@@ -51,7 +51,7 @@ function memoryModel(kind) {
   };
   return {
     store, hook: null,
-    async create(value) { const entry = { _id: kind + '-' + ++sequence, plans: [], messages: [], ...copy(value) }; store.set(entry._id, entry); return doc(entry); },
+    async create(value) { if (Array.isArray(value)) return Promise.all(value.map(row => this.create(row))); const entry = { _id: kind + '-' + ++sequence, plans: [], messages: [], ...copy(value) }; store.set(entry._id, entry); return doc(entry); },
     findOne(filter) { return query([...store.values()].find((value) => matches(value, filter))); },
     findById(id) { return query(store.get(String(id))); },
     async findOneAndUpdate(filter, operation) {
@@ -77,6 +77,7 @@ function setup(options = {}) {
   let membership = options.membership;
   let starts = 0;
   const runner = createRunner({
+    admitJob: options.admitJob || (async (_connection, _action, work) => work(null)),
     AISession, AIPlan, config, instance: 'test-instance',
     // null selects the runner's default provider check.
     preflight: options.preflight === undefined ? async () => null : options.preflight,
@@ -376,4 +377,25 @@ test('an Anthropic reply cut off at the output limit never runs its partial tool
   const g = setup({ providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat: async () => cut } } });
   const repeated = await g.runner.runProvider([{ role: 'user', content: 'Build it' }], 'system', async () => assert.fail('never run'), [], undefined, { deadline: Date.now() + 60000 });
   assert.match(repeated, /repeatedly cut off/);
+});
+
+test('denied company admission leaves no empty case and the same submission can run after setup', async () => {
+  let enabled = false;
+  const f = setup({ admitJob: async (_connection, _action, work) => { if (!enabled) throw new Error('Company preparation required'); return work(null); } });
+  await assert.rejects(f.start(), /preparation/); assert.equal(f.AISession.store.size, 0); assert.equal(f.starts, 0);
+  enabled = true; const accepted = await f.start(); await f.runner.waitForIdle(accepted._id);
+  const retried = await f.start(); assert.equal(retried._id, accepted._id); assert.equal(f.starts, 1); assert.equal(f.AISession.store.size, 1);
+});
+test('an older empty rejected submission can be claimed without changing its request identity', async () => {
+  const f = setup(); const draft = await f.AISession.create({ userId: 'owner', realmId: 'realm', submissionId: 'request-123456789', mode: 'reproduce', messages: [], plans: [] });
+  const accepted = await f.start(); await f.runner.waitForIdle(accepted._id); assert.equal(accepted._id, draft._id); assert.equal(f.starts, 1);
+});
+
+test('submission identity is re-read inside policy admission before a competing create', async () => {
+  let f;
+  f = setup({ admitJob: async (_connection, _action, work) => {
+    await f.AISession.create({ userId: 'owner', realmId: 'realm', submissionId: 'request-123456789', mode: 'reproduce', messages: [], plans: [], reproduction: { requestId: 'request-123456789', status: 'completed', summary: 'Other admission completed' } });
+    return work(null);
+  } });
+  const accepted = await f.start(); assert.equal(accepted.reproduction.summary, 'Other admission completed'); assert.equal(f.AISession.store.size, 1); assert.equal(f.AIPlan.store.size, 0); assert.equal(f.starts, 0);
 });

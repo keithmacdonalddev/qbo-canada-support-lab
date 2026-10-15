@@ -9,6 +9,7 @@ const AIPlan = dependencies.AIPlan || require('../models/AIPlan');
 const Connection = dependencies.Connection || require('../models/Connection');
 const CompanyMembership = dependencies.CompanyMembership || require('../models/CompanyMembership');
 const User = dependencies.User || require('../models/User');
+const admitJob = dependencies.admitJob || require('./company-job-admission').admitCompanyJob;
 const config = dependencies.config || require('../config');
 const createQBOClient = dependencies.createQBOClient || require('./qbo-client').createQBOClient;
 const createAuditEntry = dependencies.createAuditEntry || require('../middleware/auditLogger').createAuditEntry;
@@ -210,23 +211,28 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     if (session.reproduction?.outcomeUnknown) throw conflict('This case has an unresolved write outcome.');
   } else {
     session = await AISession.findOne({ ...scope, submissionId: requestId });
-    if (session) return session;
-    try {
-      session = await AISession.create({ ...scope, submissionId: requestId, mode: 'reproduce',
-        title: message.replace(/[*#]/g, '').slice(0, 80), messages: [], plans: [] });
-    } catch (err) {
-      if (err.code !== 11000) throw err;
-      return AISession.findOne({ ...scope, submissionId: requestId });
-    }
+    if (session?.reproduction) return session;
+    // An older admission-denied empty submission can be claimed with the same
+    // request. A new submission is created atomically with its active claim.
   }
   const runId = randomUUID();
-  const previous = session.reproduction;
+  const previous = session?.reproduction;
   const timingOrigin = sessionId ? firstRequest(session, receivedAt.getTime()) : { firstSubmittedAt: receivedAt.toISOString(), firstSubmissionSource: 'recorded_request' };
   // Claim in MongoDB as well as memory; duplicate tabs cannot launch a second run.
   // The owner may be deciding a change to an existing record; never run alongside it.
   const now = new Date();
-  const claimed = await AISession.findOneAndUpdate({
-    _id: session._id, ...scope, 'reproduction.status': { $ne: 'running' },
+  const initialSession = session;
+  let claimed, reusedSubmission = false;
+  try { claimed = await admitJob(connection, 'reproduction.run', async dbSession => {
+    session = initialSession; reusedSubmission = false; // Reset every transaction attempt.
+    if (!sessionId) {
+      session = await AISession.findOne({ ...scope, submissionId: requestId }).session(dbSession);
+      if (session?.reproduction) { reusedSubmission = true; return session; }
+    }
+    if (!session) [session] = await AISession.create([{ ...scope, submissionId: requestId, mode: 'reproduce',
+      title: message.replace(/[*#]/g, '').slice(0, 80), messages: [], plans: [] }], { session: dbSession });
+    return AISession.findOneAndUpdate({
+    _id: session._id, ...scope, ...(previous ? { 'reproduction.runId': previous.runId } : {}), 'reproduction.status': { $ne: 'running' },
     $or: [{ 'reproduction.decisionLockUntil': { $exists: false } }, { 'reproduction.decisionLockUntil': null },
       { 'reproduction.decisionLockUntil': { $lt: now } }],
   },{ $set: { mode: 'reproduce', reproduction: {
@@ -238,7 +244,15 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     outcome: null, summary: '', limitations: [], tests: [], checks: [], awaitingOperator: null, toolAccess: null,
     // The claim filter guarantees no live decision lock; never copy back an old one.
     decisionLockUntil: null,
-  } } }, { new: true });
+  } } }, { new: true, session: dbSession });
+  }); } catch (error) {
+    if (error.code === 11000 && !sessionId) {
+      const accepted = await AISession.findOne({ ...scope, submissionId: requestId });
+      if (accepted?.reproduction?.requestId === requestId) return accepted;
+    }
+    throw error;
+  }
+  if (reusedSubmission) return claimed;
   if (!claimed) throw conflict('This case is already running, or a change to an existing record is being decided.');
   try {
     // Old pending suggestions are superseded, never silently executed.

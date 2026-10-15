@@ -141,13 +141,9 @@ router.post(
     const realmId = connection.realmId;
 
     // Create run record
-    const run = await IssuePackRun.create({
-      userId: req.user.id,
-      realmId,
-      issuePackId: pack._id,
-      status: 'in_progress',
-      startedAt: new Date(),
-    });
+    const [run] = await require('../modules/company-job-admission').admitCompanyJob(connection, 'operations.execute', session => IssuePackRun.create([{
+      userId: req.user.id, realmId, issuePackId: pack._id, status: 'in_progress', startedAt: new Date(),
+    }], { session }));
 
     // Fire and forget
     (async () => {

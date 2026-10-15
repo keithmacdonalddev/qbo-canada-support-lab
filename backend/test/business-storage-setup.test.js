@@ -265,3 +265,33 @@ test('baseline completion gate rejects changed target, deployment or receipt int
   for (const edit of edits) { const f = fixture(), plan = await f.preview(baselineProfile); await f.apply(plan.planHash, baselineProfile); edit(f.data().auditlogs.docs.find(row => row.outcome === 'success')); await assert.rejects(assertBaselineSetupCompleted(f.db, target)); }
   const f = fixture(), plan = await f.preview(baselineProfile); await f.apply(plan.planHash, baselineProfile); await assert.rejects(assertBaselineSetupCompleted(f.db, { ...target, realmId: '456' }));
 });
+
+const continual = 'continual-business';
+test('continual setup is a separate v4 approval and preserves existing drafts and observations', async () => {
+  const f = fixture(); const legacy = await f.preview(baselineProfile); await f.apply(legacy.planHash, baselineProfile);
+  f.data().blueprintversions.docs.push({ _id: 'retained-draft', realmId: '123', version: 1 });
+  f.data().businessbaselines.docs.push({ _id: 'retained-observation' });
+  const before = clone(f.data().businessbaselines.docs), plan = await f.preview(continual);
+  assert.equal(plan.version, 4); assert.equal(plan.activation, 'none'); assert.equal(plan.qboWrites, 0);
+  assert.ok(plan.collections.some(row => row.name === 'businessauthorities')); assert.ok(plan.collections.some(row => row.name === 'businesscandidates'));
+  await assert.rejects(f.apply(legacy.planHash, continual), /profile or definition/);
+  await f.apply(plan.planHash, continual); assert.deepEqual(f.data().businessbaselines.docs, before);
+  assert.equal(f.data().blueprintversions.docs[0]._id, 'retained-draft');
+  assert.equal(f.data().companywritepolicies.docs.length, 0); assert.equal(f.data().businesscalendars.docs.length, 0);
+  await require('../src/modules/business-storage-setup').assertProfileSetupCompleted(f.db, target, continual);
+  await assertBaselineSetupCompleted(f.db, target);
+});
+test('continual initial preparation refuses populated operation or authority storage', async () => {
+  for (const name of ['operationruns', 'companywritepolicies', 'businessauthorities', 'businesscandidates']) {
+    const f = fixture(); f.data()[name] = { docs: [{ _id: 'existing' }], indexes: [{ name: '_id_', key: { _id: 1 } }], options: {} };
+    await assert.rejects(f.preview(continual), /must be empty/); assert.equal(f.writes, 0);
+  }
+});
+
+test('continual setup explicitly prepares and verifies case submission uniqueness while retaining cases', async () => {
+  const f = fixture(); f.data().aisessions = { docs: [{ _id: 'retained-case', userId: target.ownerId, realmId: target.realmId }], indexes: [{ name: '_id_', key: { _id: 1 } }], options: {} };
+  const plan = await f.preview(continual); const identity = plan.collections.find(row => row.name === 'aisessions');
+  assert.ok(identity.indexes.some(row => row.unique && row.partialFilterExpression?.submissionId?.$type === 'string'));
+  await f.apply(plan.planHash, continual); assert.equal(f.data().aisessions.docs[0]._id, 'retained-case');
+  const actual = require('../src/models/AISession').schema.indexes(); for (const [key, options] of actual) assert.ok(identity.indexes.some(row => exactIndex(row, { key, ...options })));
+});

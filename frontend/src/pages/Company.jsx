@@ -4,6 +4,7 @@ import { ArrowRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import Layout from '../components/Layout'
 import BookEvidence from '../components/BookEvidence'
 import BusinessBaseline from '../components/BusinessBaseline'
+import BusinessSetup from '../components/BusinessSetup'
 import BusinessPlan from '../components/BusinessPlan'
 import BusinessOperations from '../components/BusinessOperations'
 import client from '../api/client'
@@ -100,6 +101,7 @@ function CompanyContent({ connection }) {
   const ready = connection?.ready === true
   const [health, setHealth] = useState(null)
   const [readVersion, setReadVersion] = useState(0)
+  const [setupVersion, setSetupVersion] = useState(0)
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotError, setSnapshotError] = useState(false)
   const [activity, setActivity] = useState(null)
@@ -167,11 +169,13 @@ function CompanyContent({ connection }) {
           </Panel>
         )}
 
-        <BusinessPlan realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessSetup enabled={ready} onChanged={() => setSetupVersion(v => v + 1)} />
 
-        <BusinessOperations realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessPlan key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
-        <BusinessBaseline realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <BusinessOperations key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+
+        <BusinessBaseline key={setupVersion} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
         <BookEvidence realmId={status?.realmId} enabled={ready} />
 

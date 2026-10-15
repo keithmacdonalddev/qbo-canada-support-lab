@@ -21,6 +21,11 @@ const OPERATIONS_COLLECTIONS = Object.freeze([...COLLECTIONS,
   { name: 'operationevidences', indexes: [index({ environment: 1, realmId: 1, operationId: 1, evidenceRevision: 1 }, { unique: true })] },
 ]);
 const BASELINE_COLLECTIONS = Object.freeze([...COLLECTIONS, { name: 'businessbaselines', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, ownerId: 1, 'payload.observedAt': -1, _id: -1 })] }]);
+const CONTINUAL_COLLECTIONS = Object.freeze([...OPERATIONS_COLLECTIONS, ...BASELINE_COLLECTIONS.slice(COLLECTIONS.length),
+  { name: 'aisessions', indexes: [index({ userId: 1, realmId: 1, submissionId: 1 }, { unique: true, partialFilterExpression: { submissionId: { $type: 'string' } } }), index({ userId: 1, createdAt: -1 }), index({ userId: 1, realmId: 1, status: 1 })] },
+  { name: 'businessauthorities', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, contentHash: 1 }, { unique: true })] },
+  { name: 'businesscandidates', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, candidateHash: 1 }, { unique: true })] },
+]);
 const LEGACY_PREREQUISITES = Object.freeze([
   { name: 'users', indexes: [index({ email: 1 }, { unique: true })] },
   { name: 'connections', indexes: [index({ userId: 1, realmId: 1 }, { unique: true })] },
@@ -28,8 +33,9 @@ const LEGACY_PREREQUISITES = Object.freeze([
   { name: 'auditlogs', indexes: [index({ userId: 1, realmId: 1, createdAt: -1 })] },
 ]);
 function freeze(value) { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
-freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
+freeze(CONTINUAL_COLLECTIONS); freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
 function setupDefinition(profile = 'blueprint') {
+  if (profile === 'continual-business') return { version: 4, profile, collections: CONTINUAL_COLLECTIONS, prerequisites: LEGACY_PREREQUISITES, initialState: 'operation-and-authority-collections-empty-database-wide-existing-drafts-cases-observations-retained' };
   if (!['blueprint', 'business-operations', 'baseline-observations'].includes(profile)) fail('Choose the blueprint, business-operations or baseline-observations setup profile.');
   if (profile === 'baseline-observations') return { version: 3, profile, collections: BASELINE_COLLECTIONS, prerequisites: LEGACY_PREREQUISITES, initialState: 'all-baseline-observations-empty-database-wide' };
   return profile === 'blueprint' ? { version: 1, profile, collections: COLLECTIONS } : { version: 2, profile, collections: OPERATIONS_COLLECTIONS, prerequisites: LEGACY_PREREQUISITES, initialState: 'all-operation-collections-empty-database-wide' };
@@ -104,7 +110,7 @@ async function inspectStorage(db, profile = 'blueprint') {
 // Do not run concurrently with privileged initialization or deployment changes.
 async function assertInitialState(db, definition, session) {
   if (definition.version === 1) return;
-  for (const collection of definition.collections.slice(COLLECTIONS.length)) {
+  for (const collection of definition.collections.slice(COLLECTIONS.length).filter(item => definition.version !== 4 || !['businessbaselines', 'aisessions'].includes(item.name))) {
     const existing = await db.collection(collection.name).findOne({}, { projection: { _id: 1 }, session, ...time });
     if (existing !== null) fail((definition.version === 3 ? 'Baseline observation' : 'Business operation') + ' storage must be empty across this database for initial setup. Populated storage requires a separately reviewed maintenance process.');
   }
@@ -122,7 +128,7 @@ async function previewSetup(db, target, configuredEnvironment, profile = 'bluepr
   await assertInitialState(db, definition);
   const contract = { version: definition.version, ...(definition.version > 1 ? { profile, prerequisites: definition.prerequisites, collectionScope: 'database-wide', initialState: definition.initialState, activation: 'none' } : {}), identity, target, source: current, collections: definition.collections,
     permissionChange: current.membership ? null : { from: 'legacy-read-only', to: 'lab-owner', permissions: [...ROLE_PERMISSIONS['lab-owner']] },
-    writes: [definition.version === 1 ? 'Add missing blueprint collections and exact indexes' : definition.version === 2 ? 'Add missing business operation and blueprint collections and exact indexes across this database' : 'Add missing baseline observation and blueprint collections and exact indexes across this database', 'Insert owner membership if absent', 'Increment owner, connection and existing membership scope fences', 'Append setup intent and completion audit'],
+    writes: [definition.version === 1 ? 'Add missing blueprint collections and exact indexes' : definition.version === 2 ? 'Add missing business operation and blueprint collections and exact indexes across this database' : definition.version === 4 ? 'Add missing continual-business collections and exact indexes, retaining existing drafts and observations' : 'Add missing baseline observation and blueprint collections and exact indexes across this database', 'Insert owner membership if absent', 'Increment owner, connection and existing membership scope fences', 'Append setup intent and completion audit'],
   };
   return { ...contract, planHash: hash(contract), storage, requiresExplicitApproval: true, qboWrites: 0, schedulingEnabled: false };
 }
@@ -203,8 +209,8 @@ async function applySetup(db, client, target, configuredEnvironment, approvedHas
   return { status: 'complete', planHash: approvedHash, auditId: String(keys.complete), membershipId: result.membershipId };
 }
 // Collection/index existence must never unlock capture midway through setup.
-async function assertBaselineSetupCompleted(db, target, session) {
-  const definition = setupDefinition('baseline-observations');
+async function assertProfileSetupCompleted(db, target, profile, session) {
+  const definition = setupDefinition(profile);
   const receipt = await db.collection('auditlogs').findOne({ 'afterState.profile': definition.profile, 'afterState.setupVersion': definition.version, 'afterState.target.environment': target.environment, 'afterState.target.realmId': target.realmId, 'afterState.target.connectionId': target.connectionId, 'afterState.target.ownerId': target.ownerId, outcome: 'success' }, { ...time, session, sort: { createdAt: -1 } });
   const value = receipt?.afterState;
   if (!value || !/^[a-f0-9]{64}$/.test(value.planHash || '')) fail('Complete the reviewed baseline observation storage setup before capturing reports.');
@@ -212,4 +218,8 @@ async function assertBaselineSetupCompleted(db, target, session) {
   if (String(receipt._id) !== String(ids(value.planHash).complete) || String(receipt.userId) !== target.ownerId || receipt.realmId !== target.realmId || receipt.action !== 'Business plan storage setup completed' || receipt.actionType !== 'manual' || receipt.approvalEvent !== 'explicit-local-setup' || value.deploymentHash !== (await deployment(db)).fingerprint || hash(value.collections) !== hash(definition.collections.map(item => item.name)) || value.qboWrites !== 0) fail('The completed baseline observation setup receipt needs review.');
   return { setupVersion: definition.version, planHash: value.planHash };
 }
-module.exports = { assertBaselineSetupCompleted, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, previewSetup, applySetup };
+async function assertBaselineSetupCompleted(db, target, session) {
+  try { return await assertProfileSetupCompleted(db, target, 'baseline-observations', session); }
+  catch { return assertProfileSetupCompleted(db, target, 'continual-business', session); }
+}
+module.exports = { assertProfileSetupCompleted, assertBaselineSetupCompleted, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };
