@@ -30,7 +30,7 @@ Distinct implementation and safety reviewers challenged the scope before mutatio
 | --- | --- | --- |
 | Reviewer cannot mutate through legacy routes | Actual routes with isolated membership/storage fixtures | Verified non-live: route guards, current actor lookup, 105 focused tests; independent implementation and safety review |
 | Case recovery settles the exact company write barrier | Correlated dispatch/receipt/step/audit recovery fixture, including mismatch/race | Verified non-live: exact recovery, lost acknowledgements, known response repair, current owner/workspace, expired/replaced decision lock, atomic rollback |
-| Generation creates coherent elapsed settlement/cash data | Actual planner/worker with taxed totals, applied credits, deposits and boundary dates | Pending implementation |
+| Generation creates coherent elapsed settlement/cash data | Actual planner/worker with taxed totals, applied credits, deposits and boundary dates | Legacy fixture dates, actual full/partial settlement and bank destination verified non-live; governed lifecycle, credit application and deposits remain pending |
 | Normal owner setup and reviewed business activation work | Scoped route fixtures, immutable decision receipts and rejection/recovery cases | Pending implementation |
 | Two adjacent periods execute and advance once | Normal routes → approved plan → fake QBO records → relationship/tax/stock/report proof → calendar | Pending implementation |
 | Business variations populate deliberate report requirements | Independent expected amounts and appropriate report/readback assertions | Pending implementation |
@@ -47,3 +47,9 @@ Likely edits: legacy route guards; generation modules; QBO writer gate and case 
 The first coherent permission/recovery unit passed 105 isolated tests through verified gpt-6-luna/low. Backend syntax, frontend build and lint, and diff whitespace checks passed; build retains the existing large-chunk warning and lint retains three existing AICommandCenter hook warnings. Distinct read-only implementation and safety reviewers found no remaining blocker in this bounded unit. Artifacts: artifacts/luna/intent-core-check-5.json and intent-core-static.json.
 
 All QBO writes now require explicit write-coordination preparation. This deliberately closes the old uncoordinated bypass; setup/admission remains the next required workflow and this checkpoint does not establish whole-application readiness. No database preparation, production accounting mutation, provider execution or service control was performed.
+
+## Generation checkpoint evidence (2026-10-15)
+
+Legacy planning uses actual calendar months and the Halifax business day, omits future follow-ups and unsupported random journals, identifies standalone credits as unapplied, and specifies a bank destination. Settlement requires original accepted totals and record versions, fresh source identity/balance, exact Payment/BillPayment application and destination readback, and the expected resulting source balance. Confirmed IDs remain durable across audit or verification failure. Public history uses actual accepted amounts; Home no longer claims company currency from a job timestamp. Older incomplete receipts or plans without explicit bank choices stop for reviewed recovery.
+
+Verified gpt-6-luna/low checks: 47 generation/readiness tests passed, backend syntax passed, frontend build/lint passed with the previously recorded warnings, diff whitespace check passed. Independent implementation and safety review cleared this bounded unit after corrections. Evidence: artifacts/luna/intent-generation-final.json. No live financial acceptance or continuous-history completion is claimed.

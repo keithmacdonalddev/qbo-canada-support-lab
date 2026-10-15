@@ -34,12 +34,6 @@ function relativeTime(date) {
   return new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function daysSince(date) {
-  if (!date) return null
-  const ms = Date.now() - new Date(date).getTime()
-  return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 86400000)) : null
-}
-
 function SetupRow({ done, title, children }) {
   return (
     <li className="flex gap-3 px-5 py-3.5">
@@ -106,42 +100,13 @@ function ApiKeyForm({ onSaved }) {
   )
 }
 
-// How current the business's day-to-day activity is.
+// Coverage measures feature presence; business currency requires calendar evidence.
 function ActivityLine({ ready }) {
-  const [lastRun, setLastRun] = useState(undefined)
-
-  useEffect(() => {
-    if (!ready) return
-    let cancelled = false
-    client.get('/generate/history')
-      .then((res) => { if (!cancelled) setLastRun((res.data?.genRuns || [])[0] || null) })
-      .catch(() => { if (!cancelled) setLastRun('error') })
-    return () => { cancelled = true }
-  }, [ready])
-
-  if (!ready || lastRun === undefined || lastRun === 'error') return null
-  const through = lastRun ? (lastRun.completedAt || lastRun.startedAt || lastRun.createdAt) : null
-  const behind = daysSince(through)
-
-  let text
-  let cta = null
-  if (!lastRun) {
-    text = 'No day-to-day business activity yet.'
-    cta = 'Generate history'
-  } else if (lastRun.status === 'failed') {
-    text = 'The last activity update stopped partway.'
-    cta = 'Resume'
-  } else if (behind > 1) {
-    text = `Day-to-day activity is ${behind} days behind.`
-    cta = 'Catch up'
-  } else {
-    text = 'Day-to-day activity is up to date.'
-  }
-
+  if (!ready) return null
   return (
     <div className="flex items-center justify-between gap-3 border-t border-[var(--line)] px-5 py-3 text-[12.5px]">
-      <span className="text-[var(--ink-2)]">{text}</span>
-      {cta && <Link to="/lab" className="shrink-0 font-medium text-[var(--link)] no-underline hover:underline">{cta}</Link>}
+      <span className="text-[var(--ink-2)]">Business history needs a verified calendar and report review.</span>
+      <Link to="/company" className="shrink-0 font-medium text-[var(--link)] no-underline hover:underline">Review business</Link>
     </div>
   )
 }

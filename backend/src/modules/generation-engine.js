@@ -4,6 +4,8 @@ const { createAuditEntry } = require('../middleware/auditLogger');
 const { buildGenerationPlan, queryEntities, queryAccounts } = require('./generation-plan');
 const { LEASE_MS, SUMMARY_KEYS } = require('./generation-state');
 const { redactLogSecrets } = require('./log-diagnostic');
+const { businessDate } = require('./business-activity-preview');
+const { prepareSettlement, verifySettlement } = require('./generation-settlement');
 
 function resolveReferences(value, steps) {
   if (typeof value === 'string') {
@@ -20,7 +22,7 @@ function resolveReferences(value, steps) {
 
 // Only an explicit API rejection proves the write did not take effect.
 function isDefiniteRejection(error) {
-  return error.qboStage === 'api' && [400, 401, 403, 404, 405, 422, 429].includes(error.status);
+  return !error.outcomeUnknown && (error.qboStage === 'write_admission' || (error.qboStage === 'api' && [400, 401, 403, 404, 405, 422, 429].includes(error.status)));
 }
 
 async function runGenerationJob(run, connection, dependencies = {}) {
@@ -62,7 +64,7 @@ async function runGenerationJob(run, connection, dependencies = {}) {
     run.txnsSummary = Object.fromEntries(Object.values(SUMMARY_KEYS).map(k => [k, 0]));
     run.createdTransactions = succeeded.map(step => {
       run.txnsSummary[SUMMARY_KEYS[step.entity]]++;
-      return { ...step.transaction, qboId: step.receipt.Id, docNumber: step.receipt.DocNumber || '',
+      return { ...step.transaction, qboId: step.receipt.Id, amount: step.receipt.TotalAmt ?? step.acceptedSettlement?.amount ?? step.transaction.amount, docNumber: step.receipt.DocNumber || '',
         linkedTo: resolveReferences(step.transaction.linkedTo || '', run.steps), timestamp: step.completedAt };
     });
     run.generationErrors = (run.steps || []).filter(s => ['rejected', 'uncertain', 'sending'].includes(s.state)).map(s => ({
@@ -92,6 +94,13 @@ async function runGenerationJob(run, connection, dependencies = {}) {
       if (['sending', 'uncertain'].includes(step.state)) throw new Error('An earlier transaction needs inspection in QuickBooks.');
       if (step.state !== 'succeeded') {
         const payload = resolveReferences(step.payload, run.steps);
+        if (payload.TxnDate > new Date(run.config.anchorDate).toISOString().slice(0, 10) || payload.TxnDate > businessDate(new Date(clock()))) throw new Error('This saved activity is in the future. Review its business period before continuing.');
+        const settlement = await prepareSettlement(step, run.steps, qbo);
+        if (settlement) {
+          payload.TotalAmt = settlement.amount; payload.Line[0].Amount = settlement.amount;
+          step.acceptedSettlement = settlement;
+        }
+        step.dispatchPayload = payload;
         const previousState = step.state;
         step.state = 'sending';
         step.error = null;
@@ -114,15 +123,21 @@ async function runGenerationJob(run, connection, dependencies = {}) {
           throw error;
         }
         step.state = 'succeeded';
-        step.receipt = { Id: receipt.Id, DocNumber: receipt.DocNumber || '' };
+        step.receipt = { Id: receipt.Id, DocNumber: receipt.DocNumber || '',
+          ...Object.fromEntries(['TotalAmt', 'Balance', 'SyncToken'].filter(key => receipt[key] !== undefined).map(key => [key, receipt[key]])) };
         step.completedAt = new Date(clock());
         refreshProgress();
         await save(); // Save accepted QBO ID before audit or any subsequent write.
       }
+      if (step.acceptedSettlement && !step.verifiedSettlement) {
+        step.verifiedSettlement = await verifySettlement(step.acceptedSettlement, qbo, { entity: step.transaction.entity, id: step.receipt.Id, payload: step.dispatchPayload });
+        await save();
+      }
       if (!step.audited) {
         const entry = await audit(run.userId, run.realmId, 'Generated ' + step.transaction.entity + ' #' + step.receipt.Id, {
           actionType: 'generate_txn', outcome: 'success',
-          afterState: { genRunId: run._id, environment: run.environment, ...step.transaction, qboId: step.receipt.Id,
+          afterState: { genRunId: run._id, environment: run.environment, ...step.transaction, amount: step.receipt.TotalAmt ?? step.acceptedSettlement?.amount ?? step.transaction.amount, qboId: step.receipt.Id,
+            settlement: step.acceptedSettlement || null,
             linkedTo: resolveReferences(step.transaction.linkedTo || '', run.steps) },
         });
         if (!entry) throw new Error('Could not save the transaction audit. Resume to repair it without recreating records.');

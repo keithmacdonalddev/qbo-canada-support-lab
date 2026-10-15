@@ -4,6 +4,7 @@ const GenerationRun = require('../models/GenerationRun');
 const GenerationScope = require('../models/GenerationScope');
 const config = require('../config');
 const { runGenerationJob } = require('./generation-engine');
+const { businessDate } = require('./business-activity-preview');
 const { LEASE_MS, generationView } = require('./generation-state');
 
 function problem(message, status = 409) { return Object.assign(new Error(message), { status }); }
@@ -13,7 +14,7 @@ function validateConfig(body = {}, now = new Date()) {
       !Number.isInteger(txnsPerMonth) || txnsPerMonth < 1 || txnsPerMonth > 60) {
     throw problem('Choose 1–12 months and 1–60 transaction chains per month.', 400);
   }
-  return { monthsBack, txnsPerMonth, arWeight: 0.6, apWeight: 0.4, anchorDate: now.toISOString().slice(0, 10) };
+  return { monthsBack, txnsPerMonth, arWeight: 0.6, apWeight: 0.4, anchorDate: businessDate(now) };
 }
 
 function createGenerationService(dependencies = {}) {

@@ -78,13 +78,14 @@ function fixtureRun(overrides = {}) {
   return { _id: ID, userId: USER, realmId: connection.realmId, environment: 'sandbox', connectionId: CONNECTION,
     executionVersion: 1, status: 'in_progress', leaseToken: 'owner', leaseExpiresAt: new Date(NOW + LEASE_MS),
     config: validateConfig({ monthsBack: 1, txnsPerMonth: 1 }, new Date(NOW)), startedAt: new Date(NOW),
-    createdTransactions: [], generationErrors: [], steps: [step('invoice', { TxnDate: '2026-09-01' }),
-      step('payment', { TxnDate: '2026-09-02', Line: [{ LinkedTxn: [{ TxnId: '$step:0' }] }] })], ...overrides };
+    createdTransactions: [], generationErrors: [], steps: [step('invoice', { TxnDate: '2026-09-01', CustomerRef: { value: '20' } }),
+      step('payment', { TxnDate: '2026-09-02', CustomerRef: { value: '20' }, DepositToAccountRef: { value: '5' }, TotalAmt: 100, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: '$step:0', TxnType: 'Invoice' }] }] })], ...overrides };
 }
 function engineHarness(run, create, audit = async () => ({ _id: 'audit' })) {
   const Runs = collection([run]);
   const profiles = [];
-  const dependencies = { Runs, now: () => NOW, audit, clientFactory: async () => ({ create }),
+  let paid = false, paymentRecord;
+  const dependencies = { Runs, now: () => NOW, audit, clientFactory: async () => ({ create: async (...args) => { const result = await create(...args); for (const row of Object.values(result || {})) if (row?.Id) { row.TotalAmt ??= 100; row.SyncToken ??= '0'; } if (args[0] === 'payment') { paid = true; paymentRecord = { ...copy(args[1]), ...result.Payment }; } return result; }, read: async (_entity, id) => _entity === 'payment' ? { Payment: paymentRecord } : ({ Invoice: { Id: id, SyncToken: '0', TxnDate: '2026-09-01', CustomerRef: { value: '20' }, TotalAmt: 100, Balance: paid ? 0 : 100 } }) }),
     Profiles: { async findOneAndUpdate(filter, update) { profiles.push({ filter, update }); } } };
   return { Runs, dependencies, profiles, saved: () => copy(Runs.docs.get(ID)) };
 }
@@ -107,7 +108,7 @@ test('a rejected child produces partial outcome; resume skips the saved parent a
   assert.equal(h.saved().status, 'partial');
   assert.equal(h.saved().createdTransactions.length, 1);
   assert.equal(h.saved().txnsSummary.invoices, 1);
-  assert.deepEqual(generationView(h.saved(), NOW).counts, { created: 1, failed: 1, pending: 0, uncertain: 0, auditPending: 0, planned: 2 });
+  assert.deepEqual(generationView(h.saved(), NOW).counts, { created: 1, failed: 1, pending: 0, uncertain: 0, auditPending: 0, verificationPending: 0, planned: 2 });
   reject = false;
   await runGenerationJob(claimAgain(h), connection, h.dependencies);
   assert.equal(h.saved().status, 'completed');
@@ -196,8 +197,8 @@ test('pure planner creates linked bounded plan with no database or QBO dependenc
   const data = { customers: [{ Id: 'cust', DisplayName: 'Fixture Customer' }], vendors: [{ Id: 'vendor', DisplayName: 'Fixture Vendor' }],
     items: [{ Id: 'item', Name: 'Fixture Item' }], expenseAccounts: [{ Id: 'expense' }], bankAccounts: [{ Id: 'bank' }], incomeAccounts: [{ Id: 'income' }] };
   const plan = await buildGenerationPlan(validateConfig({ monthsBack: 1, txnsPerMonth: 10 }, new Date(NOW)), data);
-  assert.ok(plan.length >= 11 && plan.length <= 32);
-  for (const entry of plan) { assert.equal(entry.state, 'pending'); assert.ok(entry.transaction.entity); assert.match(entry.payload.TxnDate, /^2026-0?[9]|^2026-1[01]/); }
+  assert.ok(plan.length >= 10 && plan.length <= 30);
+  for (const entry of plan) { assert.equal(entry.state, 'pending'); assert.ok(entry.transaction.entity); assert.match(entry.payload.TxnDate, /^2026-10-/); assert.ok(entry.payload.TxnDate <= '2026-10-02'); assert.notEqual(entry.entity, 'journalentry'); }
   for (const entry of plan.filter(s => ['payment', 'billpayment'].includes(s.entity))) assert.match(entry.payload.Line[0].LinkedTxn[0].TxnId, /^\$step:/);
 });
 
@@ -308,4 +309,79 @@ test('ordinary in-flight audit persistence does not show a recovery warning', ()
   const run = fixtureRun({ steps: [step('invoice', {}, { state: 'succeeded', receipt: { Id: 'confirmed' }, audited: false })] });
   assert.equal(generationView(run, NOW).recoveryMessage, null);
   assert.match(generationView(run, NOW + LEASE_MS + 1).recoveryMessage, /audit entries/);
+});
+
+for (const entity of ['invoice', 'bill']) for (const fraction of [1, 0.5]) test(entity+' settlement uses accepted tax total and verifies the remaining balance: '+fraction, async () => {
+  const sales = entity === 'invoice', sourceType = sales ? 'Invoice' : 'Bill', paymentType = sales ? 'Payment' : 'BillPayment', partyKey = sales ? 'CustomerRef' : 'VendorRef';
+  const parent = step(entity, { TxnDate: '2026-09-01', [partyKey]: { value: '20' } }); parent.transaction.entity = sourceType;
+  const child = step(sales ? 'payment' : 'billpayment', { TxnDate: '2026-09-10', [partyKey]: { value: '20' }, ...(sales ? { DepositToAccountRef: { value: '5' } } : { CheckPayment: { BankAccountRef: { value: '5' } } }), TotalAmt: 100*fraction, Line: [{ Amount: 100*fraction, LinkedTxn: [{ TxnId: '$step:0', TxnType: sourceType }] }] }, { settlement: { version: 1, sourceIndex: 0, fraction } });
+  child.transaction.entity = paymentType; child.transaction.amount = 100*fraction;
+  const run = fixtureRun({ steps: [parent, child] }), sent = []; let balance = 113;
+  const h = engineHarness(run, async () => {});
+  h.dependencies.clientFactory = async () => ({
+    create: async (type, payload) => { sent.push(copy(payload)); if (type !== entity) balance -= payload.TotalAmt; return { [type === entity ? sourceType : paymentType]: { Id: type === entity ? '100' : '200', SyncToken: '0', TotalAmt: type === entity ? 113 : payload.TotalAmt } }; },
+    read: async (type) => type === paymentType.toLowerCase() ? { [paymentType]: { ...sent[1], Id: '200', SyncToken: '0' } } : ({ [sourceType]: { Id: '100', SyncToken: '0', TxnDate: '2026-09-01', [partyKey]: { value: '20' }, TotalAmt: 113, Balance: balance } }),
+  });
+  await runGenerationJob(copy(run), connection, h.dependencies);
+  assert.equal(h.saved().status, 'completed'); assert.equal(sent[1].TotalAmt, 113*fraction); assert.equal(sent[1].Line[0].Amount, 113*fraction);
+  assert.equal(h.saved().createdTransactions[0].amount, 113); assert.equal(h.saved().createdTransactions[1].amount, 113*fraction);
+  assert.equal(h.saved().steps[1].verifiedSettlement.remainingBalance, 113*(1-fraction));
+  assert.deepEqual(generationView(h.saved(), NOW).createdTransactions.map(row => row.amount), [113, 113*fraction]);
+});
+for (const change of [r => { r.TotalAmt = undefined; }, r => { r.CustomerRef.value = 'other'; }, r => { r.Balance = 0; }, r => { r.TotalAmt = 500; }, r => { r.SyncToken = '2'; }]) test('unverified or changed source cannot be paid: '+change.toString(), async () => {
+  const run = fixtureRun(), sent = [];
+  const h = engineHarness(run, async () => {});
+  const record = { Id: '100', SyncToken: '0', TotalAmt: 113, Balance: 113, TxnDate: '2026-09-01', CustomerRef: { value: '20' } }; change(record);
+  h.dependencies.clientFactory = async () => ({ create: async type => { sent.push(type); return { Invoice: { Id: '100', SyncToken: '0', TotalAmt: 113 } }; }, read: async () => ({ Invoice: record }) });
+  await runGenerationJob(copy(run), connection, h.dependencies);
+  assert.deepEqual(sent, ['invoice']); assert.equal(h.saved().status, 'partial'); assert.equal(h.saved().steps[1].state, 'pending');
+});
+test('a saved payment with unverified balance is retained and is never recreated on resume', async () => {
+  const run = fixtureRun(), sent = []; let balance = 113;
+  const h = engineHarness(run, async () => {});
+  h.dependencies.clientFactory = async () => ({ create: async (type, payload) => { sent.push({ type, payload }); return { [type === 'invoice' ? 'Invoice' : 'Payment']: { Id: type === 'invoice' ? '100' : '200', SyncToken: '0', TotalAmt: 113 } }; }, read: async type => type === 'payment' ? { Payment: { ...sent[1].payload, Id: '200', SyncToken: '0' } } : ({ Invoice: { Id: '100', SyncToken: '0', TotalAmt: 113, Balance: balance, TxnDate: '2026-09-01', CustomerRef: { value: '20' } } }) });
+  await runGenerationJob(copy(run), connection, h.dependencies);
+  assert.equal(h.saved().status, 'partial'); assert.equal(h.saved().steps[1].receipt.Id, '200');
+  balance = 0; await runGenerationJob(claimAgain(h), connection, h.dependencies);
+  assert.deepEqual(sent.map(row => row.type), ['invoice', 'payment']); assert.equal(h.saved().status, 'completed');
+});
+test('calendar-month plans cover each requested month without future transactions or invented adjustments', async () => {
+  const data = { customers: [{ Id: '1', DisplayName: 'Fixture Customer' }], vendors: [{ Id: '2', DisplayName: 'Fixture Vendor' }], items: [{ Id: '3' }], expenseAccounts: [{ Id: '4' }], bankAccounts: [{ Id: '5' }] };
+  for (const anchorDate of ['2024-03-01', '2026-01-31']) {
+    const plan = await buildGenerationPlan({ anchorDate, monthsBack: 3, txnsPerMonth: 10, arWeight: 0.6 }, data);
+    const parents = plan.filter(row => ['invoice', 'bill'].includes(row.entity));
+    assert.equal(parents.length, 30); assert.equal(new Set(parents.map(row => row.payload.TxnDate.slice(0, 7))).size, 3);
+    assert.ok(plan.every(row => row.payload.TxnDate <= anchorDate)); assert.ok(plan.every(row => row.entity !== 'journalentry'));
+    assert.ok(plan.filter(row => ['creditmemo', 'vendorcredit'].includes(row.entity)).every(row => row.transaction.linkedTo === ''));
+    assert.ok(plan.filter(row => row.entity === 'payment').every(row => row.payload.DepositToAccountRef.value === '5'));
+  }
+});
+test('an explicit uncertain transport outcome cannot be classified as a definite rejection', () => {
+  const { isDefiniteRejection } = require('../src/modules/generation-engine');
+  assert.equal(isDefiniteRejection({ status: 429, qboStage: 'api', outcomeUnknown: true }), false);
+});
+
+test('definite write admission denial stays resumable after setup or access is restored', async () => {
+  const run = fixtureRun({ steps: [step('invoice', { TxnDate: '2026-09-01' })] }); let deny = true, accepted = 0;
+  const h = engineHarness(run, async () => { if (deny) throw Object.assign(new Error('Storage setup required'), { qboStage: 'write_admission', status: 409 }); accepted++; return { Invoice: { Id: '100' } }; });
+  await runGenerationJob(copy(run), connection, h.dependencies);
+  assert.equal(h.saved().steps[0].state, 'rejected'); assert.equal(generationView(h.saved(), NOW).canResume, true); assert.equal(accepted, 0);
+  deny = false; await runGenerationJob(claimAgain(h), connection, h.dependencies); assert.equal(accepted, 1); assert.equal(h.saved().status, 'completed');
+});
+test('an older incomplete parent receipt cannot authorize a newly changed payment amount', async () => {
+  const run = fixtureRun(); Object.assign(run.steps[0], { state: 'succeeded', audited: true, receipt: { Id: '100' } }); let calls = 0;
+  const h = engineHarness(run, async () => { calls++; });
+  await runGenerationJob(copy(run), connection, h.dependencies); assert.equal(calls, 0); assert.equal(h.saved().status, 'partial');
+});
+for (const mutate of [r => { r.TotalAmt += 10; r.UnappliedAmt = 10; }, r => { r.Line[0].LinkedTxn[0].TxnId = '999'; }, r => { r.DepositToAccountRef.value = '999'; }, r => { r.CustomerRef.value = '999'; }, r => { r.TxnDate = '2026-09-30'; }]) test('source balance alone cannot approve a changed payment: '+mutate.toString(), async () => {
+  const { verifySettlement } = require('../src/modules/generation-settlement');
+  const payload = { TxnDate: '2026-09-02', CustomerRef: { value: '20' }, DepositToAccountRef: { value: '5' }, TotalAmt: 113, Line: [{ Amount: 113, LinkedTxn: [{ TxnId: '100', TxnType: 'Invoice' }] }] };
+  const record = { ...copy(payload), Id: '200', SyncToken: '0', UnappliedAmt: 0 }; mutate(record);
+  const qbo = { read: async type => type === 'payment' ? { Payment: record } : { Invoice: { Id: '100', TotalAmt: 113, Balance: 0 } } };
+  await assert.rejects(verifySettlement({ sourceType: 'Invoice', sourceId: '100', total: 113, balance: 113, amount: 113 }, qbo, { entity: 'Payment', id: '200', payload }), /saved payment/);
+});
+
+test('generation uses the local business day across UTC midnight', () => {
+  assert.equal(validateConfig({}, new Date('2026-10-15T00:30:00Z')).anchorDate, '2026-10-14');
+  assert.equal(validateConfig({}, new Date('2026-10-15T03:30:00Z')).anchorDate, '2026-10-15');
 });
