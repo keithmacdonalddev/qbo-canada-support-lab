@@ -134,7 +134,7 @@ function CoveragePanel({ ready, aiReady }) {
       </p>
     ) : (
       <p className="flex items-center gap-2 px-5 py-4 text-[13px] text-[var(--ink-2)]" role="status">
-        <LoaderCircle className="size-3.5 animate-spin" /> Reading every part of the company…
+        <LoaderCircle className="size-3.5 animate-spin" /> Reading configured company checks…
       </p>
     )
   } else {
@@ -148,7 +148,7 @@ function CoveragePanel({ ready, aiReady }) {
                 <Link
                   to={`/coverage?area=${encodeURIComponent(area.key)}`}
                   className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md px-3 py-[5px] no-underline hover:bg-[var(--sunken)]"
-                  title={`${area.name}: ${AREA_STATE[area.status]?.label || area.status}${measured ? `, ${inUse} of ${measured} in use` : ''}`}
+                  title={`${area.name}: ${AREA_STATE[area.status]?.label || area.status}${measured ? `, ${inUse} of ${measured} measured signals found` : ''}`}
                 >
                   <span className="truncate text-[12.5px] text-[var(--ink)]">{area.name}</span>
                   <Pips signals={area.signals} className="justify-end" />
@@ -159,7 +159,7 @@ function CoveragePanel({ ready, aiReady }) {
         </ul>
         {topGaps.length > 0 && (
           <div className="border-t border-[var(--line)] px-5 py-4">
-            <h3 className="text-[12px] font-medium text-[var(--ink-2)]">Biggest gaps the assistant can fill</h3>
+            <h3 className="text-[12px] font-medium text-[var(--ink-2)]">Gaps for separate test cases</h3><p className="mt-1 text-[12px] text-[var(--ink-3)]">Starting a case immediately authorizes the assistant to create and change its own QuickBooks test records. Maintain the business calendar on Company.</p>
             <ul className="mt-2 flex flex-col gap-1.5">
               {topGaps.map(({ area, gaps }) => (
                 <li key={area.key} className="flex items-center justify-between gap-3">
@@ -172,7 +172,7 @@ function CoveragePanel({ ready, aiReady }) {
                     disabled={!aiReady}
                     onClick={() => navigate('/cases/new', { state: { message: fillRequest(area, gaps) } })}
                   >
-                    <WandSparkles /> Fill
+                    <WandSparkles /> Start test case
                   </Button>
                 </li>
               ))}
@@ -187,10 +187,10 @@ function CoveragePanel({ ready, aiReady }) {
     <section className="rounded-[10px] border border-[var(--line)] bg-[var(--surface)]" aria-label="Company coverage">
       <header className="flex items-baseline justify-between gap-3 border-b border-[var(--line)] px-5 py-3.5">
         <div>
-          <h2 className="text-[13px] font-semibold text-[var(--ink)]">How much of QuickBooks is in use</h2>
+          <h2 className="text-[13px] font-semibold text-[var(--ink)]">Feature evidence in this company</h2>
           {result && (
             <p className="mt-0.5 text-[12.5px] text-[var(--ink-2)]">
-              <span className="tabular font-medium text-[var(--ink)]">{covered} of {result.summary.measuredAreas}</span> areas fully in use
+              <span className="tabular font-medium text-[var(--ink)]">{covered} of {result.summary.measuredAreas}</span> areas with all measured signals found
             </p>
           )}
         </div>

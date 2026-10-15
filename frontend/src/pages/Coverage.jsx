@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { LoaderCircle, RefreshCw, WandSparkles } from 'lucide-react'
 import Layout from '../components/Layout'
 import client from '../api/client'
@@ -11,9 +11,8 @@ import {
 } from '@/components/coverage'
 import { cn } from '@/lib/utils'
 
-// Coverage answers: which parts of QuickBooks does this company actually use?
-// Every area is measured from the company's own records, so a gap here is a
-// real gap, and each one says who can close it.
+// Coverage shows evidence found by bounded record checks. Isolated cases and
+// unmanaged history can satisfy presence signals without completing the business.
 
 const BAR_ORDER = ['covered', 'partial', 'stale', 'missing', 'manual', 'error']
 const BAR_CLS = {
@@ -29,6 +28,7 @@ function SummaryBand({ result }) {
   const counts = result.summary.areas
   const total = result.summary.measuredAreas
   const gaps = result.summary.gaps
+  const manualChecks = result.areas.reduce((count, area) => count + area.signals.filter(signal => signal.status === 'manual').length, 0)
   return (
     <section className="mt-6 grid grid-cols-1 gap-6 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-6 py-5 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center">
       <div>
@@ -36,7 +36,7 @@ function SummaryBand({ result }) {
           <span className="text-[34px] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">{counts.covered || 0}</span>
           <span className="text-[17px] text-[var(--ink-3)]">/ {total}</span>
         </div>
-        <p className="mt-1 text-[12.5px] text-[var(--ink-2)]">areas fully in use</p>
+        <p className="mt-1 text-[12.5px] text-[var(--ink-2)]">areas with all measured signals found</p>
       </div>
       <div className="min-w-0">
         <div className="flex h-2.5 overflow-hidden rounded-full bg-[var(--sunken)]" role="img" aria-label={BAR_ORDER.filter((k) => counts[k]).map((k) => `${counts[k]} ${AREA_STATE[k].label.toLowerCase()}`).join(', ')}>
@@ -55,12 +55,12 @@ function SummaryBand({ result }) {
       </div>
       <dl className="grid grid-cols-2 gap-x-6 text-[12.5px] lg:border-l lg:border-[var(--line)] lg:pl-6">
         <div>
-          <dt className="text-[var(--ink-2)]">Assistant can fill</dt>
+          <dt className="text-[var(--ink-2)]">Test-case candidates</dt>
           <dd className="text-[22px] font-semibold tabular text-[var(--ink)]">{gaps.assistant}</dd>
         </div>
         <div>
-          <dt className="text-[var(--ink-2)]">Do in QuickBooks</dt>
-          <dd className="text-[22px] font-semibold tabular text-[var(--ink)]">{gaps.quickbooks}</dd>
+          <dt className="text-[var(--ink-2)]">Manual checks</dt>
+          <dd className="text-[22px] font-semibold tabular text-[var(--ink)]">{manualChecks}</dd>
         </div>
       </dl>
     </section>
@@ -106,7 +106,7 @@ function SignalRow({ signal }) {
         <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-2)]">{signalDetail(signal)}</p>
         {gap && (
           <p className="mt-1 text-[12px] font-medium text-[var(--ink-3)]">
-            {signal.fill === 'assistant' ? 'The assistant can add these' : (signal.blockedBy || 'Set this up in QuickBooks')}
+            {signal.fill === 'assistant' ? 'A separate test case can exercise this feature' : (signal.blockedBy || 'Set this up in QuickBooks')}
           </p>
         )}
       </div>
@@ -135,10 +135,10 @@ function AreaDetail({ area, canAsk }) {
             disabled={!canAsk}
             onClick={() => navigate('/cases/new', { state: { message: fillRequest(area, fillable) } })}
           >
-            <WandSparkles /> Ask the assistant to fill {fillable.length === 1 ? 'this gap' : `${fillable.length} gaps`}
+            <WandSparkles /> Start a separate test case
           </Button>
           <p className="mt-2 text-[12px] leading-relaxed text-[var(--ink-3)]">
-            Opening this case authorizes the assistant to create and change its own test records in the connected company.
+            Starting a case immediately authorizes the assistant to create and change its own QuickBooks test records in the connected company. This does not prepare or advance the managed business calendar.
           </p>
         </div>
       )}
@@ -184,7 +184,7 @@ export default function Coverage() {
           <div>
             <h1 className="text-[22px] font-semibold tracking-[-0.015em] text-[var(--ink)]">Coverage</h1>
             <p className="mt-1 max-w-[70ch] text-[13.5px] text-[var(--ink-2)]">
-              Which parts of QuickBooks this company actually uses, read from its own records. Each square is one thing a real business does.
+              Record and setup evidence found by the current checks. Test cases and older unmanaged records can satisfy these signals; they do not prove complete business history or report coverage.
             </p>
           </div>
           {ready && state !== 'unavailable' && (
@@ -198,6 +198,8 @@ export default function Coverage() {
           )}
         </div>
 
+        <p className="mt-4 text-[13px] text-[var(--ink-2)]">For continuing business activity, <Link to="/company" className="font-medium text-[var(--link)] underline">review the business plan and calendar</Link>. Manual checks still need evidence from QuickBooks.</p>
+
         {!ready ? (
           <p className="mt-8 text-[13.5px] text-[var(--ink-2)]">Coverage is read from QuickBooks, so it shows once the company is connected.</p>
         ) : state === 'unavailable' ? (
@@ -209,7 +211,7 @@ export default function Coverage() {
             </p>
           ) : (
             <p className="mt-8 flex items-center gap-2 text-[13.5px] text-[var(--ink-2)]" role="status">
-              <LoaderCircle className="size-4 animate-spin" /> Reading every part of the company. This takes up to half a minute the first time.
+              <LoaderCircle className="size-4 animate-spin" /> Reading the configured company checks. This takes up to half a minute the first time.
             </p>
           )
         ) : (

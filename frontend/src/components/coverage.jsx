@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 // shape and colour both carry its state, so it reads without colour too.
 
 export const SIGNAL_STATE = {
-  ok: { label: 'In use', cls: 'bg-[var(--ok)] border-[var(--ok)]' },
+  ok: { label: 'Evidence found', cls: 'bg-[var(--ok)] border-[var(--ok)]' },
   stale: { label: 'Stale', cls: 'bg-[var(--attention-dot)] border-[var(--attention-dot)]' },
   missing: { label: 'Missing', cls: 'bg-transparent border-[var(--ink-3)]' },
   manual: { label: 'Check by hand', cls: 'bg-[repeating-linear-gradient(135deg,var(--ink-3)_0_1.5px,transparent_1.5px_4px)] border-[var(--ink-3)]' },
@@ -18,10 +18,10 @@ export const SIGNAL_STATE = {
 }
 
 export const AREA_STATE = {
-  covered: { label: 'In use', tone: 'text-[var(--ok)]' },
-  partial: { label: 'Partly used', tone: 'text-[var(--ink)]' },
-  stale: { label: 'Gone quiet', tone: 'text-[var(--attention)]' },
-  missing: { label: 'Not used', tone: 'text-[var(--ink-2)]' },
+  covered: { label: 'Measured signals found', tone: 'text-[var(--ok)]' },
+  partial: { label: 'Some evidence found', tone: 'text-[var(--ink)]' },
+  stale: { label: 'No recent evidence', tone: 'text-[var(--attention)]' },
+  missing: { label: 'No evidence found', tone: 'text-[var(--ink-2)]' },
   manual: { label: 'Check by hand', tone: 'text-[var(--ink-2)]' },
   error: { label: "Couldn't check", tone: 'text-[var(--danger-ink)]' },
 }
@@ -49,7 +49,7 @@ export function assistantGaps(area) {
 // The message that opens a case asking the assistant to fill an area's gaps.
 export function fillRequest(area, signals = assistantGaps(area)) {
   const list = signals.map((s) => `- ${s.label}${s.status === 'stale' && s.last ? ` (last one ${s.last})` : ''}`).join('\n')
-  return `Fill these coverage gaps in ${area.name}:\n${list}\n\nUse realistic records that fit the existing customers, vendors, items and accounts, dated in the last 30 days.`
+  return `Create a separate support test case to exercise these feature-presence gaps in ${area.name}:\n${list}\n\nUse coherent case-owned test records on elapsed dates in the last 30 days. Keep existing transactions read-only. This case does not prepare, repair or advance the managed business calendar, and feature presence alone does not prove report coverage or complete business history.`
 }
 
 export function shortDate(iso) {
