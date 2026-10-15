@@ -28,7 +28,7 @@ function caseTiming(session, now = Date.now()) {
   return { available: end !== null, ...origin, latestRunStartedAt: started !== null ? new Date(started).toISOString() : null,
     measuredThrough: end !== null ? new Date(end).toISOString() : null,
     elapsedMs: end !== null ? end - first : null, latestRunMs: end !== null && started !== null && started <= end ? end - started : null,
-    includesWaiting: true, running,
+    includesWaiting: true, running, assessmentTrust: run.assessmentTrust || 'executor-assessed',
     verifiedResult: !running && run.status === 'completed' && ['reproduced', 'not_reproduced', 'completed'].includes(run.outcome),
   };
 }

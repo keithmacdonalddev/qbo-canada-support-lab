@@ -163,3 +163,10 @@ test('an abandoned decision is re-offered only if nothing was sent', async () =>
   assert.equal(sent.stepOf(2).approval.state, 'unknown');
   assert.equal(sent.session.reproduction.outcomeUnknown, true);
 });
+
+test('a version2 owner decision invalidates its independent result before sending the saved change', async () => {
+  const f = fixture(); Object.assign(f.session.reproduction, { caseContractVersion: 2, assessment: { payload: {} }, assessmentResult: { setupComplete: true }, outcome: 'completed' });
+  const result = await ask(f); assert.equal(result.state, 'approved');
+  assert.equal(f.session.reproduction.assessment, null); assert.equal(f.session.reproduction.assessmentResult, null); assert.equal(f.session.reproduction.outcome, 'unverified');
+  assert.deepEqual(f.calls, ['read', ['POST', 'bill?operation=delete', { Id: '501', SyncToken: '3' }]]);
+});

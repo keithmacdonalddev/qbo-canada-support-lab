@@ -308,7 +308,10 @@ function errorPreview(stdout, stderr) {
  *   tools and `toolCalls` counts calls that reached it; otherwise toolCalls
  *   counts Codex's MCP tool-call events and toolsListed is false.
  */
-async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs, effort: effortOverride }) {
+async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs, effort: effortOverride, signal, maxOutputBytes, inferenceOnly = false }) {
+  const deadline = Date.now() + timeoutMs;
+  signal?.throwIfAborted();
+  if (inferenceOnly && bridge) throw new TypeError('An independent assessment cannot receive a tool bridge.');
   const executable = resolveExecutable();
   if (!executable) {
     throw providerError('Codex CLI is not installed. Install it with `npm install -g @openai/codex`, then run `codex login`.', 503);
@@ -316,7 +319,10 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
 
   // Without the stripped catalog the model may be offered Codex's own coding
   // tools, so refuse rather than run with weaker isolation.
-  const catalogFile = await modelCatalogFile(executable);
+  const catalogFile = await require('./codex-inference-output').boundedAwait(modelCatalogFile(executable), { signal, timeoutMs });
+  signal?.throwIfAborted();
+  timeoutMs = deadline - Date.now();
+  if (timeoutMs <= 0) throw providerTimeout('Codex', 0);
   if (!catalogFile) {
     throw providerError('Codex CLI could not load its model list, so the assistant was not started. Check that `codex` works in a terminal, then try again.', 503);
   }
@@ -356,6 +362,8 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
     cleanup();
     throw providerError(`Codex CLI could not start: ${err.message}`, 503);
   }
+
+  if (inferenceOnly) return require('./codex-inference-output').collectInference(child, { prompt, timeoutMs, signal, maxOutputBytes }).finally(cleanup);
 
   return new Promise((resolve, reject) => {
     let stdout = '';

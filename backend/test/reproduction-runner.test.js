@@ -176,7 +176,7 @@ test('interrupted run with an in-flight write cannot be replayed', async () => {
   await assert.rejects(() => f.start({ sessionId: first._id, requestId: 'request-123456784' }), /unresolved external write/);
 });
 
-test('continuation discards stale checks and reconstructs revision from durable writes', async () => {
+test('continuation preserves old observations and reconstructs revision from durable writes', async () => {
   let continued;
   const f = setup({ runEngine: async ({ state, persist }) => {
     continued = copy(state);
@@ -195,7 +195,7 @@ test('continuation discards stale checks and reconstructs revision from durable 
   saved.reproduction.checks = [{ label: 'Old quantity', revision: 1, available: true, passed: true }];
   await f.start({ sessionId: first._id, requestId: 'request-123456785' });
   await f.runner.waitForIdle(first._id);
-  assert.deepEqual(continued.checks, []);
+  assert.deepEqual(continued.checks, [{ label: 'Old quantity', revision: 1, available: true, passed: true }]);
   assert.equal(continued.revision, 2);
 });
 
@@ -277,7 +277,7 @@ test('continuation preserves first request timing and clears the prior finish be
   assert.ok(original);
   await f.start({ sessionId: first._id, requestId: 'request-timing-12345678' }); await f.runner.waitForIdle(first._id);
   assert.equal(starts.length, 2); assert.equal(starts[1].firstSubmittedAt, original); assert.equal(starts[1].completedAt, null);
-  const publicCase = f.runner.publicState(f.AISession.store.get(first._id));
+  const publicCase = await f.runner.publicState(f.AISession.store.get(first._id));
   assert.equal(publicCase.timing.available, true); assert.equal(publicCase.timing.firstSubmissionSource, 'recorded_request');
 });
 
@@ -323,7 +323,8 @@ test('an operator question ends the run and the reply continues the case with th
     if (call === 3) return { content: [{ type: 'tool_use', id: 't2', name: 'finishCase', input: { outcome: 'unverified', summary: 'Fixture stop', tests: [], limitations: [] } }] };
     return { content: [{ type: 'text', text: 'Done for now.' }] };
   };
-  const f = setup({ runEngine, providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat } } });
+  const complete = async ({ prompt }) => { const sources = JSON.parse(prompt).sources, first = sources.entries[0]; return { text: JSON.stringify({ purpose: 'setup', requirements: [{ id: 'r1', kind: 'setup', timing: 'final', label: 'Transfer amount is 40000', measurement: 'Requested transfer and account choice', channel: 'record', predicate: { operator: 'equal', expected: 40000 }, sources: [{ requestId: first.id, start: 0, end: first.text.length }], after: [] }] }) }; };
+  const f = setup({ runEngine, providerDependencies: { aiProvider: { resolveProvider: async () => 'anthropic', chat, complete } } });
   const first = await f.start({ message: 'need to create an owners distributions account and transfer $40000 to it for April 21, 2026' });
   await f.runner.waitForIdle(first._id);
   let saved = f.AISession.store.get(first._id);
@@ -332,7 +333,7 @@ test('an operator question ends the run and the reply continues the case with th
   assert.equal(saved.reproduction.awaitingOperator.question, question);
   assert.equal(saved.messages.at(-1).role, 'assistant');
   assert.equal(saved.messages.at(-1).content, question + '\n\nOptions:\n1. Chequing\n2. Savings');
-  assert.equal(f.runner.publicState(saved).reproduction.outcome, 'needs_input');
+  assert.equal((await f.runner.publicState(saved)).reproduction.outcome, 'needs_input');
 
   await f.start({ sessionId: first._id, requestId: 'request-answer-12345678', message: 'Use Chequing' });
   await f.runner.waitForIdle(first._id);
@@ -353,7 +354,7 @@ test('a run left by an earlier backend process can continue at once, unless a wr
   const saved = f.AISession.store.get(first._id);
   saved.reproduction.status = 'running'; saved.reproduction.instance = 'previous-server';
   saved.reproduction.leaseExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  assert.equal(f.runner.publicState(saved).reproduction.status, 'interrupted');
+  assert.equal((await f.runner.publicState(saved)).reproduction.status, 'interrupted');
   const plan = f.AIPlan.store.get(saved.reproduction.planId);
   plan.steps = [{ stepNumber: 1, toolName: 'createRecord', toolInput: { entityType: 'Bill' }, status: 'executing' }];
   await assert.rejects(() => f.start({ sessionId: first._id, requestId: 'request-h1-unresolved-1' }), /unresolved external write/);
@@ -415,4 +416,49 @@ test('credential revocation during a case stops before the next model call',asyn
     await runModel([],async()=>{},[],{deadline:Date.now()+60000});state.status='completed';
   }});
   const started=await f.start();await f.runner.waitForIdle(started._id);assert.equal(calls,0);assert.equal(f.AISession.store.get(started._id).reproduction.status,'stopped');assert.match(f.AISession.store.get(started._id).reproduction.summary,/automation is paused/);
+});
+
+test('typed Continue retains the exact original source and records no synthetic user amendment', async () => {
+  const f = setup(), first = await f.start(); await f.runner.waitForIdle(first._id);
+  const original = copy(f.AISession.store.get(first._id).reproduction.requestSources);
+  await f.start({ sessionId: first._id, requestId: 'continue-saved-12345678', message: undefined, continueSaved: true }); await f.runner.waitForIdle(first._id);
+  const saved = f.AISession.store.get(first._id);
+  assert.deepEqual(saved.reproduction.requestSources, original); assert.equal(saved.messages.filter(row => row.role === 'user').length, 1);
+  assert.ok(saved.messages.some(row => row.role === 'system')); assert.equal(saved.reproduction.caseRunHistory.length, 1);
+  await assert.rejects(f.start({ sessionId: first._id, requestId: 'continue-bad-12345678', message: 'Replace the request', continueSaved: true }), /without adding/);
+});
+test('optional assessment plan-read failure preserves running progress and Stop without assurance', async () => {
+  let release, started; const ready = new Promise(resolve => { started = resolve; }), gate = new Promise(resolve => { release = resolve; });
+  const f = setup({ runEngine: async ({ state, persist, assertActive }) => { state.assessment = { payload: {} }; await persist(); started(); await gate; await assertActive(); } });
+  const first = await f.start(); await ready;
+  const originalFind = f.AIPlan.findOne; f.AIPlan.findOne = async () => { throw new Error('isolated optional lookup failure'); };
+  try {
+    const view = await f.runner.publicState(f.AISession.store.get(first._id));
+    assert.equal(view.reproduction.status, 'running'); assert.equal(view.reproduction.outcome, 'unverified'); assert.equal(view.reproduction.assessmentTrust, 'assessment-unavailable');
+    const stopped = await f.runner.stopCase('owner', first._id), visible = await f.runner.publicState(stopped);
+    assert.equal(visible.reproduction.stopRequested, true); assert.equal(visible.reproduction.assessmentTrust, 'assessment-unavailable');
+  } finally { f.AIPlan.findOne = originalFind; release(); await f.runner.waitForIdle(first._id); }
+});
+test('legacy public results retain their meaning and are labelled executor-assessed without provider reads', async () => {
+  const f = setup(), first = await f.start(); await f.runner.waitForIdle(first._id);
+  const saved = f.AISession.store.get(first._id); delete saved.reproduction.caseContractVersion;
+  Object.assign(saved.reproduction, { status: 'completed', outcome: 'completed', revision: 1, conditions: ['Saved invoice'], checks: [{ label: 'Saved invoice', available: true, passed: true, revision: 1 }] });
+  f.AIPlan.findOne = async () => { throw new Error('Legacy inspection must not load assessment receipts'); };
+  const view = await f.runner.publicState(saved); assert.equal(view.reproduction.outcome, 'completed'); assert.equal(view.reproduction.assessmentTrust, 'executor-assessed');
+});
+
+test('a paused legacy note provider cannot race a conversion into a source-bound reproduction case', async t => {
+  const f = setup(), legacy = await f.AISession.create({ userId: 'owner', realmId: 'realm', mode: 'investigate', status: 'active', messages: [{ role: 'user', content: 'Original legacy investigation' }], tokenUsage: { inputTokens: 0, outputTokens: 0 } });
+  t.mock.method(require('../src/models/AISession'), 'findById', id => f.AISession.findById(id));
+  t.mock.method(require('../src/models/User'), 'findById', () => ({ select: async () => ({}) }));
+  let release, entered; const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  t.mock.method(require('../src/modules/ai-provider'), 'complete', async () => { entered(); await gate; return { text: 'Synthetic legacy note', usage: { inputTokens: 0, outputTokens: 0 } }; });
+  const pending = require('../src/modules/ai-orchestrator').generateNote(legacy._id);
+  try {
+    await started;
+    await assert.rejects(f.start({ sessionId: legacy._id, requestId: 'request-legacy-race-1', message: 'Convert the in-flight investigation' }), /cannot be converted/);
+    assert.equal(f.AIPlan.store.size, 0); assert.equal(f.starts, 0); assert.equal(f.AISession.store.get(legacy._id).reproduction, undefined);
+  } finally { release(); await pending; }
+  assert.deepEqual(f.AISession.store.get(legacy._id).messages, [{ role: 'user', content: 'Original legacy investigation' }]);
+  assert.equal(f.AISession.store.get(legacy._id).reproduction, undefined);
 });

@@ -83,6 +83,10 @@ function createApprovals(dependencies = {}) {
       { $set: { 'steps.$.approval.state': 'deciding', 'steps.$.approval.decidedBy': String(actorId), 'steps.$.approval.claimedAt': claimedAt } },
       { new: true });
     if (!plan) fail(409, 'This change has already been decided.');
+    if (session.reproduction?.caseContractVersion === 2) {
+      const invalidated = await AISession.updateOne({ _id: session._id, 'reproduction.decisionLockUntil': session.reproduction.decisionLockUntil }, { $set: { 'reproduction.assessment': null, 'reproduction.assessmentResult': null, 'reproduction.outcome': 'unverified', 'reproduction.summary': 'An owner decision changed the case evidence. Continue the saved request to check its result.' }, $inc: { 'reproduction.decisionRevision': 1 } });
+      if (invalidated.matchedCount !== 1) fail(409, 'Case decision ownership changed. Nothing was sent.');
+    }
     // Every later write is to this decision's own claim, so a superseded attempt
     // can never overwrite the record of a newer one.
     const setStep = async (_planId, _n, fields) => {

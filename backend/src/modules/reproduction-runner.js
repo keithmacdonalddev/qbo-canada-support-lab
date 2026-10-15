@@ -1,6 +1,8 @@
 'use strict';
 const { firstRequest, caseTiming } = require('./case-timing');
 const { assertAccountEligible } = require('./account-policy');
+const requestContract = require('./reproduction-assessment-contract');
+const { createCaseAssessment, readAssessment, positive } = require('./reproduction-assessment');
 
 const { randomUUID } = require('crypto');
 const { screenBroker, makeScreenInspector } = require('./reproduction-screen');
@@ -14,6 +16,7 @@ const admitJob = dependencies.admitJob || require('./company-job-admission').adm
 const config = dependencies.config || require('../config');
 const createQBOClient = dependencies.createQBOClient || require('./qbo-client').createQBOClient;
 const createAuditEntry = dependencies.createAuditEntry || require('../middleware/auditLogger').createAuditEntry;
+const loadAssessmentAudit = dependencies.loadAssessmentAudit || (id => require('../models/AuditLog').findOne({ _id: id }).maxTimeMS(3000).lean());
 const { bindActor, currentActorId } = require('./actor-context');
 const aiProvider = dependencies.aiProvider || require('./ai-provider');
 const codexCli = dependencies.codexCli || require('./codex-cli');
@@ -97,12 +100,22 @@ async function executeCase(sessionId, runId) {
     state.updatedAt = new Date();
     state.leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
     // Persist the operation receipt first; session references are already durable.
-    if (plan) await plan.save();
+    if (plan) {
+      if (state.caseContractVersion === 2 && ['assessing', 'finished'].includes(state.phase)) {
+        if (state.phase === 'finished') await AIPlan.updateOne({ _id: plan._id, sessionId: session._id, userId: session.userId, realmId: session.realmId }, { $set: { status: plan.status, completedAt: plan.completedAt } });
+      } else await plan.save();
+    }
     // Stop is owned by its route; never overwrite a concurrent stop request.
     const fields = Object.fromEntries(Object.entries(state)
       .filter(([key]) => key !== 'stopRequested')
       .map(([key, value]) => ['reproduction.' + key, value]));
-    const saved = await AISession.updateOne({ _id: sessionId, 'reproduction.runId': runId }, { $set: fields });
+    const decisionFence = state.decisionRevision === undefined ? { $exists: false } : state.decisionRevision;
+    const resultFence = state.caseContractVersion === 2 && positive(state.outcome) ? {
+      'reproduction.stopRequested': { $ne: true }, 'reproduction.revision': state.revision,
+      'reproduction.decisionRevision': decisionFence, 'reproduction.requestSources.contentHash': state.requestSources.contentHash,
+      'reproduction.requestContract.contentHash': state.requestContract.contentHash, 'reproduction.checks': state.checks,
+    } : {};
+    const saved = await AISession.updateOne({ _id: sessionId, 'reproduction.runId': runId, ...resultFence }, { $set: fields });
     if (saved.matchedCount !== 1) throw new Error('This run lost its case ownership.');
     if (session.isModified('messages') || session.isModified('title')) await session.save();
   }
@@ -164,7 +177,21 @@ async function executeCase(sessionId, runId) {
       await persist();
       return;
     }
-    await runEngine({ state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen,
+    const assessor = createCaseAssessment({ session, plan, persist, assertActive, audit, loadAudit: loadAssessmentAudit,
+      reload: async () => {
+        await assertActive();
+        const current = await AISession.findOne({ _id: sessionId, userId: session.userId, realmId: session.realmId, 'reproduction.runId': runId });
+        const receipts = await AIPlan.findOne({ _id: plan._id, sessionId: session._id, userId: session.userId, realmId: session.realmId });
+        if (!current || !receipts) throw new Error('The original case evidence is unavailable.');
+        return { session: current, plan: receipts };
+      },
+      complete: async options => {
+        await assertActive();
+        const account = await User.findById(state.actorId).select('+anthropicApiKey');
+        if (!account) throw new Error('The initiating account is unavailable.');
+        return aiProvider.complete({ ...options, userApiKey: account.anthropicApiKey, provider });
+      } });
+    await runEngine({ state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen, ensureContract: assessor.ensureContract, reviewFinish: assessor.reviewFinish,
       runModel: async (transcript, execute, tools, budget) => { await assertActive(); const currentUser = await User.findById(state.actorId).select('+anthropicApiKey'); if (!currentUser) throw new Error('The initiating account is unavailable.'); return runProvider(transcript, system, execute, tools, currentUser.anthropicApiKey, { ...budget, provider }); } });
     session.messages.push({ role: 'assistant', content: state.summary, timestamp: new Date() });
     if (state.title) session.title = state.title;
@@ -184,9 +211,11 @@ async function executeCase(sessionId, runId) {
   }
 }
 
-async function startCase({ userId, actorId = currentActorId() || userId, connection, requestId, message, sessionId }) {
+async function startCase({ userId, actorId = currentActorId() || userId, connection, requestId, message, sessionId, continueSaved = false }) {
   const receivedAt = new Date();
-  if (typeof message !== 'string' || !message.trim() || message.length > 30000) throw Object.assign(new Error('Provide a case description up to 30,000 characters.'), { status: 400 });
+  if (typeof continueSaved !== 'boolean' || (continueSaved && (!sessionId || (message !== undefined && message !== null)))) throw Object.assign(new Error('Continue the saved request without adding a replacement message.'), { status: 400 });
+  if (!continueSaved && (typeof message !== 'string' || !message.trim() || message.length > 30000)) throw Object.assign(new Error('Provide a case description up to 30,000 characters.'), { status: 400 });
+  const instruction = continueSaved ? 'Continue the original source-bound request using saved records and receipts. Do not repeat completed changes.' : message.trim();
   if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(requestId)) throw Object.assign(new Error('A valid submission identifier is required.'), { status: 400 });
   if (!connection || String(connection.userId) !== String(userId) || connection.status !== 'active') throw conflict('Connect the case company first.');
   await assertActorAccess(userId, actorId, connection.realmId);
@@ -195,6 +224,7 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
   if (sessionId) {
     session = await AISession.findOne({ _id: sessionId, ...scope });
     if (!session) throw Object.assign(new Error('Case not found in this connected company.'), { status: 404 });
+    if (session.mode !== 'reproduce' && !session.reproduction) throw conflict('Start a new reproduction case; an existing investigation or chat cannot be converted.');
     if (session.reproduction && (session.reproduction.environment !== config.qbo.environment
         || session.reproduction.connectionId !== String(connection._id))) {
       throw conflict('This case belongs to its original connection and environment. Start a new case in this company.');
@@ -220,11 +250,16 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
   } else {
     session = await AISession.findOne({ ...scope, submissionId: requestId });
     if (session?.reproduction) return session;
+    if (session && session.mode !== 'reproduce') throw conflict('This submission belongs to a legacy session. Start a new reproduction case.');
     // An older admission-denied empty submission can be claimed with the same
     // request. A new submission is created atomically with its active claim.
   }
   const runId = randomUUID();
   const previous = session?.reproduction;
+  const sources = requestContract.requestSources({ userId, realmId: connection.realmId, messages: session?.messages || [], reproduction: { ...(previous || {}), connectionId: String(connection._id), environment: config.qbo.environment } }, { message, requestId, actorId, continueSaved });
+  const caseRunHistory = requestContract.bounded([...(previous?.caseRunHistory || []), ...(previous?.caseContractVersion === 2 ? [{ runId: previous.runId, sourceHash: previous.requestSources.contentHash, contractHash: previous.requestContract?.contentHash || null, startedAt: previous.startedAt, endedAt: previous.completedAt || receivedAt }] : [])], 40000);
+  if (caseRunHistory.length > 60) throw conflict('This case reached its retained run limit. Preserve its evidence and start a separate case for new work.');
+  const legacyAssessment = previous && previous.caseContractVersion !== 2 ? requestContract.bounded({ outcome: previous.outcome || null, summary: previous.summary || '', conditions: previous.conditions || [], checks: previous.checks || [], revision: previous.revision || 0, completedAt: previous.completedAt || null }, 1000000) : previous?.legacyAssessment;
   const timingOrigin = sessionId ? firstRequest(session, receivedAt.getTime()) : { firstSubmittedAt: receivedAt.toISOString(), firstSubmissionSource: 'recorded_request' };
   // Claim in MongoDB as well as memory; duplicate tabs cannot launch a second run.
   // The owner may be deciding a change to an existing record; never run alongside it.
@@ -236,11 +271,12 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     if (!sessionId) {
       session = await AISession.findOne({ ...scope, submissionId: requestId }).session(dbSession);
       if (session?.reproduction) { reusedSubmission = true; return session; }
+      if (session && session.mode !== 'reproduce') throw conflict('This submission belongs to a legacy session. Start a new reproduction case.');
     }
     if (!session) [session] = await AISession.create([{ ...scope, submissionId: requestId, mode: 'reproduce',
-      title: message.replace(/[*#]/g, '').slice(0, 80), messages: [], plans: [] }], { session: dbSession });
+      title: instruction.replace(/[*#]/g, '').slice(0, 80), messages: [], plans: [] }], { session: dbSession });
     return AISession.findOneAndUpdate({
-    _id: session._id, ...scope, ...(previous ? { 'reproduction.runId': previous.runId } : {}), 'reproduction.status': { $ne: 'running' },
+    _id: session._id, ...scope, ...(previous ? { 'reproduction.runId': previous.runId } : { mode: 'reproduce' }), 'reproduction.status': { $ne: 'running' },
     $or: [{ 'reproduction.decisionLockUntil': { $exists: false } }, { 'reproduction.decisionLockUntil': null },
       { 'reproduction.decisionLockUntil': { $lt: now } }],
   },{ $set: { mode: 'reproduce', reproduction: {
@@ -249,7 +285,8 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
     actorId: String(actorId), companyName: connection.companyName || 'Connected company',
     authorization: 'connected-company-case-request-v1', ...timingOrigin, startedAt: now, completedAt: null, stopRequested: false,
     leaseExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
-    outcome: null, summary: '', limitations: [], tests: [], checks: [], awaitingOperator: null, toolAccess: null,
+    caseContractVersion: 2, requestSources: sources, caseRunHistory, ...(legacyAssessment ? { legacyAssessment } : {}), assessment: null, assessmentResult: null, executorSummary: null,
+    outcome: null, summary: '', limitations: [], tests: [], checks: previous?.caseContractVersion === 2 ? previous.checks || [] : [], awaitingOperator: null, toolAccess: null,
     // The claim filter guarantees no live decision lock; never copy back an old one.
     decisionLockUntil: null,
   } } }, { new: true, session: dbSession });
@@ -293,13 +330,13 @@ async function startCase({ userId, actorId = currentActorId() || userId, connect
       await plan.save();
     }
     claimed.reproduction.planId = String(plan._id);
-    claimed.messages.push({ role: 'user', content: message.trim(), timestamp: new Date() });
+    claimed.messages.push({ role: continueSaved ? 'system' : 'user', content: instruction, timestamp: new Date() });
     const fields = Object.fromEntries(Object.entries(claimed.reproduction)
       .filter(([key]) => key !== 'stopRequested')
       .map(([key, value]) => ['reproduction.' + key, value]));
     const initialized = await AISession.updateOne({ _id: claimed._id, 'reproduction.runId': runId }, {
       $set: fields, $addToSet: { plans: plan._id },
-      $push: { messages: { role: 'user', content: message.trim(), timestamp: new Date() } },
+      $push: { messages: { role: continueSaved ? 'system' : 'user', content: instruction, timestamp: new Date() } },
     });
     if (initialized.matchedCount !== 1) throw conflict('This case run is no longer active.');
     const recorded = await createAuditEntry(userId, connection.realmId, 'Reproduction requested', {
@@ -326,12 +363,23 @@ async function stopCase(userId, sessionId) {
   return session;
 }
 
-function publicState(session) {
+async function publicState(session) {
   const plain = typeof session.toObject === 'function' ? session.toObject() : { ...session };
   if (plain.reproduction) {
     const run = plain.reproduction;
-    const outcome = run.outcome ? classifyOutcome(run.outcome, run.conditions || [], run.checks || [], run.revision) : run.outcome;
-    plain.reproduction = { ...run, outcome, conditionResults: conditionResults(run.conditions || [], run.checks || [], run.revision),
+    let outcome = run.outcome ? classifyOutcome(run.outcome, run.conditions || [], run.checks || [], run.revision) : run.outcome;
+    let assessmentTrust = 'executor-assessed', assessmentReview = null;
+    if (run.caseContractVersion === 2) {
+      assessmentTrust = 'not-assessed';
+      if (run.assessment) {
+        try {
+          const receipts = await AIPlan.findOne({ _id: run.planId, sessionId: session._id, userId: session.userId, realmId: session.realmId });
+          assessmentReview = await readAssessment(plain, receipts, loadAssessmentAudit);
+        } catch { assessmentReview = { valid: false, trust: 'assessment-unavailable', outcome: 'unverified', setupComplete: false, requirements: [], reason: 'Saved assessment evidence is unavailable. Core progress and Stop remain available.' }; }
+        outcome = assessmentReview.outcome; assessmentTrust = assessmentReview.trust;
+      } else if (positive(run.outcome)) outcome = 'unverified';
+    }
+    plain.reproduction = { ...run, outcome, assessmentTrust, assessmentReview, conditionResults: conditionResults(run.conditions || [], run.checks || [], run.revision),
       ...(outcome !== run.outcome ? { summary: 'The saved conclusion is not supported by all recorded checks. Review the evidence below.' } : {}) };
   }
   if (plain.reproduction?.status === 'running' && (plain.reproduction.instance !== INSTANCE || !jobs.has(String(plain._id)))) {

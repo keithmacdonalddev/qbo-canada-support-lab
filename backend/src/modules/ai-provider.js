@@ -120,6 +120,7 @@ function friendlyError(error, { attempts = 1, model } = {}) {
  * @returns {Object} Anthropic response object
  */
 async function chat(messages, tools = [], options = {}) {
+  options.signal?.throwIfAborted();
   const apiKey = resolveApiKey(options);
   const client = getClient(apiKey);
 
@@ -136,13 +137,16 @@ async function chat(messages, tools = [], options = {}) {
     const remaining = deadline === null ? undefined : deadline - Date.now();
     if (remaining !== undefined && remaining <= 0) throw providerTimeout('The model service', options.timeoutMs);
     try {
-      return await client.messages.create(params, remaining === undefined ? { maxRetries: 0 } : { timeout: remaining, maxRetries: 0 });
+      const response = await client.messages.create(params, { maxRetries: 0, ...(remaining === undefined ? {} : { timeout: remaining }), ...(options.signal ? { signal: options.signal } : {}) });
+      options.signal?.throwIfAborted();
+      return response;
     } catch (error) {
+      options.signal?.throwIfAborted();
       if (deadline !== null && error instanceof Anthropic.APIConnectionTimeoutError) throw providerTimeout('The model service', options.timeoutMs);
       const delay = retryDelayMs(error, attempt);
       // Leave the retried call at least five seconds to answer.
       const fits = deadline === null || deadline - Date.now() - delay > 5000;
-      if (attempt >= MAX_ATTEMPTS || !isRetryable(error) || !fits) throw friendlyError(error, { attempts: attempt, model: params.model });
+      if (attempt >= (options.maxAttempts || MAX_ATTEMPTS) || !isRetryable(error) || !fits) throw friendlyError(error, { attempts: attempt, model: params.model });
       console.warn('[ai-provider] model call failed; retrying', { attempt, status: error?.status ?? 'network', delayMs: Math.round(delay) });
       await timing.sleep(delay);
     }
@@ -220,17 +224,22 @@ async function resolveProvider(options = {}) {
  * @param {Object} options - { system, prompt, maxTokens?, userApiKey?, provider? }
  * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number } }>}
  */
-async function complete({ system, prompt, maxTokens, userApiKey, provider } = {}) {
+async function complete({ system, prompt, maxTokens, userApiKey, provider, timeoutMs, signal, maxOutputBytes, inferenceOnly = false } = {}) {
+  signal?.throwIfAborted();
+  if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300000)) throw new TypeError('Completion timeout is outside its supported bound.');
+  if (maxOutputBytes !== undefined && (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 256 || maxOutputBytes > 1048576)) throw new TypeError('Completion output limit is outside its supported bound.');
+  let result;
   if (await resolveProvider({ provider }) === 'codex') {
-    const result = await codexCli.run({ system, prompt });
-    return { text: result.text, usage: result.usage };
+    result = await codexCli.run({ system, prompt, ...(timeoutMs === undefined ? {} : { timeoutMs }), signal, maxOutputBytes, inferenceOnly });
+  } else {
+    const response = await chat([{ role: 'user', content: prompt }], [], { system, maxTokens, userApiKey, timeoutMs, signal, ...(inferenceOnly ? { maxAttempts: 1 } : {}) });
+    if (inferenceOnly && (response.stop_reason === 'max_tokens' || (response.content || []).some(block => block.type !== 'text'))) throw Object.assign(new Error('The independent assessment did not return a complete text response.'), { code: 'AI_ASSESSMENT_INCOMPLETE' });
+    result = { text: (response.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n'),
+      usage: { inputTokens: response.usage?.input_tokens || 0, outputTokens: response.usage?.output_tokens || 0 } };
   }
-  const response = await chat([{ role: 'user', content: prompt }], [], { system, maxTokens, userApiKey });
-  const text = (response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-  return {
-    text,
-    usage: { inputTokens: response.usage?.input_tokens || 0, outputTokens: response.usage?.output_tokens || 0 },
-  };
+  signal?.throwIfAborted();
+  if (maxOutputBytes !== undefined && Buffer.byteLength(result.text || '', 'utf8') > maxOutputBytes) throw Object.assign(new Error('The independent assessment exceeded its output limit.'), { code: 'AI_ASSESSMENT_TOO_LARGE' });
+  return { text: result.text, usage: result.usage };
 }
 
 module.exports = {

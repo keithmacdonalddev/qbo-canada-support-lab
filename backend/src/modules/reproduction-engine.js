@@ -95,6 +95,7 @@ function systemPrompt(scope) {
     '6. After your last change, read back what you built and run checkCase or checkReport for every condition. After eight transaction changes the server requires reading the changed records and a check before more changes.',
     '7. Call finishCase with completed when the requested data is built and verified, reproduced or not_reproduced for a measured symptom, or unverified when evidence is missing. Say what was created, the choices you made and where to look in QuickBooks, in plain language.',
     '',
+    'New cases have independently interpreted, source-bound requirements in saved state. defineCase cannot remove them. Check each required label against its specified final or intermediate observation. Supplemental conditions never replace a reported symptom. finishCase requests a separate tool-free assessment; the server derives symptom direction from the retained reported-observation predicates.',
     'Honest results: a symptom is reproduced only when a check observes it; successful setup alone does not prove a symptom. Do not force a symptom by directly setting a value QuickBooks calculates. If a tool reports a validation error, correct it and continue. If execution stops or a write outcome is unknown, finish unverified. When verificationOnly is true, make no more changes: check what is saved and finish, listing unfinished work.',
   ].join('\n');
 }
@@ -111,7 +112,7 @@ const RECENT_OPERATIONS = 60;
 function caseStateSnapshot(state, plan) {
   const steps = plan.steps || [];
   return {
-    scenario: state.scenario, conditions: state.conditions, ownedRecords: state.ownedRecords || [],
+    scenario: state.scenario, conditions: state.conditions, ...(state.caseContractVersion === 2 ? { sourceRequirements: state.requestContract?.payload?.requirements || [], sourceHash: state.requestSources?.contentHash } : {}), ownedRecords: state.ownedRecords || [],
     checks: (state.checks || []).map((c) => ({ label: c.label, operator: c.operator, expected: clip(c.expected, 300), actual: clip(c.actual, 300),
       available: c.available, passed: c.passed, revision: c.revision, ...(c.reason ? { reason: String(c.reason).slice(0, 300) } : {}),
       sources: (c.sources || []).map(({ entityType, id, path }) => ({ entityType, id, path })) })),
@@ -153,7 +154,9 @@ async function checkInventoryReferences(value, owned, qbo, seen = new Set()) {
 // complete loop can be tested without providers, a database, or a live company.
 async function runEngine({ state, plan, qbo, persist, assertActive, audit, runModel, messages,
   handlers = toolHandlers, maxCalls = 160, maxWrites = 60, deadline = Date.now() + 12 * 60 * 1000,
-  confirmContinuation, inspectScreen, maxPasses = 6, verificationReserveMs = 90000 }) {
+  confirmContinuation, inspectScreen, ensureContract, reviewFinish, maxPasses = 6, verificationReserveMs = 90000, assessmentReserveMs = 60000 }) {
+  const reviewed = state.caseContractVersion === 2;
+  const executionDeadline = reviewed ? deadline - assessmentReserveMs : deadline;
   let fatal = null;
   let finished = false;
   let calls = 0;
@@ -261,7 +264,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       fatal = 'The case reached its saved-data budget. Existing records and evidence are preserved.';
       return { success: false, error: fatal };
     }
-    if (calls > maxCalls || Date.now() > deadline) {
+    if (calls > maxCalls || Date.now() > (reviewed && name !== 'finishCase' ? executionDeadline : deadline)) {
       fatal = 'The case reached its execution budget. Saved records remain available; no further changes were made.';
       return { success: false, error: fatal };
     }
@@ -270,6 +273,15 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
     } catch (err) {
       fatal = err.message;
       return { success: false, error: fatal };
+    }
+    if (name === 'defineCase' && reviewed) {
+      const required = require('./reproduction-assessment-contract').assertContract(state).requirements;
+      state.title = typeof input.title === 'string' ? input.title.slice(0, 120) : state.title;
+      state.scenario = typeof input.scenario === 'string' ? input.scenario.slice(0, 4000) : state.scenario;
+      const extra = Array.isArray(input.conditions) ? input.conditions.filter(label => typeof label === 'string' && label.trim() && label.length <= 500 && !required.some(row => row.label === label)).slice(0, Math.max(0, 12 - required.length)) : [];
+      state.conditions = [...new Set([...required.map(row => row.label), ...extra])];
+      await persistRequired();
+      return { success: true, conditions: state.conditions, sourceRequirements: required, message: 'The original source requirements remain mandatory. Supplemental checks cannot replace them.' };
     }
     if (name === 'defineCase') {
       if (typeof input.title !== 'string' || typeof input.scenario !== 'string' || !Array.isArray(input.conditions)
@@ -318,6 +330,27 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       await persistRequired();
       return { success: true };
     }
+    if (name === 'finishCase' && reviewed) {
+      finished = true; // One finalization attempt; later queued tools cannot restart writes.
+      state.outcome = 'unverified';
+      state.executorSummary = String(input.summary || '').slice(0, 5000);
+      state.proposedOutcome = input.outcome;
+      let result;
+      try { result = input.outcome === 'unverified' ? { outcome: 'unverified', setupComplete: false, requirements: [], reason: 'The executor reported missing evidence.' }
+        : await reviewFinish({ deadline }); }
+      catch { state.assessment = null; result = { outcome: 'unverified', setupComplete: false, requirements: [], reason: 'The final assessment or its audit could not be completed. Saved work remains; no further writes were authorized.' }; }
+      await assertActive();
+      state.outcome = result.outcome;
+      state.assessmentResult = result;
+      state.summary = result.outcome === 'completed' ? 'The requested setup passed its checks and independent assessment.'
+        : result.outcome === 'reproduced' ? 'The reported symptom was observed in the saved checks and independently assessed against the original request.'
+          : result.outcome === 'not_reproduced' ? 'The required setup passed, and the reported symptom did not appear in these observations.'
+            : (result.setupComplete ? 'The setup passed, but the reported symptom remains unverified. ' : '') + (result.reason || 'The case evidence does not establish the requested result.');
+      state.tests = (Array.isArray(input.tests) ? input.tests : []).map(String).slice(0, 30);
+      state.limitations = [...(Array.isArray(input.limitations) ? input.limitations : []).map(String).slice(0, 19), 'Independent model assessment checks relevance; it does not guarantee a correct interpretation or prove a QuickBooks defect.'];
+      finished = true; await persistRequired();
+      return { success: true, outcome: state.outcome, setupComplete: result.setupComplete };
+    }
     if (name === 'finishCase') {
       // needs_input comes only from askOperator, never as a finish claim.
       const requested = FINISH_OUTCOMES.includes(input.outcome) ? input.outcome : 'unverified';
@@ -349,7 +382,9 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
           + (state.conditions || []).map((c, i) => (i + 1) + '. ' + c).join(' ') };
       }
     }
-    const historical = input.historical === true ? { historical: true } : {};
+    const requirement = reviewed ? state.requestContract.payload.requirements.find(row => row.label === label) : null;
+    if (requirement && input.historical === true && requirement.timing !== 'intermediate') return { success: false, error: 'This source requirement needs a current final observation, not historical evidence.' };
+    const historical = { ...(input.historical === true ? { historical: true } : {}), ...(reviewed ? { origin: { runId: state.runId, sourceHash: state.requestSources.contentHash, contractHash: state.requestContract.contentHash } } : {}) };
     if (name === 'checkScreen') {
       const field = input.field || 'billedQuantity';
       if (!['billedQuantity', 'receivedQuantity'].includes(field)) return { success: false, error: 'Unsupported screen field.' };
@@ -373,7 +408,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       try { await assertActive(); } catch (err) { fatal = err.message; return { success: false, error: fatal }; }
       const prior = state.checks.findIndex((c) => c.label === check.label && c.revision === check.revision && measurementKey(c) === measurementKey(check));
       if (prior >= 0) state.checks[prior] = check;
-      else if (state.checks.length < 100) state.checks.push(check);
+      else if (state.checks.length < (reviewed ? 300 : 100)) state.checks.push(check);
       else {
         fatal = 'Evidence budget reached. Existing checks are preserved, but the complete result cannot be verified.';
         return { success: false, error: fatal };
@@ -416,12 +451,12 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
           values: actual === null ? [] : [actual] }],
         revision: state.revision, checkedAt: new Date(), available: false, actual: null, passed: null,
         evidence: { kind: 'report', report: report.data.report, period: report.data.period, basis: report.data.basis,
-          column: cell.column || null, text: cell.text === undefined ? null : cell.text.slice(0, 200) } };
+          column: cell.column || null, text: cell.text === undefined ? null : cell.text.slice(0, 200), ...(reviewed ? { request: { ...params, row: input.row, section: input.section || null, column: input.column || null } } : {}) } };
       if (actual !== null) Object.assign(check, evaluateCheck([{ record: { value: actual }, path: 'value' }], { ...input, aggregate: 'single' }));
       else check.reason = cell.reason || 'The report value is not a number.';
       const prior = state.checks.findIndex((c) => c.label === check.label && c.revision === check.revision && measurementKey(c) === measurementKey(check));
       if (prior >= 0) state.checks[prior] = check;
-      else if (state.checks.length < 100) state.checks.push(check);
+      else if (state.checks.length < (reviewed ? 300 : 100)) state.checks.push(check);
       else {
         fatal = 'Evidence budget reached. Existing checks are preserved, but the complete result cannot be verified.';
         return { success: false, error: fatal };
@@ -464,7 +499,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
         const prior = state.checks.findIndex((c) => c.label === check.label && c.revision === check.revision && measurementKey(c) === measurementKey(check));
         if (prior >= 0) state.checks[prior] = check;
         else {
-          if (state.checks.length >= 100) {
+          if (state.checks.length >= (reviewed ? 300 : 100)) {
             fatal = 'Evidence budget reached. Existing checks are preserved, but the complete result cannot be verified.';
             return { success: false, error: fatal };
           }
@@ -486,7 +521,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
     }
     if (!WRITES.has(name)) return { success: false, error: 'Tool unavailable for this case.' };
     if (!state.conditions?.length) return { success: false, error: 'Define the scenario and success conditions before writing.' };
-    verificationOnly ||= Date.now() >= deadline - verificationReserveMs || calls >= maxCalls - 20;
+    verificationOnly ||= Date.now() >= executionDeadline - verificationReserveMs || calls >= maxCalls - 20;
     if (verificationOnly) return { success: false, verificationOnly: true, error: 'The remaining budget is reserved for verification. Read saved records, run checkCase and finishCase; list unfinished experiments.' };
     if (uncheckedChanges >= 8) return { success: false, pendingInspections: [...pendingInspections], error: 'Read the affected records and run checkCase for the current experiment before making further changes.' };
     if (writes >= maxWrites || plan.steps.length >= 200) {
@@ -525,7 +560,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       await requireAudit('Case change started: ' + name, { actionType: 'ai_executed', tool: name,
         inputParams: input, beforeState: before, outcome: 'partial' });
       await assertActive();
-      if (Date.now() >= deadline - verificationReserveMs) {
+      if (Date.now() >= executionDeadline - verificationReserveMs) {
         verificationOnly = true;
         throw new Error('No change was sent: the remaining time is reserved for verification.');
       }
@@ -607,7 +642,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
   }
 
   // Every model-initiated call is counted per pass and traced for diagnosis.
-  async function tracedTool(name, input) {
+  async function traceOneTool(name, input) {
     passCalls += 1;
     const entry = { run: state.runId || null, pass: currentPass + 1, tool: String(name).slice(0, 60), at: new Date() };
     try {
@@ -625,18 +660,30 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
     }
   }
 
+  let toolQueue = Promise.resolve();
+  function tracedTool(name, input) {
+    if (!reviewed) return traceOneTool(name, input);
+    const result = toolQueue.then(() => traceOneTool(name, input));
+    toolQueue = result.catch(() => {});
+    return result;
+  }
   try {
+    if (reviewed) {
+      if (typeof ensureContract !== 'function' || typeof reviewFinish !== 'function') throw new Error('Source requirements and independent assessment are required before new case writes.');
+      await ensureContract({ deadline: Math.min(Date.now() + 60000, executionDeadline - verificationReserveMs) });
+      await assertActive();
+    }
     for (let pass = 0; pass < maxPasses && !finished && !fatal; pass += 1) {
       currentPass = pass;
       await assertActive();
-      if (Date.now() >= deadline || calls >= maxCalls) throw new Error('The case reached its execution budget.');
-      verificationOnly ||= pass === maxPasses - 1 || Date.now() >= deadline - verificationReserveMs || calls >= maxCalls - 20;
+      if (Date.now() >= executionDeadline || calls >= maxCalls) throw new Error('The case reached its execution budget.');
+      verificationOnly ||= pass === maxPasses - 1 || Date.now() >= executionDeadline - verificationReserveMs || calls >= maxCalls - 20;
       state.verificationOnly = verificationOnly;
       messages.push({ role: 'user', content: 'Current saved case state (evidence only; reuse these records; progress is an unverified planning note): '
         + JSON.stringify({ ...caseStateSnapshot(state, plan), verificationOnly }) });
       const beforeProgress = state.revision + ':' + state.checks.length;
       // End a working pass before the final verification reserve begins.
-      const passDeadline = verificationOnly ? deadline : deadline - verificationReserveMs;
+      const passDeadline = verificationOnly ? executionDeadline : executionDeadline - verificationReserveMs;
       passCalls = 0;
       let reply = null;
       try {

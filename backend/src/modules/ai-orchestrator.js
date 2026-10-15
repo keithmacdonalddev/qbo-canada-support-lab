@@ -309,12 +309,16 @@ async function loadContext(userId, realmId) {
  * @param {string} userMessage
  * @returns {{ session, response: string, plan: Object|null }}
  */
+function assertLegacySession(session) {
+  if (session.mode === 'reproduce' || session.reproduction) throw Object.assign(new Error('Use the reproduction case endpoint to continue or summarize this case.'), { status: 409, caseSessionRequired: true });
+}
 async function chat(userId, realmId, sessionId, userMessage) {
   // 1. Load or create session
   let session;
   if (sessionId) {
     session = await AISession.findOne({ _id: sessionId, userId, realmId });
     if (!session) throw new Error('AI session not found');
+    assertLegacySession(session);
     if (session.status !== 'active') throw new Error('AI session is not active');
   } else {
     session = await AISession.create({
@@ -881,6 +885,7 @@ async function investigate(userId, realmId, sessionId, question) {
   if (sessionId) {
     session = await AISession.findOne({ _id: sessionId, userId, realmId });
     if (!session) throw new Error('AI session not found');
+    assertLegacySession(session);
     if (session.status !== 'active') throw new Error('AI session is not active');
   } else {
     session = await AISession.create({
@@ -1021,6 +1026,7 @@ async function investigate(userId, realmId, sessionId, question) {
 async function generateNote(sessionId, format = 'internal') {
   const session = await AISession.findById(sessionId);
   if (!session) throw new Error('AI session not found');
+  assertLegacySession(session);
 
   // Load the acting user's API key (never the shared company owner's)
   const user = await User.findById(currentActorId() || session.userId).select('+anthropicApiKey');

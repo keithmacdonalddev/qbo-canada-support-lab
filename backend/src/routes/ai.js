@@ -18,6 +18,10 @@ const approvals = require('../modules/reproduction-approvals');
 const reconciler = require('../modules/reproduction-reconcile');
 const { screenBroker } = require('../modules/reproduction-screen');
 const { createQBOClient } = require('../modules/qbo-client');
+const { createSessionAccess, respondSessionAccess } = require('../modules/ai-session-access');
+const savedAccess = createSessionAccess();
+const assertSavedRead = (req, session) => savedAccess.assertSession(req.user, session, req.currentAccount);
+const savedIdentity = session => JSON.stringify(aiNotes.caseNoteEvidence(session));
 
 const router = express.Router();
 
@@ -78,27 +82,56 @@ async function getActiveConnection(userId) {
   return Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 });
 }
 
+// A saved session may contain historical or corrupt plan references. Only expose
+// plans belonging to that same workspace and original company.
+function scopedPlans(session) {
+  const plain = typeof session.toObject === 'function' ? session.toObject() : { ...session };
+  if (Array.isArray(plain.plans)) plain.plans = plain.plans.filter(plan => plan && String(plan.userId) === String(plain.userId) && plan.realmId === plain.realmId && String(plan.sessionId) === String(plain._id));
+  return plain;
+}
+async function assertLegacySessionRead(req, sessionId) {
+  if (!sessionId) return;
+  const session = await AISession.findOne({ _id: sessionId, userId: req.user.id }).select('userId realmId mode reproduction');
+  await assertSavedRead(req, session);
+  if (session.mode === 'reproduce' || session.reproduction) throw Object.assign(new Error('Use the reproduction case endpoint to continue this case.'), { status: 409, caseSessionRequired: true });
+}
+async function requireSavedPlan(req, res, next) {
+  try {
+    const plan = await AIPlan.findOne({ _id: req.params.id, userId: req.user.id });
+    await assertSavedRead(req, plan);
+    if (String(req.companyContext?.connection?.realmId) !== String(plan.realmId)) return res.status(409).json({ success: false, error: 'This plan belongs to a different company. Return to its original company before deciding it.' });
+    return next();
+  } catch (error) {
+    if (respondSessionAccess(res, error)) return;
+    return res.status(503).json({ success: false, error: 'Saved plan access could not be verified.' });
+  }
+}
+
 // --- Routes ---
 
 // Authenticated local-app rendezvous; the companion never receives a JWT.
 const screenScope = (req) => ({ userId: String(req.user.id), actorId: String(req.user.actorId || req.user.id), caseId: req.params.id });
 router.get('/sessions/:id/screen', async (req, res) => {
   try {
-    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('reproduction');
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('userId realmId reproduction');
     if (!session) return res.status(404).json({ success: false, error: 'Case not found.' });
+    await assertSavedRead(req, session);
     const request = await screenBroker.poll(screenScope(req));
+    await assertSavedRead(req, session);
     return res.json({ success: true, data: { request } });
-  } catch { return res.status(409).json({ success: false, error: 'The screen check is no longer active.' }); }
+  } catch (error) { if (respondSessionAccess(res, error)) return; return res.status(409).json({ success: false, error: 'The screen check is no longer active.' }); }
 });
 router.post('/sessions/:id/screen', async (req, res) => {
   try {
-    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('reproduction');
+    const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id, mode: 'reproduce' }).select('userId realmId reproduction');
     if (!session) return res.status(404).json({ success: false, error: 'Case not found.' });
+    await assertSavedRead(req, session);
     if (req.body?.type === 'heartbeat') screenBroker.heartbeat(screenScope(req), req.body.ready === true);
     else if (req.body?.type === 'receipt') await screenBroker.receive(screenScope(req), req.body);
     else return res.status(400).json({ success: false, error: 'Invalid screen message.' });
+    await assertSavedRead(req, session);
     return res.json({ success: true });
-  } catch { return res.status(409).json({ success: false, error: 'The screen evidence expired or did not match this active case.' }); }
+  } catch (error) { if (respondSessionAccess(res, error)) return; return res.status(409).json({ success: false, error: 'The screen evidence expired or did not match this active case.' }); }
 });
 
 // Reproduction is the connected company's normal workflow. The submitted case
@@ -112,9 +145,9 @@ router.post('/reproduce', async (req, res) => {
     }
     const session = await reproduction.startCase({
       userId: req.user.id, actorId: req.user.actorId || req.user.id, connection,
-      requestId: req.body.requestId, message: req.body.message, sessionId: req.body.sessionId,
+      requestId: req.body.requestId, message: req.body.message, sessionId: req.body.sessionId, continueSaved: req.body.continueSaved ?? false,
     });
-    return res.status(202).json({ success: true, data: { session: reproduction.publicState(session) } });
+    return res.status(202).json({ success: true, data: { session: await reproduction.publicState(session) } });
   } catch (err) {
     return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
@@ -145,7 +178,7 @@ router.post('/sessions/:id/reconcile', async (req, res) => {
     const result = await reconciler.reconcile({ userId: req.user.id, actorId: req.user.actorId || req.user.id,
       sessionId: req.params.id, selections: req.body?.selections || [] });
     const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id }).populate('plans');
-    return res.json({ success: true, data: { ...result, session: session ? reproduction.publicState(session) : null } });
+    return res.json({ success: true, data: { ...result, session: session ? await reproduction.publicState(session) : null } });
   } catch (err) {
     if (err.caseReconcile) return res.status(err.status).json({ success: false, error: err.message });
     if (isQboError(err)) return respondQboError(res, err);
@@ -156,9 +189,13 @@ router.post('/sessions/:id/reconcile', async (req, res) => {
 
 router.post('/sessions/:id/stop', async (req, res) => {
   try {
+    const saved = await AISession.findOne({ _id: req.params.id, userId: req.user.id }).select('userId realmId');
+    await assertSavedRead(req, saved);
     const session = await reproduction.stopCase(req.user.id, req.params.id);
-    return res.json({ success: true, data: { session: reproduction.publicState(session) } });
+    await assertSavedRead(req, session);
+    return res.json({ success: true, data: { session: await reproduction.publicState(session) } });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
     return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }
 });
@@ -230,15 +267,13 @@ router.post('/chat', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Message is required' });
     }
 
+    await assertLegacySessionRead(req, sessionId);
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {
       return res.status(400).json({ success: false, error: 'No active QBO connection' });
     }
     const realmId = connection.realmId;
 
-    if (sessionId && await AISession.exists({ _id: sessionId, userId: req.user.id, mode: 'reproduce' })) {
-      return res.status(409).json({ success: false, error: 'Use the reproduction case endpoint to continue this case.' });
-    }
     let result;
     if (mode === 'investigate') {
       result = await orchestrator.investigate(req.user.id, realmId, sessionId, message);
@@ -254,6 +289,8 @@ router.post('/chat', async (req, res) => {
 
     return res.json({ success: true, data: result });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
+    if (err.caseSessionRequired) return res.status(409).json({ success: false, error: err.message, code: 'CASE_ENDPOINT_REQUIRED' });
     console.error('[ai/chat]', err.message);
     if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
@@ -266,7 +303,7 @@ router.post('/chat', async (req, res) => {
  * Approve a plan (or specific steps).
  * Body: { stepApprovals?: [{ stepNumber, approved }] }
  */
-router.post('/plan/:id/approve', requireCompanyWrite, async (req, res) => {
+router.post('/plan/:id/approve', requireCompanyWrite, requireSavedPlan, async (req, res) => {
   try {
     const { stepApprovals } = req.body;
     const plan = await orchestrator.approvePlan(req.params.id, req.user.id, stepApprovals);
@@ -293,7 +330,7 @@ router.post('/plan/:id/approve', requireCompanyWrite, async (req, res) => {
  * POST /plan/:id/reject
  * Reject a plan.
  */
-router.post('/plan/:id/reject', requireCompanyWrite, async (req, res) => {
+router.post('/plan/:id/reject', requireCompanyWrite, requireSavedPlan, async (req, res) => {
   try {
     const plan = await orchestrator.rejectPlan(req.params.id, req.user.id);
 
@@ -327,6 +364,7 @@ router.post(
   '/plan/:id/execute',
   requireFeatureFlag('experimental.aiMutations', { message: 'Legacy AI mutations are disabled by server policy' }),
   requireCompanyWrite,
+  requireSavedPlan,
   requireProductionConfirm,
   async (req, res) => {
     try {
@@ -365,7 +403,8 @@ router.get('/sessions', async (req, res) => {
   try {
     const { status, limit = 20, offset = 0 } = req.query;
 
-    const filter = { userId: req.user.id };
+    const scope = await savedAccess.listScope(req.user, req.currentAccount);
+    const filter = { ...scope.filter };
     if (status) filter.status = status;
 
     const sessions = await AISession.find(filter)
@@ -374,9 +413,11 @@ router.get('/sessions', async (req, res) => {
       .limit(Math.min(Number(limit), 100));
 
     const total = await AISession.countDocuments(filter);
+    await savedAccess.assertListScope(scope, req.user, req.currentAccount);
 
     return res.json({ success: true, data: { sessions, total, limit: Number(limit), offset: Number(offset) } });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
     console.error('[ai/sessions]', err.message);
     return res.status(500).json({ success: false, error: 'Failed to list sessions' });
   }
@@ -397,8 +438,13 @@ router.get('/sessions/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
-    return res.json({ success: true, data: { session: reproduction.publicState(session) } });
+    await assertSavedRead(req, session);
+    const scoped = scopedPlans(session);
+    const state = await reproduction.publicState(scoped);
+    await assertSavedRead(req, session);
+    return res.json({ success: true, data: { session: state } });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
     console.error('[ai/sessions/get]', err.message);
     return res.status(500).json({ success: false, error: 'Failed to fetch session' });
   }
@@ -419,7 +465,8 @@ router.get('/sessions/:id/changes', async (req, res) => {
     const session = await AISession.findOne({ _id: req.params.id, userId: req.user.id }).populate('plans');
     if (!session) return res.status(404).json({ success: false, error: 'Session not found' });
 
-    const plans = [...(session.plans || [])].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    await assertSavedRead(req, session);
+    const plans = [...(scopedPlans(session).plans || [])].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     const refs = caseChanges.collectRefs(plans);
     // Finished steps are part of the key: a payment that just ran changes the balances shown.
     const finished = plans.flatMap((p) => (p.steps || []).filter((s) => s.status === 'completed').map((s) => `${p._id}.${s.stepNumber}`)).join(',');
@@ -444,8 +491,10 @@ router.get('/sessions/:id/changes', async (req, res) => {
     }
 
     const request = (session.messages || []).find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
+    await assertSavedRead(req, session);
     return res.json({ success: true, data: caseChanges.describeChanges(plans, names.map, { request }) });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
     console.error('[ai/sessions/changes]', err.message);
     return res.status(500).json({ success: false, error: 'Failed to describe the changes' });
   }
@@ -463,6 +512,7 @@ router.post('/investigate', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Question is required' });
     }
 
+    await assertLegacySessionRead(req, sessionId);
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {
       return res.status(400).json({ success: false, error: 'No active QBO connection' });
@@ -479,6 +529,8 @@ router.post('/investigate', async (req, res) => {
 
     return res.json({ success: true, data: result });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
+    if (err.caseSessionRequired) return res.status(409).json({ success: false, error: err.message, code: 'CASE_ENDPOINT_REQUIRED' });
     console.error('[ai/investigate]', err.message);
     if (sendAiProviderError(res, err)) return;
     if (sendQboErrorJson(res, err)) return;
@@ -509,25 +561,34 @@ router.post('/generate-note', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
 
+    await assertSavedRead(req, session);
     const User = require('../models/User');
-    const user = await User.findById(req.user.actorId || req.user.id).select('+anthropicApiKey');
+    const caseSession = session.reproduction ? await reproduction.publicState(session) : null;
+    if (caseSession && req.body.evidence && !aiNotes.matchesCaseNoteEvidence(req.body.evidence, aiNotes.caseNoteEvidence(caseSession))) return res.status(409).json({ success: false, error: 'The saved case evidence changed. Refresh before writing a note.' });
+    const user = caseSession ? null : await User.findById(req.user.actorId || req.user.id).select('+anthropicApiKey');
     const note = await aiNotes.generateNote(
-      { messages: session.messages },
+      caseSession || { messages: session.messages },
       format,
       { userApiKey: user?.anthropicApiKey || null },
     );
 
-    const connection = await getActiveConnection(req.user.id);
-    if (connection) {
-      await createAuditEntry(req.user.id, connection.realmId, 'AI note generated', {
+    await assertSavedRead(req, session);
+    const connection = caseSession ? null : await getActiveConnection(req.user.id);
+    if (caseSession || connection) {
+      await createAuditEntry(req.user.id, caseSession?.realmId || connection.realmId, caseSession ? 'Case evidence note generated' : 'AI note generated', {
         actionType: 'ai_generate_note',
         outcome: 'success',
-        afterState: { sessionId, format, tokenUsage: note.tokenUsage },
+        afterState: { sessionId, format, tokenUsage: note.tokenUsage, ...(caseSession ? { source: note.source, evidence: note.evidence } : {}) },
       });
     }
 
+    const latest = await AISession.findOne({ _id: sessionId, userId: req.user.id });
+    await assertSavedRead(req, latest);
+    if (caseSession && savedIdentity(await reproduction.publicState(latest)) !== savedIdentity(caseSession)) return res.status(409).json({ success: false, error: 'The saved case evidence changed. Refresh before writing a note.' });
+    await assertSavedRead(req, latest);
     return res.json({ success: true, data: { note } });
   } catch (err) {
+    if (respondSessionAccess(res, err)) return;
     console.error('[ai/generate-note]', err.message);
     return res.status(safeStatus(err)).json({ success: false, error: err.message });
   }

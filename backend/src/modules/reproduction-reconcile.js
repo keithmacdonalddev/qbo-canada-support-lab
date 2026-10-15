@@ -236,6 +236,7 @@ function createReconciler(dependencies = {}) {
     if (!outcomeUnknown && state.outcomeUnknown) update['reproduction.outcomeUnknown'] = false;
     if (now() >= lock.getTime()) fail(409, 'Recovery decision expired. Reconcile again; no saved change will be resent.');
     if (Object.keys(update).length) {
+      if (state.caseContractVersion === 2) Object.assign(update, { 'reproduction.assessment': null, 'reproduction.assessmentResult': null, 'reproduction.outcome': 'unverified', 'reproduction.summary': 'Recovery changed the case evidence. Continue the saved request to check its result.' });
       const saved = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $set: update, $inc: { 'reproduction.decisionRevision': 1 } });
       if (saved?.matchedCount !== 1) fail(409, 'Recovery decision ownership changed. Reconcile again.');
     }
@@ -371,7 +372,7 @@ function createReconciler(dependencies = {}) {
     if (step.approval) fields['approval.state'] = decision.status === 'completed' ? 'approved' : 'failed';
     return settleWrite({ scope: { realmId: String(session.realmId), environment: session.reproduction.environment, connectionId: String(session.reproduction.connectionId) }, ownerId: String(userId), actorId: String(userId), workflow: { version: 1, kind: 'reproduction', sessionId: String(session._id), planId: String(plan._id), stepNumber: step.stepNumber }, dispatch: step.writeDispatch, decision }, async transactionSession => {
     if (now() >= lock.getTime()) fail(409, 'Recovery decision expired. Reconcile again; no saved change will be resent.');
-    const locked = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $inc: { 'reproduction.decisionRevision': 1 } }, { session: transactionSession });
+    const locked = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $inc: { 'reproduction.decisionRevision': 1 }, ...(session.reproduction.caseContractVersion === 2 ? { $set: { 'reproduction.assessment': null, 'reproduction.assessmentResult': null, 'reproduction.outcome': 'unverified', 'reproduction.summary': 'Recovery changed the case evidence. Continue the saved request to check its result.' } } : {}) }, { session: transactionSession });
     if (locked?.matchedCount !== 1) fail(409, 'Recovery decision ownership changed. Nothing was settled.');
     const entry = await createAuditEntry(userId, session.realmId, `Case write reconciled: ${step.toolName} ${result.reconciled}`, {
       actionType: 'ai_plan', tool: step.toolName, approvalEvent: plan._id, outcome: decision.status === 'completed' ? 'success' : 'failure',

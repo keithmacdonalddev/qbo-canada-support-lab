@@ -440,51 +440,80 @@ export function ChangesLedger({ view, plans, environment, loading, onReload }) {
   )
 }
 
-function CaseNote({ sessionId }) {
+function caseNoteView(sessionId, run) {
+  return { caseId: String(sessionId), runId: run.runId || null, revision: run.revision || 0, decisionRevision: run.decisionRevision || 0,
+    sourceHash: run.requestSources?.contentHash || null, contractHash: run.requestContract?.contentHash || null,
+    assessmentHash: run.assessment?.contentHash || null, viewOutcome: run.outcome || null, trust: run.assessmentTrust || 'not-assessed' }
+}
+const noteMatchesView = (value, expected) => Boolean(value && Object.keys(expected).every(key => value[key] === expected[key]))
+
+function CaseNote({ sessionId, evidence }) {
   const [note, setNote] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const write = async () => {
     setBusy(true)
     setError(null)
     try {
-      const res = await client.post('/ai/generate-note', { sessionId, format: 'internal' })
-      setNote(res.data?.data?.note?.content || '')
+      const res = await client.post('/ai/generate-note', { sessionId, format: 'internal', evidence })
+      if (!alive.current) return
+      const next = res.data?.data?.note
+      if (next?.source !== 'retained-case-evidence' || !noteMatchesView(next.evidence, evidence)) throw new Error('The saved case evidence changed. Refresh before writing a note.')
+      setNote(next)
     } catch (err) {
-      setError(err.response?.data?.error || 'The note could not be written.')
+      if (alive.current) setError(err.response?.data?.error || err.message || 'The note could not be written.')
     } finally {
-      setBusy(false)
+      if (alive.current) setBusy(false)
     }
   }
 
-  const copy = () => navigator.clipboard?.writeText(note).then(() => {
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }).catch(() => {})
+  const copy = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await client.get('/ai/sessions/' + sessionId)
+      if (!alive.current) return
+      const latest = res.data?.data?.session
+      if (!latest?.reproduction || !noteMatchesView(note.evidence, caseNoteView(latest._id, latest.reproduction))) {
+        setNote(null)
+        setError('The saved case evidence changed. Write a new note before copying.')
+        return
+      }
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.')
+      await navigator.clipboard.writeText(note.content)
+      if (alive.current) { setCopied(true); setTimeout(() => { if (alive.current) setCopied(false) }, 1500) }
+    } catch (err) {
+      if (alive.current) setError(err.response?.data?.error || err.message || 'The note could not be copied.')
+    } finally {
+      if (alive.current) setBusy(false)
+    }
+  }
 
   return (
     <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)]">
       <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
         <h2 className="text-[13px] font-semibold text-[var(--ink)]">Case note</h2>
         {note && (
-          <button type="button" onClick={copy} className="inline-flex items-center gap-1 text-[12.5px] text-[var(--ink-2)] hover:text-[var(--ink)]">
+          <button type="button" onClick={copy} disabled={busy} className="inline-flex items-center gap-1 text-[12.5px] text-[var(--ink-2)] hover:text-[var(--ink)]">
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copied ? 'Copied' : 'Copy'}
           </button>
         )}
       </header>
       {note ? (
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap px-4 py-3 font-sans text-[13px] leading-relaxed text-[var(--ink)]">{note}</pre>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap px-4 py-3 font-sans text-[13px] leading-relaxed text-[var(--ink)]">{note.content}</pre>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <p className="text-[13px] text-[var(--ink-2)]">A summary of what was reproduced, ready to paste into the ticket.</p>
+          <p className="text-[13px] text-[var(--ink-2)]">A summary of this case and its saved evidence, ready for the ticket.</p>
           <Button variant="outline" onClick={write} disabled={busy}>
             {busy ? <LoaderCircle className="animate-spin" /> : <FileText />} {busy ? 'Writing…' : 'Write note'}
           </Button>
-          {error && <p className="w-full text-[12.5px] text-[var(--danger-ink)]">{error}</p>}
         </div>
       )}
+      {error && <p className="px-4 pb-3 text-[12.5px] text-[var(--danger-ink)]" role="alert">{error}</p>}
     </section>
   )
 }
@@ -651,10 +680,10 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, onAnswer
   return (
     <section className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4" aria-label="Case status">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[var(--ink)]" role="status">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold text-[var(--ink)]" aria-live="polite">
           {active && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}
           {asking && <CircleHelp className="size-4 text-[var(--attention)]" aria-hidden="true" />}
-          {active ? (run.phase === 'continuing' ? 'Continuing from saved progress' : run.phase === 'checking' || run.verificationOnly ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
+          {active ? (run.phase === 'interpreting' ? 'Preserving the original request' : run.phase === 'assessing' ? 'Assessing evidence against the original request' : run.phase === 'continuing' ? 'Continuing from saved progress' : run.phase === 'checking' || run.verificationOnly ? 'Checking the result' : run.phase === 'preparing' ? 'Preparing the scenario' : 'Recreating the scenario')
             : OUTCOME_LABELS[run?.outcome] || 'Ready to continue this case'}
         </h2>
         {active && <Button variant="outline" size="sm" onClick={onStop} disabled={stopping || run.stopRequested}>{run.stopRequested ? 'Stopping…' : 'Stop'}</Button>}
@@ -677,6 +706,14 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, onAnswer
           {(!run || run.status === 'interrupted' || (run.outcome === 'unverified' && !run.outcomeUnknown)) && <Button className="mt-3" onClick={onContinue} disabled={busy}>{busy ? 'Starting…' : 'Continue this case'}</Button>}
         </>
       )}
+      {run && <p className="mt-3 text-[12px] text-[var(--ink-2)]">
+        {run.assessmentTrust === 'independent-model-assessment' ? 'Independently assessed against the original request. This remains a model assessment of the saved observations.'
+          : run.assessmentTrust === 'executor-assessed' ? 'Legacy result: the executing assistant chose and assessed these checks. No independent request assessment was recorded.'
+            : run.assessmentTrust === 'assessment-unavailable' ? 'The saved independent assessment cannot be verified. Continue the case to inspect fresh evidence.'
+              : 'The original request and independent evidence assessment are required before a verified result.'}
+      </p>}
+      {run?.requestContract?.payload?.requirements?.length > 0 && <details className="mt-3 text-[13px]"><summary className="cursor-pointer font-medium">Original request requirements</summary><ul className="mt-2 space-y-2">{run.requestContract.payload.requirements.map(row => <li key={row.id}><span className="font-medium">{row.kind === 'symptom' ? 'Reported symptom' : row.kind === 'constraint' ? 'Constraint' : 'Setup'}: </span>{row.label}<span className="block text-[12px] text-[var(--ink-3)]">{row.measurement} · {row.channel} evidence · {row.timing === 'intermediate' ? 'Intermediate state' : 'Final state'}</span>{row.sources?.map((ref, index) => <blockquote key={index} className="mt-1 max-h-32 overflow-y-auto border-l border-[var(--line)] pl-2 text-[12px] text-[var(--ink-3)]">{run.requestSources?.payload?.entries?.find(entry => entry.id === ref.requestId)?.text?.slice(ref.start, ref.end)}</blockquote>)}</li>)}</ul></details>}
+      {run?.assessmentReview && <div className="mt-3 text-[13px] text-[var(--ink-2)]"><p>Setup: {run.assessmentReview.setupComplete ? 'verified in these observations' : 'not fully verified'}.</p>{run.assessmentReview.requirements?.map(row => <p key={row.id}>{row.label}: {row.available ? (row.matched ? 'matched' : 'did not match') : 'unavailable'} — {row.reason}</p>)}</div>}
       {active && run?.progress?.currentStep && (
         <div className="mt-3 text-[13px] text-[var(--ink-2)]">
           <p><span className="font-semibold">Agent’s saved plan: </span>{run.progress.currentStep}</p>
@@ -691,7 +728,7 @@ export function ReproductionStatus({ run, onStop, stopping, onContinue, onAnswer
               const result = run.conditionResults?.find((entry) => entry.label === label);
               return <li key={label} className="flex items-start gap-2">
                 {result?.available ? (result.passed ? <Check className="mt-0.5 size-4 shrink-0 text-[var(--ok)]" /> : <Minus className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />) : <CircleDashed className="mt-0.5 size-4 shrink-0 text-[var(--ink-3)]" />}
-                <span>{label}{result?.checks.map((check, index) => {
+                <span>{label}{run.caseContractVersion === 2 && !run.requestContract?.payload?.requirements?.some(row => row.label === label) && <span className="text-[var(--ink-3)]"> (supplemental check)</span>}{result?.checks.map((check, index) => {
                   const fields = [...new Set((check.sources || []).map((source) => source.path?.split('.').at(-1)))];
                   const names = { Qty: 'Quantity', TxnLineId: 'Linked transaction line', TxnId: 'Linked transaction', TotalAmt: 'Total amount', Received: 'Received quantity', billedQuantity: 'Screen billed quantity', receivedQuantity: 'Screen received quantity' };
                   const measurement = fields.map((field) => names[field] || field).filter(Boolean).join(', ') || 'Check';
@@ -727,6 +764,7 @@ export default function Case() {
   const [pending, setPending] = useState(null);
   const [chatError, setChatError] = useState(null);
   const [failedText, setFailedText] = useState(null);
+  const failedRequest = useRef(null);
   const [reply, setReply] = useState('');
   const [version, setVersion] = useState(0);
   const [stopping, setStopping] = useState(false);
@@ -735,14 +773,14 @@ export default function Case() {
   const started = useRef(false);
   const submission = useRef({ text: initialMessage, requestId: location.state?.requestId || crypto.randomUUID() });
 
-  const startCase = async (text, existingId) => {
-    if (submission.current.text !== text) submission.current = { text, requestId: crypto.randomUUID() };
+  const startCase = async (text, existingId, continueSaved = false) => {
+    if (submission.current.text !== text || submission.current.continueSaved !== continueSaved || !submission.current.requestId) submission.current = { text, continueSaved, requestId: crypto.randomUUID() };
     setChatError(null);
     setFailedText(null);
-    setPending({ text, since: Date.now() });
+    setPending({ text: continueSaved ? 'Continue the saved request' : text, since: Date.now() });
     try {
       const res = await client.post('/ai/reproduce', {
-        message: text, sessionId: existingId, requestId: submission.current.requestId,
+        ...(continueSaved ? { continueSaved: true } : { message: text }), sessionId: existingId, requestId: submission.current.requestId,
         realmId: connection?.status?.realmId, environment: connection?.environment,
       });
       const next = res.data?.data?.session;
@@ -754,7 +792,8 @@ export default function Case() {
       // Keep the id for network retries; a successful new instruction gets a new id.
       submission.current = { text: null, requestId: null };
     } catch (err) {
-      setFailedText(text);
+      failedRequest.current = { text, existingId, continueSaved };
+      setFailedText(continueSaved ? 'Continue the saved request' : text);
       setChatError(err.response?.data?.error || 'The case could not start. Retrying this request will not duplicate its records.');
     } finally {
       setPending(null);
@@ -856,17 +895,17 @@ export default function Case() {
               {!isNew && !session && <p role="status" className="text-[13px] text-[var(--ink-2)]">Loading case…</p>}
               {!isNew && session && <ReproductionStatus run={run} onStop={stop} stopping={stopping} busy={busy}
                 error={chatError} onAnswer={submitReply} canAnswer={Boolean(connection?.ready)}
-                onContinue={() => startCase('Complete the original reproduction request automatically, including supported experiments and verification. Reuse the saved records from this case and resume unfinished tests. Do not stop for repeated approvals or manual setup. Supersede the earlier proposal.', id)} />}
+                onContinue={() => startCase(undefined, id, true)} />}
               {!isNew && run?.outcomeUnknown && !active && <ReconcileWrites sessionId={id} onSession={setSession} disabled={busy} />}
               {!isNew && run && <ScreenVerification sessionId={id} run={run} />}
               <ApprovalRequests changes={waitingForOwner} active={active} onDecide={decide} deciding={deciding} error={decisionError} />
               <ChangesLedger view={view} plans={plans} environment={run?.environment || connection?.environment}
                 loading={!view && !isNew} onReload={() => setVersion((v) => v + 1)} />
-              {run && !active && <CaseNote sessionId={id} />}
+              {run && !active && <CaseNote key={JSON.stringify(caseNoteView(id, run))} sessionId={id} evidence={caseNoteView(id, run)} />}
             </div>
             <aside className="min-w-0 xl:sticky xl:top-4">
               <Conversation messages={messages} pending={pending} failedText={failedText}
-                chatError={chatError} onRetry={() => startCase(failedText, isNew ? undefined : id)}
+                chatError={chatError} onRetry={() => { const request = failedRequest.current; if (request) startCase(request.text, request.existingId, request.continueSaved); }}
                 loading={!session && !pending && !chatError && !isNew} isNew={isNew}
                 reply={reply} setReply={setReply} onSend={sendReply} canSend={Boolean(connection?.ready) && !active} busy={busy}
                 inputRef={replyBox} awaitingAnswer={asking} />

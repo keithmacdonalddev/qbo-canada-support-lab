@@ -69,11 +69,11 @@ test('a historical reading keeps counting after later changes', () => {
   assert.equal(classifyOutcome('not_reproduced', [label], [{ ...before, actual: 90, passed: false }], 9), 'not_reproduced');
 });
 
-test('public case results correct historical last-check-wins claims without changing stored data', () => {
+test('public case results correct historical last-check-wins claims without changing stored data', async () => {
   const { publicState } = require('../src/modules/reproduction-runner');
   const saved = { _id: 'fixture', reproduction: { status: 'completed', outcome: 'completed', summary: 'Old result',
     conditions: [label], revision: 7, checks: [check(qty, 3.5, 5), check(link, '1', '1')] } };
-  const view = publicState(saved);
+  const view = await publicState(saved);
   assert.equal(view.reproduction.outcome, 'unverified');
   assert.equal(view.reproduction.conditionResults[0].passed, false);
   assert.equal(view.reproduction.conditionResults[0].checks.length, 2);
@@ -81,15 +81,15 @@ test('public case results correct historical last-check-wins claims without chan
   assert.equal(saved.reproduction.conditionResults, undefined);
 });
 
-test('public case results keep a pending question and verify a completed build', () => {
+test('public case results keep a pending question and verify a completed build', async () => {
   const { publicState } = require('../src/modules/reproduction-runner');
-  const waiting = publicState({ _id: 'fixture', reproduction: { status: 'completed', outcome: 'needs_input', summary: 'Which account?',
+  const waiting = await publicState({ _id: 'fixture', reproduction: { status: 'completed', outcome: 'needs_input', summary: 'Which account?',
     awaitingOperator: { question: 'Which account?', options: [] }, conditions: [], checks: [], revision: 0 } });
   assert.equal(waiting.reproduction.outcome, 'needs_input');
   assert.equal(waiting.reproduction.summary, 'Which account?');
   const built = { status: 'completed', outcome: 'completed', summary: 'Built', conditions: [label], revision: 7, checks: [check(qty, 3.5, 3.5)] };
-  assert.equal(publicState({ _id: 'fixture', reproduction: built }).reproduction.outcome, 'completed');
-  const stale = publicState({ _id: 'fixture', reproduction: { ...built, revision: 8 } }).reproduction;
+  assert.equal((await publicState({ _id: 'fixture', reproduction: built })).reproduction.outcome, 'completed');
+  const stale = (await publicState({ _id: 'fixture', reproduction: { ...built, revision: 8 } })).reproduction;
   assert.equal(stale.outcome, 'unverified');
   assert.match(stale.summary, /not supported/);
 });
