@@ -284,3 +284,10 @@ test('final Production transport gate refuses absent or mismatched explicit plan
   if(change&&Object.keys(change).length===0){const ticket=await h.gate.begin(h.input);assert.equal(ticket.coordinated,true);assert.equal(h.data.Receipts.length,1);}else{await assert.rejects(h.gate.begin(h.input),/Production/);assert.equal(h.data.Receipts.length,0);}
  }
 });
+
+test('reserved accounts cannot dispatch before recovery or while retained automation is paused',async()=>{
+  for(const business of [false,true])for(const recovered of [false,true]){
+    const h=harness(business);Object.assign(h.data.Users[0],{email:'tester@testdatalab.local',authVersion:recovered?1:0,accessPolicyVersion:recovered?1:0,automationAccessPolicyVersion:0});
+    await assert.rejects(h.gate.begin(h.input),recovered?/automation is paused/:/private credential recovery/);assert.equal(h.data.Receipts.length,0);
+  }
+});

@@ -78,6 +78,14 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     if (reason === 'stopped' && (!value.calendar.stopRequested || value.writer.unresolved !== null)) fail('A stopped operation must settle its outstanding request first.');
     return change(value, selected, actorId, session, 'release-' + reason, { leaseToken: null, leaseExpiresAt: null, status: reason === 'stopped' ? 'stopped' : reason === 'blocked' ? 'blocked' : value.run.status, lastError: reason === 'blocked' ? 'Operation requires recovery or fresh verification.' : null });
   });
-  return { inspect, claim, renew, advance, release };
+  const settleStop = (scope, operationId) => perform(scope, operationId, 'operations.stop', async (value, selected, actorId, session) => {
+    if (value.run.status === 'stopped') return view(value);
+    owned(value);
+    const expiry = new Date(value.run.leaseExpiresAt).getTime();
+    if (!value.calendar.stopRequested || value.writer.unresolved !== null || (value.run.leaseToken && (!Number.isFinite(expiry) || expiry > now()))) fail('Stop remains requested while an active worker or uncertain request needs to settle.');
+    if (!['reserved','running','blocked','awaiting-evidence'].includes(value.run.status)) fail('This operation cannot settle a stop.');
+    return change(value, selected, actorId, session, 'stop-settled', { leaseToken: null, leaseExpiresAt: null, status: 'stopped' });
+  });
+  return { inspect, claim, renew, advance, release, settleStop };
 }
 module.exports = { createBusinessRunState };

@@ -19,6 +19,7 @@ const config = require('../config');
 const Connection = require('../models/Connection');
 const CompanyMembership = require('../models/CompanyMembership');
 const { runAsActor } = require('../modules/actor-context');
+const { assertAccountEligible } = require('../modules/account-policy');
 
 const defaultLookups = {
   // Without a database there is nothing to share; routes report that themselves.
@@ -51,7 +52,7 @@ function createCompanyScope(lookups = defaultLookups) {
     if (!header.startsWith('Bearer ')) return next();
     let decoded;
     try {
-      decoded = jwt.verify(header.slice(7), config.jwtSecret);
+      decoded = req.currentAccount || jwt.verify(header.slice(7), config.jwtSecret, { algorithms: ['HS256'] });
     } catch {
       // The route's own authenticate answers with the usual 401.
       return next();
@@ -64,6 +65,10 @@ function createCompanyScope(lookups = defaultLookups) {
       return next(err);
     }
 
+    if (req.currentAccount && ownerId !== req.currentAccount.id) {
+      try { assertAccountEligible(await req.readCurrentAccount(ownerId)); }
+      catch (error) { return res.status(error.code === 'ACCOUNT_ACCESS_RECOVERY_REQUIRED' ? 403 : 503).json({ error: 'The company workspace account is unavailable or needs private credential recovery.', code: 'COMPANY_ACCOUNT_UNAVAILABLE' }); }
+    }
     const actorId = String(decoded.id);
     req.user = {
       id: ownerId,

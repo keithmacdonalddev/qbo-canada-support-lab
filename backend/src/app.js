@@ -5,6 +5,7 @@ const cors = require('cors')
 const mongoose = require('mongoose')
 const errorHandler = require('./middleware/errorHandler')
 const { requestContext } = require('./middleware/requestContext')
+const { createCurrentAccountGuard } = require('./middleware/currentAccount')
 const { createRebuildRouter } = require('./routes/rebuild')
 const { companyScope: defaultCompanyScope } = require('./middleware/companyScope')
 
@@ -12,8 +13,19 @@ function createApp(options = {}) {
   const app = express()
 
   app.use(requestContext)
-  app.use(cors())
-  app.use(express.json())
+  const allowedOrigins = require('./config').security.allowedOrigins
+  app.use((req,res,next) => {
+    const origin=req.get('origin')
+    const extensionCapability=req.path==='/api/screen-reader/capability' && /^chrome-extension:\/\/[a-p]{32}$/.test(origin || '')
+    if(origin && !allowedOrigins.includes(origin) && !extensionCapability) return res.status(403).json({error:'This browser origin is not allowed to access Test Data Lab.'})
+    return next()
+  })
+  app.use(cors((req,callback) => {
+    const origin=req.get('origin'), extensionCapability=req.path==='/api/screen-reader/capability' && /^chrome-extension:\/\/[a-p]{32}$/.test(origin || '')
+    callback(null,{origin:origin && (allowedOrigins.includes(origin) || extensionCapability) ? origin : false})
+  }))
+  app.use(express.json({ limit: '1mb' }))
+  app.use('/api', createCurrentAccountGuard(options.currentAccount || {}))
 
   // Browser companion redeems a one-use, short-lived case capability, never a JWT.
   // This exact endpoint grants no general app or QBO access.
@@ -39,8 +51,8 @@ function createApp(options = {}) {
   ], companyScope)
   app.get('/api/qbo/status', companyScope)
 
-  app.use('/api/auth', require('./routes/auth'))
-  app.use('/api/qbo', require('./routes/qbo'))
+  app.use('/api/auth', options.authRouter || require('./routes/auth'))
+  app.use('/api/qbo', options.qboRouter || require('./routes/qbo'))
   app.use('/api/company', require('./routes/company'))
   app.use('/api/seed', require('./routes/seed'))
   app.use('/api/audit', require('./routes/audit'))
@@ -52,7 +64,7 @@ function createApp(options = {}) {
   app.use('/api/issuepacks', require('./routes/issuepacks'))
   // Codex CLI runs call this app's AI tools here (per-run token, no JWT).
   app.use('/api/ai-tools/mcp', require('./routes/ai-tools-mcp'))
-  const aiRoutes = require('./routes/ai')
+  const aiRoutes = options.aiRoutes || require('./routes/ai')
   app.use('/api/ai', aiRoutes.router)
 
   const orchestrator = require('./modules/ai-orchestrator')

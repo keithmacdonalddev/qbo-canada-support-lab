@@ -76,6 +76,8 @@ function setup(options = {}) {
   const connection = { _id: 'connection-1', userId: 'owner', realmId: 'realm', status: 'active', companyName: 'Fixture company' };
   let membership = options.membership;
   let starts = 0;
+  const accounts = new Map();
+  const account = id => accounts.has(id) ? accounts.get(id) : { _id:id, email: `${id}@fixture.invalid`, role: 'agent', authVersion:0 };
   const runner = createRunner({
     admitJob: options.admitJob || (async (_connection, _action, work) => work(null)),
     AISession, AIPlan, config, instance: 'test-instance',
@@ -84,7 +86,7 @@ function setup(options = {}) {
     ...(options.providerDependencies || {}),
     Connection: { findOne: async () => connection, exists: async () => connection.status === 'active' },
     CompanyMembership: { findOne: async () => membership },
-    User: { findById: () => ({ select: async () => ({}) }) },
+    User: { findById: id => { const query = Promise.resolve(account(String(id))); query.select = () => query; query.maxTimeMS = () => query; return query; } },
     createQBOClient: async () => ({}), createAuditEntry: async () => ({ id: 'audit' }),
     runEngine: options.runEngine || (async ({ state, assertActive, persist }) => {
       starts += 1;
@@ -95,7 +97,7 @@ function setup(options = {}) {
   });
   const start = (extra = {}) => runner.startCase({ userId: 'owner', actorId: 'owner', connection,
     message: 'Recreate the customer scenario', requestId: 'request-123456789', ...extra });
-  return { runner, start, AISession, AIPlan, config, connection, setMembership: (m) => { membership = m; }, get starts() { return starts; } };
+  return { runner, start, AISession, AIPlan, config, connection, setAccount: (id, value) => accounts.set(id, value), setMembership: (m) => { membership = m; }, get starts() { return starts; } };
 }
 
 test('duplicate submissions share one case and one execution', async () => {
@@ -398,4 +400,19 @@ test('submission identity is re-read inside policy admission before a competing 
     return work(null);
   } });
   const accepted = await f.start(); assert.equal(accepted.reproduction.summary, 'Other admission completed'); assert.equal(f.AISession.store.size, 1); assert.equal(f.AIPlan.store.size, 0); assert.equal(f.starts, 0);
+});
+
+test('reserved unrecovered or paused accounts cannot start cases, including shared workspace owners',async()=>{
+  for(const recovered of [false,true]){
+    const f=setup();f.setAccount('owner',{_id:'owner',email:'tester@testdatalab.local',role:'supervisor',authVersion:recovered?1:0,accessPolicyVersion:recovered?1:0,automationAccessPolicyVersion:0});
+    await assert.rejects(f.start(),/recovery|automation is paused/);assert.equal(f.AISession.store.size,0);assert.equal(f.starts,0);
+  }
+});
+test('credential revocation during a case stops before the next model call',async()=>{
+  let calls=0,f;
+  f=setup({providerDependencies:{aiProvider:{resolveProvider:async()=> 'anthropic',chat:async()=>{calls++;return{content:[]};}}},runEngine:async({runModel,state})=>{
+    f.setAccount('owner',{_id:'owner',email:'tester@testdatalab.local',role:'supervisor',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});
+    await runModel([],async()=>{},[],{deadline:Date.now()+60000});state.status='completed';
+  }});
+  const started=await f.start();await f.runner.waitForIdle(started._id);assert.equal(calls,0);assert.equal(f.AISession.store.get(started._id).reproduction.status,'stopped');assert.match(f.AISession.store.get(started._id).reproduction.summary,/automation is paused/);
 });

@@ -72,7 +72,7 @@ npm install
 
 2. Create `.env` from `.env.example`.
 
-3. Fill in local MongoDB, JWT, QBO OAuth, and optional AI-provider settings. Never commit `.env`, `.tokens.json`, credentials, tokens, or keys.
+3. Fill in local MongoDB, a private JWT signing secret generated from at least 32 random bytes, QBO OAuth, and optional AI-provider settings. Startup refuses a missing/public signing key. Existing tester accounts use the [private account recovery procedure](docs/account-access-recovery.md). Never commit `.env`, `.tokens.json`, credentials, tokens, or keys.
 
 QBO OAuth currently uses `intuit-oauth@4.2.2`.
 

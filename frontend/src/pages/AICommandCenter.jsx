@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Layout from '../components/Layout'
 import { useAuth } from '../context/AuthContext'
 import api from '../api/client'
+import { AuthenticatedEventSource } from '../lib/authenticated-event-source.mjs'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -80,7 +81,7 @@ export default function AICommandCenter() {
         const { data } = await api.post('/ai/stream-ticket', { sessionId })
         if (!data.success || cancelled) return
 
-        source = new EventSource(`/api/ai/stream/${sessionId}?ticket=${data.data.ticket}`)
+        source = new AuthenticatedEventSource(`/api/ai/stream/${sessionId}?ticket=${data.data.ticket}`)
         eventSourceRef.current = source
 
         source.addEventListener('token', (e) => {

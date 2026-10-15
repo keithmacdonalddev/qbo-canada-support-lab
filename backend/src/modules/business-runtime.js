@@ -88,6 +88,16 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, now }), resolveClient: access.resolveClient, authorize, assertReady, now });
     return createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence: evidence.prepareEvidence, validateOpening })(scope, operationId, { signal });
   }
-  return Object.freeze({ execute, inspect: async () => { const saved = await bind(); const { leaseToken, ...visible } = saved; return visible; }, stop: () => periods.requestStop(operationId, scope) });
+  return Object.freeze({ execute, settleStop: async () => {
+    let saved = await bind();
+    const complete = value => ({ operationId, state:'verified', complete:true, completedRecords:value.nextOrdinal, recordCount:value.recordCount, ...value.completion });
+    if (saved.status === 'verified' && saved.completion) return complete(saved);
+    if (['committing','verified'].includes(saved.status)) {
+      await periods.repair(scope, operationId); saved = await bind();
+      if (!saved.completion) fail('The completed operation receipt still needs recovery.');
+      return { operationId, state:'verified', complete:true, completedRecords:saved.nextOrdinal, recordCount:saved.recordCount, ...saved.completion };
+    }
+    return state.settleStop(scope, operationId);
+  }, inspect: async () => { const saved = await bind(); const { leaseToken, ...visible } = saved; return visible; }, stop: () => periods.requestStop(operationId, scope) });
 }
 module.exports = { createBusinessRuntime, loadModels };

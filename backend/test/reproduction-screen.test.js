@@ -125,7 +125,7 @@ test('HTTP capability route grants only issued extension capabilities and reject
     screenBroker.heartbeat(scope, true);
     task = screenBroker.request(scope, target, async () => {});
     await turn(); const pending = await screenBroker.poll(scope);
-    assert.equal((await post(pending.nonce, 'https://evil.example')).status, 404);
+    assert.equal((await post(pending.nonce, 'https://evil.example')).status, 403);
     const receipt = await post(pending.nonce);
     assert.equal(receipt.status, 200); assert.equal(receipt.headers.get('cache-control'), 'no-store');
     assert.equal((await receipt.json()).request.id, '608');

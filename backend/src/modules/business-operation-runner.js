@@ -11,7 +11,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
     const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.nextOrdinal, recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash } : {}) });
     let current = await state.inspect(scope, operationId), leaseToken;
     if (current.status === 'verified' && current.completion) return result(current, 'verified');
-    if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }
+    if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }
     if (current.status === 'previewed') return result(current, 'approval_required');
     if (['stopped', 'retired'].includes(current.status)) return result(current);
     if (signal?.aborted) return result(current, 'interrupted');
@@ -81,7 +81,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
       // calendar receipt, never by creating transactions again.
       try {
         current = await state.inspect(scope, operationId);
-        if (['committing', 'verified'].includes(current.status)) { await periods.repair(scope); current = await state.inspect(scope, operationId); if (current.completion) { leaseToken = null; return result(current, 'verified'); } }
+        if (['committing', 'verified'].includes(current.status)) { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); if (current.completion) { leaseToken = null; return result(current, 'verified'); } }
         if (current.leaseToken === leaseToken) {
           current = await reconcileOutstanding();
           await release(current.stopRequested && !current.unresolved ? 'stopped' : signal?.aborted && !current.unresolved ? 'yield' : 'blocked');

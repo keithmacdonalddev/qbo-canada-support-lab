@@ -91,11 +91,12 @@ function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authori
   function matchingCalendar(run, scope) {
     return { _id: calendarId(scope), ...scopeFilter(scope), businessKey: run.businessKey, blueprintId: run.blueprintId, blueprintHash: run.blueprintHash, 'baseline.status': 'verified', 'baseline.evidenceHash': run.baselineHash, verifiedThrough: run.expectedCursor, revision: run.expectedRevision, stopRequested: false };
   }
-  async function repair(scope) {
+  async function repair(scope, expectedOperationId) {
     const actor = await authority(scope, 'operations.recover');
     const calendar = await Calendars.findOne({ _id: calendarId(scope), ...scopeFilter(scope) }).lean();
     if (!calendar?.pendingCommit) return calendar;
     const commit = calendar.pendingCommit;
+    if (expectedOperationId && !same(commit.operationId, expectedOperationId)) throw problem('The pending calendar commit belongs to a different operation.');
     const run = await readRun(String(commit.operationId), scope);
     if (typeof commit.actorId !== 'string' || !commit.actorId || !validHash(commit.recordSetHash) || !validHash(commit.evidenceHash) || calendar.businessKey !== run.businessKey || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.evidenceHash !== run.baselineHash || commit.planHash !== run.planHash || commit.blueprintHash !== run.blueprintHash || calendar.verifiedThrough !== run.throughDate || calendar.revision !== run.expectedRevision + 1 || !same(calendar.currentOperationId, run._id)) throw problem('Calendar commit requires evidence recovery before more activity');
     const auditId = await audit('business-period:' + run._id + ':committed', { ...scope, actorId: commit.actorId, action: 'Business period verified', operationId: String(run._id), evidenceHash: commit.evidenceHash, throughDate: run.throughDate });

@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema(
       enum: ['agent', 'supervisor'],
       default: 'agent',
     },
+    authVersion: { type: Number, default: 0, min: 0 },
+    accessPolicyVersion: { type: Number, default: 0, min: 0 },
+    automationAccessPolicyVersion: { type: Number, default: 0, min: 0 },
+    automationReviewHash: { type: String },
     anthropicApiKey: {
       type: String,
     },
@@ -37,6 +41,10 @@ const userSchema = new mongoose.Schema(
     toJSON: {
       transform(_doc, ret) {
         delete ret.password;
+        delete ret.authVersion;
+        delete ret.accessPolicyVersion;
+        delete ret.automationAccessPolicyVersion;
+        delete ret.automationReviewHash;
         delete ret.connectionSwitchVersion;
         delete ret.businessObservationVersion;
         // Mask API key — show only last 4 chars

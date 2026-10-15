@@ -1,19 +1,21 @@
 const express = require('express');
 const crypto = require('node:crypto');
-const mongoose = require('mongoose');
+const defaultDatabase = require('mongoose');
 const OAuthClient = require('intuit-oauth');
 const config = require('../config');
-const Connection = require('../models/Connection');
-const AuditLog = require('../models/AuditLog');
-const User = require('../models/User');
+const DefaultConnection = require('../models/Connection');
+const DefaultAuditLog = require('../models/AuditLog');
+const DefaultUser = require('../models/User');
 const { authenticate } = require('../middleware/auth');
-const { createAuditEntry } = require('../middleware/auditLogger');
+const { loadCurrentAccount: defaultLoadAccount } = require('../middleware/currentAccount');
+const { assertAccountEligible, accountVersion } = require('../modules/account-policy');
+const { createAuditEntry: defaultAuditEntry } = require('../middleware/auditLogger');
 const { deriveTokenHealth, refreshTokenExpiryFrom, isAuthFailure, expireRejectedConnection, describeRefreshFailure } = require('../modules/connection-health');
 const { redactLogSecrets } = require('../modules/log-diagnostic');
-const { createQBOClient } = require('../modules/qbo-client');
+const { createQBOClient: defaultQBOClient } = require('../modules/qbo-client');
 
-// In-memory nonce store (keyed by nonce → { userId, createdAt })
-// In production this should be Redis/DB with TTL
+function createQboRouter({ Connections: Connection = DefaultConnection, Accounts: User = DefaultUser, Audits: AuditLog = DefaultAuditLog, database: mongoose = defaultDatabase, loadAccount: loadCurrentAccount = defaultLoadAccount, auditEntry: createAuditEntry = defaultAuditEntry, clientFor: createQBOClient = defaultQBOClient, oauthFactory } = {}) {
+// Single-use, ten-minute nonces are bound to the initiating account version.
 const pendingOAuthStates = new Map();
 
 const router = express.Router();
@@ -28,13 +30,15 @@ async function preferredConnection(userId, statuses = ['active', 'expired', 'err
   return null;
 }
 
-async function lockUserConnectionScope(userId, session) {
+async function lockUserConnectionScope(userId, session, expectedAuthVersion) {
+  const current = await User.findById(userId).select('_id email role authVersion accessPolicyVersion').session(session).maxTimeMS(3000).lean();
+  assertAccountEligible(current);
+  if (!Number.isSafeInteger(expectedAuthVersion) || accountVersion(current) !== expectedAuthVersion) throw new Error('Account authorization changed. Connect again with your current private session.');
   const guard = await User.updateOne(
-    { _id: userId },
-    { $inc: { connectionSwitchVersion: 1 } },
-    { session },
+    { _id: userId, role: current.role, authVersion: current.authVersion === undefined ? { $exists: false } : current.authVersion },
+    { $inc: { connectionSwitchVersion: 1 } }, { session },
   );
-  if (guard.matchedCount !== 1) throw new Error('Connecting user is no longer available.');
+  if (guard.matchedCount !== 1) throw new Error('Connecting account authorization changed.');
 }
 
 function localAppOrigin(req) {
@@ -60,6 +64,7 @@ function popupResult(type, message, origin) {
  * Build a fresh OAuthClient instance (stateless -- tokens set per request).
  */
 function buildOAuthClient() {
+  if (oauthFactory) return oauthFactory();
   return new OAuthClient({
     clientId: config.qbo.clientId,
     clientSecret: config.qbo.clientSecret,
@@ -72,10 +77,12 @@ function buildOAuthClient() {
  * GET /connect
  * Generates the Intuit OAuth authorization URL.
  */
-router.get('/connect', authenticate, (req, res) => {
+router.get('/connect', authenticate, async (req, res) => {
   try {
     const nonce = crypto.randomBytes(32).toString('hex');
-    pendingOAuthStates.set(nonce, { userId: req.user.id, createdAt: Date.now(), frontendOrigin: localAppOrigin(req) });
+    const account = req.currentAccount || await loadCurrentAccount(req.user.id);
+    assertAccountEligible(account);
+    pendingOAuthStates.set(nonce, { userId: req.user.id, authVersion: accountVersion(account), createdAt: Date.now(), frontendOrigin: localAppOrigin(req) });
 
     // Clean up stale nonces older than 10 minutes
     const TEN_MIN = 10 * 60 * 1000;
@@ -118,6 +125,14 @@ router.get('/callback', async (req, res) => {
       return res.send(popupResult('qbo_error', 'QuickBooks returned an incomplete authorization. Try connecting again.', frontendOrigin));
     }
 
+    let initiatingAccount;
+    try {
+      initiatingAccount = await loadCurrentAccount(pending.userId);
+      assertAccountEligible(initiatingAccount);
+    } catch (error) {
+      return res.status(error.status === 403 ? 403 : 503).send(popupResult('qbo_error', 'Current account authorization could not be confirmed. Sign in again before connecting.', frontendOrigin));
+    }
+    if (!Number.isSafeInteger(pending.authVersion) || accountVersion(initiatingAccount) !== pending.authVersion) return res.status(403).send(popupResult('qbo_error', 'Account authorization changed. Sign in again and reconnect.', frontendOrigin));
     const oauthClient = buildOAuthClient();
 
     // Exchange authorization code for tokens
@@ -151,7 +166,7 @@ router.get('/callback', async (req, res) => {
         // Every company switch for this user writes the same guard document.
         // Concurrent callbacks for different realms then conflict and retry
         // against the latest committed active realm instead of both staying active.
-        await lockUserConnectionScope(userId, session);
+        await lockUserConnectionScope(userId, session, pending.authVersion);
         connection = await Connection.findOneAndUpdate(
           { userId, realmId },
           {
@@ -335,7 +350,7 @@ router.post('/disconnect', authenticate, async (req, res) => {
     try {
       await session.withTransaction(async () => {
         disconnected = null;
-        await lockUserConnectionScope(req.user.id, session);
+        await lockUserConnectionScope(req.user.id, session, req.currentAccount?.authVersion ?? req.user.authVersion);
         const connection = await preferredConnection(req.user.id, ['active', 'expired'], session);
         if (!connection) return;
         disconnected = await Connection.findOneAndUpdate(
@@ -368,4 +383,7 @@ router.post('/disconnect', authenticate, async (req, res) => {
   }
 });
 
-module.exports = router;
+return router;
+}
+module.exports = createQboRouter();
+module.exports.createQboRouter = createQboRouter;

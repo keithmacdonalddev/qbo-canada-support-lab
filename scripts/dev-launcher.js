@@ -264,7 +264,7 @@ async function inspectStack(context, options = {}) {
     loopbackIsListening(context.webPort),
   ]);
   const [apiResponse, webResponse] = await Promise.all([
-    apiConnected ? request(`http://localhost:${context.apiPort}/api/health`) : null,
+    apiConnected ? request(`http://127.0.0.1:${context.apiPort}/api/health`) : null,
     webConnected ? request(`http://localhost:${context.webPort}/`) : null,
   ]);
   const apiHealth = parseApiHealth(apiResponse);

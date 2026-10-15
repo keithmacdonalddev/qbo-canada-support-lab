@@ -6,6 +6,7 @@ const config = require('./config/index');
 const { createApp } = require('./app');
 
 async function start() {
+  require('./modules/auth-token').validateStartupSecurity();
   await connectDB();
 
   if (config.features.legacyStartupMaintenance) {
@@ -41,7 +42,7 @@ async function start() {
   }
 
   const app = createApp();
-  const server = app.listen(config.port, () => {
+  const server = app.listen(config.port, config.host, () => {
     const execution = require('./modules/business-execution-service').getBusinessExecutionService();
     execution.start();
     server.on('close', () => execution.close());

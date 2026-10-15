@@ -50,6 +50,7 @@ test('saved refresh token can reach the SDK request even when old lifetime metad
   });
   oauthClient.log = () => {};
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.oauthClient = oauthClient;
   const connection = {
     accessToken: 'fixture-access', refreshToken: 'fixture-refresh',
@@ -208,6 +209,7 @@ test('simultaneous requests refresh once and both use the newest saved tokens', 
   console.info = () => {};
   const makeClient = () => {
     const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
     client.connection = { ...old };
     client.realmId = old.realmId;
     client.oauthClient = {
@@ -263,6 +265,7 @@ test('a successful forced refresh can run again with the latest stored token', a
   };
   console.info = () => {};
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.connection = { ...latest };
   client.realmId = latest.realmId;
   client.oauthClient = {
@@ -308,6 +311,7 @@ test('a rotated token is saved on the next request after a storage failure witho
   console.error = () => {};
   console.info = () => {};
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.connection = { ...latest };
   client.realmId = latest.realmId;
   client.oauthClient = {
@@ -343,6 +347,7 @@ test('storage read failure and malformed provider response keep their distinct s
     tokenExpiresAt: new Date(Date.now() - 60_000), status: 'active',
   };
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.connection = { ...latest };
   client.realmId = latest.realmId;
   client.oauthClient = {
@@ -389,6 +394,7 @@ test('API 401 refreshes once and retries the read without expiring the connectio
   let calls = 0;
   let forced = 0;
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.apiBase = 'https://example.test/v3/company/fixture';
   client._retryAfterUntil = 0;
   client._requestLog = [];
@@ -411,6 +417,7 @@ test('API 401 does not retry a production write', async () => {
   let calls = 0;
   let forced = 0;
   const client = Object.create(QBOClient.prototype);
+  client.loadAccount = async id => ({ _id: id, email: 'owner@fixture.invalid', role: 'agent', authVersion: 0 });
   client.realmId = '123';
   client.connection = { _id: 'a'.repeat(24), userId: 'b'.repeat(24) };
   client.writeGate = { preflight: async () => null, begin: async () => ({ coordinated: false }) };
@@ -428,4 +435,12 @@ test('API 401 does not retry a production write', async () => {
   } finally {
     console.error = originalError;
   }
+});
+
+test('retained QBO clients check current account eligibility before token reuse or refresh',async()=>{
+  const client=Object.create(QBOClient.prototype);client.connection={_id:'account-eligibility-fixture',userId:'owner',status:'active',accessToken:'fixture',tokenExpiresAt:new Date(Date.now()+60000)};let refreshed=0;
+  client._refreshStoredConnection=async()=>{refreshed++;throw Error('provider must not be contacted');};
+  for(const account of [null,{_id:'other',role:'agent'},{_id:'owner',email:'tester@testdatalab.local',role:'supervisor',authVersion:0}]){client.loadAccount=async()=>account;for(const force of [false,true])await assert.rejects(client.ensureFreshToken({force}),/account|recovery/);}
+  client.loadAccount=async()=>{throw Error('fixture account storage unavailable');};await assert.rejects(client.ensureFreshToken(),/storage unavailable/);assert.equal(refreshed,0);
+  client.loadAccount=async()=>({_id:'owner',email:'tester@testdatalab.local',role:'supervisor',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});await client.ensureFreshToken();assert.equal(refreshed,0,'private paused account can still read with its existing token');
 });

@@ -7,6 +7,7 @@ const { freezeWriteRequest, consumeBusinessWritePermit, denied } = require('./qb
 const { getQboWriteGate } = require('./qbo-write-gate');
 const { currentActorId } = require('./actor-context');
 const { claimWriteWorkflow } = require('./qbo-write-workflow');
+const { assertAccountEligible } = require('./account-policy');
 
 const refreshFlights = new Map();
 // Keep a rotated refresh token in memory until MongoDB confirms it was saved.
@@ -30,7 +31,8 @@ class QBOClient {
   /**
    * @param {object} connection - Mongoose Connection document (with tokens, realmId)
    */
-  constructor(connection) {
+  constructor(connection, { loadAccount = require('../middleware/currentAccount').loadCurrentAccount } = {}) {
+    this.loadAccount = loadAccount;
     this.connection = connection;
     this.realmId = connection.realmId;
 
@@ -200,6 +202,13 @@ class QBOClient {
   }
 
   async ensureFreshToken({ force = false } = {}) {
+    // A retained worker/client cannot continue using a disabled historical account.
+    // This runs before access-token reuse or any OAuth refresh.
+    for (const id of new Set([String(this.connection.userId), String(currentActorId() || this.connection.userId)])) {
+      const account = await this.loadAccount(id);
+      if (!account || String(account._id) !== id) throw Object.assign(new Error('The connected account is unavailable.'), { status: 403, code: 'ACCOUNT_ACCESS_RECOVERY_REQUIRED' });
+      assertAccountEligible(account);
+    }
     const key = String(this.connection._id || `${this.connection.userId}:${this.realmId}`);
     if (!force && !pendingRefreshSaves.has(key) && hasUsableAccessToken(this.connection)) return;
     let flight = refreshFlights.get(key);

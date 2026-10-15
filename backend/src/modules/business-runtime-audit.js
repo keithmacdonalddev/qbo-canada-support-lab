@@ -13,7 +13,10 @@ function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transactio
     const id = hash({ scope, actorId, ownerId, eventKey }).slice(0, 24), params = { eventKey, ...scope, details: retained };
     const save = async currentSession => {
       if (!currentSession?.inTransaction?.()) fail('Operation audit requires a transaction.');
-      const action = details.phase === 'prepared' && eventKey.startsWith('business-plan:') ? 'operations.preview' : 'operations.record';
+      const stopRequest = eventKey === 'business-period:' + details.operationId + ':stop-request' && details.action === 'Business period stop requested';
+      const settledStop = eventKey.startsWith('business-run:' + details.operationId + ':') && /^business-run:[a-f0-9]{24}:[0-9]+$/.test(eventKey) && details.phase === 'stop-settled';
+      const completionRepair = eventKey === 'business-period:' + details.operationId + ':committed' && details.action === 'Business period verified' && /^[a-f0-9]{64}$/.test(details.evidenceHash || '');
+      const action = completionRepair ? 'operations.recover' : stopRequest || settledStop ? 'operations.stop' : details.phase === 'prepared' && eventKey.startsWith('business-plan:') ? 'operations.preview' : 'operations.record';
       const actor = await access.authorize(scope, action, { session: currentSession });
       if (actor?.actorId !== actorId || actor?.ownerId !== ownerId) fail('The operation audit actor changed.');
       const row = await Audits.findOne({ _id: id }).session(currentSession).maxTimeMS(3000).lean();

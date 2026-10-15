@@ -1,7 +1,5 @@
 const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
 const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
 const express = require('express');
 const config = require('../config');
 const Connection = require('../models/Connection');
@@ -23,19 +21,9 @@ const { createQBOClient } = require('../modules/qbo-client');
 
 const router = express.Router();
 
-// Short-lived SSE tickets: ticketId → { userId, sessionId, expiresAt }
-const sseTickets = new Map();
-const SSE_TICKET_TTL_MS = 30_000; // 30 seconds
-
-// All routes (except SSE stream) require authentication
-router.use((req, res, next) => {
-  // The SSE stream endpoint handles its own auth via ticket
-  if (req.path.startsWith('/stream/')) return next();
-  return authenticate(req, res, next);
-});
-
-// SSE connections map: sessionId -> Set of res objects
-const sseConnections = new Map();
+const streams = require('../modules/ai-session-streams').sessionStreams();
+// Streaming uses the same Authorization header/current-account guard as other routes.
+router.use(authenticate);
 
 /**
  * Map a QBO upstream error onto this router's { success: false, ... } envelope.
@@ -550,103 +538,7 @@ router.post('/generate-note', async (req, res) => {
  * Issue a short-lived, single-use ticket for SSE connections.
  * This keeps the long-lived JWT out of query strings / access logs.
  */
-router.post('/stream-ticket', authenticate, async (req, res) => {
-  try {
-    const { sessionId } = req.body;
-    if (!sessionId) {
-      return res.status(400).json({ success: false, error: 'sessionId is required' });
-    }
-
-    // Verify session ownership
-    const session = await AISession.findOne({ _id: sessionId, userId: req.user.id });
-    if (!session) {
-      return res.status(404).json({ success: false, error: 'Session not found' });
-    }
-
-    const ticketId = crypto.randomBytes(32).toString('hex');
-    sseTickets.set(ticketId, {
-      userId: req.user.id,
-      sessionId,
-      expiresAt: Date.now() + SSE_TICKET_TTL_MS,
-    });
-
-    // Garbage-collect expired tickets while we're here
-    for (const [id, t] of sseTickets) {
-      if (t.expiresAt < Date.now()) sseTickets.delete(id);
-    }
-
-    return res.json({ success: true, data: { ticket: ticketId } });
-  } catch (err) {
-    console.error('[ai/stream-ticket]', err.message);
-    return res.status(500).json({ success: false, error: 'Failed to create SSE ticket' });
-  }
-});
-
-/**
- * GET /stream/:sessionId
- * SSE streaming endpoint for real-time AI session updates.
- * Authenticates via a short-lived ticket (not the raw JWT).
- */
-router.get('/stream/:sessionId', async (req, res) => {
-  const { sessionId } = req.params;
-  const { ticket } = req.query;
-
-  // Validate ticket
-  if (!ticket) {
-    return res.status(401).json({ success: false, error: 'Missing SSE ticket' });
-  }
-  const ticketData = sseTickets.get(ticket);
-  if (!ticketData) {
-    return res.status(401).json({ success: false, error: 'Invalid or expired SSE ticket' });
-  }
-  // Consume ticket (single-use)
-  sseTickets.delete(ticket);
-
-  if (ticketData.expiresAt < Date.now()) {
-    return res.status(401).json({ success: false, error: 'SSE ticket expired' });
-  }
-  if (ticketData.sessionId !== sessionId) {
-    return res.status(403).json({ success: false, error: 'Ticket does not match session' });
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  });
-
-  // Send initial connection event
-  res.write(`event: connected\ndata: ${JSON.stringify({ sessionId })}\n\n`);
-
-  // Store connection
-  if (!sseConnections.has(sessionId)) {
-    sseConnections.set(sessionId, new Set());
-  }
-  sseConnections.get(sessionId).add(res);
-
-  // Clean up on disconnect
-  req.on('close', () => {
-    const conns = sseConnections.get(sessionId);
-    if (conns) {
-      conns.delete(res);
-      if (conns.size === 0) sseConnections.delete(sessionId);
-    }
-  });
-});
-
-/**
- * Helper to emit SSE events to all connected clients for a session.
- * @param {string} sessionId
- * @param {string} event - Event name
- * @param {*} data - JSON-serializable data
- */
-function emitSSE(sessionId, event, data) {
-  const conns = sseConnections.get(sessionId);
-  if (!conns) return;
-  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const res of conns) {
-    res.write(msg);
-  }
-}
+router.use(require('./session-streams').createSessionStreamRouter({ streams }));
+function emitSSE(sessionId,event,data) { return streams.emit(sessionId,event,data); }
 
 module.exports = { router, emitSSE };

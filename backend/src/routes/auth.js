@@ -1,50 +1,21 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
-const config = require('../config');
-const User = require('../models/User');
+const { assertPrivatePassword } = require('../modules/account-recovery');
+const { issueToken } = require('../modules/auth-token');
+const { RESERVED_EMAIL, normalizeEmail, publicTesterAttempt, accountEligible } = require('../modules/account-policy');
+const DefaultUser = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 
+function createAuthRouter({ Users: User = DefaultUser, automation = () => require('../modules/account-automation-review').accountAutomationReview() } = {}) {
 const router = express.Router();
 
 /**
  * Helper -- sign a JWT for the given user document.
  */
-function signToken(user) {
-  return jwt.sign(
-    { id: user._id, email: user.email, role: user.role },
-    config.jwtSecret,
-    { expiresIn: config.jwtExpiresIn }
-  );
-}
+function signToken(user) { return issueToken(user); }
 
-function isDevAccessEmail(email) {
-  // Trimmed and lowercased like the User schema stores it, so padding cannot slip past.
-  return config.devAccess.enabled && String(email).trim().toLowerCase() === config.devAccess.email;
-}
-
-// The tester password is public (it is in the source and on the sign-in page),
-// and the tester account may be a member of the real company. Hand it out and
-// accept it only from this computer, never from the network.
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-function fromThisComputer(req) {
-  return LOOPBACK_ADDRESSES.has(req.socket?.remoteAddress);
-}
-
-/**
- * GET /dev-access
- * Returns the intentionally public shared tester credentials in local development.
- */
-router.get('/dev-access', (req, res) => {
-  if (!config.devAccess.enabled || !fromThisComputer(req)) {
-    return res.json({ enabled: false });
-  }
-
-  return res.json({
-    enabled: true,
-    email: config.devAccess.email,
-    password: config.devAccess.password,
-  });
-});
+// No passwords are published and no development login can create, promote or
+// reset a real-company account. Reserved legacy access needs explicit recovery.
+router.get('/dev-access', (_req,res) => res.json({ enabled: false }));
 
 /**
  * POST /register
@@ -52,17 +23,20 @@ router.get('/dev-access', (req, res) => {
  */
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, displayName } = req.body;
+    const { password, displayName } = req.body;
+    const email = normalizeEmail(req.body.email);
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    if (isDevAccessEmail(email)) {
-      return res.status(409).json({ error: 'Use the tester credentials shown on the sign-in page' });
+    if (normalizeEmail(email) === RESERVED_EMAIL) {
+      return res.status(409).json({ error: 'This account name is reserved for explicit local credential recovery.' });
     }
 
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return res.status(400).json({ error: 'Enter a valid email address.' });
+    try { assertPrivatePassword(password); } catch (error) { return res.status(400).json({ error:error.message }); }
+    const existing = await User.findOne({ email });
     if (existing) {
       return res.status(409).json({ error: 'Email already registered' });
     }
@@ -94,49 +68,14 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password || email.length > 254 || Buffer.byteLength(password,'utf8') > 72) {
+      return res.status(400).json({ error: 'Email and password are required within the supported length.' });
     }
 
-    const normalizedEmail = String(email).trim().toLowerCase();
-    if (isDevAccessEmail(normalizedEmail) && !fromThisComputer(req)) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    const isDevAccessAttempt = isDevAccessEmail(normalizedEmail)
-      && password === config.devAccess.password;
-
-    // Explicitly select password since toJSON transform strips it.
-    let user = await User.findOne({ email: normalizedEmail }).select('+password');
-
-    if (isDevAccessAttempt) {
-      if (!user) {
-        user = await User.create({
-          email: config.devAccess.email,
-          password: config.devAccess.password,
-          displayName: config.devAccess.displayName,
-          role: 'supervisor',
-        });
-      } else {
-        const passwordMatches = await user.comparePassword(config.devAccess.password);
-        const needsSave = !passwordMatches
-          || user.displayName !== config.devAccess.displayName
-          || user.role !== 'supervisor';
-
-        if (!passwordMatches) user.password = config.devAccess.password;
-        user.displayName = config.devAccess.displayName;
-        user.role = 'supervisor';
-        if (needsSave) await user.save();
-      }
-    }
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Backstop on the stored account, whatever spelling of the email was sent.
-    if (user.email === config.devAccess.email && !fromThisComputer(req)) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    const normalizedEmail = normalizeEmail(email);
+    if (publicTesterAttempt(email,password)) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    if (!user || !accountEligible(user)) return res.status(401).json({ error: 'Invalid credentials or account recovery required' });
 
     const valid = await user.comparePassword(password);
     if (!valid) {
@@ -203,4 +142,15 @@ router.put('/api-key', authenticate, async (req, res) => {
   }
 });
 
-module.exports = router;
+router.get('/automation-review', authenticate, async (req,res) => {
+  try { return res.json(await automation().review(req.user.id)); }
+  catch(error) { return res.status(error.status||503).json({error:error.status?error.message:'Retained work could not be read. Automation remains paused.'}); }
+});
+router.post('/automation-enable', authenticate, async (req,res) => {
+  try { return res.json(await automation().enable(req.user.id,req.body)); }
+  catch(error) { return res.status(error.status||503).json({error:error.status?error.message:'Automation could not be enabled. Read the current review before retrying.'}); }
+});
+return router;
+}
+module.exports = createAuthRouter();
+module.exports.createAuthRouter = createAuthRouter;

@@ -132,3 +132,35 @@ test('lost acknowledgement followed by a settled blocked run continues once with
   const result = await requestBusinessOperation({ api, operation: { operationId, planHash: h.body.planHash }, keys, ...scope, newKey: () => 'fixture_continuation_0002' });
   assert.equal(posts, 2); assert.equal(result.execution.pending, true); assert.equal(result.reused, false); assert.equal(keys.get(identity), 'fixture_continuation_0002'); h.service.close();
 });
+
+test('a recovered paused owner can inspect and stop a reserved operation without enabling automation or sending records',async()=>{
+ const h=setup();await h.service.request(user,operationId,h.body);
+ await h.runtime.execute({signal:{get aborted(){return h.data.Calendars[0].currentOperationId !== null;}}});
+ assert.equal(h.posts,0);assert.equal(h.data.Runs[0].leaseToken,null);
+ Object.assign(h.data.Users.find(row=>row._id===ownerId),{email:'tester@testdatalab.local',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});
+ const view=await h.service.inspect(user,operationId);assert.equal(view.permissions.execute,false);assert.equal(view.permissions.stop,true);
+ await h.service.stop(user,operationId);await h.flush();assert.equal(h.posts,0);assert.equal(h.data.Runs[0].status,'stopped');assert.equal(h.data.Users.find(row=>row._id===ownerId).automationAccessPolicyVersion,0);
+});
+
+test('a queued stop observes completion proof if another recovery finishes before its worker',async()=>{
+ const h=setup(),original=h.models.Runs.findOneAndUpdate;let interrupt=true;
+ h.models.Runs.findOneAndUpdate=(filter,change,options)=>interrupt&&change.$set?.status==='verified'?{lean:async()=>{throw Error('fixture completion receipt interruption');}}:original(filter,change,options);
+ await h.service.request(user,operationId,h.body);await h.flush();assert.equal(h.data.Runs[0].status,'committing');
+ interrupt=false;h.clock+=600001;await h.service.stop(user,operationId);const posts=h.posts,revision=h.data.Calendars[0].revision;
+ await h.runtime.settleStop();assert.equal(h.data.Runs[0].status,'verified');
+ Object.assign(h.data.Users.find(row=>row._id===ownerId),{email:'tester@testdatalab.local',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});
+ await h.flush();assert.equal(h.posts,posts);assert.equal(h.data.Calendars[0].revision,revision);assert.equal(h.data.Runs[0].executionRequest.pending,false);assert.equal(h.data.Runs[0].executionRequest.result.complete,true);
+});
+test('a paused stop worker repairs an already committed period without another accounting request',async()=>{
+ const h=setup(),original=h.models.Runs.findOneAndUpdate;let interrupt=true;
+ h.models.Runs.findOneAndUpdate=(filter,change,options)=>interrupt&&change.$set?.status==='verified'?{lean:async()=>{throw Error('fixture completion receipt interruption');}}:original(filter,change,options);
+ await h.service.request(user,operationId,h.body);await h.flush();assert.equal(h.data.Runs[0].status,'committing');assert.ok(h.data.Calendars[0].pendingCommit);const posts=h.posts,revision=h.data.Calendars[0].revision;
+ interrupt=false;h.clock+=600001;Object.assign(h.data.Users.find(row=>row._id===ownerId),{email:'tester@testdatalab.local',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});
+ await h.service.stop(user,operationId);await h.flush();assert.equal(h.posts,posts);assert.equal(h.data.Calendars[0].revision,revision);assert.equal(h.data.Calendars[0].pendingCommit,null);assert.equal(h.data.Runs[0].status,'verified');assert.equal(h.data.Runs[0].executionRequest.pending,false);assert.equal(h.data.Runs[0].executionRequest.result.complete,true);
+});
+
+test('a historical completed stop returns its own proof without repairing a later company commit',async()=>{
+ const h=setup();await h.runtime.execute();assert.equal(h.data.Runs[0].status,'verified');const oldRun=structuredClone(h.data.Runs[0]);
+ const later='f'.repeat(24);h.data.Calendars[0].currentOperationId=later;h.data.Calendars[0].pendingCommit={operationId:later,evidenceHash:hash('later-proof')};h.writer().operationId=later;h.writer().planHash=hash('later-plan');
+ const before=structuredClone(h.data);const result=await h.runtime.settleStop();assert.equal(result.complete,true);assert.equal(result.operationId,operationId);assert.deepEqual(h.data,before);assert.equal(h.data.Runs[0].verification.evidenceHash,oldRun.verification.evidenceHash);
+});

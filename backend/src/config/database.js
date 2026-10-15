@@ -1,17 +1,8 @@
-const dns = require('node:dns');
 const mongoose = require('mongoose');
 const config = require('./index');
 
 async function connectDB() {
-  // Override DNS for Atlas SRV resolution if configured
-  const dnsServers = process.env.MONGODB_DNS_SERVERS;
-  if (dnsServers) {
-    const servers = dnsServers.split(',').map(s => s.trim()).filter(Boolean);
-    if (servers.length) {
-      dns.setServers(servers);
-      console.log(`MongoDB DNS override: ${servers.join(', ')}`);
-    }
-  }
+  require('../modules/storage-target').configureDatabaseDns();
 
   try {
     const conn = await mongoose.connect(config.mongoUri);

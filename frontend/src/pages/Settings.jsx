@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { KeyRound, LoaderCircle, LogOut, RefreshCw } from 'lucide-react'
 import Layout from '../components/Layout'
+import AccountAutomationReview from '../components/AccountAutomationReview'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
@@ -253,18 +254,18 @@ function AssistantSection() {
       <dl className="divide-y divide-[var(--line)] border-t border-[var(--line)] px-5 py-1">
         <FactRow label="Service">{codex ? 'Codex CLI (ChatGPT subscription)' : 'Anthropic API'}</FactRow>
         {codex && <FactRow label="Model">{config.codex?.model || 'Codex default'}</FactRow>}
-        <FactRow label="Changes to QuickBooks">
+        <FactRow label="Legacy AI plans">
           <span className="inline-flex items-center gap-1.5">
             <StatusDot tone={canWrite ? 'ok' : 'muted'} />
-            {canWrite ? 'Allowed after you approve each case' : 'Off: the assistant can only propose'}
+            {canWrite ? 'Enabled with plan approval' : 'Disabled'}
           </span>
         </FactRow>
       </dl>
       <p className="border-t border-[var(--line)] px-5 py-3 text-[12px] text-[var(--ink-3)]">
         {canWrite
-          ? 'Nothing is written until you approve a case’s list of changes. In production you also confirm by typing PRODUCTION.'
-          : 'To let approved cases write to QuickBooks, set LEGACY_AI_MUTATIONS_ENABLED=true in the backend .env and restart the backend.'}
-        {' '}The service is chosen by AI_PROVIDER in the backend .env.
+          ? 'Legacy plans need approval of their changes and production confirmation.'
+          : 'Legacy plan execution is disabled by server policy.'}
+        {' '}Submitting a reproduction case authorizes the assistant to create its own records, subject to current company access and write controls. Changes to pre-existing records follow the owner approval policy shown on the case.
       </p>
       {(!codex || config.hasUserKey) && (
         <div className="border-t border-[var(--line)] px-5 py-4">
@@ -284,6 +285,7 @@ function AccountSection() {
       <Headline tone="ok" title={user?.displayName || user?.email || 'Signed in'} detail={user?.displayName ? user.email : null}>
         <Button variant="outline" onClick={() => { logout(); navigate('/login') }}><LogOut /> Log out</Button>
       </Headline>
+      <AccountAutomationReview />
     </Panel>
   )
 }

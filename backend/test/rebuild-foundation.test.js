@@ -4,7 +4,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
 const express = require('express')
-const jwt = require('jsonwebtoken')
+const { issueToken } = require('../src/modules/auth-token')
 
 const config = require('../src/config')
 const { createApp } = require('../src/app')
@@ -16,7 +16,7 @@ const { validateBlueprintDefinition } = require('../src/modules/blueprint-valida
 const BlueprintVersion = require('../src/models/BlueprintVersion')
 
 function bearer(role = 'supervisor') {
-  const token = jwt.sign({ id: '000000000000000000000001', email: 'fixture@test.local', role }, config.jwtSecret)
+  const token = issueToken({ _id: '000000000000000000000001', email: 'fixture@test.local', role, authVersion:0 })
   return `Bearer ${token}`
 }
 
@@ -262,7 +262,7 @@ test('legacy AI and issue-pack QBO mutation routes are off by default', async ()
   assert.equal(config.features.experimental.aiMutations, false)
   assert.equal(config.features.experimental.issuePackMutations, false)
 
-  await withServer(createApp(), async (baseUrl) => {
+  await withServer(createApp({ currentAccount:{loadAccount:async id=>({_id:id,email:'fixture@test.local',role:'supervisor',authVersion:0})} }), async (baseUrl) => {
     for (const path of ['/api/ai/plan/fixture/execute', '/api/issuepacks/fixture/run']) {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',

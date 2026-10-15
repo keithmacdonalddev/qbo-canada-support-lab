@@ -6,6 +6,8 @@ Start the complete local application with:
 npm run dev
 ```
 
+Before startup, configure a private JWT_SECRET generated from at least 32 random bytes. The API refuses a missing key or the historical public development key before connecting to MongoDB. APP_HOST must be 127.0.0.1 so the launcher, desktop proxy and companion reach the same local listener. Existing built-in tester credentials are disabled; use the [private account recovery procedure](account-access-recovery.md) to retain that account’s company and work. Credential recovery and service restarts require separate explicit authorization.
+
 The development launcher checks ports before starting anything, starts the API first, waits for MongoDB and the API health route, and then starts the web app. It verifies that the responding API and web pages belong to Test Data Lab. The API health route returns `503` if MongoDB disconnects. When configured, the launcher also starts the QuickBooks callback tunnel.
 
 The status symbols and colors have consistent meanings:

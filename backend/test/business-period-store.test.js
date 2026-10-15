@@ -215,3 +215,9 @@ test('approved status without an exact durable approval cannot reserve the calen
     assert.equal(h.Runs.value.status, 'approved'); assert.equal(h.Calendars.value.currentOperationId, null); assert.equal(h.audits.size, 0);
   }
 });
+
+test('operation-bound completion recovery cannot repair another operation pending on the company',async()=>{
+ const h=harness();h.Runs.failStatus='verified';await assert.rejects(h.store.finish(id,scope));const before=clone(h.Calendars.value),run=clone(h.Runs.value),audits=h.audits.size;
+ await assert.rejects(h.store.repair(scope,'f'.repeat(24)),/different operation/);assert.deepEqual(h.Calendars.value,before);assert.deepEqual(h.Runs.value,run);assert.equal(h.audits.size,audits);
+ await h.store.repair(scope,id);assert.equal(h.Runs.value.status,'verified');
+});

@@ -38,3 +38,10 @@ test('an unrequested or unresolved stop cannot be recorded as stopped', async ()
 test('corrupt completion receipts are not exposed as complete', async () => {
   const h = harness(); await h.execute(); h.run().verification.evidenceHash = 'invalid'; assert.equal((await h.state.inspect(scope, operationId)).completion, null);
 });
+
+test('stop-only settlement cannot steal a live lease or clear an unresolved write',async()=>{
+ const h=await claimed();h.calendar().stopRequested=true;
+ await assert.rejects(h.state.settleStop(scope,operationId),/active worker/);h.clock+=600001;
+ h.writer().unresolved={key:hash('uncertain')};await assert.rejects(h.state.settleStop(scope,operationId),/uncertain request/);h.writer().unresolved=null;
+ const saved=await h.state.settleStop(scope,operationId);assert.equal(saved.status,'stopped');assert.equal(saved.leaseToken,null);assert.equal(h.calendar().stopRequested,true);assert.equal(h.writer().operationId,operationId);
+});

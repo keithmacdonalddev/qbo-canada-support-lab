@@ -1,3 +1,9 @@
+const { randomBytes } = require('node:crypto')
+const historicalJwt = 'dev-jwt-secret-change-in-production'
+const suppliedJwt = process.env.JWT_SECRET
+const privateJwtConfigured = typeof suppliedJwt === 'string' && suppliedJwt.trim() === suppliedJwt && Buffer.byteLength(suppliedJwt) >= 32 && Buffer.byteLength(suppliedJwt) <= 4096 && suppliedJwt !== historicalJwt
+const privateJwt = privateJwtConfigured ? suppliedJwt : randomBytes(48).toString('base64url')
+
 function enabled(name, defaultValue = false) {
   if (process.env[name] === undefined) return defaultValue
   return process.env[name] === 'true'
@@ -5,13 +11,15 @@ function enabled(name, defaultValue = false) {
 
 const config = {
   port: process.env.PORT || 3001,
+  host: process.env.APP_HOST || '127.0.0.1',
+  security: { privateJwtConfigured, allowedOrigins: (process.env.APP_ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3001,http://127.0.0.1:3001').split(',').map(value => value.trim()).filter(Boolean) },
   mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/qbo-support-lab',
-  jwtSecret: process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production',
+  // Import-only fixtures use one process-private key. Explicit startup refuses it.
+  jwtSecret: privateJwt,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   devAccess: {
-    enabled: process.env.NODE_ENV !== 'production',
+    enabled: false,
     email: 'tester@testdatalab.local',
-    password: 'test-data-lab',
     displayName: 'Local Tester',
   },
   qbo: {

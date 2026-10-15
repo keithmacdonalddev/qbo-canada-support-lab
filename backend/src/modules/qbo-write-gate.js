@@ -1,5 +1,6 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
+const { assertAccountEligible } = require('./account-policy');
 const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
 const { denied, scoped, classifyWriteResponse } = require('./qbo-write-contract');
@@ -14,14 +15,15 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId });
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
-  async function fenceWorkspace(scope, ownerId, actorId, session) {
+  async function fenceWorkspace(scope, ownerId, actorId, session, automation = false) {
     if (!Users) throw denied('Business workspace authority storage is required.');
     // OAuth switches write these same user documents. A concurrent switch then
     // conflicts with this transaction, so admission retries against the new scope.
     for (const id of [...new Set([ownerId, actorId])].sort()) {
-      const user = await Users.findOne({ _id: id }).select('_id role connectionSwitchVersion').session(session).maxTimeMS(3000).lean();
+      const user = await Users.findOne({ _id: id }).select('_id role email authVersion accessPolicyVersion automationAccessPolicyVersion connectionSwitchVersion').session(session).maxTimeMS(3000).lean();
       const version = user?.connectionSwitchVersion ?? 0;
       if (!user || !['agent', 'supervisor'].includes(user.role) || !validRevision(version)) throw denied('Business workspace user is unavailable.');
+      try { assertAccountEligible(user, { automation }); } catch (error) { throw denied(error.message); }
       const versionFilter = user.connectionSwitchVersion === undefined ? { $exists: false } : version;
       const touched = await Users.findOneAndUpdate({ _id: id, role: user.role, connectionSwitchVersion: versionFilter }, { $inc: { connectionSwitchVersion: 1 } }, { new: true, session }).select('_id').lean();
       if (!touched) throw denied('Business workspace selection changed before dispatch.');
@@ -59,7 +61,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       if (!state || state.policy.state !== 'active') throw denied('Company write preparation or scope changed.');
       const connection = await read(Connections, { _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' }, session);
       if (!connection) throw denied('The company connection is no longer active.');
-      await fenceWorkspace(scope, ownerId, actorId, session);
+      await fenceWorkspace(scope, ownerId, actorId, session, true);
       const membership = await read(Memberships, { userId: actorId, realmId: scope.realmId, status: 'active' }, session);
       const permission = workflow && !permit ? 'reproduction.run' : 'operations.execute';
       if (!membership || !normalizePermissions(membership.role, membership.permissionOverrides || []).includes(permission)) throw denied('Current company permission is required before every write.');

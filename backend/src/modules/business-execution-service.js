@@ -23,8 +23,12 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
     return { scope, actorId, ownerId, access };
   }
   async function permissions(selected) {
-    try { await selected.access.authorize(selected.scope, 'operations.execute'); return { execute: true, stop: true }; }
-    catch (error) { if (error.status === 403) return { execute: false, stop: false }; throw error; }
+    const allowed = {};
+    for (const [key, action] of [['execute','operations.execute'],['stop','operations.stop']]) {
+      try { await selected.access.authorize(selected.scope, action); allowed[key] = true; }
+      catch (error) { if (error.status !== 403) throw error; allowed[key] = false; }
+    }
+    return allowed;
   }
   function requestIdentity(run) {
     const request = run?.executionRequest, scope = scoped({ realmId: run?.realmId, environment: run?.environment, connectionId: String(run?.connectionId) });
@@ -79,7 +83,7 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
             }
           }
         }
-        observed = await runtime.execute();
+        observed = identity.request.mode === 'stop' && typeof runtime.settleStop === 'function' ? await runtime.settleStop() : await runtime.execute();
       } catch (caught) { error = caught; }
       await settle(identity, error, observed);
     }).catch(() => { lastScanError = 'Saved business work needs recovery; no request was replayed.'; }).finally(() => jobs.delete(operationId));

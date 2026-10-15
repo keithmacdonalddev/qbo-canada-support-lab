@@ -1,5 +1,6 @@
 'use strict';
 const { scoped } = require('./qbo-write-contract');
+const { assertAccountEligible } = require('./account-policy');
 const { ROLE_PERMISSIONS, ALL_PERMISSIONS, resolvePermissionSnapshot } = require('./rebuild-permissions');
 const ID = /^[a-f0-9]{24}$/;
 // Internal operation actions map to existing public permissions. No roles or
@@ -37,11 +38,14 @@ function createBusinessRuntimeAccess({ actorId, ownerId, Users = require('../mod
     if (scope.environment !== environment()) fail('The configured company environment changed.', 409);
     // Session reads are sequential: MongoDB does not support parallel operations
     // within one transaction. Read projections never include credentials.
-    const actor = await query(Users, { _id: actorId }, '_id role', session); cancelled(signal);
+    const automation = ['operations.execute','operations.record','reproduction.run'].includes(action);
+    const actor = await query(Users, { _id: actorId }, '_id role email authVersion accessPolicyVersion automationAccessPolicyVersion', session); cancelled(signal);
     if (!actor || !same(actor._id, actorId) || !['agent', 'supervisor'].includes(actor.role)) fail('The operation actor is no longer available.');
+    try { assertAccountEligible(actor, { automation }); } catch (error) { fail(error.message); }
     if (actorId !== ownerId) {
-      const owner = await query(Users, { _id: ownerId }, '_id', session); cancelled(signal);
+      const owner = await query(Users, { _id: ownerId }, '_id role email authVersion accessPolicyVersion automationAccessPolicyVersion', session); cancelled(signal);
       if (!owner || !same(owner._id, ownerId)) fail('The company workspace owner is unavailable.');
+      try { assertAccountEligible(owner, { automation }); } catch (error) { fail(error.message); }
       const ownConnection = await query(Connections, { userId: actorId, status: 'active' }, '_id', session);
       if (ownConnection) fail('The actor now works in its own company workspace.', 409);
     }

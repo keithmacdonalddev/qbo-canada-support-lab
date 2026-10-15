@@ -1,5 +1,6 @@
 'use strict';
 const { firstRequest, caseTiming } = require('./case-timing');
+const { assertAccountEligible } = require('./account-policy');
 
 const { randomUUID } = require('crypto');
 const { screenBroker, makeScreenInspector } = require('./reproduction-screen');
@@ -31,6 +32,12 @@ const preflight = dependencies.preflight || (async () => {
 });
 
 async function assertActorAccess(userId, actorId, realmId) {
+  if (!dependencies.User && require('mongoose').connection.readyState !== 1) throw Object.assign(new Error('Current account storage is unavailable.'), { status: 503 });
+  for (const id of new Set([String(userId), String(actorId)])) {
+    const account = await User.findById(id).select('_id email role authVersion accessPolicyVersion automationAccessPolicyVersion').maxTimeMS(3000);
+    if (!account || String(account._id) !== id) throw Object.assign(new Error('The initiating account is unavailable.'), { status: 403 });
+    assertAccountEligible(account, { automation: true });
+  }
   if (String(userId) === String(actorId)) return;
   const membership = await CompanyMembership.findOne({ userId: actorId, realmId, status: 'active' });
   if (!membership || !normalizePermissions(membership.role, membership.permissionOverrides).includes('reproduction.run')) {
@@ -105,6 +112,7 @@ async function executeCase(sessionId, runId) {
     if (!connection) throw new Error('The case company is no longer connected.');
     const user = await User.findById(state.actorId).select('+anthropicApiKey');
     if (!user) throw new Error('The initiating user is no longer available.');
+    await assertActorAccess(session.userId, state.actorId, session.realmId);
     const qbo = await createQBOClient(connection);
     plan = await AIPlan.findById(state.planId);
     if (!plan) throw new Error('The case operation log is missing.');
@@ -157,7 +165,7 @@ async function executeCase(sessionId, runId) {
       return;
     }
     await runEngine({ state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen,
-      runModel: (transcript, execute, tools, budget) => runProvider(transcript, system, execute, tools, user.anthropicApiKey, { ...budget, provider }) });
+      runModel: async (transcript, execute, tools, budget) => { await assertActive(); const currentUser = await User.findById(state.actorId).select('+anthropicApiKey'); if (!currentUser) throw new Error('The initiating account is unavailable.'); return runProvider(transcript, system, execute, tools, currentUser.anthropicApiKey, { ...budget, provider }); } });
     session.messages.push({ role: 'assistant', content: state.summary, timestamp: new Date() });
     if (state.title) session.title = state.title;
     await persist();
