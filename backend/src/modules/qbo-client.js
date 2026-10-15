@@ -1,4 +1,5 @@
 const OAuthClient = require('intuit-oauth');
+const { setTimeout: readDelay } = require('node:timers/promises');
 const config = require('../config');
 const Connection = require('../models/Connection');
 const { refreshTokenExpiryFrom } = require('./connection-health');
@@ -14,6 +15,19 @@ const refreshFlights = new Map();
 // Retrying with the old stored token after a failed save can invalidate recovery.
 const pendingRefreshSaves = new Map();
 const ACCESS_TOKEN_MARGIN_MS = 30_000;
+function snapshotReadControl(value, method) {
+  if (value === undefined) return null;
+  if (method !== 'GET' || !value || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).some(key => !['signal','beforeAttempt','onFailure'].includes(key)) || Reflect.ownKeys(value).length !== 3) throw new TypeError('Bounded read controls require an exact GET-only contract.');
+  const { signal, beforeAttempt, onFailure } = value;
+  if (!(signal instanceof AbortSignal) || typeof beforeAttempt !== 'function' || typeof onFailure !== 'function') throw new TypeError('Bounded reads require a signal and trusted admission/failure callbacks.');
+  return Object.freeze({ signal, beforeAttempt, onFailure });
+}
+function readCancelled() { return Object.assign(new Error('The bounded QuickBooks read was cancelled.'), {status:409,code:'QBO_READ_CANCELLED'}); }
+function assertReadActive(control) { if (control?.signal.aborted) throw readCancelled(); }
+function notifyReadFailure(control, error) {
+  if (control) try { const pending = control.onFailure(error); pending?.catch?.(() => {}); } catch { /* Preserve the original failure. */ }
+}
+
 
 function hasUsableAccessToken(connection) {
   return Boolean(connection.tokenExpiresAt
@@ -236,9 +250,13 @@ class QBOClient {
    * 5xx and network failures REJECT (throw); the try/catch below handles those,
    * plus any throw from refresh() inside ensureFreshToken.
    */
-  async apiCall(method, endpoint, body, _retryCount = 0, _authRetryCount = 0) {
+  // Optional trusted readControl fences GET admission/failure and waiting.
+  // It disables accounting retries while allowing token persistence to settle.
+  async apiCall(method, endpoint, body, _retryCount = 0, _authRetryCount = 0, readControl) {
     const MAX_RETRIES = 5;
     method = String(method).toUpperCase();
+    const control = snapshotReadControl(readControl, method);
+    assertReadActive(control);
     // Freeze the exact bytes and consume local permission before any await.
     const writeRequest = method === 'GET' ? null : freezeWriteRequest({ environment: config.qbo.environment, realmId: String(this.realmId), connectionId: String(this.connection?._id) }, method, endpoint, body);
     const permit = writeRequest ? consumeBusinessWritePermit() : null;
@@ -251,14 +269,22 @@ class QBOClient {
     const endpointType = String(endpoint).split(/[/?]/)[0] || 'unknown';
 
     let response;
-    let reachedApiCall = false;
+    let reachedApiCall = false, localReadFailure = false;
     try {
       await this.ensureFreshToken();
 
       // Respect an active rate-limit wait
       const now = Date.now();
       if (now < this._retryAfterUntil) {
-        await this._sleep(this._retryAfterUntil - now);
+        if (control) {
+          try { await readDelay(this._retryAfterUntil - now, undefined, {signal:control.signal}); }
+          catch (error) { if (control.signal.aborted) { localReadFailure = true; throw readCancelled(); } throw error; }
+        } else await this._sleep(this._retryAfterUntil - now);
+      }
+
+      if (control) {
+        try { assertReadActive(control); await control.beforeAttempt(); assertReadActive(control); }
+        catch (error) { localReadFailure = true; throw error; }
       }
 
       // Track requests in rolling window
@@ -270,6 +296,7 @@ class QBOClient {
         method,
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       };
+      if (control) opts.maxRetries = 1; // One admission is one SDK accounting request.
       if (writeRequest) opts.body = writeRequest.body;
       else if (body) opts.body = JSON.stringify(body);
       if (writeGate) {
@@ -286,7 +313,19 @@ class QBOClient {
       // rather than resolves.
       reachedApiCall = true;
       response = await this.oauthClient.makeApiCall(opts);
+      if (control) {
+        if (typeof response?.status === 'number' && response.status >= 400) {
+          const fault = this._extractFaultMessage(response), error = new Error('QBO API error (HTTP ' + response.status + ')' + (fault ? ': ' + fault : ''));
+          error.status = response.status; error.qboStage = 'api';
+          let headers; try { headers = typeof response.headers === 'function' ? response.headers() : response.headers; } catch { /* optional trace */ }
+          const tid = this._extractIntuitTid(headers, response.intuit_tid); if (tid) error.intuit_tid = tid;
+          throw error;
+        }
+        try { assertReadActive(control); } catch (error) { localReadFailure = true; throw error; }
+      }
     } catch (err) {
+      notifyReadFailure(control, err);
+      if (localReadFailure) throw err;
       // Genuinely thrown exception: network failure, or refresh() rejecting
       // inside ensureFreshToken(). Extract a tid where one is present, log,
       // and rethrow. Do not log tokens, auth headers, or full bodies.
@@ -512,9 +551,9 @@ class QBOClient {
     return this.apiCall('GET', `${entity}/${id}`);
   }
 
-  async query(queryStr) {
+  async query(queryStr, readControl) {
     const encoded = encodeURIComponent(queryStr);
-    return this.apiCall('GET', `query?query=${encoded}`);
+    return this.apiCall('GET', `query?query=${encoded}`, undefined, 0, 0, readControl);
   }
 
   async update(entity, data) {

@@ -67,7 +67,7 @@ test('book reads use fixed GET report names and SELECT accounts only', async () 
   const fixtures=fixture(true);fixtures.TrialBalance.Rows.Row[0].ColData[0].id='1';fixtures.TrialBalance.Rows.Row[1].ColData[0].id='2';
   const h=require('./helpers/book-read-fixture').bookReadFixture(fixtures);
   const result=await readBookEvidence(h.access,h.scope,period);
-  assert.equal(result.status,'checks-passed');assert.equal(h.calls.length,8);assert.ok(h.calls.every(call=>call.method==='GET'));assert.ok(h.actions.every(action=>action==='reports.observe'));assert.ok(h.calls.filter(call=>call.url.includes('/reports/')).every(call=>call.url.includes('accounting_method=Accrual')));
+  assert.equal(result.status,'checks-passed');assert.equal(result.readAttempts,8);assert.equal(h.calls.length,8);assert.ok(h.calls.every(call=>call.method==='GET'));assert.ok(h.actions.every(action=>action==='reports.observe'));assert.ok(h.calls.filter(call=>call.url.includes('/reports/')).every(call=>call.url.includes('accounting_method=Accrual')));
 });
 test('invalid or future periods cause no QuickBooks calls',async()=>{
  const h=require('./helpers/book-read-fixture').bookReadFixture(fixture(true));await assert.rejects(readBookEvidence(h.access,h.scope,{...period,throughDate:'2026-10-07'},{now:()=>Date.parse('2026-10-06T12:00:00Z')}),{status:400});assert.equal(h.calls.length,0);

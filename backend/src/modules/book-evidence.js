@@ -152,8 +152,9 @@ async function readBookEvidence(access, scope, { fromDate, throughDate }, { sign
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now()));
   if (![fromDate, throughDate, today].every(validDate) || fromDate > throughDate || throughDate > today || Date.parse(throughDate) - Date.parse(fromDate) > 366 * 86400000) throw Object.assign(new Error('Choose a valid period of at most one year, ending no later than today.'), { status: 400 });
   const { createBusinessReportReader } = require('./business-report-evidence');
-  const source = await createBusinessReportReader({ access, now, purpose: 'book' })(scope, { fromDate, throughDate }, { signal });
+  let readAttempts = 0;
+  const source = await createBusinessReportReader({ access, now, purpose: 'book', onAttempt: count => { readAttempts = count } })(scope, { fromDate, throughDate }, { signal });
   await access.authorize(scope, 'reports.observe', { signal });
-  return { checkedAt: source.observedAt, ...evaluateReportSources(source, { allowExplicitZero: true }) };
+  return { checkedAt: source.observedAt, readAttempts, ...evaluateReportSources(source, { allowExplicitZero: true }) };
 }
 module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport };

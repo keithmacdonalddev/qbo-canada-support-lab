@@ -23,7 +23,7 @@ test('authenticated status and book results use the same current connection ID a
   h.data.Memberships[0].role = 'reviewer';
   const response = await request('/api/qbo/status'); assert.equal(response.status,200); const status = await response.json(); assert.equal(status.connectionId,scope.connectionId);
   const read = await request(period); assert.equal(read.status,200); assert.equal(read.headers.get('cache-control'),'no-store'); const body = await read.json();
-  assert.equal(body.data.connectionId,status.connectionId); assert.equal(body.data.environment,status.environment); assert.equal(body.data.reportCoverage.required,7); assert.equal(body.data.reportCoverage.complete,true);
+  assert.equal(body.data.connectionId,status.connectionId); assert.equal(body.data.environment,status.environment); assert.equal(body.data.readAttempts,8); assert.equal(body.data.reportCoverage.required,7); assert.equal(body.data.reportCoverage.complete,true);
   assert.equal(h.posts,0); assert.equal(h.events.filter(event=>event.path.includes('/reports/')).length,7); assert.equal(body.data.sources,undefined); assert.equal(body.data.accounts,undefined); assert.equal(body.data.reports[5].Rows,undefined); assert.doesNotMatch(JSON.stringify(body),/fixture-token|gzip-canonical-json|refreshToken/);
   assert.equal((await request(period,{headers:{}})).status,401);
 }));
