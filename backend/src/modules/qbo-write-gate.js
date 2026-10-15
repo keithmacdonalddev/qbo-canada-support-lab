@@ -4,6 +4,7 @@ const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
 const { denied, scoped, classifyWriteResponse } = require('./qbo-write-contract');
 const { normalizePermissions } = require('./rebuild-permissions');
+const { normalizeWorkflow } = require('./qbo-write-workflow');
 const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
@@ -40,12 +41,12 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       inputParams: { environment: input.scope.environment, connectionId: input.scope.connectionId, dispatchKey: input.dispatchKey, requestHash: input.requestHash, entity: input.entity, operation: input.operation }, afterState: details,
     }], { session });
   }
-  async function begin({ request, permit, ownerId, actorId }) {
+  async function begin({ request, permit, ownerId, actorId, workflow }) {
     const scope = scoped(request.scope);
+    workflow = workflow ? normalizeWorkflow(workflow) : null;
     if (!ID.test(ownerId || '') || !ID.test(actorId || '')) throw denied('The actual write actor and company owner are required.');
     const initial = await policyState(scope);
-    if (!initial && !permit) return { coordinated: false };
-    if (!initial) throw denied('Business dispatch requires prepared company write coordination.');
+    if (!initial) throw denied('Company writes require explicit business storage and write-coordination setup on the Company page. Nothing was sent.');
     if (initial.policy.state !== 'active') throw denied('Company writes are paused while business write coordination is being prepared. Nothing was sent to QuickBooks; finish or resume that setup, then try again.');
     if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
     await assertReady();
@@ -57,11 +58,11 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       if (!state || state.policy.state !== 'active') throw denied('Company write preparation or scope changed.');
       const connection = await read(Connections, { _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' }, session);
       if (!connection) throw denied('The company connection is no longer active.');
-      const membership = permit || actorId !== ownerId ? await read(Memberships, { userId: actorId, realmId: scope.realmId, status: 'active' }, session) : null;
-      if ((permit || actorId !== ownerId) && !membership) throw denied('Company access changed before the request.');
-      if (permit) {
-        await fenceWorkspace(scope, ownerId, actorId, session);
-        if (!normalizePermissions(membership.role, membership.permissionOverrides || []).includes('operations.execute')) throw denied('Current business execution permission is required.');
+      await fenceWorkspace(scope, ownerId, actorId, session);
+      const membership = await read(Memberships, { userId: actorId, realmId: scope.realmId, status: 'active' }, session);
+      const permission = workflow && !permit ? 'reproduction.run' : 'operations.execute';
+      if (!membership || !normalizePermissions(membership.role, membership.permissionOverrides || []).includes(permission)) throw denied('Current company permission is required before every write.');
+      if (membership) {
         // Take a write conflict with concurrent membership changes in this transaction.
         const authorized = await Memberships.findOneAndUpdate({ _id: membership._id, userId: actorId, realmId: scope.realmId, status: 'active', role: membership.role }, { $inc: { businessSetupVersion: 1 } }, { new: true, session }).lean();
         if (!authorized) throw denied('Business execution permission changed before dispatch.');
@@ -88,7 +89,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const policyTouched = await Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
       const writerTouched = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId: writer.operationId, planHash: writer.planHash }, { $set: { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!policyTouched || !writerTouched) throw denied('Company write admission changed.');
-      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : {}), dispatchKey, requestHash: request.requestHash, entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
+      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : {}), dispatchKey, requestHash: request.requestHash, entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
       await audit(startAuditId, { ...ticket, scope }, 'started', { state: 'possibly-sent', receiptId }, session);
       return ticket;
     });
@@ -122,7 +123,62 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       return { ...observed, receiptId: ticket.receiptId };
     });
   }
-  return { begin, complete };
+  const caseQuery = (scope, ownerId, workflow) => ({ ...scope, kind: 'legacy', ownerId, 'workflow.kind': 'reproduction', 'workflow.sessionId': workflow.sessionId, 'workflow.planId': workflow.planId, 'workflow.stepNumber': workflow.stepNumber });
+  const caseReceipts = (query, session) => Receipts.find(query).limit(2).session(session).maxTimeMS(3000).lean();
+  // A server-owned reverse lookup also covers a crash/lost acknowledgement
+  // between durable admission and the case saving its dispatch identifier.
+  async function settleCase({ scope, ownerId, actorId, workflow, dispatch, decision }, save) {
+    scope = scoped(scope); workflow = normalizeWorkflow(workflow);
+    if (!ID.test(ownerId || '') || actorId !== ownerId || typeof save !== 'function') throw denied('Only the current company owner can settle a case write.');
+    return transaction(async session => {
+      await fenceWorkspace(scope, ownerId, actorId, session);
+      const state = await policyState(scope, session);
+      const receipts = await caseReceipts(caseQuery(scope, ownerId, workflow), session);
+      if (receipts.length > 1) throw denied('Several requests claim this case step. Review their exact receipts; nothing was settled.');
+      let receipt = receipts[0] || null;
+      if (!dispatch && receipt) dispatch = { version: 1, scope, receiptId: String(receipt._id), dispatchKey: receipt.dispatchKey, requestHash: receipt.requestHash };
+      if (!dispatch) {
+        if (state?.writer.unresolved) throw denied('This company has an unresolved request without an exact receipt for this case step. Its dispatch must be identified before the case can be cleared.');
+        return save(session);
+      }
+      if (dispatch.version !== 1 || !HASH.test(dispatch.receiptId || '') || !HASH.test(dispatch.dispatchKey || '') || !HASH.test(dispatch.requestHash || '') || hash(dispatch.scope || null) !== hash(scope)) throw denied('The saved case dispatch is incomplete or belongs to another company.');
+      await assertReady();
+      if (!receipt || String(receipt._id) !== dispatch.receiptId || receipt.dispatchKey !== dispatch.dispatchKey || receipt.requestHash !== dispatch.requestHash || hash(receipt.workflow || null) !== hash(workflow)) throw denied('The uncertain company request does not match this exact case step. Nothing was settled.');
+      const connection = await read(Connections, { _id: scope.connectionId, userId: ownerId, realmId: scope.realmId, status: 'active' }, session);
+      if (!connection) throw denied('The case company connection changed during recovery.');
+      if (!decision || !['completed', 'failed'].includes(decision.status) || (decision.status === 'completed' && !/^\d{1,30}$/.test(String(decision.result?.data?.id || '')))) throw denied('Saved record evidence or an explicit no-effect decision is required.');
+      if (['saved', 'rejected'].includes(receipt.state)) {
+        const savedId = receipt.observed?.qboId || receipt.reconciliation?.qboId;
+        if ((receipt.state === 'saved' && (decision.status !== 'completed' || String(savedId) !== String(decision.result.data.id))) || (receipt.state === 'rejected' && decision.status !== 'failed')) throw denied('Readback contradicts the retained transport result. Nothing was settled.');
+        // The response is already durable. Repair this workflow only; an unrelated
+        // current writer is neither changed nor released.
+        return save(session);
+      }
+      const writer = state?.writer;
+      if (!['possibly-sent', 'unknown'].includes(receipt.state) || !writer || writer.operationId !== null || writer.planHash !== null || writer.unresolved?.key !== receipt.dispatchKey || writer.unresolved?.requestHash !== receipt.requestHash || writer.unresolved?.transportConsumed?.receiptId !== receipt._id) throw denied('The company barrier changed or belongs to another operation. Nothing was settled.');
+      const reconciliation = { version: 1, workflow, actorId, at: new Date(now()).toISOString(), decision: decision.result.reconciled, outcome: decision.status === 'completed' ? 'saved' : 'rejected', qboId: decision.result?.data?.id || null };
+      const settled = await Receipts.findOneAndUpdate({ _id: receipt._id, ...scope, state: receipt.state, requestHash: receipt.requestHash }, { $set: { state: reconciliation.outcome, reconciliation } }, { new: true, session }).lean();
+      const released = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId: null, planHash: null, 'unresolved.key': receipt.dispatchKey }, { $set: { unresolved: null }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!settled || !released) throw denied('The uncertain company request changed during recovery.');
+      return save(session);
+    });
+  }
+  async function assertCaseSettled({ scope, ownerId, sessionId }) {
+    scope = scoped(scope);
+    if (!ID.test(ownerId || '') || !ID.test(sessionId || '')) throw denied('The current company owner and exact case are required.');
+    return transaction(async session => {
+      await fenceWorkspace(scope, ownerId, ownerId, session);
+      const state = await policyState(scope, session), writer = state?.writer;
+      const pending = await caseReceipts({ ...scope, kind: 'legacy', ownerId, 'workflow.sessionId': sessionId, state: { $in: ['possibly-sent', 'unknown'] } }, session);
+      if (pending.length) throw denied('The case still has an uncertain transport receipt. Recover its exact saved change before continuing.');
+      if (writer?.unresolved) {
+        const receipt = await read(Receipts, { _id: writer.unresolved.transportConsumed?.receiptId, ...scope }, session);
+        if (!receipt?.workflow || receipt.workflow.sessionId === sessionId) throw denied('The company still has an unresolved request for this case or an unidentified historical request. Its transport must be settled before the case can be cleared.');
+      }
+      return true;
+    });
+  }
+  return { begin, complete, settleCase, assertCaseSettled };
 }
 let defaultGate;
 function getQboWriteGate() {

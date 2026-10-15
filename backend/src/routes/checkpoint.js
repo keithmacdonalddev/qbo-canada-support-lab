@@ -1,3 +1,5 @@
+const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
+const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
 const express = require('express');
 const Connection = require('../models/Connection');
 const Checkpoint = require('../models/Checkpoint');
@@ -18,7 +20,7 @@ async function getActiveConnection(userId) {
  * POST /
  * Create a named checkpoint (snapshot all entities from QBO).
  */
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireCompanyWrite, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {
@@ -136,7 +138,7 @@ router.get('/:id/diff/:compareId', authenticate, async (req, res) => {
  * DELETE /:id
  * Delete a checkpoint.
  */
-router.delete('/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, requireCompanyWrite, async (req, res) => {
   try {
     const checkpoint = await Checkpoint.findOneAndDelete({
       _id: req.params.id,

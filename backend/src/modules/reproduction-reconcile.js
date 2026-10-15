@@ -131,6 +131,8 @@ function createReconciler(dependencies = {}) {
   const createAuditEntry = dependencies.createAuditEntry || require('../middleware/auditLogger').createAuditEntry;
   // A run still executing in this process, whatever its saved lease says.
   const isActive = dependencies.isActive || ((id) => Boolean(require('./reproduction-runner').waitForIdle(id)));
+  const assertSettled = dependencies.assertSettled || (input => require('./qbo-write-gate').getQboWriteGate().assertCaseSettled(input));
+  const settleWrite = dependencies.settleWrite || ((input, save) => require('./qbo-write-gate').getQboWriteGate().settleCase(input, save));
   const now = dependencies.now || (() => Date.now());
   const stepFields = (fields) => ({ $set: Object.fromEntries(Object.entries(fields).map(([k, v]) => ['steps.$.' + k, v])) });
 
@@ -161,13 +163,13 @@ function createReconciler(dependencies = {}) {
       fail(409, exists.reproduction?.status === 'running' ? 'Wait for the case run to finish, then reconcile.' : 'Another decision on this case is in progress.');
     }
     try {
-      return await reconcileLocked({ session, userId, selections });
+      return await reconcileLocked({ session, userId, selections, lock });
     } finally {
       await AISession.updateOne({ _id: session._id, 'reproduction.decisionLockUntil': lock }, { $unset: { 'reproduction.decisionLockUntil': 1 } });
     }
   }
 
-  async function reconcileLocked({ session, userId, selections }) {
+  async function reconcileLocked({ session, userId, selections, lock }) {
     const state = session.reproduction || {};
     const plans = await AIPlan.find({ _id: { $in: session.plans || [] }, sessionId: session._id, userId });
     const pending = [];
@@ -195,7 +197,9 @@ function createReconciler(dependencies = {}) {
         const where = { planId: String(plan._id), stepNumber: step.stepNumber, toolName: step.toolName,
           entityType: step.toolInput?.entityType || null };
         if (!decision.status) { unresolved.push({ ...where, id: step.toolInput?.id || null, reason: decision.reason, candidates: decision.candidates }); continue; }
-        const saved = await save({ session, userId, plan, step, decision, selection });
+        let saved;
+        try { saved = await save({ session, userId, plan, step, decision, selection, lock }); }
+        catch (error) { unresolved.push({ ...where, reason: String(error.message).slice(0, 500) }); continue; }
         if (saved) {
           step.status = saved.status;
           step.result = saved.result;
@@ -205,6 +209,10 @@ function createReconciler(dependencies = {}) {
           unresolved.push({ ...where, reason: 'The decision could not be audited or the step changed meanwhile. Nothing was recorded; try again.' });
         }
       }
+    }
+    if (!unresolved.length) {
+      try { await assertSettled({ scope: { realmId: String(session.realmId), environment: state.environment, connectionId: String(state.connectionId) }, ownerId: String(userId), sessionId: String(session._id) }); }
+      catch (error) { unresolved.push({ toolName: 'transport', reason: String(error.message).slice(0, 500) }); }
     }
     const outcomeUnknown = unresolved.length > 0;
     const update = {};
@@ -226,7 +234,11 @@ function createReconciler(dependencies = {}) {
       update['reproduction.ownedRecords'] = ownedRecords;
     }
     if (!outcomeUnknown && state.outcomeUnknown) update['reproduction.outcomeUnknown'] = false;
-    if (Object.keys(update).length) await AISession.updateOne({ _id: session._id, userId }, { $set: update });
+    if (now() >= lock.getTime()) fail(409, 'Recovery decision expired. Reconcile again; no saved change will be resent.');
+    if (Object.keys(update).length) {
+      const saved = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $set: update, $inc: { 'reproduction.decisionRevision': 1 } });
+      if (saved?.matchedCount !== 1) fail(409, 'Recovery decision ownership changed. Reconcile again.');
+    }
     return { resolved, unresolved, outcomeUnknown };
   }
 
@@ -350,25 +362,31 @@ function createReconciler(dependencies = {}) {
     return { error: 'QuickBooks rejected the search.' };
   }
 
-  async function save({ session, userId, plan, step, decision, selection }) {
+  async function save({ session, userId, plan, step, decision, selection, lock }) {
     const reconciledAt = new Date(now());
     const result = { ...decision.result, reconciledAt, reconciledBy: String(userId) };
     const fields = { status: decision.status, result };
     if (decision.status === 'completed') fields.executedAt = reconciledAt;
     if (decision.error) fields.error = decision.error;
     if (step.approval) fields['approval.state'] = decision.status === 'completed' ? 'approved' : 'failed';
+    return settleWrite({ scope: { realmId: String(session.realmId), environment: session.reproduction.environment, connectionId: String(session.reproduction.connectionId) }, ownerId: String(userId), actorId: String(userId), workflow: { version: 1, kind: 'reproduction', sessionId: String(session._id), planId: String(plan._id), stepNumber: step.stepNumber }, dispatch: step.writeDispatch, decision }, async transactionSession => {
+    if (now() >= lock.getTime()) fail(409, 'Recovery decision expired. Reconcile again; no saved change will be resent.');
+    const locked = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $inc: { 'reproduction.decisionRevision': 1 } }, { session: transactionSession });
+    if (locked?.matchedCount !== 1) fail(409, 'Recovery decision ownership changed. Nothing was settled.');
     const entry = await createAuditEntry(userId, session.realmId, `Case write reconciled: ${step.toolName} ${result.reconciled}`, {
       actionType: 'ai_plan', tool: step.toolName, approvalEvent: plan._id, outcome: decision.status === 'completed' ? 'success' : 'failure',
       inputParams: { caseId: String(session._id), planId: String(plan._id), stepNumber: step.stepNumber,
         entityType: step.toolInput?.entityType, id: step.toolInput?.id, reconcile: result.reconciled,
         ...(selection ? { ownerSelection: String(selection.recordId) } : {}) },
       beforeState: { status: step.status, result: step.result || null },
-      afterState: { status: decision.status, result },
-    });
-    if (!entry) return false;
+      afterState: { status: decision.status, result, dispatch: step.writeDispatch || null },
+    }, { session: transactionSession });
+    if (!entry) throw new Error('The recovery audit could not be saved. Nothing was settled.');
     const saved = await AIPlan.updateOne({ _id: plan._id, sessionId: session._id, userId,
-      steps: { $elemMatch: { stepNumber: step.stepNumber, status: step.status } } }, stepFields(fields));
-    return saved?.matchedCount === 1 ? fields : null;
+      steps: { $elemMatch: { stepNumber: step.stepNumber, status: step.status } } }, stepFields(fields), { session: transactionSession });
+    if (saved?.matchedCount !== 1) throw new Error('The case step changed during recovery. Nothing was settled.');
+    return fields;
+    });
   }
 
   return { reconcile };

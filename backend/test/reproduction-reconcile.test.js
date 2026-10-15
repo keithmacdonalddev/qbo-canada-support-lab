@@ -27,6 +27,7 @@ function fixture({ steps, records = {}, queryRows = [], running = false, active 
   const session = { _id: SESSION, userId: OWNER, realmId: 'r1', plans: [PLAN],
     reproduction: { status: running ? 'running' : 'stopped', environment: 'production', connectionId: CONNECTION,
       planId: PLAN, outcomeUnknown, startedAt: new Date(NOW - 120000), ownedRecords: [] } };
+  let clock = NOW;
   const writes = [];
   const queries = [];
   const audits = [];
@@ -43,14 +44,15 @@ function fixture({ steps, records = {}, queryRows = [], running = false, active 
   };
   const deps = {
     AISession: {
-      findOneAndUpdate: async () => {
+      findOneAndUpdate: async (_q, update) => {
         const lock = session.reproduction.decisionLockUntil;
         if (session.reproduction.status === 'running' || (lock && lock > new Date(NOW))) return null;
-        session.reproduction.decisionLockUntil = new Date(NOW + 60000);
+        session.reproduction.decisionLockUntil = update.$set['reproduction.decisionLockUntil'];
         return session;
       },
       findOne: async () => session,
       updateOne: async (_q, update) => {
+        if (_q['reproduction.decisionLockUntil'] && Number(_q['reproduction.decisionLockUntil']) !== Number(session.reproduction.decisionLockUntil)) return { matchedCount: 0 };
         if (update.$unset) session.reproduction.decisionLockUntil = undefined;
         for (const [path, value] of Object.entries(update.$set || {})) setPath(session, path, value);
         return { matchedCount: 1 };
@@ -69,11 +71,13 @@ function fixture({ steps, records = {}, queryRows = [], running = false, active 
     Connection: { findOne: async (q) => (q._id === CONNECTION ? { _id: CONNECTION, realmId: 'r1' } : null) },
     config: { qbo: { environment: 'production' } },
     createQBOClient: async () => qbo,
+    assertSettled: async () => true,
+    settleWrite: async (_input, save) => save(null),
     createAuditEntry: async (...args) => { audits.push(args); return auditOk ? { _id: 'audit' } : null; },
     isActive: () => active,
-    now: () => NOW,
+    now: () => clock,
   };
-  return { plan, session, writes, queries, audits, reconciler: createReconciler(deps) };
+  return { plan, session, writes, queries, audits, advance: ms => { clock += ms; }, reconciler: createReconciler(deps) };
 }
 
 const invoiceStep = (overrides = {}) => ({
@@ -257,4 +261,14 @@ test('transfer accounts alone never identify a record; only none can be chosen',
   assert.equal(f.plan.steps[0].status, 'executing');
   const none = await call(f, { selections: [{ planId: PLAN, stepNumber: 1, recordId: 'none' }] });
   assert.equal(none.resolved[0].decision, 'owner_confirmed_none');
+});
+
+for (const mode of ['expired', 'replaced']) test('recovery cannot settle with a '+mode+' decision lock', async () => {
+  const f = fixture({ steps: [customerStep, invoiceStep()], queryRows: [savedInvoice('501')] });
+  // The read completes after another action could take ownership.
+  const pending = call(f);
+  queueMicrotask(() => { if (mode === 'expired') f.advance(11 * 60 * 1000); else f.session.reproduction.decisionLockUntil = new Date(NOW + 20 * 60 * 1000); });
+  if (mode === 'expired') await assert.rejects(pending, /expired/);
+  else { const result = await pending; assert.equal(result.outcomeUnknown, true); }
+  assert.equal(f.plan.steps[1].status, 'executing'); assert.equal(f.audits.length, 0);
 });

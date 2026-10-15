@@ -10,11 +10,11 @@ const { currentActorId } = require('../modules/actor-context');
  * @param {object} details  - optional fields: actionType, tool, inputParams,
  *                            outcome, beforeState, afterState, aiDriven, error
  */
-async function createAuditEntry(userId, realmId, action, details = {}) {
+async function createAuditEntry(userId, realmId, action, details = {}, options = {}) {
   try {
     // In a shared company, userId is the workspace owner; record who really acted.
     const actorId = currentActorId();
-    const entry = await AuditLog.create({
+    const document = {
       userId,
       actorUserId: actorId && actorId !== String(userId) ? actorId : undefined,
       realmId,
@@ -28,8 +28,9 @@ async function createAuditEntry(userId, realmId, action, details = {}) {
       aiDriven: details.aiDriven || false,
       approvalEvent: details.approvalEvent,
       error: details.error,
-    });
-    return entry;
+    };
+    if (options.session) return (await AuditLog.create([document], { session: options.session }))[0];
+    return await AuditLog.create(document);
   } catch (err) {
     // Audit failures should never break the main request flow
     console.error('[audit] Failed to create audit entry:', err.message);

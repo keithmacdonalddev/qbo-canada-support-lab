@@ -1,5 +1,6 @@
 'use strict';
 
+const { withWriteWorkflow } = require('./qbo-write-workflow');
 const { toolDefinitions, toolHandlers, toolPermissions, VALID_ENTITY_TYPES, VOIDABLE_ENTITY_TYPES } = require('./ai-tools');
 const { WRITES, DELETE_TYPES, FINISH_OUTCOMES, writeFailureIsDefinite, findReportCell, reportNumber, unsupportedConditions, owns, checkWrite, checkApprovalRequest, checkSavedRecord, pathValues, evaluateCheck, measurementKey, classifyOutcome } = require('./reproduction-policy');
 const { isProviderTimeout } = require('./ai-provider-timeout');
@@ -529,6 +530,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
         throw new Error('No change was sent: the remaining time is reserved for verification.');
       }
       sent = true;
+      const mutate = async () => {
       let result;
       if (name === 'deleteRecord') {
         const response = await qbo.apiCall('POST', input.entityType.toLowerCase() + '?operation=delete',
@@ -548,6 +550,10 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
         } }) : qbo;
         result = await handlers[name](input, { qbo: checkedQbo });
       }
+        return result;
+      };
+      const correlated = [plan._id, plan.sessionId].every(id => /^[a-f0-9]{24}$/i.test(String(id)));
+      const result = correlated ? await withWriteWorkflow({ version: 1, kind: 'reproduction', sessionId: String(plan.sessionId), planId: String(plan._id), stepNumber: savedStep.stepNumber }, async dispatch => { savedStep.writeDispatch = dispatch; await persistRequired(); }, mutate) : await mutate();
       if (!result || result.success === false) {
         const err = new Error(result?.error || 'The change was refused.'); err.definite = true; throw err;
       }

@@ -138,7 +138,7 @@ function AreaDetail({ area, canAsk }) {
             <WandSparkles /> Ask the assistant to fill {fillable.length === 1 ? 'this gap' : `${fillable.length} gaps`}
           </Button>
           <p className="mt-2 text-[12px] leading-relaxed text-[var(--ink-3)]">
-            It proposes the exact records first. Nothing is written until you approve.
+            Opening this case authorizes the assistant to create and change its own test records in the connected company.
           </p>
         </div>
       )}

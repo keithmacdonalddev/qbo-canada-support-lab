@@ -1,3 +1,5 @@
+const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
+const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
 const express = require('express');
 const Connection = require('../models/Connection');
 const CompanyProfile = require('../models/CompanyProfile');
@@ -273,7 +275,7 @@ async function createBatchWithLogging(qbo, entity, items, nameField, seedRun, ph
  * POST /start
  * Kicks off master data seeding asynchronously.
  */
-router.post('/start', authenticate, requireProductionConfirm, async (req, res) => {
+router.post('/start', authenticate, requireCompanyWrite, requireProductionConfirm, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {

@@ -22,6 +22,8 @@ const planStepSchema = new mongoose.Schema({
     environment: { type: String, enum: ['production', 'sandbox'], required: true },
     connectionId: { type: String, required: true },
   }, { _id: false }), default: undefined },
+  // Exact coordinated transport receipt, saved before the request is sent.
+  writeDispatch: { type: mongoose.Schema.Types.Mixed, default: undefined },
   // A reproduction change to a record that existed before the case waits here for
   // the company owner: { state: needed|deciding|approved|declined|stale|failed, ... }.
   approval: { type: mongoose.Schema.Types.Mixed },

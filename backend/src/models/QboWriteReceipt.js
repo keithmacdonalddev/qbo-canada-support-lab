@@ -11,6 +11,8 @@ const schema = new mongoose.Schema({
   dispatchKey: { type: String, required: true, immutable: true }, requestHash: { type: String, required: true, immutable: true },
   entity: { type: String, required: true, immutable: true }, operation: { type: String, required: true, immutable: true },
   state: { type: String, enum: ['possibly-sent', 'saved', 'rejected', 'unknown'], required: true },
+  workflow: { type: mongoose.Schema.Types.Mixed, immutable: true },
+  reconciliation: { type: mongoose.Schema.Types.Mixed, default: null },
   observed: { type: mongoose.Schema.Types.Mixed, default: null },
   sentAt: { type: Date, required: true, immutable: true }, observedAt: Date,
   startAuditId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true }, resultAuditId: mongoose.Schema.Types.ObjectId,

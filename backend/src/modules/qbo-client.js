@@ -6,6 +6,7 @@ const { redactLogSecrets } = require('./log-diagnostic');
 const { freezeWriteRequest, consumeBusinessWritePermit, denied } = require('./qbo-write-contract');
 const { getQboWriteGate } = require('./qbo-write-gate');
 const { currentActorId } = require('./actor-context');
+const { claimWriteWorkflow } = require('./qbo-write-workflow');
 
 const refreshFlights = new Map();
 // Keep a rotated refresh token in memory until MongoDB confirms it was saved.
@@ -232,6 +233,7 @@ class QBOClient {
     // Freeze the exact bytes and consume local permission before any await.
     const writeRequest = method === 'GET' ? null : freezeWriteRequest({ environment: config.qbo.environment, realmId: String(this.realmId), connectionId: String(this.connection?._id) }, method, endpoint, body);
     const permit = writeRequest ? consumeBusinessWritePermit() : null;
+    const workflowContext = writeRequest ? claimWriteWorkflow() : null;
     if (writeRequest) { endpoint = writeRequest.endpoint; body = JSON.parse(writeRequest.body); }
     const writeGate = writeRequest ? (this.writeGate || getQboWriteGate()) : null;
     let writeTicket = null;
@@ -262,8 +264,10 @@ class QBOClient {
       if (writeRequest) opts.body = writeRequest.body;
       else if (body) opts.body = JSON.stringify(body);
       if (writeGate) {
-        try { writeTicket = await writeGate.begin({ request: writeRequest, permit, ownerId: String(this.connection.userId), actorId: String(currentActorId() || this.connection.userId) }); }
-        catch (error) { if (error.qboStage) throw error; throw denied('Write coordination could not be recorded. No request was sent.'); }
+        try { writeTicket = await writeGate.begin({ request: writeRequest, permit, ownerId: String(this.connection.userId), actorId: String(currentActorId() || this.connection.userId), workflow: workflowContext?.workflow });
+          if (writeTicket.coordinated && workflowContext) await workflowContext.onDispatch({ version: 1, scope: writeTicket.scope, receiptId: writeTicket.receiptId, dispatchKey: writeTicket.dispatchKey, requestHash: writeTicket.requestHash });
+        }
+        catch (error) { if (writeTicket?.coordinated || (workflowContext && !error.qboStage)) throw denied('A dispatch may have been reserved but its case receipt could not be saved. Recover this request before trying again.', true); if (error.qboStage) throw error; throw denied('Write coordination could not be recorded. No request was sent.'); }
       }
 
       // Past token refresh and setup: any throw from here is the API call
@@ -341,7 +345,7 @@ class QBOClient {
     }
 
     // ---- 429: rate limited -> existing backoff/retry mechanism ----
-    if (status === 429 && !writeTicket?.coordinated) {
+    if (status === 429 && method === 'GET') {
       if (_retryCount >= MAX_RETRIES) {
         const err = new Error(
           `QBO API rate limit exceeded after ${MAX_RETRIES} retries (HTTP 429)`

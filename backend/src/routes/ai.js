@@ -1,3 +1,5 @@
+const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
+const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const express = require('express');
@@ -276,7 +278,7 @@ router.post('/chat', async (req, res) => {
  * Approve a plan (or specific steps).
  * Body: { stepApprovals?: [{ stepNumber, approved }] }
  */
-router.post('/plan/:id/approve', async (req, res) => {
+router.post('/plan/:id/approve', requireCompanyWrite, async (req, res) => {
   try {
     const { stepApprovals } = req.body;
     const plan = await orchestrator.approvePlan(req.params.id, req.user.id, stepApprovals);
@@ -303,7 +305,7 @@ router.post('/plan/:id/approve', async (req, res) => {
  * POST /plan/:id/reject
  * Reject a plan.
  */
-router.post('/plan/:id/reject', async (req, res) => {
+router.post('/plan/:id/reject', requireCompanyWrite, async (req, res) => {
   try {
     const plan = await orchestrator.rejectPlan(req.params.id, req.user.id);
 
@@ -335,6 +337,7 @@ router.post('/plan/:id/reject', async (req, res) => {
  */
 router.post(
   '/plan/:id/execute',
+  requireCompanyWrite,
   requireFeatureFlag('experimental.aiMutations', { message: 'Legacy AI mutations are disabled by server policy' }),
   requireProductionConfirm,
   async (req, res) => {

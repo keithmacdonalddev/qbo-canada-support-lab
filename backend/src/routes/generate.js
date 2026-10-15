@@ -1,3 +1,5 @@
+const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
+const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
 const express = require('express');
 const Connection = require('../models/Connection');
 const GenerationRun = require('../models/GenerationRun');
@@ -20,7 +22,7 @@ async function getActiveConnection(userId) {
  * POST /start
  * Kicks off historical activity generation asynchronously.
  */
-router.post('/start', authenticate, requireProductionConfirm, async (req, res) => {
+router.post('/start', authenticate, requireCompanyWrite, requireProductionConfirm, async (req, res) => {
   try {
     const connection = await getActiveConnection(req.user.id);
     if (!connection) {

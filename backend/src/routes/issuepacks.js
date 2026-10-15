@@ -1,3 +1,5 @@
+const { createCompanyPermissionGuard } = require('../middleware/companyPermission');
+const requireCompanyWrite = createCompanyPermissionGuard('operations.execute');
 const express = require('express');
 const Connection = require('../models/Connection');
 const IssuePack = require('../models/IssuePack');
@@ -121,6 +123,7 @@ router.get('/:slug', authenticate, async (req, res) => {
 router.post(
   '/:slug/run',
   authenticate,
+  requireCompanyWrite,
   requireFeatureFlag('experimental.issuePackMutations', { message: 'Legacy issue-pack mutations are disabled by server policy' }),
   requireProductionConfirm,
   async (req, res) => {

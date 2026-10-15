@@ -5,6 +5,8 @@
 // Approval runs exactly the saved change, once, and only if QuickBooks still
 // holds the version the owner was shown; anything else changes nothing.
 
+const { withWriteWorkflow } = require('./qbo-write-workflow');
+const { writeFailureIsDefinite } = require('./reproduction-policy');
 const DECISIONS = new Set(['approve', 'decline']);
 const APPROVABLE = new Set(['deleteRecord', 'voidTransaction']);
 // Longer than any decision can take (a read and a write, each with rate-limit retries).
@@ -148,6 +150,7 @@ function createApprovals(dependencies = {}) {
     }
     let result;
     try {
+      const mutate = async () => {
       if (step.toolName === 'deleteRecord') {
         const response = await qbo.apiCall('POST', entity + '?operation=delete', { Id: before.Id, SyncToken: before.SyncToken });
         if (String(response?.[input.entityType]?.Id) !== String(input.id) || response[input.entityType]?.status !== 'Deleted') {
@@ -164,8 +167,11 @@ function createApprovals(dependencies = {}) {
         result = await handlers.voidTransaction({ entityType: input.entityType, id: input.id, summary: input.summary }, { qbo: pinned });
         if (!result || result.success === false) throw Object.assign(new Error(result?.error || 'QuickBooks refused the change.'), { definite: true });
       }
+        return result;
+      };
+      result = await withWriteWorkflow({ version: 1, kind: 'reproduction', sessionId: String(session._id), planId: String(plan._id), stepNumber: n }, async dispatch => { await setStep(plan._id, n, { writeDispatch: dispatch }); }, mutate);
     } catch (err) {
-      const definite = err.definite || (Number(err.status) >= 400 && Number(err.status) < 500);
+      const definite = writeFailureIsDefinite(err, true);
       // Record the failure even if this attempt was superseded meanwhile.
       await setStep(plan._id, n, { status: 'failed', error: err.message, result: { success: false, outcomeUnknown: !definite },
         'approval.state': 'failed', 'approval.decidedAt': new Date() }).catch((saveErr) => console.error('[case approvals] failure not recorded:', saveErr.message));
