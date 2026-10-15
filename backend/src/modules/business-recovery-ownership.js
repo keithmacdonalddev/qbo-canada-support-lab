@@ -4,6 +4,7 @@ function legacyOwnershipQueries(scope,entity,id) {
   const environment={$or:[{environment:scope.environment},{environment:{$exists:false}},{environment:null}]};
   const tools={Invoice:'createInvoice',Payment:'applyPayment',Bill:'createBill',BillPayment:'applyBillPayment'};
   return [
+    {collection:'masterpreparationruns',filter:{...company,...environment,records:{$elemMatch:{entity,qboId:id}}}},
     {collection:'aiplans',filter:{...company,steps:{$elemMatch:{'result.data.id':id,$and:[{$or:[{toolName:'createRecord','toolInput.entityType':entity},...(tools[entity]?[{toolName:tools[entity]}]:[])]},{$or:[{executionScope:{$exists:false}},{executionScope:null},{'executionScope.environment':{$exists:false}},{'executionScope.environment':null},{$and:[{'executionScope.environment':scope.environment},{$or:[{'executionScope.realmId':scope.realmId},{'executionScope.realmId':{$exists:false}},{'executionScope.realmId':null}]}]}]}]}}}},
     {collection:'generationruns',filter:{...company,$and:[environment,{$or:[{steps:{$elemMatch:{'transaction.entity':entity,'receipt.Id':id}}},{createdTransactions:{$elemMatch:{entity:{$in:types},qboId:id}}}]}]}},
     ...['seedruns','issuepackruns'].map(collection=>({collection,filter:{...company,...environment,createdEntities:{$elemMatch:{entity:{$in:types},qboId:id}}}})),

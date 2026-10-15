@@ -151,6 +151,16 @@ function compileMasterEntry(plan, ordinal, verified = {}) {
     if (!parent || parent.ordinal >= ordinal || proof?.state !== 'verified' || !ID.test(proof.qboId || '') || proof.planHash !== plan.planHash || proof.ordinal !== parent.ordinal) throw problem('A required created account needs independent readback before use.', 409);
     return proof.qboId;
   };
+  return masterFields(plan, entry, key => ({ value: resolved(key) }));
+}
+function describeMasterEntry(plan, ordinal) {
+  assertMasterPlan(plan); const entry = plan.entries[ordinal];
+  if (!entry || entry.ordinal !== ordinal) throw problem('Choose an exact saved master ordinal.', 409);
+  return masterFields(plan, entry, key => plan.source.mappings[key] ? { value: plan.source.mappings[key] } : { plannedAccountRole: key });
+}
+// One field builder serves the owner preview and the strict SDK compiler. A planned
+// role is descriptive only; the compiler still requires the verified numeric ID.
+function masterFields(plan, entry, accountRef) {
   let payload;
   if (entry.entity === 'Account') payload = { Name: entry.name, Active: true, AccountType: entry.accountType, AccountSubType: entry.accountSubtype, CurrencyRef: { value: 'CAD' } };
   else if (entry.entity === 'Customer' || entry.entity === 'Vendor') payload = { DisplayName: entry.name, Active: true, CurrencyRef: { value: 'CAD' } };
@@ -158,10 +168,10 @@ function compileMasterEntry(plan, ordinal, verified = {}) {
   else if (entry.entity === 'Item') {
     const requirement = masterRequirements(plan.source.business).find(row => row.key === entry.key);
     if (!requirement || requirement.itemType !== entry.itemType) throw problem('The product role no longer has its original definition.', 409);
-    payload = { Name: entry.name, Active: true, Type: entry.itemType, Taxable: plan.salesTaxable, IncomeAccountRef: { value: resolved(requirement.accountMappings.IncomeAccountRef) }, SalesTaxCodeRef: { value: plan.source.mappings.salesTax } };
+    payload = { Name: entry.name, Active: true, Type: entry.itemType, Taxable: plan.salesTaxable, IncomeAccountRef: accountRef(requirement.accountMappings.IncomeAccountRef), SalesTaxCodeRef: { value: plan.source.mappings.salesTax } };
     if (entry.itemType === 'Inventory') {
       const n = Number(entry.key.slice(-1)), cost = 18 + n * 2.5;
-      Object.assign(payload, { UnitPrice: cost * 2, PurchaseCost: cost, TrackQtyOnHand: true, QtyOnHand: 0, InvStartDate: plan.inventoryStartDate, AssetAccountRef: { value: resolved('inventoryAsset') }, ExpenseAccountRef: { value: resolved('costOfGoods') }, PurchaseTaxCodeRef: { value: plan.source.mappings.purchaseTax } });
+      Object.assign(payload, { UnitPrice: cost * 2, PurchaseCost: cost, TrackQtyOnHand: true, QtyOnHand: 0, InvStartDate: plan.inventoryStartDate, AssetAccountRef: accountRef('inventoryAsset'), ExpenseAccountRef: accountRef('costOfGoods'), PurchaseTaxCodeRef: { value: plan.source.mappings.purchaseTax } });
     } else payload.UnitPrice = entry.key === 'field-service-hour' ? 125 : 149 + (Number(entry.key.slice(-1)) - 1) * 50;
   } else throw problem('Unsupported master entity.', 409);
   return { entity: entry.entity, payload };
@@ -175,4 +185,4 @@ function verifyMasterReadback(compiled, record, expectedId) {
   if (compiled.entity === 'Account' && [record.CurrentBalance, record.CurrentBalanceWithSubAccounts].some(value => value != null && value !== 0)) throw problem('The prepared account has a nonzero balance; review it before using it.', 409);
   return { entity: compiled.entity, qboId: record.Id, syncToken: record.SyncToken, fields, projectionHash: hash({ entity: compiled.entity, qboId: record.Id, fields }) };
 }
-module.exports = { ACCOUNTS, validateMasterPreparationInput, prepareMasterPlan, assertMasterPlan, compileMasterEntry, verifyMasterReadback };
+module.exports = { ACCOUNTS, validateMasterPreparationInput, prepareMasterPlan, assertMasterPlan, compileMasterEntry, describeMasterEntry, verifyMasterReadback };

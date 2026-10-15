@@ -84,3 +84,10 @@ test('target fingerprints preserve the installed driver database and SRV selecti
  assert.notEqual(storageTarget('mongodb+srv://cluster.fixture.invalid/lab?srvServiceName=mongodb').fingerprint,storageTarget('mongodb+srv://cluster.fixture.invalid/lab?SRVSERVICENAME=other').fingerprint);
  assert.notEqual(storageTarget('mongodb://host/lab?replicaSet=one').fingerprint,storageTarget('mongodb://host/lab?replicaSet=two').fingerprint);
 });
+
+test('retained master approvals and uncertain attempts appear in account recovery review', async () => {
+ const h=fixture(),definition=require('../src/modules/account-automation-review').defaultSources().find(source=>source.key==='masters');
+ h.data.Work=[{_id:'master-stopped',ownerId:id,realmId:'123',state:'stopped',claim:'open',approval:{approvedAt:'fixture'},records:[{state:'verified'}]}, {_id:'master-unknown',ownerId:id,realmId:'123',state:'blocked',claim:'open',approval:null,records:[{state:'unknown'}]}, {_id:'master-closed',ownerId:id,realmId:'123',state:'closed',claim:'closed',approval:{approvedAt:'fixture'},records:[{state:'verified'}]}];await h.recover();
+ const service=createAccountAutomationReview({Users:h.models.Users,Audits:h.models.Audits,transaction:h.transaction,sources:[{...definition,Model:h.models.Work}]});
+ const preview=await service.review(id);assert.equal(preview.groups[0].total,3);assert.equal(preview.groups[0].entries.length,2);assert.equal(preview.groups[0].entries.find(row=>row.id==='master-unknown').uncertain,true);assert.equal(preview.groups[0].history.stopped,1);
+});

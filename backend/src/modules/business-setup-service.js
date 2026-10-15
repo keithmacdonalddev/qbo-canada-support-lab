@@ -80,16 +80,7 @@ function createBusinessSetupService(dependencies = {}) {
   }
   async function legacyWork(scope, session) {
     if (dependencies.legacyWork) return dependencies.legacyWork(scope, session);
-    const queries = [
-      ['seedruns', { realmId: scope.realmId, status: { $in: ['pending', 'in_progress'] } }],
-      ['generationruns', { realmId: scope.realmId, $or: [{ status: { $in: ['pending', 'in_progress'] } }, { 'steps.state': { $in: ['sending', 'uncertain'] } }] }],
-      ['issuepackruns', { realmId: scope.realmId, status: { $in: ['pending', 'in_progress', 'running'] } }],
-      ['aisessions', { realmId: scope.realmId, $or: [{ 'reproduction.status': 'running' }, { 'reproduction.outcomeUnknown': true }] }],
-      ['aiplans', { realmId: scope.realmId, status: 'executing' }],
-    ];
-    const blockers = [];
-    for (const [collection, filter] of queries) if (await connection.db.collection(collection).findOne(filter, { session, projection: { _id: 1 }, maxTimeMS: 3000 })) blockers.push(collection);
-    return blockers;
+    return (await require('./company-active-work').companyActiveWork(connection.db, scope, { session })).map(row => row.collection);
   }
   async function recordPeriodControls(user, input) {
     if (!input || Object.keys(input).sort().join(',') !== 'closedThrough,evidenceNote,reconciledThrough' || typeof input.evidenceNote !== 'string' || input.evidenceNote.trim().length < 10 || input.evidenceNote.length > 2000) fail('Record both protected dates (or none) and a short evidence note.', 400);

@@ -94,3 +94,10 @@ test('period choices are owner-only, elapsed, monotonic, audited and require a s
  h.data.Writers[0].unresolved={key:'unknown'};await assert.rejects(h.record({...input,reconciledThrough:'2026-09-30'}),/current operation/);h.data.Writers[0].unresolved=null;
  h.failAudit=true;const before=clone(h.data);await assert.rejects(h.record({...input,reconciledThrough:'2026-09-30'}),/audit/);assert.deepEqual(h.data,before);
 });
+
+test('occupied, uncertain and changed company writers refuse new jobs before creating a durable run', async () => {
+  for (const fields of [{ operationId: 'e'.repeat(24), planHash: 'f'.repeat(64), workflowKind: 'master-preparation' }, { operationId: 'e'.repeat(24), planHash: 'f'.repeat(64) }, { unresolved: { key: 'unknown' } }, { connectionId: 'e'.repeat(24) }]) {
+    const h = fixture(), preparation = await h.prepare(); await h.activate(preparation); Object.assign(h.data.Writers[0], fields);
+    const before = clone(h.data); await assert.rejects(h.job(), /current company writer/); assert.deepEqual(h.data, before); assert.equal(h.jobs.length, 0);
+  }
+});

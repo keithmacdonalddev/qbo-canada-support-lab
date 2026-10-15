@@ -8,6 +8,7 @@ function defaultSources(){
   return [
     {key:'cases',label:'Reproduction cases',Model:model('AISession'),filter:id=>({mode:'reproduce',$or:[{userId:id},{'reproduction.actorId':id}]}),fields:'_id realmId status reproduction.status reproduction.runId reproduction.actorId reproduction.environment reproduction.connectionId reproduction.outcomeUnknown reproduction.stopRequested updatedAt'},
     {key:'business',label:'Business operations',Model:model('OperationRun'),filter:id=>({$or:[{createdBy:id},{'approval.actorId':id},{'executionRequest.ownerId':id},{'executionRequest.actorId':id}]}),fields:'_id realmId environment connectionId status planHash createdBy executionRequest approval.actorId executionRevision updatedAt'},
+    {key:'masters',label:'Business master preparation',Model:model('MasterPreparationRun'),filter:id=>({ownerId:id}),fields:'_id realmId environment connectionId state claim planHash approval records.state stopRequested updatedAt'},
     {key:'plans',label:'Legacy AI plans',Model:model('AIPlan'),filter:id=>({$or:[{userId:id},{approvedBy:id}]}),fields:'_id realmId status approvedBy approvedAt steps.stepNumber steps.status steps.executionScope steps.writeDispatch.receiptId steps.result.outcomeUnknown updatedAt'},
     {key:'generation',label:'Legacy generation runs',Model:model('GenerationRun'),filter:id=>({userId:id}),fields:'_id realmId environment connectionId status leaseExpiresAt progress completedAt createdAt'},
     {key:'seed',label:'Legacy seed runs',Model:model('SeedRun'),filter:id=>({userId:id}),fields:'_id realmId status progress completedAt createdAt'},
@@ -28,10 +29,10 @@ function createAccountAutomationReview({Users,Audits,transaction,sources=default
         const rows=await source.Model.find(filter).select(source.fields).sort({_id:1}).limit(250).session(session).maxTimeMS(3000).lean();
         for(const row of rows){
           sourceHash.update(JSON.stringify(row)+'\n');total++;
-          const status=row.reproduction?.status||row.status||'unknown';history[status]=(history[status]||0)+1;
+          const status=row.reproduction?.status||row.status||row.state||'unknown';history[status]=(history[status]||0)+1;
           const pending=row.executionRequest?.pending===true||['pending','in_progress','running','executing','reserved'].includes(status);
-          const uncertain=row.reproduction?.outcomeUnknown===true||row.steps?.some(step=>step.result?.outcomeUnknown||step.status==='executing')||false;
-          const authorized=pending||uncertain||(source.key==='business'&&['approved','blocked','awaiting-evidence','committing'].includes(status))||(source.key==='plans'&&['approved','partially_approved'].includes(status));
+          const uncertain=row.reproduction?.outcomeUnknown===true||row.steps?.some(step=>step.result?.outcomeUnknown||step.status==='executing')||row.records?.some(record=>['possibly-sent','unknown'].includes(record.state))||false;
+          const authorized=pending||uncertain||(source.key==='masters'&&row.claim==='open'&&Boolean(row.approval))||(source.key==='business'&&['approved','blocked','awaiting-evidence','committing'].includes(status))||(source.key==='plans'&&['approved','partially_approved'].includes(status));
           if(authorized)entries.push({id:String(row._id),realmId:row.realmId,environment:row.environment||row.reproduction?.environment||'not retained',status,pending,uncertain,planHash:row.planHash||null});
         }
         if(rows.length<250)break;

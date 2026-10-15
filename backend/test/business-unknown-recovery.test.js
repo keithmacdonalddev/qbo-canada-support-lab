@@ -28,12 +28,13 @@ test('changed record, changed parent and changed authority cannot use a stale re
  for(const mode of ['record','parent','authority']){const h=await uncertain(mode==='parent'?'Invoice':undefined),review=await h.service.reviewUnknown(h.user,h.plan.operationId,h.input);if(mode==='record')h.records.get(h.candidate.entity.toLowerCase()+':'+h.candidate.id).record.SyncToken='999';if(mode==='parent'){const link=h.step.compilation.relationships[0];h.records.get(link.entity.toLowerCase()+':'+link.qboId).record.SyncToken='999';}if(mode==='authority')h.data.Calendars[0].authorityHash=hash('changed');await assert.rejects(h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review)));assert.ok(h.data.Writers[0].unresolved);assert.equal(h.step.receipt,null);}
 });
 test('cross-workflow and prior-owner creation evidence or unavailable ownership lookup blocks attribution',async()=>{
- for(const mode of ['step','receipt','reconciled','case','generation','seed','issuepack','unavailable']){const h=await uncertain(),id=h.input.qboId,entity=h.step.entity;
+ for(const mode of ['step','receipt','reconciled','case','generation','seed','issuepack','master','unavailable']){const h=await uncertain(),id=h.input.qboId,entity=h.step.entity;
  if(mode==='step')h.data.Steps.push({_id:'other-step',environment:scope.environment,realmId:scope.realmId,connectionId:'f'.repeat(24),entity,qboId:id});
  if(mode==='receipt'||mode==='reconciled')h.data.Receipts.push({_id:hash('other-receipt'),environment:scope.environment,realmId:scope.realmId,connectionId:'f'.repeat(24),kind:'legacy',entity:entity.toLowerCase(),...(mode==='receipt'?{observed:{qboId:id}}:{reconciliation:{qboId:id}})});
  if(mode==='case')h.legacy.aiplans.push({_id:'old-case',userId:'f'.repeat(24),realmId:scope.realmId,steps:[{toolName:'createRecord',toolInput:{entityType:entity},result:{data:{id}}}]});
  if(mode==='generation')h.legacy.generationruns.push({_id:'old-generation',userId:'f'.repeat(24),realmId:scope.realmId,environment:scope.environment,steps:[{transaction:{entity},receipt:{Id:id}}]});
  if(mode==='seed'||mode==='issuepack')h.legacy[mode==='seed'?'seedruns':'issuepackruns'].push({_id:'old-run',userId:'f'.repeat(24),realmId:scope.realmId,createdEntities:[{entity,qboId:id}]});
+ if(mode==='master')h.legacy.masterpreparationruns.push({_id:'old-master',ownerId:'f'.repeat(24),realmId:scope.realmId,environment:scope.environment,records:[{entity,qboId:id}]});
  if(mode==='unavailable')h.failOwnership='aiplans';await assert.rejects(h.service.reviewUnknown(h.user,h.plan.operationId,h.input),undefined,mode);assert.ok(h.data.Writers[0].unresolved,mode);assert.equal(h.step.receipt,null,mode);}
 });
 test('content mismatch, missing metadata and wrong QBO ID never permit replacement or replay',async()=>{
