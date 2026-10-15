@@ -123,8 +123,8 @@ router.get('/:slug', authenticate, async (req, res) => {
 router.post(
   '/:slug/run',
   authenticate,
-  requireCompanyWrite,
   requireFeatureFlag('experimental.issuePackMutations', { message: 'Legacy issue-pack mutations are disabled by server policy' }),
+  requireCompanyWrite,
   requireProductionConfirm,
   async (req, res) => {
     try {

@@ -337,8 +337,8 @@ router.post('/plan/:id/reject', requireCompanyWrite, async (req, res) => {
  */
 router.post(
   '/plan/:id/execute',
-  requireCompanyWrite,
   requireFeatureFlag('experimental.aiMutations', { message: 'Legacy AI mutations are disabled by server policy' }),
+  requireCompanyWrite,
   requireProductionConfirm,
   async (req, res) => {
     try {
