@@ -12,6 +12,7 @@ const { createMasterQuiescence } = require('./company-active-work');
 const { createQboWriteGate } = require('./qbo-write-gate');
 const { QBOClient, createQBOClient } = require('./qbo-client');
 const { prepareMasterPlan, validateMasterPreparationInput } = require('./business-master-preparation-plan');
+const { assertMappingVersion } = require('./blueprint-mapping-check');
 const { draftView, readDraftSetup } = require('./blueprint-draft');
 const { readBusinessMasters } = require('./business-master-data');
 const { readCanadianCompany } = require('./business-country');
@@ -66,6 +67,8 @@ function createMasterRuntime({ scope, ownerId, actorId, models = loadMasterModel
   async function prepare(input) {
     input = validateMasterPreparationInput(input); await assertReady(); await access.authorize(scope, 'operations.preview');
     const current = await store.latest(), view = { ...scope, draft: draftView(current, scope.connectionId) };
+    assertMappingVersion(view, { connectionId: input.connectionId, baseHash: input.baseHash });
+    if (!view.draft?.connectionMatches) throw denied('Save the business for this exact company connection before preparing records.');
     const observedSetup = await readDraftSetup(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
     const masters = await readBusinessMasters(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
     const country = await readCanadianCompany(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');

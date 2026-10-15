@@ -26,21 +26,21 @@ test('known accepted readback recovers while automation is paused without issuin
   h.onGET = async opts => { if (/\/account\/100$/.test(new URL(opts.url).pathname) && once) { once = false; throw new Error('fixture GET unavailable'); } return original(opts); };
   await h.execute(String(h.run()._id)); assert.equal(h.run().records[0].state, 'saved'); h.pause();
   const recovered = await h.execute.recover(String(h.run()._id)); assert.equal(recovered.state, 'stopped'); assert.equal(h.run().records[0].state, 'verified'); assert.equal(h.sent.length, 1); assert.equal(h.writer().unresolved, null); assert.equal(h.writer().operationId, String(h.run()._id));
-  await assert.rejects(h.store.claim(String(h.run()._id), { resume: true }));
+  await assert.rejects(h.store.claim(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }));
 });
 test('expired reserved request needs company-wide receipt absence and a new owner-approved attempt identity', async t => {
   const h = await fixture(t); await h.claim(); await h.prepare(0); const old = clone(h.run().records[0].attempts[0]); h.clock += 300001;
   h.data.Receipts.push({ _id: 'other', environment: scope.environment, realmId: scope.realmId, dispatchKey: old.dispatchKey });
   await assert.rejects(h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run()))); assert.equal(h.run().records[0].state, 'reserved'); h.data.Receipts = [];
   await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run())); assert.equal(h.run().records[0].attempts[0].state, 'proved-unsent'); assert.equal(h.run().records[0].state, 'pending');
-  const result = await h.execute(String(h.run()._id), { resume: true }); assert.equal(result.complete, true); assert.equal(h.sent.length, 32); assert.equal(h.run().records[0].attempts.length, 2); assert.notEqual(h.run().records[0].attempts[1].dispatchKey, old.dispatchKey);
+  const result = await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }); assert.equal(result.complete, true); assert.equal(h.sent.length, 32); assert.equal(h.run().records[0].attempts.length, 2); assert.notEqual(h.run().records[0].attempts[1].dispatchKey, old.dispatchKey);
 });
 test('definite refusal stays visible and requires an exact audited owner retry', async t => {
   const h = await fixture(t), original = h.onSDK; let refuse = true;
   h.onSDK = async opts => refuse ? { status: 400, json: { Fault: { type: 'ValidationFault', Error: [{ code: '6000' }] } } } : original(opts);
   await h.execute(String(h.run()._id)); assert.equal(h.run().records[0].state, 'rejected'); assert.equal(h.writer().unresolved, null); await h.execute(String(h.run()._id)); assert.equal(h.sent.length, 1);
   await assert.rejects(h.store.retry(String(h.run()._id), 0, h.run().planHash, false, masterProgressHash(h.run()))); await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run())); refuse = false;
-  assert.equal((await h.execute(String(h.run()._id), { resume: true })).complete, true); assert.equal(h.sent.length, 33); assert.equal(h.run().records[0].attempts.length, 2); assert.equal(h.run().records[0].attempts[0].state, 'rejected');
+  assert.equal((await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) })).complete, true); assert.equal(h.sent.length, 33); assert.equal(h.run().records[0].attempts.length, 2); assert.equal(h.run().records[0].attempts[0].state, 'rejected');
 });
 test('unknown remote creation cannot be retried or closed merely because its lease expired', async t => {
   const h = await fixture(t); h.afterCreate = async () => { throw Object.assign(new Error('fixture lost transport'), { code: '500' }); }; await h.execute(String(h.run()._id)); h.clock += 600000;
@@ -83,14 +83,14 @@ test('a lost apply commit acknowledgement retries the original draft without a s
 
 test('an old retry confirmation cannot approve a later refused attempt', async t => {
   const h = await fixture(t); h.onSDK = async () => ({ status: 400, json: { Fault: { type: 'ValidationFault', Error: [{ code: '6000' }] } } }); await h.execute(String(h.run()._id));
-  const reviewed = masterProgressHash(h.run()); await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, reviewed); await h.execute(String(h.run()._id), { resume: true }); assert.equal(h.run().records[0].attempts.length, 2); assert.equal(h.run().records[0].state, 'rejected');
-  await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, reviewed); assert.equal(h.run().records[0].state, 'rejected'); await h.execute(String(h.run()._id), { resume: true }); assert.equal(h.sent.length, 2);
+  const reviewed = masterProgressHash(h.run()); await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, reviewed); await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }); assert.equal(h.run().records[0].attempts.length, 2); assert.equal(h.run().records[0].state, 'rejected');
+  await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, reviewed); assert.equal(h.run().records[0].state, 'rejected'); await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }); assert.equal(h.sent.length, 2);
 });
 test('original refusal audits must survive both owner decision and final transport admission', async t => {
   const h = await fixture(t); h.onSDK = async () => ({ status: 400, json: { Fault: { type: 'ValidationFault', Error: [{ code: '6000' }] } } }); await h.execute(String(h.run()._id));
   const resultId = h.data.Receipts[0].resultAuditId, saved = clone(h.data.Audits.find(row => String(row._id) === String(resultId))); h.data.Audits = h.data.Audits.filter(row => String(row._id) !== String(resultId));
   await assert.rejects(h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run())), /transport audit/); h.data.Audits.push(saved);
-  await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run())); h.data.Audits = h.data.Audits.filter(row => String(row._id) !== String(resultId)); await h.execute(String(h.run()._id), { resume: true }); assert.equal(h.sent.length, 1);
+  await h.store.retry(String(h.run()._id), 0, h.run().planHash, true, masterProgressHash(h.run())); h.data.Audits = h.data.Audits.filter(row => String(row._id) !== String(resultId)); await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }); assert.equal(h.sent.length, 1);
 });
 test('a contradictory accepted request barrier is never cleared by retaining records', async t => {
   const h = await fixture(t); h.changeRead = row => ({ ...row, Active: false }); await h.execute(String(h.run()._id)); h.writer().unresolved.requestHash = 'f'.repeat(64);
@@ -98,7 +98,7 @@ test('a contradictory accepted request barrier is never cleared by retaining rec
 });
 test('new accepted progress invalidates an earlier apply or retain confirmation', async t => {
   const h = await fixture(t); h.afterCreate = async () => h.store.stop(String(h.run()._id)); await h.execute(String(h.run()._id)); const review = await h.review([0]), retained = masterProgressHash(h.run());
-  await h.execute(String(h.run()._id), { resume: true }); assert.equal(h.sent.length, 2); await assert.rejects(h.store.apply(String(h.run()._id), review, key), /changed after review/); await assert.rejects(h.store.retain(String(h.run()._id), h.run().planHash, true, retained), /exact current/); assert.equal(h.run().claim, 'open');
+  await h.execute(String(h.run()._id), { resume: true, reviewHash: masterProgressHash(h.run()) }); assert.equal(h.sent.length, 2); await assert.rejects(h.store.apply(String(h.run()._id), review, key), /changed after review/); await assert.rejects(h.store.retain(String(h.run()._id), h.run().planHash, true, retained), /exact current/); assert.equal(h.run().claim, 'open');
 });
 test('confirmation rereads the real accepted ID and refuses remote changes after preview', async t => {
   const h = await fixture(t); h.afterCreate = async () => h.store.stop(String(h.run()._id)); await h.execute(String(h.run()._id)); const review = await h.review([0]), reads = h.exactReads.length;

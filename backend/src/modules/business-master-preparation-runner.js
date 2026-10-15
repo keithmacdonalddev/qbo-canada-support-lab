@@ -20,12 +20,13 @@ function createMasterPreparationRunner({ scope, ownerId, store, clientFor, autho
     return value;
   }
   const result = (run, error) => ({ runId: String(run._id), state: run.state, complete: run.state === 'complete', recordCount: run.records.length, ...masterCounts(run), ...(error && run.state !== 'complete' ? { needsReview: true, failure: run.lastFailure || error } : {}) });
-  const execute = async function execute(id, { resume = false } = {}) {
+  const execute = async function execute(id, { resume = false, reviewHash, onClaim } = {}) {
     let leaseToken = null, error = null, stage = 'claim';
     try {
       let run = await store.load(id);
       if (run.state === 'complete') return result(run);
-      run = await store.claim(id, { resume }); leaseToken = run.leaseToken;
+      run = await store.claim(id, { resume, reviewHash }); leaseToken = run.leaseToken;
+      if (onClaim) await onClaim(run);
       for (;;) {
         run = await store.load(id);
         if (run.leaseToken !== leaseToken) throw denied('The master worker no longer holds its saved lease.');
@@ -73,10 +74,11 @@ function createMasterPreparationRunner({ scope, ownerId, store, clientFor, autho
     try { return result(await store.load(id), error); }
     catch { return { runId: id, state: 'unavailable', complete: false, needsReview: true, error: 'Current saved master progress could not be read. Refresh before taking another action.' }; }
   };
-  execute.recover = async id => {
+  execute.recover = async (id, { reviewHash, onClaim } = {}) => {
     let leaseToken = null, error = null, stage = 'claim';
     try {
-      let run = await store.claimRecovery(id); leaseToken = run.leaseToken;
+      let run = await store.claimRecovery(id, { reviewHash }); leaseToken = run.leaseToken;
+      if (onClaim) await onClaim(run);
       const row = run.records.find(value => value.state !== 'verified');
       if (row) {
         stage = 'readback';

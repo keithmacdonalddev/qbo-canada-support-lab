@@ -11,7 +11,7 @@ const { assertMasterFailure } = require('./business-master-preparation-failure')
 const { createMasterPreparationRecovery } = require('./business-master-preparation-recovery');
 const { createMasterApply } = require('./business-master-apply');
 const { createMasterAttribution } = require('./business-master-attribution');
-const { assertMasterReceiptAudits, assertMasterBarrier, masterCounts } = require('./business-master-receipt');
+const { assertMasterReceiptAudits, assertMasterBarrier, masterCounts, masterProgressHash } = require('./business-master-receipt');
 const { assertMasterRecordSet } = require('./business-master-record-evidence');
 const same = (a, b) => String(a) === String(b);
 const validWorkerLease = (run, now) => Boolean(run.leaseToken && Number.isFinite(new Date(run.leaseExpiresAt).getTime()) && new Date(run.leaseExpiresAt).getTime() > now);
@@ -92,9 +92,10 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       return change(run, { approval, state: 'approved', lastAuditId: auditId }, session);
     });
   }
-  async function claim(id, { resume = false } = {}) {
+  async function claim(id, { resume = false, reviewHash } = {}) {
     return transaction(async session => {
       await authorize('operations.execute', session); const run = await load(id, session); assertMasterApproval(run);
+      if (typeof resume !== 'boolean' || (resume && !/^[a-f0-9]{64}$/.test(reviewHash || '')) || (reviewHash !== undefined && masterProgressHash(run) !== reviewHash)) throw denied('Review the exact current master progress before continuing.');
       if (run.claim !== 'open' || !['approved', 'running', 'stopped', 'blocked'].includes(run.state) || activeLease(run, now()) || (run.stopRequested && !resume) || run.records.some(row => ['reserved', 'possibly-sent', 'unknown', 'rejected'].includes(row.state))) throw denied('Review stopped, refused or uncertain master work before continuing.');
       const { policy, writer } = await coordination(session, true); await touchPolicy(policy, session); await transport.fenceSource(run, session);
       if (writer.operationId !== null || writer.planHash !== null) owns(writer, run);
@@ -141,7 +142,10 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
     return transaction(async session => {
       await authorize('operations.stop', session); const run = await load(id, session);
       const live = activeLease(run, now());
-      if (run.claim === 'closed' || (run.stopRequested && (live || !run.leaseToken))) return run;
+      if (run.claim === 'closed') return run;
+      // Every explicit Stop supersedes a pending continuation, including when the
+      // previous saved state was already stopped and its worker has not claimed.
+
       const { writer } = await coordination(session), ownUnresolved = same(writer.operationId, run._id) && Boolean(writer.unresolved);
       const lastAuditId = await audit(run, 'Business master stop requested', { activeWorker: live, unresolved: ownUnresolved, settledExpiredWorker: run.stopRequested, qboWrites: 0 }, session);
       return change(run, { stopRequested: true, ...(!live && run.state !== 'complete' ? { state: ownUnresolved ? 'blocked' : 'stopped', leaseToken: null, leaseExpiresAt: null } : {}), lastAuditId }, session);

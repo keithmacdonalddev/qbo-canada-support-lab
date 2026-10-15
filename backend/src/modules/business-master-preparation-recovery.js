@@ -29,9 +29,10 @@ function createMasterPreparationRecovery(d) {
     const receipt = await exactReceipt(run, row, session);
     if (receipt.state !== 'rejected' || canonical(receipt.observed) !== canonical(attempt.outcome) || receipt.observed?.outcome !== 'rejected' || receipt.observed.httpStatus !== 400 || !receipt.observed.faultCodes?.length) throw denied('Only the exact definite ValidationFault refusal has no-effect proof.');
   }
-  async function claimRecovery(id) {
+  async function claimRecovery(id, { reviewHash } = {}) {
     return transaction(async session => {
       await authorize('operations.recover', session); const run = await load(id, session); inactive(run);
+      if (reviewHash !== undefined && masterProgressHash(run) !== reviewHash) throw denied('Review the exact current accepted-ID progress before recovery.');
       const { policy, writer } = await coordination(session); owns(writer, run); await touchPolicy(policy, session);
       const first = run.records.find(row => row.state !== 'verified');
       if (first && first.state !== 'saved') throw denied('Recover an exact accepted ID before any new creates; this ordinal has no confirmed ID.');
