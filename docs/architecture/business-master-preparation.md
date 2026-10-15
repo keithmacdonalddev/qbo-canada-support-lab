@@ -1,8 +1,8 @@
 # Business master preparation
 
-Status: private planning, owner decisions, transport, worker, no-effect/accepted-ID recovery and atomic draft application implemented non-live, 2026-10-15; terminal-unknown owner attribution and authenticated public service/routes are implemented; normal UI remains in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
+Status: private planning, owner decisions, transport, worker, no-effect/accepted-ID recovery and atomic draft application implemented non-live, 2026-10-15; terminal-unknown owner attribution and authenticated public service/routes are implemented; the normal Company UI is implemented and verified in isolated desktop scenarios. This document records the reviewed boundary and non-live proof; it does not establish live records or whole-product completion.
 
-The normal business setup currently requires exact accounts, customers, suppliers, products and a time-entry worker, but only offers selection of records that already exist. The legacy seeder creates an unrelated population and cannot satisfy this outcome. The intended result is an owner action on Company: prepare the missing roles for the saved business, review the exact proposed creates, execute that approved plan, then explicitly use verified IDs in a new draft. Publication and financial baseline acceptance remain separate actions.
+The normal business setup requires exact accounts, customers, suppliers, products and a time-entry worker. It now offers explicit missing-record preparation alongside selection of existing records. The legacy seeder creates an unrelated population and cannot satisfy this outcome. The intended result is an owner action on Company: prepare the missing roles for the saved business, review the exact proposed creates, execute that approved plan, then explicitly use verified IDs in a new draft. Publication and financial baseline acceptance remain separate actions.
 
 ## Authority and prerequisites
 
@@ -45,3 +45,7 @@ Live QBO creates, database preparation, paid providers, credential changes and p
 ## Primary API references
 
 Intuit's [basic billing implementation](https://developer.intuit.com/app/developer/qbo/docs/develop/basic-implementations/basic-billing-implementation) requires referenced entities to exist before transactions. Its [official concepts sample](https://github.com/IntuitDeveloper/QBOConceptsTutorial-PHP/blob/master/LandingTheJob.php) demonstrates account references and inventory-item fields. The [Item API reference](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/item) and [Employee schema reference](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippphpdevkitv3/entities/files/IPPEmployee.html) inform field validation; older SDK references do not certify current Canadian live capability. Direct entity documentation was partly unavailable through the text browser during research. Canadian behavior remains a live acceptance question until an explicitly approved run returns independent record/report evidence.
+
+## Origin visibility
+
+Account, Customer, Vendor and Item creation history in Records and captured-inventory comparison now includes minimal master-preparation evidence. Confirmed response, independent readback and owner identification of an original unknown outcome remain distinct. Missing mandatory audits/receipts or conflicting creation evidence stay incomplete. Retaining or applying IDs never erases this history or classifies the records as part of the business. Employee inspection remains outside the general Explorer and immutable inventory contracts; the time-entry worker’s minimal ID and receipt stay available in preparation history.

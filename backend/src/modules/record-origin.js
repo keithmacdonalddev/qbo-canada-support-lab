@@ -1,5 +1,6 @@
 'use strict';
 const { identity } = require('./record-queries');
+const { MASTER_ENTITIES, masterOriginPipeline, masterOriginEvidence } = require('./business-master-origin');
 const { businessTransportEvidence, assertBusinessTransportAudits } = require('./business-dispatch-receipt');
 const { SOURCE: OWNER_SOURCE, assertOwnerAttribution } = require('./business-owner-attribution');
 const LIMIT = 20;
@@ -57,6 +58,7 @@ function originPipelines({ userId, realmId, environment, entity, id }) {
         { $limit: 3 }, { $project: { _id: 1, userId: 1, actorUserId: 1, realmId: 1, action: 1, actionType: 1, outcome: 1, inputParams: 1, afterState: 1 } },
       ], as: 'audits' } },
     ] },
+    ...(MASTER_ENTITIES.has(entity) ? [{ key: 'master_preparation', collection: 'masterpreparationruns', pipeline: masterOriginPipeline({ userId, realmId, environment, entity, id }, LIMIT + 1) }] : []),
   ];
 }
 
@@ -71,6 +73,11 @@ async function readRecordOrigin({ db, attributionModels, userId, realmId, enviro
     if (result.status !== 'fulfilled' || !Array.isArray(result.value)) { incompleteSources.push(kind); continue; }
     if (result.value.length > LIMIT) incompleteSources.push(kind);
     for (const row of result.value.slice(0, LIMIT)) {
+      if (kind === 'master_preparation') {
+        try { sources.push(await masterOriginEvidence({ models: attributionModels, run: row, userId, realmId, environment, entity, id })); }
+        catch { incompleteSources.push(kind); }
+        continue;
+      }
       if (kind === 'business_owner_attribution') {
         try {
           if (!row || row.realmId !== realmId || row.environment !== environment || row.entity !== entity || row.qboId !== id || !attributionModels) throw new Error('Owner attribution source is unavailable');
@@ -103,6 +110,8 @@ async function readRecordOrigin({ db, attributionModels, userId, realmId, enviro
     }
   }
   if (sources.filter(source => source.kind === 'business_operation').length > 1) incompleteSources.push('business_operation');
+  const masters = sources.filter(source => ['master_preparation', 'master_owner_attribution'].includes(source.kind));
+  if (masters.length > 1 || (masters.length && sources.length > masters.length)) incompleteSources.push('master_preparation');
   const complete = incompleteSources.length === 0;
   return { entity, id, sources, complete, incompleteSources: [...new Set(incompleteSources)],
     status: !complete ? 'incomplete' : sources.some(source => source.scope === 'recorded_environment') ? 'recorded' : sources.length ? 'historical_match' : 'unknown',

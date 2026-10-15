@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { assertBaselineScope } from '../lib/business-baseline-request.mjs'
 const labels = { matches: 'Matches capture', 'different-version': 'Version differs from capture', 'different-content': 'Contents differ from capture', 'not-returned': 'No current record returned' }
-const sourceLabels = { business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', support_case: 'Support reproduction', assistant: 'Assistant plan', generation: 'Generation', legacy_generation: 'Older generation', seed: 'Setup', issue_pack: 'Issue pack' }
+const sourceLabels = { master_preparation: 'Prepared business record', master_owner_attribution: 'Prepared record identified by owner', business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', support_case: 'Support reproduction', assistant: 'Assistant plan', generation: 'Generation', legacy_generation: 'Older generation', seed: 'Setup', issue_pack: 'Issue pack' }
 const reason = error => error.response?.data?.error || error.message || 'Captured records could not be reviewed.'
 function assertEvidence(value, baseline, entity) {
   assertBaselineScope(value, baseline.scope.realmId, baseline.scope.environment, baseline.scope.connectionId)

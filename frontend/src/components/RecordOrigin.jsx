@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 
 const labels = {
   support_case: 'Support case', assistant: 'Assistant plan', generation: 'Historical generation',
-  business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', legacy_generation: 'Historical generation', seed: 'Master-data setup', issue_pack: 'Issue pack',
+  master_preparation: 'Prepared business record', master_owner_attribution: 'Prepared record identified by owner', business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', legacy_generation: 'Historical generation', seed: 'Master-data setup', issue_pack: 'Issue pack',
 }
 
 export default function RecordOrigin({ type, id, realmId, environment }) {
@@ -36,7 +36,7 @@ export default function RecordOrigin({ type, id, realmId, environment }) {
             {result.sources.map((source, index) => <li key={source.kind + ':' + source.sourceId + ':' + index}>
               <div className="font-medium text-[var(--ink)]">{source.caseId ? <Link className="text-[var(--link)] hover:underline" to={'/cases/' + source.caseId}>{labels[source.kind]}</Link> : labels[source.kind] || 'App receipt'}{source.step ? ' · step ' + source.step : ''}</div>
               <p className="text-[var(--ink-2)]">{source.limitation || (source.scope === 'recorded_environment' ? 'Creation recorded in this company and environment.' : 'Historical match; the environment was not recorded.') }</p>
-              {source.operationId && <p className="break-all text-[12px] text-[var(--ink-3)]">Operation {source.operationId}</p>}
+              {source.operationId && <p className="break-all text-[12px] text-[var(--ink-3)]">{source.kind.startsWith('master_') ? 'Preparation' : 'Operation'} {source.operationId}</p>}
               {source.createdAt && <p className="text-[var(--ink-3)]">{source.attributedAt ? 'Record created ' : ''}{dateTime(source.createdAt)}</p>}
               {source.attributedAt && <p className="text-[var(--ink-3)]">Owner attribution saved {dateTime(source.attributedAt)}</p>}
             </li>)}

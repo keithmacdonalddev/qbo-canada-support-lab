@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const { hash, canonical } = require('../../src/modules/business-calendar');
-const { MAPPINGS, buildDraftDefinition, proposalView } = require('../../src/modules/blueprint-draft');
+const { MAPPINGS, buildDraftDefinition, proposalView, draftView } = require('../../src/modules/blueprint-draft');
 const { masterRequirements, readBusinessMasters } = require('../../src/modules/business-master-data');
 const { createBusinessRuntimeAccess } = require('../../src/modules/business-runtime-access');
 const { createBusinessBaselineStore } = require('../../src/modules/business-baseline');
@@ -14,7 +14,9 @@ const clone = value => structuredClone(value);
 const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) }, ownerId = 'b'.repeat(24), actorId = 'c'.repeat(24), blueprintId = 'd'.repeat(24);
 const at = (row, key) => { const parts=key.split('.'); const walk=(value,index)=>index===parts.length?value:Array.isArray(value)?value.flatMap(entry=>walk(entry,index)):walk(value?.[parts[index]],index+1); return walk(row,0); };
 function matches(row, filter) { return row && Object.entries(filter).every(([key,value]) => key === '$or' ? value.some(branch => matches(row,branch)) : key === '$and' ? value.every(branch => matches(row,branch)) : value instanceof Date ? new Date(at(row,key)).getTime() === value.getTime() : value && typeof value === 'object' ? Object.entries(value).every(([op,want]) => op === '$elemMatch' ? Array.isArray(at(row,key)) && at(row,key).some(entry=>matches(entry,want)) : op === '$ne' ? at(row,key)!==want : op === '$in' ? want.some(value=>Array.isArray(at(row,key))?at(row,key).includes(value):at(row,key)===value) : op === '$exists' ? (at(row,key)!==undefined)===want : op === '$gte' ? at(row,key)>=want : op === '$lt' ? at(row,key)<want : op === '$gt' ? at(row,key)>want : op === '$lte' ? at(row,key)<=want : op === '$type' ? typeof at(row,key)===want : canonical(at(row,key))===canonical(value)) : value === null ? at(row,key) == null : at(row,key)===value); }
-function fixture() {
+const defaults = { scope, ownerId, blueprintId };
+function fixture(options = {}) {
+ const scope=options.scope||defaults.scope,ownerId=options.ownerId||defaults.ownerId,blueprintId=String(options.savedDraft?._id||defaults.blueprintId);
  const h={clock:Date.parse('2026-12-01T15:00:00Z'),sequence:10000,reads:0,posts:0,events:[],data:Object.fromEntries(['Users','Connections','Memberships','Audits','Policies','Writers','Versions','Baselines','Authorities','Candidates','Calendars','Runs','Plans','Intents','Steps','Receipts','Evidence'].map(key=>[key,[]])),records:new Map(),itemCosts:new Map(),saleCosts:new Map()};
  const set=(row,key,value)=>{const keys=key.split('.');let target=row;for(const part of keys.slice(0,-1))target=target[part]||={};target[keys.at(-1)]=value;};
  h.models=Object.fromEntries(Object.keys(h.data).map(name=>{
@@ -23,22 +25,22 @@ function fixture() {
  }));
  let queue=Promise.resolve();h.transaction=work=>{const result=queue.then(async()=>{const before=clone(h.data);let out;try{out=await work({inTransaction:()=>true});}catch(error){h.data=before;throw error;}if(h.loseReply){h.loseReply=false;throw Error('Fixture commit acknowledgement lost');}return out;});queue=result.catch(()=>{});return result;};
  h.data.Users.push({_id:ownerId,role:'agent'},{_id:actorId,role:'agent'});h.data.Connections.push({_id:scope.connectionId,userId:ownerId,realmId:scope.realmId,status:'active'});h.data.Memberships.push({_id:'owner-membership',userId:ownerId,realmId:scope.realmId,status:'active',role:'lab-owner'},{_id:'operator-membership',userId:actorId,realmId:scope.realmId,status:'active',role:'operator'});
- h.data.Policies.push({_id:'sandbox:123',contractVersion:1,...scope,state:'active',revision:0,preparationEvidenceHash:hash('prepared'),periodControl:controls(scope,ownerId,h.clock)});h.data.Writers.push({_id:'sandbox:123',contractVersion:1,...scope,revision:0,operationId:null,planHash:null,unresolved:null});
- const business={...proposalView().business,openingDate:'2026-10-01',volumeProfile:'development'},mappings=Object.fromEntries(Object.keys(MAPPINGS).map((key,i)=>[key,String(i+1)])),masterBindings={};
+ h.data.Policies.push({_id:scope.environment+':'+scope.realmId,contractVersion:1,...scope,state:'active',revision:0,preparationEvidenceHash:hash('prepared'),periodControl:controls(scope,ownerId,h.clock)});h.data.Writers.push({_id:scope.environment+':'+scope.realmId,contractVersion:1,...scope,revision:0,operationId:null,planHash:null,unresolved:null});
+ const business=options.savedDraft?draftView(options.savedDraft,scope.connectionId).business:{...proposalView().business,openingDate:'2026-10-01',volumeProfile:'development'},mappings=options.savedDraft?clone(options.savedDraft.definition.mappings):Object.fromEntries(Object.keys(MAPPINGS).map((key,i)=>[key,String(i+1)])),masterBindings={};
  const put=(entity,record)=>{h.records.set(entity.toLowerCase()+':'+record.Id,{entity,record});return record;};
- for(const[key,role]of Object.entries(MAPPINGS))if(role.entity==='Account')put('Account',{Id:mappings[key],SyncToken:'0',Active:true,Name:key,AccountType:role.types[0],AccountSubType:role.subtypes?.[0]||role.types[0],CurrencyRef:{value:'CAD'},CurrentBalance:key==='operatingBank'?1000:0});
+ for(const[key,role]of Object.entries(MAPPINGS))if(role.entity==='Account')put('Account',{Id:mappings[key],SyncToken:'0',Active:true,Name:key,AccountType:role.types[0],AccountSubType:role.subtypes?.[0]||role.types[0],CurrencyRef:{value:'CAD'},CurrentBalance:key==='operatingBank'?(options.openingCash??1000):0});
  for(const[key,direction]of [['salesTax','SalesTaxRateList'],['purchaseTax','PurchaseTaxRateList']])put('TaxCode',{Id:mappings[key],SyncToken:'0',Active:true,Name:key,Taxable:true,[direction]:{TaxRateDetail:[{TaxTypeApplicable:'TaxOnAmount',TaxRateRef:{value:'950'}}]}});
  put('TaxRate',{Id:'950',SyncToken:'0',Active:true,RateValue:13,EffectiveTaxRate:[{EffectiveDate:'2020-01-01T00:00:00-04:00',RateValue:13}]});
  for(const[ordinal,role]of masterRequirements(business).entries()){
  const id=String(100+ordinal);masterBindings[role.key]=id;
  put(role.entity,{Id:id,SyncToken:'0',Active:true,Name:role.key,DisplayName:role.key,CurrencyRef:{value:'CAD'},...(role.entity==='Item'?{Type:role.itemType,...(role.itemType==='Inventory'?{QtyOnHand:0,InvStartDate:business.openingDate}:{}),...Object.fromEntries(Object.entries(role.accountMappings).map(([field,key])=>[field,{value:mappings[key]}]))}:{})});
  }
- const definition=buildDraftDefinition({requestKey:'11111111-1111-4111-8111-111111111111',connectionId:scope.connectionId,baseHash:null,business,mappings,masterBindings}),blueprintHash=hash(definition);
- h.data.Versions.push({_id:blueprintId,contractVersion:2,...scope,status:'draft',definition,contentHash:blueprintHash,auditId:'draft-audit',version:1});h.mappings=mappings;
+ const definition=options.savedDraft?.definition||buildDraftDefinition({requestKey:'11111111-1111-4111-8111-111111111111',connectionId:scope.connectionId,baseHash:null,business,mappings,masterBindings}),blueprintHash=hash(definition);
+ h.data.Versions.push(options.savedDraft?clone({...options.savedDraft,_id:blueprintId,connectionId:scope.connectionId}):{_id:blueprintId,contractVersion:2,...scope,status:'draft',definition,contentHash:blueprintHash,auditId:'draft-audit',version:1});h.mappings=mappings;
  const ref=value=>({value});
  h.reportSources=period=>{
   const report=(name,columns,rows)=>({Header:{ReportName:name,StartPeriod:period.fromDate,EndPeriod:period.throughDate,ReportBasis:'Accrual',Currency:'CAD'},Columns:{Column:columns.map(ColTitle=>({ColTitle}))},Rows:{Row:rows}}),data=(id,label,...values)=>({type:'Data',ColData:[{id,value:label},...values.map(value=>({value:value.toFixed(2)}))]}),total=(group,label,value)=>({type:'Section',group,Summary:{ColData:[{value:label},{value:value.toFixed(2)}]}});
-  const values={bank:1000,undeposited:0,ar:0,ap:0,stock:0,tax:0,income:0,cogs:0,periodIncome:0,periodCogs:0};
+  const openingCash=options.openingCash??1000,values={bank:openingCash,undeposited:0,ar:0,ap:0,stock:0,tax:0,income:0,cogs:0,periodIncome:0,periodCogs:0};
   const transactions=[...h.records.values()].filter(row=>row.record.TxnDate&&row.record.TxnDate<=period.throughDate);
   for(const{entity,record:r}of transactions){const net=(r.Line||[]).reduce((sum,line)=>sum+(line.Amount||0),0),tax=r.TxnTaxDetail?.TotalTax||0,gross=r.TotalAmt||0,inPeriod=r.TxnDate>=period.fromDate;
    if(entity==='Invoice'){values.ar+=gross;values.income+=net;values.tax+=tax;if(inPeriod)values.periodIncome+=net;}
@@ -49,9 +51,9 @@ function fixture() {
    if(entity==='Deposit'){values.undeposited-=gross;values.bank+=gross;}
   }
   const balance=(id,label,amount)=>data(id,label,Math.max(amount,0),Math.max(-amount,0));
-  const rows=[balance(mappings.operatingBank,'Bank',values.bank),balance(mappings.undepositedFunds,'Undeposited',values.undeposited),balance(mappings.accountsReceivable,'Receivables',values.ar),balance(mappings.accountsPayable,'Payables',-values.ap),balance(mappings.inventoryAsset,'Inventory',values.stock),balance('970','Tax',-values.tax),balance('971','Income',-values.income),balance(mappings.costOfGoods,'Cost of goods',values.cogs),balance('972','Opening capital',-1000)];
+  const rows=[balance(mappings.operatingBank,'Bank',values.bank),balance(mappings.undepositedFunds,'Undeposited',values.undeposited),balance(mappings.accountsReceivable,'Receivables',values.ar),balance(mappings.accountsPayable,'Payables',-values.ap),balance(mappings.inventoryAsset,'Inventory',values.stock),balance('970','Tax',-values.tax),balance('971','Income',-values.income),balance(mappings.costOfGoods,'Cost of goods',values.cogs),balance('972','Opening capital',-openingCash)];
   const debit=rows.reduce((sum,row)=>sum+Number(row.ColData[1].value),0),credit=rows.reduce((sum,row)=>sum+Number(row.ColData[2].value),0);rows.push({group:'GrandTotal',Summary:{ColData:[{value:'TOTAL'},{value:debit.toFixed(2)},{value:credit.toFixed(2)}]}});
-  const assets=values.bank+values.undeposited+values.ar+values.stock,equity=1000+values.income-values.cogs;
+  const assets=values.bank+values.undeposited+values.ar+values.stock,equity=openingCash+values.income-values.cogs;
   const reports={TrialBalance:report('TrialBalance',['Account','Debit','Credit'],rows),BalanceSheet:report('BalanceSheet',['Account','Total'],[data('bank','Bank',values.bank),total('BankAccounts','Bank accounts',values.bank),total('Assets','Assets',assets),total('LiabilitiesAndEquity','Liabilities and equity',values.ap+values.tax+equity)]),ProfitAndLoss:report('ProfitAndLoss',['Account','Total'],[data('income','Income',values.periodIncome),total('Income','Income',values.periodIncome),total('NetIncome','Net income',values.periodIncome-values.periodCogs)]),AgedReceivables:report('AgedReceivables',['Name','Current','Total'],[data('ar','Receivables',values.ar,values.ar),{group:'GrandTotal',Summary:{ColData:[{value:'TOTAL'},{value:values.ar.toFixed(2)},{value:values.ar.toFixed(2)}]}}]),AgedPayables:report('AgedPayables',['Name','Current','Total'],[data('ap','Payables',values.ap,values.ap),{group:'GrandTotal',Summary:{ColData:[{value:'TOTAL'},{value:values.ap.toFixed(2)},{value:values.ap.toFixed(2)}]}}])};
   const accounts=[...h.records.values()].filter(row=>row.entity==='Account').map(row=>clone(row.record)),source={version:1,scope,period,startedAt:new Date(h.clock-1).toISOString(),observedAt:new Date(h.clock).toISOString(),reports,accounts};return{...source,sourceHash:hash(source)};
  };
@@ -73,7 +75,7 @@ function fixture() {
  }}});
  h.accessFor=options=>createBusinessRuntimeAccess({...options,...h.models,environment:()=>scope.environment,createClient:async()=>h.client});
  h.assertReady=async()=>{if(h.notReady)throw Object.assign(Error('Fixture storage unprepared'),{status:409,code:'BUSINESS_STORAGE_UNPREPARED'});};
- const access=h.accessFor({actorId:ownerId,ownerId}),openingPeriod={fromDate:'2026-09-01',throughDate:'2026-09-30'};
+ const access=h.accessFor({actorId:ownerId,ownerId}),openingThrough=new Date(Date.parse(business.openingDate+'T12:00:00Z')-86400000).toISOString().slice(0,10),openingPeriod={fromDate:openingThrough.slice(0,7)+'-01',throughDate:openingThrough};
  const baselineStore=createBusinessBaselineStore({scope,actorId:ownerId,ownerId,...h.models,access,assertReady:h.assertReady,assertCaptureReady:async()=>{},transaction:h.transaction,readReports:async()=>h.reportSources(openingPeriod),readInventory:async()=>h.inventory(),now:()=>h.clock});
  h.capture=()=>baselineStore.capture({requestKey:'opening-evidence-0001',connectionId:scope.connectionId,blueprintId,blueprintHash:h.data.Versions[0].contentHash,purpose:'opening-balances',...openingPeriod});
  h.legacy=Object.fromEntries(['aiplans','generationruns','seedruns','issuepackruns','masterpreparationruns'].map(name=>[name,[]]));h.db={collection:name=>({find:(filter,options)=>({limit:value=>({toArray:async()=>{if(h.failOwnership===name)throw Error('Fixture ownership unavailable');assert.equal(options.maxTimeMS,3000);return h.legacy[name].filter(row=>matches(row,filter)).slice(0,value).map(row=>({_id:row._id}));}})})})};
