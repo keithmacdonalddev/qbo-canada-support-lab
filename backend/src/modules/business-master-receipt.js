@@ -19,8 +19,15 @@ async function assertMasterReceiptAudits(models, receipt, session) {
   }
   return receipt;
 }
+function assertMasterBarrier(run, row, writer) {
+  const attempt = row?.attempts.at(-1), barrier = writer?.unresolved;
+  if (!attempt || !barrier || barrier.key !== attempt.dispatchKey || barrier.requestHash !== attempt.requestHash || barrier.actorId !== String(run.ownerId) || barrier.entity !== row.entity.toLowerCase() || barrier.kind !== 'master-preparation' || barrier.runId !== String(run._id) || barrier.ordinal !== row.ordinal || barrier.attempt !== attempt.number || barrier.transportConsumed?.receiptId !== attempt.receiptId || barrier.responseReceiptId !== attempt.receiptId) throw denied('The exact accepted or terminal master request barrier changed.');
+}
+function masterCounts(run) {
+  return { identifiedRecords: run.records.filter(row => row.qboId).length, acceptedRecords: run.records.filter(row => row.qboId && !row.attempts.at(-1)?.ownerAttribution && row.attempts.at(-1)?.outcome?.outcome === 'saved').length, ownerAttributedRecords: run.records.filter(row => row.qboId && row.attempts.at(-1)?.outcome?.outcome === 'unknown' && row.attempts.at(-1)?.ownerAttribution).length, verifiedRecords: run.records.filter(row => row.state === 'verified').length };
+}
 function masterProgress(run) {
   return { version: 1, runId: String(run._id), planHash: run.planHash, revision: run.revision, state: run.state, claim: run.claim, leaseTokenHash: hash(run.leaseToken || null), leaseExpiresAt: run.leaseExpiresAt ? new Date(run.leaseExpiresAt).toISOString() : null, stopRequested: run.stopRequested, records: run.records.map(row => ({ ordinal: row.ordinal, entity: row.entity, key: row.key, state: row.state, qboId: row.qboId || null, attempts: row.attempts.map(value => ({ number: value.number, state: value.state, dispatchKey: value.dispatchKey, requestHash: value.requestHash, receiptId: value.receiptId || null, qboId: value.qboId || null, outcomeHash: hash(value.outcome || null) })) })) };
 }
 const masterProgressHash = run => hash(masterProgress(run));
-module.exports = { assertMasterReceiptAudits, masterProgress, masterProgressHash };
+module.exports = { assertMasterReceiptAudits, assertMasterBarrier, masterCounts, masterProgress, masterProgressHash };

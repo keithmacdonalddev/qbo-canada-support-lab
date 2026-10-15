@@ -10,10 +10,13 @@ const { fenceBusinessOwner } = require('./business-owner-fence');
 const { assertMasterFailure } = require('./business-master-preparation-failure');
 const { createMasterPreparationRecovery } = require('./business-master-preparation-recovery');
 const { createMasterApply } = require('./business-master-apply');
+const { createMasterAttribution } = require('./business-master-attribution');
+const { assertMasterReceiptAudits, assertMasterBarrier, masterCounts } = require('./business-master-receipt');
+const { assertMasterRecordSet } = require('./business-master-record-evidence');
 const same = (a, b) => String(a) === String(b);
 const validWorkerLease = (run, now) => Boolean(run.leaseToken && Number.isFinite(new Date(run.leaseExpiresAt).getTime()) && new Date(run.leaseExpiresAt).getTime() > now);
 const activeLease = (run, now) => Boolean(run.leaseToken && (!Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() > now));
-function createMasterPreparationStore({ models, scope, ownerId, actorId, access, transaction, assertReady, transport, assertQuiescent, now = () => Date.now(), token = randomUUID }) {
+function createMasterPreparationStore({ models, scope, ownerId, actorId, access, transaction, assertReady, transport, assertQuiescent, now = () => Date.now(), token = randomUUID, db = models?.MasterRuns?.db?.db }) {
   scope = scoped(scope);
   if (![ownerId, actorId].every(id => /^[a-f0-9]{24}$/.test(id || '')) || !models?.MasterRuns || [transaction, assertReady, transport?.fenceSource, assertQuiescent].some(value => typeof value !== 'function')) throw new TypeError('Master preparation requires scoped durable adapters');
   const { MasterRuns, Policies, Writers, Receipts, Audits } = models;
@@ -124,9 +127,10 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       const { writer } = await coordination(session); owns(writer, run);
       const receipt = await read(Receipts, { _id: attempt.receiptId, ...scope, ownerId, kind: 'master-preparation', state: 'saved', 'workflow.runId': String(run._id), 'workflow.ordinal': ordinal, 'workflow.attempt': attempt.number }, session);
       if (!receipt || receipt.observed?.qboId !== row.qboId || receipt.requestHash !== attempt.requestHash || receipt.dispatchKey !== attempt.dispatchKey || run.plan.inventoryBefore[row.entity].includes(row.qboId)) throw denied('The accepted master identity or mandatory receipt is incomplete.');
+      await assertMasterReceiptAudits(models, receipt, session);
       const compiled = compileMasterEntry(run.plan, ordinal, verifiedParents(run)), proof = verifyMasterReadback(compiled, recordValue, row.qboId);
       if (row.state === 'verified' && canonical(row.readback) === canonical(proof)) return run;
-      if (writer.unresolved?.key !== attempt.dispatchKey || writer.unresolved?.transportConsumed?.receiptId !== attempt.receiptId) throw denied('The exact accepted master request barrier changed.');
+      assertMasterBarrier(run, row, writer);
       row.state = attempt.state = 'verified'; row.readback = attempt.readback = proof;
       const lastAuditId = await audit(run, 'Business master record independently verified', { ordinal, attempt: attempt.number, qboId: row.qboId, projectionHash: proof.projectionHash }, session);
       await updateWriter(writer, { unresolved: null }, session);
@@ -149,7 +153,8 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       if (run.state === 'complete') return run;
       if (run.leaseToken !== leaseToken || run.records.some(row => row.state !== 'verified')) throw denied('Every prepared record needs exact-ID readback before completion.');
       const { writer } = await coordination(session); owns(writer, run); if (writer.unresolved !== null) throw denied('An unresolved master request prevents completion.');
-      const lastAuditId = await audit(run, 'Business master creation completed', { confirmedCreates: run.records.length, admittedRequests: run.records.reduce((count, row) => count + row.attempts.filter(value => value.receiptId).length, 0), applied: false }, session);
+      await assertMasterRecordSet(models, scope, run, run.records, session);
+      const lastAuditId = await audit(run, 'Business master creation completed', { ...masterCounts(run), confirmedCreates: masterCounts(run).acceptedRecords, admittedRequests: run.records.reduce((count, row) => count + row.attempts.filter(value => value.receiptId).length, 0), applied: false }, session);
       await updateWriter(writer, { operationId: null, planHash: null, workflowKind: null, lastReleasedOperationId: run._id }, session);
       return change(run, { state: 'complete', leaseToken: null, leaseExpiresAt: null, lastAuditId }, session);
     });
@@ -164,12 +169,13 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       if (run.leaseToken !== leaseToken || ['complete', 'closed'].includes(run.state)) return run;
       const { writer } = await coordination(session); owns(writer, run);
       const state = writer.unresolved ? 'blocked' : run.stopRequested ? 'stopped' : 'blocked';
-      const lastAuditId = await audit(run, 'Business master worker settled', { state, unresolved: Boolean(writer.unresolved), acceptedRecords: run.records.filter(row => row.qboId).length, failure }, session);
+      const lastAuditId = await audit(run, 'Business master worker settled', { state, unresolved: Boolean(writer.unresolved), ...masterCounts(run), failure }, session);
       return change(run, { state, leaseToken: null, leaseExpiresAt: null, lastFailure: failure, lastAuditId }, session);
     });
   }
   const recovery = createMasterPreparationRecovery({ models, scope, ownerId, transaction, now, token, activeLease, load, authorize, coordination, touchPolicy, change, audit, owns, updateWriter, transport });
   const applyStore = createMasterApply({ models, scope, ownerId, actorId, access, assertReady, transaction, now, load, authorize, coordination, touchPolicy, change, audit, recovery });
-  return { applyReview: applyStore.review, apply: applyStore.apply, latest: applyStore.latest, propose, approve, claim, reserve, verify, stop, finish, releaseWorker, load, claimRecovery: recovery.claimRecovery, retry: recovery.retry, retain: recovery.retain };
+  const attribution = createMasterAttribution({ models, scope, ownerId, actorId, access, assertReady, db, transaction, now, load, authorize, coordination, touchPolicy, change, recovery, updateWriter, verifiedParents });
+  return { attributionReview: attribution.review, attribute: attribution.confirm, applyReview: applyStore.review, apply: applyStore.apply, latest: applyStore.latest, propose, approve, claim, reserve, verify, stop, finish, releaseWorker, load, claimRecovery: recovery.claimRecovery, retry: recovery.retry, retain: recovery.retain };
 }
 module.exports = { createMasterPreparationStore, activeLease };

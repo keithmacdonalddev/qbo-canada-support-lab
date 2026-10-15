@@ -5,6 +5,7 @@ const { assertMasterPlan, compileMasterEntry, verifyMasterReadback } = require('
 const { draftView } = require('./blueprint-draft');
 const { assertMasterDispatchEvidence } = require('./business-master-dispatch-evidence');
 const { assertMasterReceiptAudits } = require('./business-master-receipt');
+const { assertMasterRecordSet } = require('./business-master-record-evidence');
 const ID = /^[a-f0-9]{24}$/, QBO_ID = /^\d{1,30}$/;
 const same = (a, b) => String(a) === String(b);
 const storedScope = row => scoped({ environment: row?.environment, realmId: row?.realmId, connectionId: String(row?.connectionId) });
@@ -82,6 +83,7 @@ function createMasterPreparationTransport({ MasterRuns, Versions, Sequences, Aud
     if (!audit || run.claim !== 'open' || run.state !== 'running' || run.stopRequested || run.leaseToken !== workflow.leaseToken || !Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() <= now() || !same(writer.operationId, run._id) || writer.workflowKind !== 'master-preparation' || writer.planHash !== run.planHash || writer.unresolved !== null) throw denied('The approved master worker, stop state or company ownership changed.');
     const record = run.records[workflow.ordinal], attempt = record?.attempts.at(-1);
     if (!record || record.state !== 'reserved' || attempt?.state !== 'reserved' || attempt.number !== workflow.attempt || attempt.leaseToken !== workflow.leaseToken || attempt.receiptId !== null || attempt.dispatchKey !== dispatchKey || attempt.requestHash !== request.requestHash || request.endpoint !== record.entity.toLowerCase() || request.body !== JSON.stringify(attempt.payload) || run.records.slice(0, workflow.ordinal).some(row => row.state !== 'verified')) throw denied('This exact approved master attempt is not unsent.');
+    await assertMasterRecordSet({ Receipts, Audits }, scope, run, run.records.slice(0, workflow.ordinal), session);
     await assertRetry(run, record, attempt, scope, ownerId, session);
     assertMasterDispatchEvidence(run, workflow.ordinal, request.requestHash, attempt.preflight, policy.periodControl, now());
     await fenceSource(run, session);

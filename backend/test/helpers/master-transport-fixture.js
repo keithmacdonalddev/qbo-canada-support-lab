@@ -29,7 +29,7 @@ const matches = (row, filter) => row && Object.entries(filter).every(([key, valu
     if ('$exists' in value) return (actual !== undefined) === value.$exists;
     return false;
   }
-  return String(actual) === String(value);
+  return value === null ? actual == null : String(actual) === String(value);
 });
 function harness() {
   const f = fixture(), plan = prepareMasterPlan(f), runId = '000000000000000000000010', leaseToken = 'master-worker-lease-000001';

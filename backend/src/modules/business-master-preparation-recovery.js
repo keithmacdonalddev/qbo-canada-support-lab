@@ -1,7 +1,8 @@
 'use strict';
 const { hash, canonical } = require('./business-calendar');
 const { denied } = require('./qbo-write-contract');
-const { assertMasterReceiptAudits, masterProgressHash } = require('./business-master-receipt');
+const { assertMasterReceiptAudits, assertMasterBarrier, masterProgressHash } = require('./business-master-receipt');
+const { assertMasterRecordEvidence, loadMasterRecordSnapshot, matchingMasterReceipts } = require('./business-master-record-evidence');
 const same = (a, b) => String(a) === String(b);
 function createMasterPreparationRecovery(d) {
   const { models, scope, ownerId, transaction, now, token, activeLease, load, authorize, coordination, touchPolicy, change, audit, owns, updateWriter, transport } = d;
@@ -12,10 +13,10 @@ function createMasterPreparationRecovery(d) {
     const attempt = row.attempts.at(-1);
     return Receipts.find({ ...company, $or: [{ dispatchKey: attempt.dispatchKey }, { 'workflow.kind': 'master-preparation', 'workflow.runId': String(run._id), 'workflow.ordinal': row.ordinal, 'workflow.attempt': attempt.number }] }).limit(2).session(session).maxTimeMS(3000).lean();
   }
-  async function exactReceipt(run, row, session) {
-    const attempt = row.attempts.at(-1), rows = await attemptReceipts(run, row, session), receipt = rows[0];
+  async function exactReceipt(run, row, session, snapshot = null) {
+    const attempt = row.attempts.at(-1), rows = snapshot ? matchingMasterReceipts(snapshot, run, row) : await attemptReceipts(run, row, session), receipt = rows[0];
     if (rows.length !== 1 || !receipt || !same(receipt._id, attempt.receiptId) || receipt.contractVersion !== 1 || receipt.kind !== 'master-preparation' || receipt.environment !== scope.environment || receipt.realmId !== scope.realmId || !same(receipt.connectionId, scope.connectionId) || !same(receipt.ownerId, ownerId) || !same(receipt.actorId, ownerId) || receipt.operation !== 'create' || receipt.entity !== row.entity.toLowerCase() || receipt.requestHash !== attempt.requestHash || receipt.dispatchKey !== attempt.dispatchKey || receipt.workflow?.runId !== String(run._id) || receipt.workflow?.ordinal !== row.ordinal || receipt.workflow?.attempt !== attempt.number || receipt.workflow?.leaseToken !== attempt.leaseToken) throw denied('The exact mandatory master receipt needs review.');
-    await assertMasterReceiptAudits(models, receipt, session); return receipt;
+    await assertMasterReceiptAudits(snapshot?.models || models, receipt, session); return receipt;
   }
   async function proveNoEffect(run, row, session) {
     const attempt = row.attempts.at(-1);
@@ -64,18 +65,21 @@ function createMasterPreparationRecovery(d) {
     const own = same(writer.operationId, run._id);
     if (writer.unresolved && !own) throw denied('Another workflow has an unresolved company request.');
     if (own) owns(writer, run);
+    const snapshot = await loadMasterRecordSnapshot(models, scope, run, run.records.filter(row => row.qboId), session);
     for (const row of run.records) {
       if (['possibly-sent', 'unknown'].includes(row.state)) throw denied('Uncertain master work must keep its claim and company barrier.');
       if (row.qboId) {
-        const receipt = await exactReceipt(run, row, session);
-        if (receipt.state !== 'saved' || receipt.observed?.qboId !== row.qboId || !['saved', 'verified'].includes(row.state)) throw denied('Every retained master ID needs its exact accepted receipt.');
+        const receipt = await exactReceipt(run, row, session, snapshot);
+        const attributed = row.state === 'verified' ? (await assertMasterRecordEvidence(snapshot.models, scope, run, row, session)).source === 'owner-attributed-master-readback' : false;
+        if ((!attributed && (receipt.state !== 'saved' || receipt.observed?.qboId !== row.qboId)) || !['saved', 'verified'].includes(row.state)) throw denied('Every retained master ID needs its exact accepted receipt or explicit owner attribution.');
       } else {
         await proveNoEffect(run, row, session); row.state = 'retired';
       }
     }
     if (writer.unresolved) {
-      const row = run.records.find(value => value.attempts.at(-1)?.dispatchKey === writer.unresolved.key), attempt = row?.attempts.at(-1);
-      if (!row?.qboId || writer.unresolved.transportConsumed?.receiptId !== attempt.receiptId || row.state !== 'saved' || writer.unresolved.requestHash !== attempt.requestHash || writer.unresolved.actorId !== ownerId || writer.unresolved.entity !== row.entity.toLowerCase() || writer.unresolved.kind !== 'master-preparation' || writer.unresolved.runId !== String(run._id) || writer.unresolved.ordinal !== row.ordinal || writer.unresolved.attempt !== attempt.number) throw denied('Only the exact known accepted-ID barrier may be retained unassigned.');
+      const row = run.records.find(value => value.attempts.at(-1)?.dispatchKey === writer.unresolved.key);
+      if (!row?.qboId || row.state !== 'saved') throw denied('Only the exact known accepted-ID barrier may be retained unassigned.');
+      assertMasterBarrier(run, row, writer);
     }
     if (own) await updateWriter(writer, { operationId: null, planHash: null, workflowKind: null, unresolved: null, lastReleasedOperationId: run._id }, session);
     else if (writer.operationId !== null || writer.planHash !== null) throw denied('Wait for the other company operation before closing master work.');

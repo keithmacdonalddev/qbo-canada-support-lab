@@ -94,7 +94,7 @@ test('original refusal audits must survive both owner decision and final transpo
 });
 test('a contradictory accepted request barrier is never cleared by retaining records', async t => {
   const h = await fixture(t); h.changeRead = row => ({ ...row, Active: false }); await h.execute(String(h.run()._id)); h.writer().unresolved.requestHash = 'f'.repeat(64);
-  await assert.rejects(h.store.retain(String(h.run()._id), h.run().planHash, true, masterProgressHash(h.run())), /exact known/); assert.equal(h.run().claim, 'open'); assert.ok(h.writer().unresolved);
+  await assert.rejects(h.store.retain(String(h.run()._id), h.run().planHash, true, masterProgressHash(h.run())), /exact accepted or terminal/); assert.equal(h.run().claim, 'open'); assert.ok(h.writer().unresolved);
 });
 test('new accepted progress invalidates an earlier apply or retain confirmation', async t => {
   const h = await fixture(t); h.afterCreate = async () => h.store.stop(String(h.run()._id)); await h.execute(String(h.run()._id)); const review = await h.review([0]), retained = masterProgressHash(h.run());

@@ -8,6 +8,7 @@ const { prepareMasterDispatchEvidence } = require('./business-master-dispatch-ev
 const { readDraftSetup } = require('./blueprint-draft');
 const { readCanadianCompany } = require('./business-country');
 const { masterFailure } = require('./business-master-preparation-failure');
+const { masterCounts } = require('./business-master-receipt');
 function createMasterPreparationRunner({ scope, ownerId, store, clientFor, authorize, readPolicy, readSetup = readDraftSetup, readCountry = readCanadianCompany, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!/^[a-f0-9]{24}$/.test(ownerId || '') || [store?.claim, store?.load, store?.reserve, store?.verify, store?.finish, store?.releaseWorker, clientFor, authorize, readPolicy, readSetup, readCountry].some(value => typeof value !== 'function')) throw new TypeError('Master worker needs a durable scope and exact read/write adapters');
@@ -18,7 +19,7 @@ function createMasterPreparationRunner({ scope, ownerId, store, clientFor, autho
     await authorize(scope, 'operations.read');
     return value;
   }
-  const result = (run, error) => ({ runId: String(run._id), state: run.state, complete: run.state === 'complete', recordCount: run.records.length, acceptedRecords: run.records.filter(row => row.qboId).length, verifiedRecords: run.records.filter(row => row.state === 'verified').length, ...(error && run.state !== 'complete' ? { needsReview: true, failure: run.lastFailure || error } : {}) });
+  const result = (run, error) => ({ runId: String(run._id), state: run.state, complete: run.state === 'complete', recordCount: run.records.length, ...masterCounts(run), ...(error && run.state !== 'complete' ? { needsReview: true, failure: run.lastFailure || error } : {}) });
   const execute = async function execute(id, { resume = false } = {}) {
     let leaseToken = null, error = null, stage = 'claim';
     try {

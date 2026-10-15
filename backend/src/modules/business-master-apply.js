@@ -22,7 +22,7 @@ function masterApplyReview(run, latest, ordinals, proofs, now = Date.now()) {
     if (canonical(actual) !== canonical(proof)) throw denied('The exact fresh master readback differs from its proof.');
     const destination = entry.target === 'mapping' ? mappings : masterBindings, role = entry.target === 'mapping' ? MAPPINGS[entry.key] : requirements.find(value => value.key === entry.key && value.entity === row.entity);
     if (!role || (role.itemType && role.itemType !== compiled.payload.Type) || (destination[entry.key] && destination[entry.key] !== row.qboId)) throw denied('A selected role is unavailable or already chooses a different record in the current draft.');
-    destination[entry.key] = row.qboId; entries.push({ ordinal, key: row.key, entity: row.entity, qboId: row.qboId, proof });
+    destination[entry.key] = row.qboId; entries.push({ ordinal, key: row.key, entity: row.entity, qboId: row.qboId, provenance: row.attempts.at(-1)?.ownerAttribution ? 'owner-attributed-master-readback' : 'request-correlated-master-readback', proof });
   }
   for (const entry of entries.filter(value => value.entity === 'Item')) {
     const role = requirements.find(value => value.key === entry.key), fields = entry.proof.fields;
