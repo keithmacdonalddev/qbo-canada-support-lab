@@ -26,6 +26,7 @@ const { assembleBusinessOperation, bindApprovedOperationPolicies } = require('./
 const { deriveBusinessPolicies } = require('./business-tax-policy');
 const { createBusinessOperationRetirement } = require('./business-operation-retirement');
 const { createBusinessOperationRecovery } = require('./business-operation-recovery');
+const { createBusinessUnknownRecovery } = require('./business-unknown-recovery');
 const { createBusinessPolicyAmendment } = require('./business-policy-amendment');
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_GOVERNANCE_REQUIRED' }); }
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
@@ -246,12 +247,14 @@ function createBusinessGovernanceService(dependencies = {}) {
     const run = await read(models.Runs, { _id: operationId, ...bound.scope });
     const plan = await read(models.Plans, { _id: run.planId, ...bound.scope });
     const rejected = await models.Steps.find({ ...bound.scope, operationId, state: 'rejected' }).limit(21).maxTimeMS(3000).lean();
-    return { ...page, rejectedActivities: rejected.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, faultCodes: row.rejection?.faultCodes || [] })), recoveryReason: run.lastError || null, queuedContinuation: run.executionRequest?.pending === true, scope: bound.scope, fromDate: plan.manifest.fromDate, throughDate: plan.manifest.throughDate, createCount: plan.manifest.createCount, requiredAssertions: plan.manifest.requiredAssertions,
+    const uncertain = await models.Steps.find({ ...bound.scope, operationId, state: { $in: ['dispatched', 'unknown'] } }).limit(21).maxTimeMS(3000).lean();
+    return { ...page, uncertainActivities: uncertain.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.compilation ? JSON.parse(row.compilation.request.body).TxnDate : null })), rejectedActivities: rejected.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, faultCodes: row.rejection?.faultCodes || [] })), recoveryReason: run.lastError || null, queuedContinuation: run.executionRequest?.pending === true, scope: bound.scope, fromDate: plan.manifest.fromDate, throughDate: plan.manifest.throughDate, createCount: plan.manifest.createCount, requiredAssertions: plan.manifest.requiredAssertions,
       entries: page.entries.map(entry => ({ logicalKey: entry.step.logicalKey, kind: entry.kind, entity: entry.step.entity, txnDate: entry.step.txnDate, details: entry.step.details, expectedTaxCents: entry.policy.readbackTax?.totalTaxCents ?? null, references: entry.step.references.map(ref => ({ entity: ref.entity, key: ref.key, id: ref.id })), dependencies: entry.step.dependencies.map(link => ({ entity: link.entity, logicalKey: link.logicalKey })) })) };
   }
   const retirement = createBusinessOperationRetirement({ models, transaction, now, bind, fence });
   const taxReview = createBusinessPolicyAmendment({ models, transaction, now, bind, fence });
   const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence });
-  return { ...recovery, status, reviewPublication, publish, prepare, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
+  const unknownRecovery = createBusinessUnknownRecovery({ models, connection, transaction, now, bind, fence });
+  return { ...unknownRecovery, ...recovery, status, reviewPublication, publish, prepare, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
 }
 module.exports = { createBusinessGovernanceService, reportHash };

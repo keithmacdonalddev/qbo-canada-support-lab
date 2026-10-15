@@ -14,6 +14,8 @@ const schema = new mongoose.Schema({
   workflow: { type: mongoose.Schema.Types.Mixed, immutable: true },
   periodProof: { type: mongoose.Schema.Types.Mixed, immutable: true },
   reconciliation: { type: mongoose.Schema.Types.Mixed, default: null },
+  terminal: { type: mongoose.Schema.Types.Mixed, default: null },
+  ownerRecovery: { type: mongoose.Schema.Types.Mixed, default: null },
   observed: { type: mongoose.Schema.Types.Mixed, default: null },
   sentAt: { type: Date, required: true, immutable: true }, observedAt: Date,
   startAuditId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true }, resultAuditId: mongoose.Schema.Types.ObjectId,

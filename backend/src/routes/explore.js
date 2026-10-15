@@ -12,7 +12,7 @@ const { searchQuery, pageResult, identity, canonicalType, integer, ENTITIES, inv
 function createExploreRouter(dependencies = {}) {
 const router = express.Router();
 const qboFor = dependencies.qboFor || createQBOClient;
-const originFor = dependencies.originFor || (input => readRecordOrigin({ ...input, db: mongoose.connection.db, userId: new mongoose.Types.ObjectId(input.userId) }));
+const originFor = dependencies.originFor || (input => readRecordOrigin({ ...input, db: mongoose.connection.db, attributionModels: { Authorities: require('../models/BusinessAuthority'), Receipts: require('../models/QboWriteReceipt'), Audits: AuditLog }, userId: new mongoose.Types.ObjectId(input.userId) }));
 const getActiveConnection = dependencies.getActiveConnection || (userId => Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 }));
 const scope = connection => ({ realmId: connection.realmId, environment: config.qbo.environment, connectionId: String(connection._id) });
 router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });

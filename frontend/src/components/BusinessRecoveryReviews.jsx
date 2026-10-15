@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Button } from './ui/button'
+import BusinessUnknownRecovery from './BusinessUnknownRecovery'
 const money = value => value == null ? 'No tax' : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(value / 100)
 export default function BusinessRecoveryReviews({ plan, api, scope, act, busy, onApproved }) {
   const [review, setReview] = useState(null), [reason, setReason] = useState(''), [accepted, setAccepted] = useState(false), [offset, setOffset] = useState(0)
@@ -18,6 +19,7 @@ export default function BusinessRecoveryReviews({ plan, api, scope, act, busy, o
       {['approved', 'reserved', 'running', 'blocked'].includes(plan.status) && <Button variant="outline" disabled={busy} onClick={() => prepare('tax')}>Review remaining tax expectations</Button>}
       {plan.rejectedActivities?.map(row => <Button key={row.logicalKey} variant="outline" disabled={busy} onClick={() => prepare('rejection', row.logicalKey)}>Review rejected {row.entity} · {row.faultCodes.join(', ')}</Button>)}
     </div>
+    <BusinessUnknownRecovery plan={plan} api={api} scope={scope} act={act} busy={busy} onApproved={onApproved} />
     {review && <form className="space-y-3 rounded border border-[var(--line)] p-3" onSubmit={event => { event.preventDefault(); act(async () => {
       const endpoint = review.mode === 'tax' ? '/tax/approve' : review.mode === 'resume' ? '/resume' : '/rejection/retry'
       await api.post(root + endpoint, { planHash: plan.planHash, reviewHash: review.reviewHash, reason, ...(review.logicalKey ? { logicalKey: review.logicalKey } : {}) }, { timeout: 190000 })

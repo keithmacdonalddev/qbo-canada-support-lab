@@ -76,7 +76,7 @@ function taxMatches(policy, compiled, record) {
 // This function checks observed content; it does not identify ownership by notes.
 function verifyBusinessContent({ compiled, receipt, observed, parents = [], descendants = [], taxPolicy = null, now = Date.now() }) {
   const request = validateCompilation(compiled), scope = request.scope;
-  if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.requestHash !== request.requestHash || typeof receipt.qboId !== 'string' || !QBO_ID.test(receipt.qboId) || !HASH.test(receipt.dispatchKey || '') || !HASH.test(receipt.evidenceHash || '') || !['create-response', 'request-correlated-readback'].includes(receipt.source)) invalid('The exact saved creation receipt is required.');
+  if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.requestHash !== request.requestHash || typeof receipt.qboId !== 'string' || !QBO_ID.test(receipt.qboId) || !HASH.test(receipt.dispatchKey || '') || !HASH.test(receipt.evidenceHash || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(receipt.source)) invalid('The exact saved creation receipt is required.');
   const record = checkedObservation(observed, scope, compiled.entity, receipt.qboId, now), payload = JSON.parse(request.body), issues = [];
   const mismatch = message => { if (!issues.includes(message)) issues.push(message); };
   if (!Array.isArray(parents) || parents.length !== compiled.relationships.length || !Array.isArray(descendants) || descendants.length > 1000) invalid('Complete relationship observations are required.');
@@ -93,7 +93,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (childIds.has(physicalKey) || (child.entity === compiled.entity && child.record?.Id === record.Id)) invalid('A downstream saved record is duplicated.');
     childIds.add(physicalKey);
     const childReceipt = child.creationReceipt;
-    if (childReceipt.version !== 1 || !sameScope(childReceipt.scope, scope) || childReceipt.entity !== child.entity || childReceipt.logicalKey !== child.logicalKey || !HASH.test(childReceipt.requestHash || '') || !HASH.test(childReceipt.dispatchKey || '') || !['create-response', 'request-correlated-readback'].includes(childReceipt.source)) invalid('The downstream creation receipt has a different identity.');
+    if (childReceipt.version !== 1 || !sameScope(childReceipt.scope, scope) || childReceipt.entity !== child.entity || childReceipt.logicalKey !== child.logicalKey || !HASH.test(childReceipt.requestHash || '') || !HASH.test(childReceipt.dispatchKey || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(childReceipt.source)) invalid('The downstream creation receipt has a different identity.');
     if (!HASH.test(child.compilationHash || '') || child.verification?.compilationHash !== child.compilationHash) invalid('The downstream proof is not bound to its dispatched compilation.');
     childKeys.add(child.logicalKey); verifiedObservation(child, scope, child.entity, childReceipt.qboId, now, 'business-content');
     const origin = child.verification.relationships?.filter(link => link.logicalKey === compiled.logicalKey);

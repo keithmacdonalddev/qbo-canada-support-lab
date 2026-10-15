@@ -35,6 +35,8 @@ function createBusinessGovernanceRouter(dependencies = {}) {
   router.post('/operations/:id/resume', action(req => service().resume(req.user, req.params.id, req.body)));
   router.post('/operations/:id/rejection/review', action(req => service().reviewRejected(req.user, req.params.id, req.body)));
   router.post('/operations/:id/rejection/retry', action(req => service().retryRejected(req.user, req.params.id, req.body)));
+  router.post('/operations/:id/uncertain/review', action((req, signal) => service().reviewUnknown(req.user, req.params.id, req.body, { signal })));
+  router.post('/operations/:id/uncertain/attribute', action((req, signal) => service().attributeUnknown(req.user, req.params.id, req.body, { signal })));
   return router;
 }
 module.exports = { createBusinessGovernanceRouter };

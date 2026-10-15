@@ -6,7 +6,7 @@ The app can prove the exact plan, actor, company, request and accepted record fo
 
 It cannot yet follow every button click through authentication, background jobs, QuickBooks and an AI provider using one shared label. A request ID is that shared label. Several errors and authentication events exist only while the server terminal is open. An audit trail is a saved record of who did what; a log is useful evidence only when it is actually retained.
 
-Users currently look in Company → Business operations, Cases, Explorer and History. These surfaces do not yet provide one complete diagnostic view. The immediate remaining operational gap is owner reconciliation of uncertain business transport outcomes. Uncertainty must remain visible; absence of a response does not prove absence of a saved transaction.
+Users currently look in Company → Business operations, Cases, Explorer and History. These surfaces do not yet provide one complete diagnostic view. The Company recovery surface now supports owner attribution of an exact saved record after a terminal unknown business request. It retains the unknown transport history and separately labels manual provenance. Requests with no terminal evidence remain blocked; absence of a response does not prove absence of a saved transaction.
 
 This report reflects source inspection, a restricted source-only evidence scan and the implementation ledger. It does not claim live deployment, production activation, database migration, provider execution or whole-business acceptance. Private company observations remain outside Git.
 
@@ -89,7 +89,7 @@ Each gap below has a matching fix plan. These are remaining engineering items, n
 
 | ID / question | Why / missing evidence | Minimum fix | Better fix | Likely source | Verification |
 | --- | --- | --- | --- | --- | --- |
-| O1: Did an uncertain business POST actually create this record? | Missing local response; barrier deliberately stays unresolved. | Exact-ID owner-reviewed readback tied to immutable request and retained uncertainty. Never infer absence or replay. | Correlation carried into supported created records, plus a complete owner reconciliation surface. | business-dispatch-receipt.js; business-operation-recovery.js; BusinessRecoveryReviews.jsx | Lost SDK response after fake create; wrong ID/content/scope, stale record, denied owner and audit rollback tests; no second POST. |
+| O1: Did an uncertain business POST actually create this record? | Matching content cannot prove request identity or exclude duplicates; unfinished requests deliberately stay blocked. | Implemented terminal-only exact-ID owner attribution tied to original request/policy, exclusion scans, immutable decision and retained uncertainty. Never infer absence or replay. | Correlation carried into supported created records, plus a complete owner reconciliation surface. | business-dispatch-receipt.js; business-operation-recovery.js; BusinessRecoveryReviews.jsx | Lost SDK response after fake create; wrong ID/content/scope, stale record, denied owner and audit rollback tests; no second POST. |
 | O2: Which request produced this error and its audit/provider calls? | HTTP IDs are not consistently carried into jobs/audits/providers/client errors. | Request AsyncLocalStorage, safe audit requestId, retained job origin and client reference. | Searchable trace grouped by request, operation and provider reference. | requestContext.js; actor-context.js; auditLogger.js; AuditLog.js; api/client.js; provider adapters | One controlled action joins HTTP, durable audit, job and mocked provider without secrets. |
 | O3: Who signed in, failed to sign in, changed or cleared a key? | No durable realm-independent auth-event record. | Bounded redacted auth/security event store; never save passwords, keys or raw Authorization. | Current-account diagnostics and scoped security history with retention. | routes/auth.js; middleware/auth.js; models/User.js; Settings | Success/failure/key-change fixtures; events survive reopen; cross-user access and redaction denial tests. |
 | O4: Which provider/model handled each pass and what resources did it use? | Session totals and adapter return values are incomplete per-call evidence. | Retain pass/run IDs, provider/model, outcome, duration, retry count and available usage. | Scoped Model Activity with prompt/response retention policy and explicit unknown cost. | ai-provider.js; codex-cli.js; reproduction-runner.js; AISession.js; case UI | Mock provider success/failure/retry/timeout; unavailable usage stays unknown; no live provider call. |
@@ -103,7 +103,7 @@ Keep Company → Business operations as the authoritative progress/recovery surf
 
 ## Prioritized fix plan
 
-1. Finish O1 uncertain-outcome recovery and preserve current receipt/barrier guarantees.
+1. Retain O1 terminal-only attribution and receipt/barrier guarantees; add supported request correlation for future operations without retroactively asserting identity for older failures.
 2. Join request IDs and controlled recovery explanations across the app (O2/O6).
 3. Close auth/key accountability and exposure gaps (O3), then retain worker and provider evidence (O4/O5).
 4. Complete original-business acceptance rather than interpreting narrow accounting checks as realism (O7).
@@ -114,6 +114,7 @@ Keep Company → Business operations as the authoritative progress/recovery surf
 - [x] Inspect original source around high-signal matches; do not use scanner counts as product completion evidence.
 - [x] Use isolated transport/storage fixtures for source → saved records → reports → calendar and recovery paths.
 - [x] Confirm current final backend/build/lint/desktop results in the implementation ledger (1009/1009 backend, syntax 147 files, build/lint and both desktop workflows; artifacts/luna/intent-governance-final-2.json).
-- [ ] Add exact-ID uncertain-outcome, request trace, auth/key event and durable incident checks as each gap is implemented.
+- [x] Verify terminal-only exact-ID owner attribution, rollback, scope/ownership denial, later graph/tax continuation and rendered desktop review: full backend 1024/1024; focused 115/115; syntax/build/lint/two desktop workflows passed.
+- [ ] Add request trace, auth/key event and durable incident checks as each remaining gap is implemented.
 - [ ] Verify provider evidence through mocks before any separately approved provider check.
 - [ ] Verify approved production records/reports only under a concrete target/budget/stop-condition approval. No live mutation or service control is authorized by this document.

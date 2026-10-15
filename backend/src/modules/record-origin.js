@@ -1,6 +1,7 @@
 'use strict';
 const { identity } = require('./record-queries');
 const { businessTransportEvidence, assertBusinessTransportAudits } = require('./business-dispatch-receipt');
+const { SOURCE: OWNER_SOURCE, assertOwnerAttribution } = require('./business-owner-attribution');
 const LIMIT = 20;
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
 const validDate = value => { const date = new Date(value); return value && Number.isFinite(date.getTime()) ? date.toISOString() : null; };
@@ -42,6 +43,11 @@ function originPipelines({ userId, realmId, environment, entity, id }) {
       { $unwind: '$createdEntities' }, { $match: { 'createdEntities.entity': key === 'seed' ? { $in: [entity, entity.toLowerCase()] } : entity, 'createdEntities.qboId': id } },
       ...finish({ _id: 1, createdAt: '$createdEntities.timestamp' }),
     ] })),
+    { key: 'business_owner_attribution', collection: 'operationsteps', pipeline: [
+      { $match: { realmId, environment, entity, qboId: id, 'receipt.source': OWNER_SOURCE } },
+      { $sort: { _id: -1 } }, { $limit: LIMIT + 1 },
+      { $project: { _id: 1, realmId: 1, environment: 1, connectionId: 1, operationId: 1, planHash: 1, logicalKey: 1, entity: 1, dispatch: 1, qboId: 1, receipt: 1 } },
+    ] },
     { key: 'business_operation', collection: 'qbowritereceipts', pipeline: [
       { $match: { ownerId: userId, realmId, environment, kind: 'business', operation: 'create', state: 'saved', entity: entity.toLowerCase(), 'observed.qboId': id } },
       { $sort: { sentAt: -1, _id: -1 } }, { $limit: LIMIT + 1 },
@@ -54,17 +60,26 @@ function originPipelines({ userId, realmId, environment, entity, id }) {
   ];
 }
 
-async function readRecordOrigin({ db, userId, realmId, environment, entity: suppliedEntity, id: suppliedId }) {
+async function readRecordOrigin({ db, attributionModels, userId, realmId, environment, entity: suppliedEntity, id: suppliedId }) {
   const { entity, id } = identity(suppliedEntity, suppliedId);
   if (!db || !userId || !realmId || !['production', 'sandbox'].includes(environment)) throw new Error('Record origin scope is unavailable');
   const jobs = originPipelines({ userId, realmId, environment, entity, id });
   const results = await Promise.allSettled(jobs.map(job => db.collection(job.collection).aggregate(job.pipeline, { maxTimeMS: 5000 }).toArray()));
   const sources = [], incompleteSources = [];
-  results.forEach((result, index) => {
-    const kind = jobs[index].key;
-    if (result.status !== 'fulfilled' || !Array.isArray(result.value)) { incompleteSources.push(kind); return; }
+  for (let index = 0; index < results.length; index++) {
+    const result = results[index], kind = jobs[index].key;
+    if (result.status !== 'fulfilled' || !Array.isArray(result.value)) { incompleteSources.push(kind); continue; }
     if (result.value.length > LIMIT) incompleteSources.push(kind);
     for (const row of result.value.slice(0, LIMIT)) {
+      if (kind === 'business_owner_attribution') {
+        try {
+          if (!row || row.realmId !== realmId || row.environment !== environment || row.entity !== entity || row.qboId !== id || !attributionModels) throw new Error('Owner attribution source is unavailable');
+          const evidence = await assertOwnerAttribution(attributionModels, { realmId, environment, connectionId: String(row.connectionId) }, row);
+          if (!evidence) throw new Error('Missing attribution');
+          sources.push({ kind, sourceId: evidence.authority.contentHash, operationId: String(row.operationId), connectionId: String(row.connectionId), caseId: null, scope: 'recorded_environment', createdAt: validDate(evidence.payload.record.MetaData?.CreateTime), attributedAt: evidence.payload.approvedAt, provenance: OWNER_SOURCE, limitation: 'Owner identification; the original transport outcome remains unknown.' });
+        } catch { incompleteSources.push(kind); }
+        continue;
+      }
       if (kind === 'business_operation') {
         try {
           if (!row || String(row.ownerId) !== String(userId) || row.realmId !== realmId || row.environment !== environment || row.kind !== 'business' || row.operation !== 'create' || row.state !== 'saved' || row.entity !== entity.toLowerCase() || row.observed?.qboId !== id) throw new Error('Mismatched origin');
@@ -86,7 +101,7 @@ async function readRecordOrigin({ db, userId, realmId, environment, entity: supp
         scope: verified ? 'recorded_environment' : 'environment_unrecorded', createdAt: validDate(row.createdAt),
         ...(kind === 'assistant' && Number.isSafeInteger(row.step) && row.step > 0 ? { step: row.step } : {}) });
     }
-  });
+  }
   if (sources.filter(source => source.kind === 'business_operation').length > 1) incompleteSources.push('business_operation');
   const complete = incompleteSources.length === 0;
   return { entity, id, sources, complete, incompleteSources: [...new Set(incompleteSources)],

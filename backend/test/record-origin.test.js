@@ -18,7 +18,8 @@ function fixture(values = {}) {
 }
 test('creation receipt search is owner/realm scoped, exact and bounded with no raw record projection', () => {
   for (const job of originPipelines(scope)) {
-    assert.equal(job.pipeline[0].$match[job.key === 'business_operation' ? 'ownerId' : 'userId'], scope.userId);
+    if (job.key === 'business_owner_attribution') { assert.equal(job.pipeline[0].$match['receipt.source'], 'owner-attributed-readback'); assert.equal(job.pipeline[0].$match.environment, scope.environment); }
+    else assert.equal(job.pipeline[0].$match[job.key === 'business_operation' ? 'ownerId' : 'userId'], scope.userId);
     assert.equal(job.pipeline[0].$match.realmId, scope.realmId);
     assert.ok(job.pipeline.some(stage => stage.$limit === LIMIT + 1));
     const projection = job.pipeline.find(stage => stage.$project).$project;
@@ -38,7 +39,7 @@ test('creation receipt search is owner/realm scoped, exact and bounded with no r
 test('no app receipt is unknown, never an assertion that a record is manual or business activity', async () => {
   const f = fixture(); const result = await readRecordOrigin({ ...scope, db: f.db });
   assert.equal(result.status, 'unknown'); assert.equal(result.complete, true); assert.equal(result.baseline, 'unclassified');
-  assert.equal(f.calls.length, 6); assert.ok(f.calls.every(call => call.options.maxTimeMS === 5000));
+  assert.equal(f.calls.length, 7); assert.ok(f.calls.every(call => call.options.maxTimeMS === 5000));
 });
 test('legacy case evidence is a historical match, even with a current case link', async () => {
   const f = fixture({ aiplans: [{ _id: recordId, cases: [{ _id: connectionId }], step: 4, createdAt: '2026-10-01' }] });

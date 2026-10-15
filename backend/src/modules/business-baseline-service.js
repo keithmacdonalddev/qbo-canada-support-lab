@@ -31,7 +31,7 @@ function createBusinessBaselineService(dependencies = {}) {
       catch { throw Object.assign(new Error('Complete the reviewed baseline observation storage setup before capturing reports.'), { code: 'BUSINESS_STORAGE_UNPREPARED', status: 409 }); }
     });
     const store = createBusinessBaselineStore({ scope, actorId, ownerId, ...models, access, assertReady, assertCaptureReady, transaction, readReports, readInventory, ...(dependencies.now ? { now: dependencies.now } : {}) });
-    const readOrigin = dependencies.readOrigin || (input => require('./record-origin').readRecordOrigin({ ...input, db: connection.db, userId: new (require('mongoose').Types.ObjectId)(input.userId) }));
+    const readOrigin = dependencies.readOrigin || (input => require('./record-origin').readRecordOrigin({ ...input, db: connection.db, attributionModels: { Authorities: models.Authorities || require('../models/BusinessAuthority'), Receipts: models.Receipts || require('../models/QboWriteReceipt'), Audits: models.Audits }, userId: new (require('mongoose').Types.ObjectId)(input.userId) }));
     const reviewRecord = dependencies.reviewRecord || ((captured, options) => createBusinessInventoryReviewReader({ access, readOrigin, ...(dependencies.now ? { now: dependencies.now } : {}) })(captured, options));
     return { scope, access, store, assertCaptureReady, reviewRecord };
   }

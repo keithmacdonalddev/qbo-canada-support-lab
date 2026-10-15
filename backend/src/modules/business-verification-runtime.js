@@ -2,6 +2,7 @@
 const { hash } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { validateCompilation } = require('./business-readback');
+const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessGraphReader } = require('./business-graph-readback');
 const { createBusinessTransactionReader } = require('./business-reference');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
@@ -30,7 +31,7 @@ function taxExpectation(policy, compiled) {
 // Internal composition only: no routes, startup, storage preparation or activation.
 // All models/adapters come from server code; the bound scope and operation cannot
 // be overridden by a tool/request payload passed to the returned graph reader.
-function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, transaction, assertReady, access, writerFence, plans, now = () => Date.now() }) {
+function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, Receipts, Authorities, Audits, transaction, assertReady, access, writerFence, plans, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || !Steps || [transaction, assertReady, access?.authorize, access?.resolveClient, writerFence?.graphSnapshot, plans?.loadIntent, now].some(value => typeof value !== 'function')) throw new TypeError('Verification needs an exact operation and concrete runtime adapters');
   const { authorize, resolveClient } = access, { graphSnapshot } = writerFence, { loadIntent } = plans;
@@ -53,8 +54,9 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     const actor = await authority(scope, 'operations.read', { signal });
     // Locate the ORIGINAL operation, including earlier-period steps refreshed by
     // this operation. loadIntent validates its immutable manifest and policy hash.
-    const row = await Steps.findOne({ ...scope, logicalKey: compiled.logicalKey }).select('operationId planHash fingerprint entity state dispatch').maxTimeMS(3000).lean(); checkSignal(signal);
+    const row = await Steps.findOne({ ...scope, logicalKey: compiled.logicalKey }).select('operationId planHash fingerprint entity state dispatch logicalKey receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     if (!row || !['saved', 'verified'].includes(row.state) || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || row.entity !== compiled.entity || row.fingerprint !== compiled.intentHash || row.dispatch?.compilationHash !== compiled.compilationHash || row.dispatch?.requestHash !== request.requestHash) fail('The original managed transaction is unavailable.');
+    await assertOwnerAttribution({ Receipts, Authorities, Audits }, scope, row);
     const originalStep = row; // The original scoped lookup already selected the complete dispatch.
     const intent = await loadIntent(scope, String(row.operationId), compiled.logicalKey, { policyHead: originalStep?.dispatch?.policyAmendmentHash || null }); checkSignal(signal);
     if (!intent || intent.version !== 1 || !sameScope(intent.scope, scope) || intent.operationId !== String(row.operationId) || intent.planHash !== row.planHash || intent.logicalKey !== compiled.logicalKey || intent.entity !== compiled.entity || intent.fingerprint !== compiled.intentHash || hash(intent.step) !== compiled.intentHash) fail('The original transaction intent changed.');

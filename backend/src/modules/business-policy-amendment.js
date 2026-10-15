@@ -5,6 +5,7 @@ const { validateOperationEntry } = require('./business-operation-plan-store');
 const { deriveBusinessPolicies, verifyBusinessTaxSources } = require('./business-tax-policy');
 const { randomUUID } = require('node:crypto');
 const { referenceDefinition } = require('./business-reference');
+const { assertOwnerAttribution, SOURCE: OWNER_SOURCE } = require('./business-owner-attribution');
 const ID=/^[a-f0-9]{24}$/, HASH=/^[a-f0-9]{64}$/;
 const read=(Model,filter,session)=>Model.findOne(filter).session(session).maxTimeMS(3000).lean();
 function fail(message){throw Object.assign(new Error(message),{status:409,code:'BUSINESS_POLICY_REVIEW_REQUIRED'});}
@@ -54,6 +55,7 @@ function createBusinessPolicyAmendment({models,transaction,now,bind,fence}){
   for(const receipt of receipts){
    const step=rows.find(row=>row.logicalKey===receipt.logicalKey);
    if(step&&saved.has(step.logicalKey)&&receipt.state==='saved'&&receipt.dispatchKey===step.dispatch?.key&&receipt.observed?.qboId===step.qboId)continue;
+   if(step&&saved.has(step.logicalKey)&&step.receipt?.source===OWNER_SOURCE&&receipt._id===hash({scope,dispatchKey:step.dispatch?.key})){await assertOwnerAttribution(models,scope,step,session);continue;}
    const history=step?.retryHistory?.find(entry=>entry.receiptId===String(receipt._id)&&entry.dispatchKey===receipt.dispatchKey&&entry.responseHash===receipt.observed?.responseHash&&entry.retryGeneration<=step.retryGeneration);
    const audit=history&&await read(models.Audits,{_id:history.recoveryAuditId,userId:bound.ownerId,realmId:scope.realmId,action:'Business operation recovery approved','afterState.operationId':operationId,'afterState.mode':'retry-rejected','afterState.newRetryGeneration':history.retryGeneration,'afterState.retainedRejectedAttempt.rejection.receiptId':receipt._id},session);
    if(!history||!audit||receipt.state!=='rejected'||receipt.observed?.outcome!=='rejected'||receipt.observed.httpStatus!==400||receipt.observed.qboId)fail('A transport outcome is not represented by a saved activity or exact owner-closed rejection.');

@@ -38,7 +38,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
   }
   async function audit(id, input, outcome, details, session) {
     await Audits.create([{ _id: id, userId: input.ownerId, actorUserId: input.actorId !== input.ownerId ? input.actorId : undefined, realmId: input.scope.realmId,
-      action: outcome === 'started' ? 'QuickBooks write dispatch recorded' : 'QuickBooks write response recorded', actionType: 'manual', outcome: outcome === 'saved' ? 'success' : outcome === 'rejected' ? 'failure' : 'partial',
+      action: outcome === 'started' ? 'QuickBooks write dispatch recorded' : details.transportFailure === true ? 'QuickBooks write transport failure recorded' : 'QuickBooks write response recorded', actionType: 'manual', outcome: outcome === 'saved' ? 'success' : outcome === 'rejected' ? 'failure' : 'partial',
       inputParams: { environment: input.scope.environment, connectionId: input.scope.connectionId, dispatchKey: input.dispatchKey, requestHash: input.requestHash, entity: input.entity, operation: input.operation }, afterState: details,
     }], { session });
   }
@@ -102,15 +102,27 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     });
   }
   async function complete(ticket, request, response, intuitTid) {
+    return finish(ticket, request, classifyWriteResponse(request, response, intuitTid), 'http-response');
+  }
+  async function failTransport(ticket, request, facts = {}) {
+    const status = Number.isInteger(facts.httpStatus) && facts.httpStatus >= 100 && facts.httpStatus <= 599 ? facts.httpStatus : null;
+    const intuitTid = typeof facts.intuitTid === 'string' && /^[a-z0-9._-]{1,128}$/i.test(facts.intuitTid) ? facts.intuitTid : null;
+    // No raw exception, request, provider message or headers enter this receipt.
+    const observed = { outcome: 'unknown', entity: request.entity, operation: request.operation, httpStatus: status, intuitTid, responseHash: null, transportFailure: true };
+    return finish(ticket, request, observed, 'sdk-failure');
+  }
+  async function finish(ticket, request, observed, endKind) {
     if (!ticket?.coordinated) return { outcome: 'uncoordinated' };
-    const observed = classifyWriteResponse(request, response, intuitTid);
     const resultAuditId = hash({ receiptId: ticket.receiptId, event: 'response', observed }).slice(0, 24);
     return transaction(async session => {
       const stored = await read(Receipts, { _id: ticket.receiptId, ...ticket.scope, dispatchKey: ticket.dispatchKey, requestHash: request.requestHash }, session);
       if (!stored || stored.state !== 'possibly-sent') throw denied('The request receipt already changed; recover its saved result.', true);
       const state = await policyState(ticket.scope, session), writer = state?.writer;
       if (!writer || writer.unresolved?.key !== ticket.dispatchKey || writer.unresolved?.transportConsumed?.receiptId !== ticket.receiptId) throw denied('The response no longer matches the company request barrier.', true);
-      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, observedAt: new Date(now()), resultAuditId } }, { new: true, session }).lean();
+      const observedAt = new Date(now());
+      const terminal = observed.outcome === 'unknown' ? { version: 1, scope: ticket.scope, receiptId: stored._id, dispatchKey: stored.dispatchKey, requestHash: stored.requestHash, kind: endKind, endedAt: observedAt.toISOString(), observedHash: hash(observed) } : null;
+      const terminalHash = terminal ? hash(terminal) : null, terminalAuditId = terminal ? hash({ terminalHash }).slice(0, 24) : null;
+      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
       if (!saved) throw denied('The response receipt changed while saving.', true);
       if (stored.kind === 'business' && observed.outcome === 'rejected') {
         const step = await read(Steps, { ...ticket.scope, operationId: stored.operationId, logicalKey: stored.logicalKey, state: { $in: ['dispatched', 'unknown'] }, 'dispatch.key': stored.dispatchKey, receipt: null }, session);
@@ -127,6 +139,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const updated = await Writers.findOneAndUpdate({ _id: writer._id, ...ticket.scope, revision: writer.revision, 'unresolved.key': ticket.dispatchKey }, { $set: { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!updated) throw denied('The company request changed while saving its response.', true);
       await audit(resultAuditId, ticket, observed.outcome, { state: observed.outcome, receiptId: ticket.receiptId, ...observed }, session);
+      if (terminal) await Audits.create([{ _id: terminalAuditId, userId: stored.ownerId, actorUserId: same(stored.ownerId, stored.actorId) ? undefined : stored.actorId, realmId: stored.realmId, action: 'QuickBooks write attempt ended without a confirmed outcome', actionType: 'manual', outcome: 'partial', afterState: { ...terminal, contentHash: terminalHash } }], { session });
       return { ...observed, receiptId: ticket.receiptId };
     });
   }
@@ -228,7 +241,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       return { released: true, state: 'claimed' };
     });
   }
-  return { preflight, begin, complete, settleCase, assertCaseSettled, releaseUnsent };
+  return { preflight, begin, complete, failTransport, settleCase, assertCaseSettled, releaseUnsent };
 }
 let defaultGate;
 function getQboWriteGate() {

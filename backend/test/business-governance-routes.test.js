@@ -23,3 +23,12 @@ test('authenticated normal publication, preparation, approval and execution rout
 test('normal governance routes deny absent authentication and context, state or unbounded-page overrides',async()=>server(async({h,call})=>{
  assert.equal((await call('/governance',undefined,null)).status,401);assert.equal((await call('/governance?realmId=999')).status,400);assert.equal((await call('/governance/operations/prepare',{requestKey:'denied-request-00001',throughDate:'2026-10-06',realmId:'999'})).status,400);assert.equal((await call('/governance/operations/'+ 'e'.repeat(24)+'/review?offset=100000')).status,400);assert.equal(h.posts,0);assert.equal(h.data.Authorities.length,0);
 }));
+
+test('authenticated uncertain-record routes require current owner and exact read-only attribution consent',async()=>server(async({h,call})=>{
+ await h.publish();const prepared=await h.service.prepare(h.user,{requestKey:'http-uncertain-period-001',throughDate:'2026-10-06'});await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});let candidate;
+ h.afterPost=async(_opts,record)=>{h.afterPost=null;candidate=record.Id;throw Object.assign(Error('Fixture transport lost response'),{code:'ECONNRESET'});};assert.equal((await h.runtime(prepared.operationId).execute()).complete,false);
+ const step=h.data.Steps.find(row=>row.state==='dispatched'),input={planHash:prepared.planHash,logicalKey:step.logicalKey,qboId:candidate},base='/governance/operations/'+prepared.operationId+'/uncertain',posts=h.posts;
+ assert.equal((await call(base+'/review',input,null)).status,401);assert.equal((await call(base+'/review',input,actorId)).status,403);assert.equal((await call(base+'/review',{...input,realmId:'999'})).status,400);
+ const review=await call(base+'/review',input);assert.equal(review.status,200,JSON.stringify(review.body));assert.equal(review.cache,'no-store');assert.ok(review.body.data.original.sentAt);assert.equal(h.posts,posts);
+ const decision={...input,reviewHash:review.body.data.reviewHash,confirmOwnership:true,reason:'Owner identified this exact saved transaction using original request and independent support evidence.'};assert.equal((await call(base+'/attribute',{...decision,confirmOwnership:'true'})).status,409);const accepted=await call(base+'/attribute',decision);assert.equal(accepted.status,200,JSON.stringify(accepted.body));assert.equal(accepted.body.data.provenance,'owner-attributed-readback');assert.equal(h.posts,posts);assert.equal(h.data.Writers[0].unresolved,null);assert.equal(h.data.Calendars[0].verifiedThrough,null);
+}));

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { assertBaselineScope } from '../lib/business-baseline-request.mjs'
 const labels = { matches: 'Matches capture', 'different-version': 'Version differs from capture', 'different-content': 'Contents differ from capture', 'not-returned': 'No current record returned' }
-const sourceLabels = { business_operation: 'Business operation', support_case: 'Support reproduction', assistant: 'Assistant plan', generation: 'Generation', legacy_generation: 'Older generation', seed: 'Setup', issue_pack: 'Issue pack' }
+const sourceLabels = { business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', support_case: 'Support reproduction', assistant: 'Assistant plan', generation: 'Generation', legacy_generation: 'Older generation', seed: 'Setup', issue_pack: 'Issue pack' }
 const reason = error => error.response?.data?.error || error.message || 'Captured records could not be reviewed.'
 function assertEvidence(value, baseline, entity) {
   assertBaselineScope(value, baseline.scope.realmId, baseline.scope.environment, baseline.scope.connectionId)
@@ -60,7 +60,7 @@ function InventoryTypeReview({ baseline, entity, api }) {
       <h5 ref={resultHeading} tabIndex={-1} className="font-semibold">{entity} {review.id}: {labels[review.comparison]}</h5>
       <p className="mt-1 text-[var(--ink-2)]">Captured version {review.captured.syncToken} · {review.current ? 'Current version ' + review.current.syncToken : 'QuickBooks returned no matching row.'}</p>
       <p className="mt-1 text-[12px] text-[var(--ink-3)]">Captured {new Date(review.captured.observedAt).toLocaleString()} · Checked {new Date(review.checkedAt).toLocaleString()}</p>
-      {review.origin?.sources?.length > 0 && <ul className="mt-2">{review.origin.sources.map((source, index) => <li key={[source.kind, source.sourceId, index].join(':')}>{sourceLabels[source.kind] || 'Creation receipt'}{source.scope === 'environment_unrecorded' ? ' · Historical match; environment was not recorded' : ' · Recorded company environment'}{source.caseId && <a className="ml-2 underline" href={'/cases/' + source.caseId}>Open case</a>}</li>)}</ul>}
+      {review.origin?.sources?.length > 0 && <ul className="mt-2">{review.origin.sources.map((source, index) => <li key={[source.kind, source.sourceId, index].join(':')}>{sourceLabels[source.kind] || 'Creation receipt'}{source.limitation ? ' · ' + source.limitation : source.scope === 'environment_unrecorded' ? ' · Historical match; environment was not recorded' : ' · Recorded company environment'}{source.caseId && <a className="ml-2 underline" href={'/cases/' + source.caseId}>Open case</a>}</li>)}</ul>}
       <p className="mt-2 text-[var(--ink-3)]">{review.origin?.complete === false ? 'Creation history is incomplete or unavailable.' : review.origin?.sources?.length ? 'Creation receipts do not establish membership in the continuing business.' : 'No matching creation receipt was found; origin remains unknown.'}</p>
       <a className="mt-2 inline-block underline" href={'/explorer?type=' + encodeURIComponent(entity) + '&id=' + encodeURIComponent(review.id)}>Inspect current record in Records</a>
       <p className="mt-2 text-[12px] text-[var(--ink-3)]">{review.limitation}</p>

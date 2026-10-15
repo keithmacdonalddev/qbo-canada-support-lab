@@ -321,6 +321,10 @@ class QBOClient {
       if (intuitTid && !err.intuit_tid) {
         err.intuit_tid = intuitTid;
       }
+      if (reachedApiCall && writeTicket?.coordinated && typeof writeGate.failTransport === 'function') {
+        try { await writeGate.failTransport(writeTicket, writeRequest, { httpStatus: typeof status === 'number' ? status : null, intuitTid }); }
+        catch { err.receiptNotRecorded = true; /* Keep the original non-expiring barrier. */ }
+      }
       throw err;
     }
 
