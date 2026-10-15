@@ -22,3 +22,11 @@ test('recovery records the current actor while retaining original committed acto
   const h = setup(); const originalActor = 'e'.repeat(24); await h.audit('business-period:' + operationId + ':committed', { ...details, actorId: originalActor });
   assert.equal(h.data.Audits[0].actorUserId, actorId); assert.equal(h.data.Audits[0].inputParams.details.actorId, originalActor);
 });
+
+test('approval report hashes must be a complete bounded pair', async () => {
+  const h = setup(), approvalKey = 'business-plan:' + operationId + ':approved';
+  const proof = { ...details, phase: 'approved', reportEvidenceHash: 'a'.repeat(64), reportSourceHash: 'b'.repeat(64) };
+  await h.audit(approvalKey, proof);
+  for (const invalid of [{...proof, reportSourceHash:undefined}, {...proof, reportSourceHash:'private report'}, {...proof, reportEvidenceHash:5}]) await assert.rejects(h.audit(approvalKey, invalid));
+  assert.equal(h.data.Audits.length, 1);
+});

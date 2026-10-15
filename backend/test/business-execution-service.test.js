@@ -136,7 +136,7 @@ test('lost acknowledgement followed by a settled blocked run continues once with
 test('a recovered paused owner can inspect and stop a reserved operation without enabling automation or sending records',async()=>{
  const h=setup();await h.service.request(user,operationId,h.body);
  await h.runtime.execute({signal:{get aborted(){return h.data.Calendars[0].currentOperationId !== null;}}});
- assert.equal(h.posts,0);assert.equal(h.data.Runs[0].leaseToken,null);
+ assert.equal(h.posts,0);assert.equal(h.data.Runs[0].leaseToken == null,true,'The unsent reserved run has no worker lease');
  Object.assign(h.data.Users.find(row=>row._id===ownerId),{email:'tester@testdatalab.local',authVersion:1,accessPolicyVersion:1,automationAccessPolicyVersion:0});
  const view=await h.service.inspect(user,operationId);assert.equal(view.permissions.execute,false);assert.equal(view.permissions.stop,true);
  await h.service.stop(user,operationId);await h.flush();assert.equal(h.posts,0);assert.equal(h.data.Runs[0].status,'stopped');assert.equal(h.data.Users.find(row=>row._id===ownerId).automationAccessPolicyVersion,0);

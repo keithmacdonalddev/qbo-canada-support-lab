@@ -85,7 +85,7 @@ function runFields(manifest, planId, actorId) {
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false }) {
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false }) {
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
   for (const fn of [assertReady, authorize, transaction, now, ...(!readOnly ? [loadCandidate, checkCurrent, writeAudit] : [])]) if (typeof fn !== 'function') throw new TypeError('Operation plans require explicit trusted adapters');
   async function authority(scope, action, session) {
@@ -93,9 +93,9 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     if (!actor || typeof actor.actorId !== 'string' || !ID.test(actor.actorId)) fail('Business operation permission is required', 403);
     return actor.actorId;
   }
-  async function audit(scope, actorId, operationId, planHash, phase, session) {
+  async function audit(scope, actorId, operationId, planHash, phase, session, reportEvidence) {
     const eventKey = 'business-plan:' + operationId + ':' + phase;
-    const result = await writeAudit(eventKey, { ...scope, actorId, operationId, planHash, phase }, session);
+    const result = await writeAudit(eventKey, { ...scope, actorId, operationId, planHash, phase, ...(reportEvidence ? { reportEvidenceHash: reportEvidence.evidenceHash, reportSourceHash: reportEvidence.sourceHash } : {}) }, session);
     if (result?.eventKey !== eventKey || typeof result.id !== 'string' || !result.id) fail('Operation plan audit was not saved');
     return result.id;
   }
@@ -152,13 +152,15 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       await loadEntries(scope, operationId, 0, MAX_RECORDS, session);
       if (run.status !== 'previewed') {
         assertRunApproval(run);
+        if (typeof verifyApproval === 'function') await verifyApproval({ run, session });
+        else if (run.approval.reportEvidence) fail('Retained approval-report verification is required.');
         return { operationId, planHash, status: run.status, approved: true, reused: true };
       }
       if (plan.manifest.throughDate > businessDate(new Date(now()))) fail('Future periods cannot be approved');
       const fence = await checkCurrent({ scope, operationId, planHash, manifest: snapshot(plan.manifest), actorId, session });
       if (!fence || !sameScope(fence.scope, scope) || fence.operationId !== operationId || fence.planHash !== planHash || fence.actorId !== actorId || fence.expectedRevision !== run.expectedRevision || !validHash(fence.fenceHash)) fail('Current blueprint, baseline, policies and calendar could not be fenced');
-      const auditId = await audit(scope, actorId, operationId, planHash, 'approved', session);
-      const approval = { actorId, planHash, fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString(), ...(scope.environment === 'production' ? { productionConsent: { confirmed: true, ...scope, actorId, planHash } } : {}) };
+      const auditId = await audit(scope, actorId, operationId, planHash, 'approved', session, fence.reportEvidence);
+      const approval = { actorId, planHash, fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString(), ...(fence.reportEvidence ? { reportEvidence: snapshot(fence.reportEvidence) } : {}), ...(scope.environment === 'production' ? { productionConsent: { confirmed: true, ...scope, actorId, planHash } } : {}) };
       const saved = await Runs.findOneAndUpdate({ _id: operationId, ...scope, status: 'previewed', planHash, approval: null }, { $set: { status: 'approved', approval } }, { new: true, session }).lean();
       if (!saved) fail('Operation approval changed concurrently');
       return { operationId, planHash, status: 'approved', approved: true, reused: false };

@@ -80,7 +80,9 @@ module.exports = { harness };
 test('default baseline service composes both actual readers and retains their original matching evidence', async () => {
   const { fixture, ownerId, actorId } = require('./helpers/business-baseline-fixture');
   const { createBusinessBaselineService } = require('../src/modules/business-baseline-service');
-  const base = fixture(), h = harness(); h.reports = base.source.reports; h.rows.Account = base.source.accounts.map(row => ({ ...row, Active: true }));
+  const base = fixture(), h = harness(); h.reports = require('./helpers/business-report-fixtures').fixture({ critical: true });
+  h.reports.TrialBalance.Rows.Row[0].ColData[0].id = '1'; h.reports.TrialBalance.Rows.Row[1].ColData[0].id = '2';
+  h.rows.Account = base.source.accounts.map(row => ({ ...row, Active: true }));
   const { readReports, readInventory, ...dependencies } = base.deps;
   const service = createBusinessBaselineService({ ...dependencies, models: base.models,
     resolveContext: async () => ({ environment: scope.environment, connection: { connected: true, ...scope } }), accessFor: () => h.access });

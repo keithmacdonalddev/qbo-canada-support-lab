@@ -324,6 +324,7 @@ router.get('/status', authenticate, async (req, res) => {
       status: health.effectiveStatus,
       environment: config.qbo.environment,
       realmId: connection.realmId,
+      connectionId: String(connection._id),
       companyName: connection.companyName,
       tokenExpiresAt: connection.tokenExpiresAt,
       refreshTokenExpiresAt: health.refreshTokenExpiresAt,

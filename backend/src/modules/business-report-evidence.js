@@ -2,15 +2,15 @@
 const { hash, canonical } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
 const { scoped } = require('./qbo-write-contract');
-const { evaluateBooks, validDate } = require('./book-evidence');
-const REPORTS = ['TrialBalance', 'BalanceSheet', 'ProfitAndLoss', 'AgedReceivables', 'AgedPayables'];
+const { evaluateReportSources, validDate } = require('./book-evidence');
+const { CRITICAL_REPORTS: REPORTS, packReport, MAX_SOURCE_BYTES } = require('./business-report-source');
 const ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_REPORT_UNVERIFIED' }); }
 // Fixed read-only report/query surface. Raw bounded sources are retained for audit;
 // totals agreeing never means that the company is realistic or bank-reconciled.
 function createBusinessReportReader({ access, now = () => Date.now(), purpose = 'operation' }) {
-  if (!['operation', 'baseline', 'preparation'].includes(purpose)) throw new TypeError('Choose an explicit report evidence purpose');
-  const action = purpose === 'baseline' ? 'baseline.capture' : purpose === 'preparation' ? 'operations.preview' : 'operations.verify';
+  if (!['operation', 'baseline', 'preparation', 'book'].includes(purpose)) throw new TypeError('Choose an explicit report evidence purpose');
+  const action = purpose === 'book' ? 'reports.observe' : purpose === 'baseline' ? 'baseline.capture' : purpose === 'preparation' ? 'operations.preview' : 'operations.verify';
   if ([access?.authorize, access?.resolveClient, now].some(fn => typeof fn !== 'function')) throw new TypeError('Report evidence needs scoped company access');
   return async function read(scope, period, { signal } = {}) {
     scope = scoped(scope);
@@ -29,24 +29,29 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
     try {
       check(); const actor = await call(() => access.authorize(scope, action, { signal: controller.signal })); check();
       if (!ID.test(actor?.actorId || '') || !ID.test(actor?.ownerId || '')) fail('Current report authority is required.');
-      const client = await call(() => access.resolveClient(scope, { signal: controller.signal })); check();
+      const client = await call(() => access.resolveClient(scope, { signal: controller.signal, reportsOnly: purpose === 'book' })); check();
       const { QBOClient } = require('./qbo-client');
       const guard = () => {
         const base = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
         if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall || client.query !== QBOClient.prototype.query || client.apiBase !== base || client.realmId !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active' || String(client.connection?.userId) !== actor.ownerId) fail('Report client changed company or owner.');
       };
-      guard(); const reports = {}, accounts = [], seen = new Set(); let bytes = 0, declared = null;
-      const retain = value => { const text = canonical(value); bytes += Buffer.byteLength(text); if (bytes > 6000000) fail('Report sources exceed the retained evidence budget.'); return JSON.parse(text); };
+      guard();
+      async function readCurrent(factory) {
+        const authorize = async () => { check(); guard(); const current = await call(() => access.authorize(scope, action, { signal: controller.signal })); check(); guard(); if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('Report authority changed during observation.'); };
+        await authorize(); const result = await call(factory); await authorize(); return result;
+      }
+      const reports = {}, accounts = [], seen = new Set(); let bytes = 0, declared = null;
+      const retain = value => { const text = canonical(value); bytes += Buffer.byteLength(text); if (bytes > MAX_SOURCE_BYTES) fail('Report sources exceed the retained evidence budget.'); return JSON.parse(text); };
       const jobs = REPORTS.map(name => async () => {
         const params = new URLSearchParams({ accounting_method: 'Accrual', start_date: fromDate, end_date: throughDate });
         if (name.startsWith('Aged')) params.set('report_date', throughDate);
-        check(); guard(); const report = await call(() => client.apiCall('GET', 'reports/' + name + '?' + params)); check(); guard();
+        check(); guard(); const report = await readCurrent(() => client.apiCall('GET', 'reports/' + name + '?' + params)); check(); guard();
         if (!report || Object.keys(report).some(key => !['Header', 'Columns', 'Rows'].includes(key))) fail('Report response is incomplete or contains unsupported warnings.');
-        reports[name] = retain(report);
+        reports[name] = retain(packReport(name, report));
       });
       jobs.push(async () => {
         for (let start = 1; start <= 4001; start += 1000) {
-          check(); guard(); const body = await call(() => client.query('SELECT * FROM Account WHERE Active IN (true, false) ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000')); check(); guard();
+          check(); guard(); const body = await readCurrent(() => client.query('SELECT * FROM Account WHERE Active IN (true, false) ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000')); check(); guard();
           if (!body || Object.keys(body).some(key => !['QueryResponse', 'time'].includes(key)) || !body.QueryResponse || Object.getPrototypeOf(body.QueryResponse) !== Object.prototype) fail('The complete account list is unavailable.');
           const page = body.QueryResponse, rows = page.Account === undefined ? [] : page.Account;
           if (Object.keys(page).some(key => !['Account', 'startPosition', 'maxResults', 'totalCount'].includes(key)) || !Array.isArray(rows) || rows.length > 1000 || (rows.length && page.startPosition !== start) || (page.startPosition !== undefined && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== rows.length)) fail('Account pagination is incomplete.');
@@ -62,9 +67,9 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       let next = 0; await Promise.all(Array.from({ length: 2 }, async () => { while (next < jobs.length) { check(); await jobs[next++](); } }));
       check(); guard(); const current = await call(() => access.authorize(scope, action, { signal: controller.signal })); check(); guard();
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('Report authority changed during observation.');
-      const evaluation = evaluateBooks(reports, { fromDate, throughDate }, {}, { records: accounts });
-      const source = { version: 1, scope, period: { fromDate, throughDate }, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), reports, accounts };
-      return { ...source, sourceHash: hash(source), evaluation };
+      const source = { version: 2, scope, period: { fromDate, throughDate }, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), reports, accounts };
+      if (Buffer.byteLength(canonical(source)) > MAX_SOURCE_BYTES) fail('The complete report source exceeds its retained evidence budget.');
+      return { ...source, sourceHash: hash(source), evaluation: evaluateReportSources(source) };
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
 }

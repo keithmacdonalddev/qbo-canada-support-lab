@@ -2,10 +2,10 @@
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { businessDate } = require('./business-activity-preview');
-const { evaluateBooks } = require('./book-evidence');
+const { evaluateReportSources } = require('./book-evidence');
+const { namesFor } = require('./business-report-source');
 const { validateInventoryObservation, inventorySummary, TYPES } = require('./business-record-inventory');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
-const REPORTS = ['TrialBalance', 'BalanceSheet', 'ProfitAndLoss', 'AgedReceivables', 'AgedPayables'];
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_BASELINE_UNVERIFIED' }); }
 function copy(value, max = 14000000) { let text; try { text = canonical(value); } catch { fail('Baseline evidence must contain plain JSON.'); } if (Buffer.byteLength(text) > max) fail('Baseline evidence exceeds its retained size budget.'); return JSON.parse(text); }
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
@@ -23,13 +23,13 @@ function evaluateSources(sources, scope, period, now, fresh) {
   sources = copy(sources, 7000000);
   const { sourceHash, evaluation: ignored, ...source } = sources;
   const start = stamp(source.startedAt), end = stamp(source.observedAt);
-  if (Object.keys(source).sort().join(',') !== 'accounts,observedAt,period,reports,scope,startedAt,version' || source.version !== 1 || !sameScope(source.scope, scope) || canonical(source.period) !== canonical(period) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || end < start || end - start > 180000 || (fresh && (end > now || now - start > 300000)) || !Array.isArray(source.accounts) || source.accounts.length > 4000 || !source.reports || canonical(Object.keys(source.reports).sort()) !== canonical([...REPORTS].sort())) fail('Complete scoped report sources and their observation interval are required.');
+  if (Object.keys(source).sort().join(',') !== 'accounts,observedAt,period,reports,scope,startedAt,version' || ![1, 2].includes(source.version) || !sameScope(source.scope, scope) || canonical(source.period) !== canonical(period) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || end < start || end - start > 180000 || (fresh && (end > now || now - start > 300000)) || !Array.isArray(source.accounts) || source.accounts.length > 4000 || !source.reports || canonical(Object.keys(source.reports).sort()) !== canonical([...namesFor(source.version)].sort())) fail('Complete scoped report sources and their observation interval are required.');
   const ids = new Set();
   for (const account of source.accounts) {
     if (!account || typeof account.Id !== 'string' || !/^\d{1,30}$/.test(account.Id) || typeof account.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(account.SyncToken) || typeof account.AccountType !== 'string' || !account.AccountType || ids.has(account.Id) || (account.sparse !== undefined && account.sparse !== false)) fail('The retained account source is incomplete or ambiguous.');
     ids.add(account.Id);
   }
-  return { sources: { ...source, sourceHash }, evaluation: copy(evaluateBooks(source.reports, source.period, {}, { records: source.accounts })) };
+  return { sources: { ...source, sourceHash }, evaluation: copy(evaluateReportSources(source)) };
 }
 function assertBaselineDocumentSize(row) {
   const size = require('mongoose').mongo.BSON.calculateObjectSize({ ...row, createdAt: new Date(), __v: 0 });

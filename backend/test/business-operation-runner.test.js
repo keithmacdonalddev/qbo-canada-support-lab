@@ -91,3 +91,10 @@ test('a worker replaced immediately before completion cannot advance the period'
   assert.equal(h.calendar().verifiedThrough, '2026-10-05');
   assert.equal(h.run().status, 'awaiting-evidence'); assert.equal(h.writes, 3);
 });
+
+test('cancellation as a successful opening check resolves never claims a worker lease', async () => {
+  const h = harness(), controller = new AbortController(); let claims = 0;
+  const run = require('../src/modules/business-operation-runner').createBusinessOperationRunner({state:{...h.state,claim:async(...args)=>{claims++;return h.state.claim(...args);}},plans:h.plans,steps:h.steps,dispatch:h.dispatch,periods:h.periods,prepareEvidence:h.prepareEvidence,validateOpening:async()=>{controller.abort();}});
+  const result = await run(scope,operationId,{signal:controller.signal});
+  assert.equal(result.state,'interrupted'); assert.equal(claims,0); assert.equal(h.run().leaseToken == null,true,'No worker lease was claimed'); assert.equal(h.run().status,'reserved'); assert.equal(h.writes,0); assert.equal(h.writer().operationId,operationId);
+});

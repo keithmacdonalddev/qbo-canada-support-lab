@@ -8,11 +8,13 @@ const { createBusinessTransaction } = require('./business-transaction');
 const { createBusinessAuditWriter } = require('./business-runtime-audit');
 const { createBusinessOperationPlanStore } = require('./business-operation-plan-store');
 const { validateBaselineObservation } = require('./business-baseline');
-const { evaluateBooks } = require('./book-evidence');
+const { evaluateReportSources } = require('./book-evidence');
+const { unpackReport } = require('./business-report-source');
+const { retainApprovalReports, readApprovalReports } = require('./business-approval-report-evidence');
 const { createBusinessInventoryReader, validateInventoryObservation } = require('./business-record-inventory');
 const { createBusinessReportReader } = require('./business-report-evidence');
 const { assertPeriodControl } = require('./qbo-write-period');
-const { financialSummary } = require('./business-financial-summary');
+const { financialSummary, reportComplete } = require('./business-financial-summary');
 const { createIncomeExpectation } = require('./business-income-evidence');
 const { readCanadianCompany } = require('./business-country');
 const { assertPublishedBusiness, assertAuthorityDocument } = require('./business-authority');
@@ -31,7 +33,7 @@ const { createBusinessPolicyAmendment } = require('./business-policy-amendment')
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_GOVERNANCE_REQUIRED' }); }
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function exact(input, keys) { if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join(',') !== [...keys].sort().join(',')) fail('Use the exact reviewed action without company or state overrides.', 400); }
-function reportHash(reports) { return hash(Object.fromEntries(Object.entries(reports).map(([key, report]) => { const copy = structuredClone(report); delete copy.Header?.Time; return [key, copy]; }))); }
+function reportHash(reports) { return hash(Object.fromEntries(Object.entries(reports).map(([key, report]) => { const copy = structuredClone(report?.encoding ? unpackReport(key, report, 2) : report); delete copy.Header?.Time; return [key, copy]; }))); }
 function createBusinessGovernanceService(dependencies = {}) {
   const connection = dependencies.connection || require('mongoose').connection;
   const models = dependencies.models || { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Candidates: require('../models/BusinessCandidate'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
@@ -76,8 +78,8 @@ function createBusinessGovernanceService(dependencies = {}) {
     const checked = validateBaselineObservation(baseline);
     const audit = await read(models.Audits, { _id: baseline.auditId, userId: ownerId, realmId: scope.realmId, action: 'Business baseline observation saved', outcome: 'success', 'afterState.evidenceHash': baseline.evidenceHash, 'afterState.sourceHash': baseline.payload.sourceHash, 'afterState.inventoryHash': baseline.inventorySources.sourceHash }, session);
     if (!audit) fail('The retained opening observation audit is unavailable.');
-    const acceptanceEvaluation = evaluateBooks(baseline.sources.reports, baseline.payload.period, {}, { records: baseline.sources.accounts }, { allowExplicitZero: true });
-    if (baseline.contractVersion !== 2 || checked.payload.purpose !== 'opening-balances' || checked.payload.blueprint.contentHash !== input.blueprintHash || acceptanceEvaluation.status !== 'checks-passed') fail('A complete opening observation with all accounting checks is required.');
+    const acceptanceEvaluation = evaluateReportSources(baseline.sources, { allowExplicitZero: true });
+    if (baseline.sources.version !== 2 || baseline.contractVersion !== 2 || checked.payload.purpose !== 'opening-balances' || checked.payload.blueprint.contentHash !== input.blueprintHash || acceptanceEvaluation.status !== 'checks-passed') fail('A complete opening observation with all accounting checks is required.');
     const blueprint = await read(models.Versions, { _id: checked.payload.blueprint.id, ...scope, contractVersion: 2, contentHash: input.blueprintHash }, session);
     if (!blueprint || !blueprint.auditId || hash(blueprint.definition) !== input.blueprintHash || checked.payload.period.throughDate !== shift(blueprint.definition.calendar.openingDate, -1)) fail('The opening evidence does not match this saved business.');
     const { policy, writer } = await coordination(bound, session), view = draftView(blueprint, scope.connectionId), definition = activityDefinition(view.business);
@@ -158,7 +160,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       return { published: true, authorityHash: contentHash, reused: false };
     });
   }
-  function planStore(bound) {
+  function planStore(bound, reportFence) {
     const { scope, access, actorId, ownerId } = bound;
     const writeAudit = createBusinessAuditWriter({ scope, actorId, ownerId, Audits: models.Audits, transaction, access });
     const checkCurrent = async ({ manifest, operationId, planHash, session }) => {
@@ -167,10 +169,12 @@ function createBusinessGovernanceService(dependencies = {}) {
       if (state.calendar.currentOperationId !== null) fail('An existing operation owns the calendar.');
       const current = await coordination(bound, session);
       if (current.policy.state !== 'active') fail('Enable company write coordination first.');
+      if (!reportFence || reportFence.operationId !== operationId || reportFence.planHash !== planHash || canonical(reportFence.scope) !== canonical(scope) || canonical(reportFence.period) !== canonical({ fromDate: manifest.fromDate, throughDate: manifest.throughDate }) || !HASH.test(reportFence.sourceHash || '') || now() < reportFence.observedAt || now() - reportFence.startedAt > 300000 || reportFence.policyRevision !== current.policy.revision || reportFence.writerRevision !== current.writer.revision || reportFence.calendarRevision !== state.calendar.revision || reportFence.authorityRevision !== state.calendar.authorityRevision || reportFence.calendarWriterRevision !== state.calendar.writerRevision || reportFence.authorityHash !== state.authority.contentHash) fail('The fresh seven-report approval observation or company state changed. Review approval again.');
+      const reportEvidence = await retainApprovalReports({ models, scope, operationId, planHash, actorId, ownerId, sources: reportFence.sources, session, now: now() });
       await touchCoordination(bound, current, session);
-      return { scope, operationId, planHash, actorId, expectedRevision: manifest.expectedRevision, fenceHash: hash({ authorityHash: state.authority.contentHash, manifest, periodControlHash: current.policy.periodControl.contentHash }) };
+      return { reportEvidence, scope, operationId, planHash, actorId, expectedRevision: manifest.expectedRevision, fenceHash: hash({ authorityHash: state.authority.contentHash, manifest, periodControlHash: current.policy.periodControl.contentHash, reportSourceHash: reportFence.sourceHash }) };
     };
-    return createBusinessOperationPlanStore({ ...models, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, loadCandidate: async (_scope, candidateHash, session) => {
+    return createBusinessOperationPlanStore({ ...models, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, verifyApproval: ({ run, session }) => readApprovalReports({ models, run, ownerId, session }), loadCandidate: async (_scope, candidateHash, session) => {
       const row = await read(models.Candidates, { ...scope, candidateHash }, session);
       if (!row || hash(row.payload) !== candidateHash || !row.auditId) fail('The exact server-prepared candidate is unavailable.');
       await assertPublishedBusiness({ ...models, scope, manifest: row.payload, session, fence: true });
@@ -221,6 +225,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const policies = await (dependencies.derivePolicies || deriveBusinessPolicies)(assembly, client, active.authority.contentHash, now());
     const boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
     const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
+    reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports);
     const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, startingReports.reports.ProfitAndLoss, startingReports.observedAt);
     const candidate = { ...boundCandidate.candidate, authorityHash: active.authority.contentHash, incomeExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
     await transaction(async session => {
@@ -235,20 +240,41 @@ function createBusinessGovernanceService(dependencies = {}) {
     });
     return store.prepare(scope, { requestKey: input.requestKey, candidateHash });
   }
+  function reportObservation(scope, period, value) {
+    const { sourceHash, evaluation: ignored, ...source } = value || {}, startedAt = Date.parse(source.startedAt), observedAt = Date.parse(source.observedAt);
+    if (source.version !== 2 || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical(period) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || !Number.isFinite(startedAt) || !Number.isFinite(observedAt) || observedAt < startedAt || observedAt > now() || now() - startedAt > 300000) fail('A fresh scoped seven-report observation is required before new business approval.');
+    const evaluation = evaluateReportSources(source, { allowExplicitZero: true });
+    if (evaluation.status !== 'checks-passed' || !reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before business writes.');
+    return { sourceHash, startedAt, observedAt };
+  }
   async function approve(user, operationId, input) {
     const bound = await bind(user, 'operations.execute', true);
     exact(input, bound.scope.environment === 'production' ? ['planHash', 'confirmProduction'] : ['planHash']);
     if (!ID.test(operationId || '') || !HASH.test(input.planHash || '') || (bound.scope.environment === 'production' && input.confirmProduction !== true)) fail('Approve the exact saved plan and explicitly confirm the real Production company.', 400);
-    return planStore(bound).approve(bound.scope, operationId, input.planHash, { confirmProduction: input.confirmProduction === true });
+    const { scope, access } = bound, run = await read(models.Runs, { _id: operationId, ...scope });
+    if (!run || run.planHash !== input.planHash) fail('The exact reviewed operation is unavailable.');
+    // Exact acknowledgement recovery reuses the already saved approval. Fresh
+    // provider reads belong outside Mongo transactions and only precede a new grant.
+    if (run.status !== 'previewed') return planStore(bound).approve(scope, operationId, input.planHash, { confirmProduction: input.confirmProduction === true });
+    const plan = await read(models.Plans, { _id: run.planId, ...scope, planHash: run.planHash });
+    if (!plan || hash(plan.manifest) !== input.planHash) fail('The immutable reviewed operation changed.');
+    const active = await assertPublishedBusiness({ ...models, scope, manifest: plan.manifest }), current = await coordination(bound);
+    const period = { fromDate: run.fromDate, throughDate: run.throughDate };
+    const reports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, period);
+    const observation = reportObservation(scope, period, reports);
+    const reportFence = { ...observation, sources: reports, scope, period, operationId, planHash: input.planHash, authorityHash: active.authority.contentHash, policyRevision: current.policy.revision, writerRevision: current.writer.revision, calendarRevision: active.calendar.revision, authorityRevision: active.calendar.authorityRevision, calendarWriterRevision: active.calendar.writerRevision };
+    return planStore(bound, reportFence).approve(scope, operationId, input.planHash, { confirmProduction: input.confirmProduction === true });
   }
   async function reviewOperation(user, operationId, offset = 0) {
     const bound = await bind(user, 'operations.preview'), store = planStore(bound);
     const page = await store.page(bound.scope, operationId, offset, 50);
     const run = await read(models.Runs, { _id: operationId, ...bound.scope });
     const plan = await read(models.Plans, { _id: run.planId, ...bound.scope });
+    const approvalReports = await readApprovalReports({ models, run, ownerId: bound.ownerId });
+    await bound.access.authorize(bound.scope, 'operations.preview');
     const rejected = await models.Steps.find({ ...bound.scope, operationId, state: 'rejected' }).limit(21).maxTimeMS(3000).lean();
     const uncertain = await models.Steps.find({ ...bound.scope, operationId, state: { $in: ['dispatched', 'unknown'] } }).limit(21).maxTimeMS(3000).lean();
-    return { ...page, uncertainActivities: uncertain.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.compilation ? JSON.parse(row.compilation.request.body).TxnDate : null })), rejectedActivities: rejected.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, faultCodes: row.rejection?.faultCodes || [] })), recoveryReason: run.lastError || null, queuedContinuation: run.executionRequest?.pending === true, scope: bound.scope, fromDate: plan.manifest.fromDate, throughDate: plan.manifest.throughDate, createCount: plan.manifest.createCount, requiredAssertions: plan.manifest.requiredAssertions,
+    return { ...page, approvalReports, uncertainActivities: uncertain.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.compilation ? JSON.parse(row.compilation.request.body).TxnDate : null })), rejectedActivities: rejected.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, faultCodes: row.rejection?.faultCodes || [] })), recoveryReason: run.lastError || null, queuedContinuation: run.executionRequest?.pending === true, scope: bound.scope, fromDate: plan.manifest.fromDate, throughDate: plan.manifest.throughDate, createCount: plan.manifest.createCount, requiredAssertions: plan.manifest.requiredAssertions,
       entries: page.entries.map(entry => ({ logicalKey: entry.step.logicalKey, kind: entry.kind, entity: entry.step.entity, txnDate: entry.step.txnDate, details: entry.step.details, expectedTaxCents: entry.policy.readbackTax?.totalTaxCents ?? null, references: entry.step.references.map(ref => ({ entity: ref.entity, key: ref.key, id: ref.id })), dependencies: entry.step.dependencies.map(link => ({ entity: link.entity, logicalKey: link.logicalKey })) })) };
   }
   const retirement = createBusinessOperationRetirement({ models, transaction, now, bind, fence });

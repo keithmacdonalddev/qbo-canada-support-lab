@@ -25,7 +25,7 @@ function harness() {
   h.data.Plans.push({ _id: planId, contractVersion: 1, ...scope, operationId, planHash, manifest, createdBy: actorId, auditId: 'retained-preparation' });
   h.data.Intents.push(...entries.map((entry, ordinal) => ({ _id: hash(entry.step).slice(0, 24), contractVersion: 1, ...scope, planId, planHash, ordinal, kind: entry.kind, step: entry.step, policy: entry.policy, logicalKey: entry.step.logicalKey, fingerprint: hash(entry.step) })));
   Object.assign(h.data.Calendars[0], { authorityHash, authorityRevision: 0, businessKey, blueprintHash, currentOperationId: null, verifiedThrough: run.expectedCursor, revision: 1, openingDate: '2026-10-01' }); Object.assign(h.writer(), { operationId: null, planHash: null }); h.data.Policies[0].preparationEvidenceHash = hash('prepared coordination');
-  h.posts = 0; h.gets = 0; const reports = reportsFixture(); for (const report of Object.values(reports)) report.Header.StartPeriod = run.fromDate;
+  h.posts = 0; h.gets = 0; const reports = reportsFixture({ critical: true }); for (const report of Object.values(reports)) report.Header.StartPeriod = run.fromDate;
   reports.TrialBalance.Rows.Row[0].ColData[0].id = '1'; reports.TrialBalance.Rows.Row[1].ColData[0].id = '2';
   h.onSend = async options => {
     if (h.beforeProvider) await h.beforeProvider(options);

@@ -1,8 +1,8 @@
 {
   "$schema": "./registry.schema.v1.json",
-  "catalogVersion": "1.0.0",
+  "catalogVersion": "1.0.1",
   "status": "discovery",
-  "asOfDate": "2026-08-09",
+  "asOfDate": "2026-10-15",
   "releasePolicy": {
     "unknownAllowedDuringDiscovery": true,
     "unknownAllowedAtRelease": false
@@ -335,6 +335,22 @@
       "url": "https://quickbooks.intuit.com/learn-support/en-ca/help-article/audit-log/use-audit-log-quickbooks-online/L2WoVnW6I_CA_en_CA",
       "accessedOn": "2026-08-09",
       "notes": "Canada admin-only Audit Log behavior, event scope, two-year availability, filters, and 150-row product pagination."
+    },
+    {
+      "id": "intuit.report-name-sdk",
+      "title": "ReportName SDK enumeration",
+      "publisher": "Intuit Developer",
+      "url": "https://static.developer.intuit.com/sdkdocs/qbv3doc/ipp-v3-java-devkit-javadoc/com/intuit/ipp/services/ReportName.html",
+      "accessedOn": "2026-10-15",
+      "notes": "Official SDK names GeneralLedger and CashFlow; connected-company availability remains separate."
+    },
+    {
+      "id": "intuit.report-modernization",
+      "title": "Reports modernization and GeneralLedger rollout response",
+      "publisher": "Intuit Developer Support",
+      "url": "https://help.developer.intuit.com/s/feed/0D5TR00001KebGJ0AZ",
+      "accessedOn": "2026-10-15",
+      "notes": "Intuit Developer Group response names GeneralLedger and CashFlow rollout; earlier GL truncation/migration limitations require independent completeness checks."
     }
   ],
   "capabilities": [
@@ -2123,11 +2139,11 @@
         "product": "QuickBooks Online Advanced",
         "locale": "CA",
         "status": "available",
-        "notes": "The current Reports API table names General Ledger Detail. Connected-company availability and populated output remain separate evidence states."
+        "notes": "GeneralLedger is named by the official SDK and Intuit modernization support response. Canadian connected-company availability, populated output and movement reconciliation remain separate evidence states."
       },
       "api": {
         "status": "supported",
-        "endpoint": "GeneralLedgerDetail",
+        "endpoint": "GeneralLedger",
         "parameters": [
           "start_date",
           "end_date",
@@ -2161,12 +2177,16 @@
       "uiNavigation": null,
       "coverageState": "unknown",
       "evidenceStatus": "documented",
-      "lastVerified": "2026-08-08",
+      "lastVerified": "2026-10-15",
       "sourceIds": [
         "intuit.api-overview",
-        "intuit.reports"
+        "intuit.reports",
+        "intuit.report-name-sdk",
+        "intuit.report-modernization"
       ],
-      "knownDiscrepancies": []
+      "knownDiscrepancies": [
+        "2026-10-15: the August catalog named GeneralLedgerDetail. Current SDK/support evidence names GeneralLedger, which the bounded runtime now requests. No alternate-endpoint fallback or live Canadian verification is claimed."
+      ]
     },
     {
       "key": "report.cash-flow",

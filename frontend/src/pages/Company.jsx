@@ -94,7 +94,7 @@ function Meter({ label, done, total }) {
 
 export default function Company() {
   const connection = useConnection()
-  const scope = [connection?.status?.realmId, connection?.environment, connection?.ready].join(':')
+  const scope = [connection?.status?.realmId, connection?.status?.connectionId, connection?.environment, connection?.ready].join(':')
   return <CompanyContent key={scope} connection={connection} />
 }
 
@@ -126,6 +126,7 @@ function CompanyContent({ connection }) {
 
   const status = connection?.status
   const coverageSummary = coverage.result?.summary
+  const manualChecks = (coverage.result?.areas || []).reduce((count, area) => count + area.signals.filter(signal => signal.status === 'manual').length, 0)
   const currency = companyReadiness({ ready, result: coverage.result, state: coverage.state, error: coverage.error })
 
   return (
@@ -181,7 +182,7 @@ function CompanyContent({ connection }) {
 
         <BusinessBaseline key={`baseline:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
-        <BookEvidence realmId={status?.realmId} enabled={ready} />
+        <BookEvidence realmId={status?.realmId} environment={connection?.environment} connectionId={status?.connectionId} enabled={ready} />
 
         <div className="mt-5 grid grid-cols-1 gap-5 md:grid-cols-3">
           <Panel title="Connection">
@@ -224,9 +225,9 @@ function CompanyContent({ connection }) {
               <CoverageUnavailable className="px-5 py-4" />
             ) : coverageSummary ? (
               <div className="flex flex-col gap-4 px-5 py-4">
-                <Meter label="Areas fully in use" done={coverageSummary.areas.covered || 0} total={coverageSummary.measuredAreas} />
+                <Meter label="Areas with all measured signals found" done={coverageSummary.areas.covered || 0} total={coverageSummary.measuredAreas} />
                 <p className="text-[12.5px] leading-relaxed text-[var(--ink-3)]">
-                  {coverageSummary.gaps.assistant} gaps the assistant can fill, {coverageSummary.gaps.quickbooks} to do in QuickBooks. Read from the company's own records.
+                  {coverageSummary.gaps.assistant} measured API signals are missing; {manualChecks} manual checks need evidence. Feature presence does not establish complete business history or reconciled reports.
                 </p>
               </div>
             ) : (

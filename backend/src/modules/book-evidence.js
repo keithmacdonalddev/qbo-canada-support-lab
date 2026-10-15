@@ -2,7 +2,7 @@
 
 // Read-only accounting evidence. A passing assertion proves only the named
 // relationship, not bank reconciliation, historical continuity, or business realism.
-const REPORTS = ['TrialBalance', 'BalanceSheet', 'ProfitAndLoss', 'AgedReceivables', 'AgedPayables'];
+const { LEGACY_REPORTS: REPORTS, CRITICAL_REPORTS, unpackReports } = require('./business-report-source');
 function validDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
     && Number.isFinite(Date.parse(value + 'T12:00:00Z'))
@@ -42,19 +42,28 @@ function assertion(key, label, left, right, reason) {
   const difference = left - right;
   return { key, label, status: difference === 0 ? 'passed' : 'failed', left: left / 100, right: right / 100, difference: difference / 100, tolerance: 0 };
 }
-function inspectReport(name, report, period, rows = rowsOf(report)) {
+function inspectReport(name, report, period, rows = rowsOf(report), strict = false) {
   if (!report?.Header || !report.Columns?.Column || !report.Rows) throw new Error('QuickBooks did not return a complete report.');
   const header = report.Header;
+  if (strict || ['GeneralLedger', 'CashFlow'].includes(name)) {
+    const columns = report.Columns.Column;
+    if (['ReportName', 'StartPeriod', 'EndPeriod', 'Currency', 'ReportBasis'].some(key => header[key] !== undefined && header[key] !== null && typeof header[key] !== 'string')) throw new Error('The report header has an unsupported identity or accounting scope.');
+    const cellsMatch = (cells, section) => Array.isArray(cells) && cells.length >= 1 && (section ? cells.length <= columns.length : cells.length === columns.length) && cells.every(cell => cell && typeof cell.value === 'string' && (cell.id === undefined || typeof cell.id === 'string'));
+    const warning = /^(?:Unable to display more data[.!]?(?:\s+Please reduce the date range[.!]?)?|Please reduce the date range[.!]?)$/i;
+    if (rows.some(row => [row.ColData, row.Header?.ColData, row.Summary?.ColData].filter(Array.isArray).some(cells => cells.some(cell => typeof cell?.value === 'string' && warning.test(cell.value.trim()))))) throw new Error('QuickBooks reports that this response is truncated. Shorten the period.');
+    if (!Array.isArray(columns) || columns.length < 2 || columns.length > 32 || columns.some(column => !column || typeof column.ColTitle !== 'string') || rows.some(row => (row.ColData !== undefined && !cellsMatch(row.ColData, Boolean(row.Header || row.Summary))) || (row.Header !== undefined && !cellsMatch(row.Header?.ColData, true)) || (row.Summary !== undefined && !cellsMatch(row.Summary?.ColData, true)))) throw new Error('The detail report columns, data and section cells do not match a supported complete layout.');
+  }
   const empty = (header.Option || []).some(option => option.Name === 'NoReportData' && String(option.Value) === 'true')
     || !rows.some(row => row.ColData && !row.Summary && !row.Header);
   const periodMatches = header.EndPeriod === period.throughDate
-    && (name !== 'ProfitAndLoss' || header.StartPeriod === period.fromDate);
+    && (!['ProfitAndLoss', 'GeneralLedger', 'CashFlow'].includes(name) || header.StartPeriod === period.fromDate);
   // Aging reports return open balances at report_date and may omit ReportBasis.
   // Do not invent a basis: record the distinct evidence type explicitly.
   const aging = name === 'AgedReceivables' || name === 'AgedPayables';
-  const basisMatches = aging ? [undefined, null, '', 'Accrual'].includes(header.ReportBasis) : header.ReportBasis === 'Accrual';
+  const cashFlow = name === 'CashFlow';
+  const basisMatches = aging || cashFlow ? [undefined, null, '', 'Accrual'].includes(header.ReportBasis) : header.ReportBasis === 'Accrual';
   return { name, status: empty ? 'empty' : 'populated', startDate: header.StartPeriod || null,
-    throughDate: header.EndPeriod || null, basis: header.ReportBasis || null, evidenceType: aging ? 'open-balances-at-date' : 'accrual-ledger', currency: header.Currency || null,
+    throughDate: header.EndPeriod || null, basis: header.ReportBasis || null, evidenceType: aging ? 'open-balances-at-date' : cashFlow ? 'cash-movement-statement' : name === 'GeneralLedger' ? 'ledger-detail' : 'accrual-ledger', currency: header.Currency || null,
     dataRows: rows.filter(row => row.ColData && !row.Summary && !row.Header).length,
     scopeMatches: periodMatches && basisMatches && header.ReportName === name,
     columns: report.Columns.Column.map(column => column.ColTitle || ''),
@@ -68,7 +77,8 @@ function explicitZeroReport(report) {
   if (rows.some(row => row.ColData && !row.Header && !row.Summary)) return false;
   return rows.every(row => [row.ColData, row.Summary?.ColData, row.Header?.ColData].filter(Boolean).every(cells => cells.slice(1).every(cell => !cell.value || money(cell.value) === 0)));
 }
-function evaluateBooks(reports, period, failures = {}, accountSource, { allowExplicitZero = false } = {}) {
+function evaluateBooks(reports, period, failures = {}, accountSource, { allowExplicitZero = false, includeCritical = false } = {}) {
+  const requiredReports = includeCritical ? CRITICAL_REPORTS : REPORTS;
   const observed = [];
   const usable = {};
   const flattened = new Map();
@@ -77,10 +87,10 @@ function evaluateBooks(reports, period, failures = {}, accountSource, { allowExp
     if (!flattened.has(report)) flattened.set(report, rowsOf(report));
     return flattened.get(report);
   }
-  for (const name of REPORTS) {
+  for (const name of requiredReports) {
     try {
       if (failures[name]) throw new Error(failures[name]);
-      const evidence = inspectReport(name, reports[name], period, reportRows(reports[name]));
+      const evidence = inspectReport(name, reports[name], period, reportRows(reports[name]), includeCritical);
       observed.push(evidence);
       if ((evidence.status === 'populated' || (allowExplicitZero && explicitZeroReport(reports[name]))) && evidence.scopeMatches && evidence.currency === 'CAD') usable[name] = reports[name];
     } catch (error) { observed.push({ name, status: 'unavailable', error: error.message }); }
@@ -127,30 +137,23 @@ function evaluateBooks(reports, period, failures = {}, accountSource, { allowExp
   checks.push(assertion('receivables', 'Receivables agree with the ledger', ledgerBalance('Accounts Receivable', false) ?? totalFor(bs, 'AccountsReceivable', reportRows(bs)), agingTotal(usable.AgedReceivables), 'Neither exact receivable account rows nor an unambiguous balance-sheet receivable total could be matched to aging.'));
   checks.push(assertion('payables', 'Payables agree with the ledger', ledgerBalance('Accounts Payable', true) ?? totalFor(bs, 'AccountsPayable', reportRows(bs)), agingTotal(usable.AgedPayables), 'Neither exact payable account rows nor an unambiguous balance-sheet payable total could be matched to aging.'));
 
+  const missingReports = requiredReports.filter(name => !usable[name]);
   return { period: { ...period, basis: 'Accrual', currency: 'CAD' }, reports: observed, checks,
-    status: checks.some(check => check.status === 'failed') ? 'differences-found' : checks.every(check => check.status === 'passed') ? 'checks-passed' : 'verification-incomplete',
+    ...(includeCritical ? { reportCoverage: { version: 1, required: requiredReports.length, available: requiredReports.length - missingReports.length, complete: missingReports.length === 0, missing: missingReports, meaning: 'Availability and supported accounting scope; ledger movements, cash-flow reconciliation and business realism need separate checks.' } } : {}),
+    status: checks.some(check => check.status === 'failed') ? 'differences-found' : checks.every(check => check.status === 'passed') && (!includeCritical || missingReports.length === 0) ? 'checks-passed' : 'verification-incomplete',
     reconciled: false, calendarVerified: false,
     limitation: 'These checks do not confirm bank reconciliation, a closed period, or complete business activity.' };
 }
-async function readBookEvidence(qbo, { fromDate, throughDate, today }) {
-  if (![fromDate, throughDate, today].every(validDate) || fromDate > throughDate || throughDate > today
-    || Date.parse(throughDate) - Date.parse(fromDate) > 366 * 86400000) {
-    throw Object.assign(new Error('Choose a valid period of at most one year, ending no later than today.'), { status: 400 });
-  }
-  const reports = {};
-  const failures = {};
-  const accountRead = require('./coverage').readSource(qbo, 'accounts', null, { pages: 4, records: 4000, deadline: Date.now() + 60000 });
-  let next = 0;
-  await Promise.all(Array.from({ length: 2 }, async () => {
-    while (next < REPORTS.length) {
-      const name = REPORTS[next++];
-      const params = new URLSearchParams({ accounting_method: 'Accrual', start_date: fromDate, end_date: throughDate });
-      if (name.startsWith('Aged')) params.set('report_date', throughDate);
-      try { reports[name] = await qbo.apiCall('GET', 'reports/' + name + '?' + params.toString()); }
-      catch { failures[name] = 'QuickBooks could not return this report. Retry the check.'; }
-    }
-  }));
-  const accounts = await accountRead;
-  return { checkedAt: new Date().toISOString(), ...evaluateBooks(reports, { fromDate, throughDate }, failures, accounts) };
+function evaluateReportSources(sources, { allowExplicitZero = false } = {}) {
+  const reports = unpackReports(sources);
+  return evaluateBooks(reports, sources.period, {}, { records: sources.accounts }, { allowExplicitZero, includeCritical: sources.version === 2 });
 }
-module.exports = { readBookEvidence, evaluateBooks, validDate, money, rowsOf, explicitZeroReport };
+async function readBookEvidence(access, scope, { fromDate, throughDate }, { signal, now = () => Date.now() } = {}) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now()));
+  if (![fromDate, throughDate, today].every(validDate) || fromDate > throughDate || throughDate > today || Date.parse(throughDate) - Date.parse(fromDate) > 366 * 86400000) throw Object.assign(new Error('Choose a valid period of at most one year, ending no later than today.'), { status: 400 });
+  const { createBusinessReportReader } = require('./business-report-evidence');
+  const source = await createBusinessReportReader({ access, now, purpose: 'book' })(scope, { fromDate, throughDate }, { signal });
+  await access.authorize(scope, 'reports.observe', { signal });
+  return { checkedAt: source.observedAt, ...evaluateReportSources(source, { allowExplicitZero: true }) };
+}
+module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport };

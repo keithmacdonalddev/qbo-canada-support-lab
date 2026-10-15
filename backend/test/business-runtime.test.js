@@ -17,7 +17,7 @@ test('preparing coordination and missing preparation proof cannot create a marke
   }
 });
 test('policy transition during compilation is fenced before dispatch marker', async () => {
-  const h = harness(); h.beforeProvider = async options => { if (options.method === 'GET') h.data.Policies[0].state = 'preparing'; };
+  const h = harness(); h.beforeProvider = async options => { if (options.method === 'GET' && /\/(?:customer|vendor|item|account|taxcode|employee)\/\d+$/.test(new URL(options.url).pathname)) h.data.Policies[0].state = 'preparing'; };
   const result = await h.runtime.execute(); assert.equal(result.complete, false); assert.equal(h.posts, 0); assert.equal(h.data.Steps[0].state, 'claimed'); assert.equal(h.writer().unresolved, null);
 });
 test('revoked membership and changed company prevent execution', async () => {
@@ -40,4 +40,13 @@ test('default model loading rejects missing legacy registrations without registe
   const mongoose = require('mongoose'), { loadModels } = require('../src/modules/business-runtime'), original = mongoose.models.User;
   delete mongoose.models.User; const names = Object.keys(mongoose.models).sort();
   try { assert.throws(loadModels, /registered/); assert.deepEqual(Object.keys(mongoose.models).sort(), names); } finally { if (original) mongoose.models.User = original; }
+});
+
+test('coordination transition during starting reports cannot reserve a dispatch marker', async () => {
+  const h = harness(); h.beforeProvider = async options => { if (options.method === 'GET' && options.url.includes('/reports/')) h.data.Policies[0].state = 'preparing'; };
+  const result = await h.runtime.execute(); assert.equal(result.complete, false); assert.equal(h.posts, 0); assert.equal(h.data.Steps.length, 0); assert.equal(h.writer().unresolved, null);
+});
+test('cancellation during the starting observation retains the reserved unsent run without a worker lease', async () => {
+  const h = harness(), controller = new AbortController(); h.beforeProvider = async options => { if (options.url.includes('/reports/')) controller.abort(); };
+  const result = await h.runtime.execute({signal:controller.signal}); assert.equal(result.state, 'interrupted'); assert.equal(result.complete, false); assert.equal(h.posts, 0); assert.equal(h.data.Steps.length, 0); assert.equal(h.data.Runs[0].leaseToken == null, true, 'No worker lease was claimed');
 });

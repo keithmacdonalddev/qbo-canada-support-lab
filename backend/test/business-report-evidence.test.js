@@ -9,7 +9,7 @@ const config = require('../src/config'), previous = config.qbo.environment;
 test.before(() => { config.qbo.environment = 'sandbox'; }); test.after(() => { config.qbo.environment = previous; });
 const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) }, actorId = 'b'.repeat(24), ownerId = 'c'.repeat(24);
 function harness() {
-  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), reports: fixture(), calls: [], accounts: [{ Id: '1', SyncToken: '0', AccountType: 'Accounts Receivable' }, { Id: '2', SyncToken: '0', AccountType: 'Accounts Payable' }], reads: 0 };
+  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), reports: fixture({ critical: true }), calls: [], accounts: [{ Id: '1', SyncToken: '0', AccountType: 'Accounts Receivable' }, { Id: '2', SyncToken: '0', AccountType: 'Accounts Payable' }], reads: 0 };
   h.reports.TrialBalance.Rows.Row[0].ColData[0].id = '1'; h.reports.TrialBalance.Rows.Row[1].ColData[0].id = '2';
   h.client = Object.create(QBOClient.prototype);
   Object.assign(h.client, { connection: { _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' }, realmId: scope.realmId, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, oauthClient: { makeApiCall: async options => {
@@ -24,9 +24,9 @@ function harness() {
 }
 test('retains full scoped report sources with reproducible hash and named checks', async () => {
   const h = harness(), result = await h.read();
-  assert.equal(result.evaluation.status, 'checks-passed'); assert.equal(h.calls.length, 6); assert.ok(h.calls.every(row => row.method === 'GET'));
+  assert.equal(result.evaluation.status, 'checks-passed'); assert.equal(h.calls.length, 8); assert.ok(h.calls.every(row => row.method === 'GET'));
   assert.ok(h.calls.some(row => decodeURIComponent(row.url).includes('Active IN (true, false)')));
-  const { sourceHash, evaluation, ...source } = result; assert.equal(sourceHash, hash(source)); assert.equal(Object.keys(source.reports).length, 5);
+  const { sourceHash, evaluation, ...source } = result; assert.equal(sourceHash, hash(source)); assert.equal(Object.keys(source.reports).length, 7);
 });
 test('wrong company or substituted transport is rejected before provider access', async () => {
   for (const mutate of [h => { h.client.connection.realmId = '456'; }, h => { h.client.connection.userId = actorId; }, h => { h.client.query = async () => ({}); }, h => { h.client.connection.status = 'inactive'; }]) {
@@ -60,6 +60,6 @@ test('baseline report purpose is fixed by trusted composition and cannot authori
   h.access.authorize = async (_scope, action) => { actions.push(action); assert.equal(action, 'baseline.capture'); return { actorId, ownerId }; };
   const read = createBusinessReportReader({ access: h.access, now: () => h.clock, purpose: 'baseline' });
   const result = await read(scope, period, { purpose: 'operation', action: 'operations.verify' });
-  assert.equal(result.evaluation.status, 'checks-passed'); assert.deepEqual(actions, ['baseline.capture', 'baseline.capture']);
+  assert.equal(result.evaluation.status, 'checks-passed'); assert.equal(actions.length, 18); assert.ok(actions.every(action => action === 'baseline.capture'));
   assert.throws(() => createBusinessReportReader({ access: h.access, purpose: 'arbitrary' }), /purpose/);
 });

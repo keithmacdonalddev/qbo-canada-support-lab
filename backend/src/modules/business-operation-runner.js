@@ -16,7 +16,15 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
     if (['stopped', 'retired'].includes(current.status)) return result(current);
     if (signal?.aborted) return result(current, 'interrupted');
     if (current.status === 'approved') { await periods.reserve(operationId, scope); current = await state.inspect(scope, operationId); }
-    if (current.nextOrdinal === 0) await validateOpening({ scope, operationId, signal });
+    if (current.nextOrdinal === 0) {
+      if (signal?.aborted) return result(current, 'interrupted');
+      try { await validateOpening({ scope, operationId, signal }); }
+      catch (error) {
+        if (signal?.aborted) return result(await state.inspect(scope, operationId), 'interrupted');
+        throw error;
+      }
+    }
+    if (signal?.aborted) return result(await state.inspect(scope, operationId), 'interrupted');
     current = await state.claim(scope, operationId); leaseToken = current.leaseToken;
     const planHash = current.planHash;
     const reconcileOutstanding = async () => {

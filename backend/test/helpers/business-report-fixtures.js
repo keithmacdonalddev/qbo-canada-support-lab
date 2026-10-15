@@ -5,7 +5,7 @@ const cell = value => ({ value });
 const data = (id, debit, credit) => ({ type: 'Data', ColData: [{ id, value: id }, cell(debit), cell(credit)] });
 const total = (group, values) => ({ type: 'Section', group, Summary: { ColData: values.map(cell) } });
 const report = (columns, rows) => ({ Header: { ...header }, Columns: { Column: columns.map(ColTitle => ({ ColTitle })) }, Rows: { Row: rows } });
-function fixture() {
+function fixture({ critical = false } = {}) {
   const reports = {
     TrialBalance: report(['Account', 'Debit', 'Credit'], [data('ar', '100.00', ''), data('ap', '', '50.00'), data('other', '', '50.00'), total('GrandTotal', ['TOTAL', '100.00', '100.00'])]),
     BalanceSheet: report(['Account', 'Total'], [data('bank', '100.00', ''), total('Assets', ['Total Assets', '100.00']), total('LiabilitiesAndEquity', ['Total Liabilities and Equity', '100.00'])]),
@@ -13,6 +13,11 @@ function fixture() {
     AgedReceivables: report(['Name', 'Current', 'Total'], [data('customer', '100.00', '100.00'), total('GrandTotal', ['TOTAL', '100.00', '100.00'])]),
     AgedPayables: report(['Name', 'Current', 'Total'], [data('vendor', '50.00', '50.00'), total('GrandTotal', ['TOTAL', '50.00', '50.00'])]),
   };
+  if (critical) {
+    for (const name of ['BalanceSheet','ProfitAndLoss']) for (const row of reports[name].Rows.Row) if (row.ColData) row.ColData = row.ColData.slice(0,2);
+    reports.GeneralLedger = report(['Account', 'Debit', 'Credit'], [data('ar', '100.00', ''), data('ap', '', '50.00'), data('other', '', '50.00')]);
+    reports.CashFlow = report(['Activity', 'Total'], ['0.00', '100.00', '100.00'].map((value,i)=>({ColData:[{value:['Opening cash','Net change','Closing cash'][i]},{value}]})));
+  }
   for (const [name, result] of Object.entries(reports)) result.Header.ReportName = name;
   return reports;
 }

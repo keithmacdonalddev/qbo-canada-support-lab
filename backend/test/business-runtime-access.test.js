@@ -49,7 +49,8 @@ test('legacy owner role retains read access only and never grants execution', as
   assert.equal((await h.access.authorize(scope, 'operations.read')).source, 'legacy-role-bridge');
   assert.equal((await h.access.authorize(scope, 'baseline.read')).source, 'legacy-role-bridge');
   assert.equal((await h.access.authorize(scope, 'baseline.review')).source, 'legacy-role-bridge');
-  for (const action of Object.keys(ACTIONS).filter(action => !['operations.read', 'baseline.read', 'baseline.review'].includes(action))) await assert.rejects(h.access.authorize(scope, action), /permission/);
+  assert.equal((await h.access.authorize(scope, 'reports.observe')).source, 'legacy-role-bridge');
+  for (const action of Object.keys(ACTIONS).filter(action => !['operations.read', 'baseline.read', 'baseline.review', 'reports.observe'].includes(action))) await assert.rejects(h.access.authorize(scope, action), /permission/);
 });
 test('suspended or retired memberships cannot fall back to legacy owner access', async () => {
   for (const status of ['suspended', 'retired']) { const h = harness(false); h.data.Memberships[0].status = status; await assert.rejects(h.access.authorize(scope, 'operations.read'), /membership/); }
@@ -115,4 +116,17 @@ test('inventory review needs QBO data read without granting capture or execution
   await h.access.authorize(scope, 'baseline.read'); await assert.rejects(h.access.authorize(scope, 'baseline.review'), /permission/);
   h.data.Memberships[0].permissionOverrides = ['qbo_data.read']; await h.access.authorize(scope, 'baseline.review');
   await assert.rejects(h.access.authorize(scope, 'baseline.capture'), /permission/); await assert.rejects(h.access.authorize(scope, 'operations.execute'), /permission/);
+});
+
+test('report-only readers cannot gain record or operation authority and remain current across resolution', async () => {
+  const h = harness(); h.data.Memberships[0].role = 'reviewer';
+  assert.equal((await h.access.authorize(scope, 'reports.observe')).actorId, actorId);
+  await h.access.resolveClient(scope, { reportsOnly: true }); assert.equal(h.clients, 1);
+  await assert.rejects(h.access.authorize(scope, 'operations.read'), /permission/);
+  await assert.rejects(h.access.authorize(scope, 'operations.execute'), /permission/);
+  await assert.rejects(h.access.resolveClient(scope), /permission/); assert.equal(h.clients, 1);
+  const revoked = harness(); revoked.data.Memberships[0].role = 'reviewer'; revoked.onClient = () => { revoked.data.Memberships[0].status = 'suspended'; };
+  await assert.rejects(revoked.access.resolveClient(scope, { reportsOnly: true }), /membership/);
+  const switched = harness(); switched.data.Memberships[0].role = 'reviewer'; switched.onClient = () => { switched.data.Connections[0]._id = 'e'.repeat(24); };
+  await assert.rejects(switched.access.resolveClient(scope, { reportsOnly: true }), /connection/);
 });

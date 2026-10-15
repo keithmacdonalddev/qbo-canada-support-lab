@@ -1,8 +1,8 @@
 # Test Data Lab Capability and Report Catalog
 
-**Catalog:** 1.0.0
+**Catalog:** 1.0.1
 **Status:** Discovery
-**As of:** 2026-08-09
+**As of:** 2026-10-15
 **Authority:** `catalog.v1.json` validated by `registry.schema.v1.json`
 
 This is a human-readable view of the versioned JSON catalog. Run `npm run render:discovery` after catalog changes.
@@ -53,7 +53,7 @@ Operation abbreviations are Read, Create, Update, Delete, and Void. `Unknown` me
 | `report.balance-sheet` | Critical | Financial | Available | API: BalanceSheet | Unknown |
 | `report.profit-and-loss` | Critical | Financial | Available | API: ProfitAndLoss | Unknown |
 | `report.trial-balance` | Critical | Financial | Available | API: TrialBalance | Unknown |
-| `report.general-ledger` | Critical | Financial | Available | API: GeneralLedgerDetail | Unknown |
+| `report.general-ledger` | Critical | Financial | Available | API: GeneralLedger | Unknown |
 | `report.cash-flow` | Critical | Cash | Available | API: CashFlow | Unknown |
 | `report.ar-aging` | Critical | Receivables | Available | API: AgedReceivables | Unknown |
 | `report.ap-aging` | Critical | Payables | Available | API: AgedPayables | Unknown |
@@ -157,6 +157,8 @@ Operation abbreviations are Read, Create, Update, Delete, and Void. `Unknown` me
 - [Run an uncleared cheque report in QuickBooks Online](https://quickbooks.intuit.com/learn-support/en-ca/help-article/pay-bills/run-report-uncleared-cheques/L5VCVXTIE_CA_en_CA) — Intuit; accessed 2026-08-09. Canada account-report procedure for sorting and filtering transactions by cleared status.
 - [Find, review, and edit transactions in account history](https://quickbooks.intuit.com/learn-support/en-ca/help-article/bank-registers/find-review-edit-transactions-account-history/L2zTRtQRZ_CA_en_CA) — Intuit; accessed 2026-08-09. Canada account history navigation, filters, sorting, and reconciliation-status behavior.
 - [Use the audit log in QuickBooks Online](https://quickbooks.intuit.com/learn-support/en-ca/help-article/audit-log/use-audit-log-quickbooks-online/L2WoVnW6I_CA_en_CA) — Intuit; accessed 2026-08-09. Canada admin-only Audit Log behavior, event scope, two-year availability, filters, and 150-row product pagination.
+- [ReportName SDK enumeration](https://static.developer.intuit.com/sdkdocs/qbv3doc/ipp-v3-java-devkit-javadoc/com/intuit/ipp/services/ReportName.html) — Intuit Developer; accessed 2026-10-15. Official SDK names GeneralLedger and CashFlow; connected-company availability remains separate.
+- [Reports modernization and GeneralLedger rollout response](https://help.developer.intuit.com/s/feed/0D5TR00001KebGJ0AZ) — Intuit Developer Support; accessed 2026-10-15. Intuit Developer Group response names GeneralLedger and CashFlow rollout; earlier GL truncation/migration limitations require independent completeness checks.
 
 ## Related artifacts
 

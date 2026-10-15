@@ -5,11 +5,13 @@ const { createBusinessPeriodEvidence } = require('../src/modules/business-period
 const { createBusinessPeriodStore } = require('../src/modules/business-period-store');
 const { harness: runnerHarness, scope, operationId, hash, clone } = require('./helpers/business-run-fixture');
 const { fixture, accounts } = require('./helpers/business-report-fixtures');
+const { packReport, unpackReports } = require('../src/modules/business-report-source');
 function harness(count = 3, requirements = [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, { key: 'trial-balance', evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' }]) {
   const h = runnerHarness(count, requirements); h.sourceCalls = 0;
   h.reportSources = () => {
-    const reports = fixture(); for (const report of Object.values(reports)) report.Header.StartPeriod = h.run().fromDate;
-    const source = { version: 1, scope, period: { fromDate: h.run().fromDate, throughDate: h.run().throughDate }, startedAt: new Date(h.clock).toISOString(), observedAt: new Date(h.clock).toISOString(), reports, accounts: accounts.records };
+    const reports = fixture({ critical: true }); for (const report of Object.values(reports)) report.Header.StartPeriod = h.run().fromDate;
+    for (const name of ['GeneralLedger', 'CashFlow']) reports[name] = packReport(name, reports[name]);
+    const source = { version: 2, scope, period: { fromDate: h.run().fromDate, throughDate: h.run().throughDate }, startedAt: new Date(h.clock).toISOString(), observedAt: new Date(h.clock).toISOString(), reports, accounts: accounts.records };
     return { ...source, sourceHash: hash(source) };
   };
   const verifyGraph = h.steps.verifyGraph;
@@ -80,11 +82,11 @@ test('runner and collector complete using the concrete scoped report reader', as
     const accounts = [{ Id: '1', SyncToken: '0', AccountType: 'Accounts Receivable' }, { Id: '2', SyncToken: '0', AccountType: 'Accounts Payable' }];
     Object.assign(client, { realmId: scope.realmId, connection: { _id: scope.connectionId, realmId: scope.realmId, userId: 'd'.repeat(24), status: 'active' }, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, oauthClient: { makeApiCall: async options => {
       calls.push(options); const name = new URL(options.url).pathname.split('/').at(-1);
-      return { status: 200, json: name === 'query' ? { QueryResponse: { Account: accounts, startPosition: 1, maxResults: 2 } } : sources.reports[name] };
+      return { status: 200, json: name === 'query' ? { QueryResponse: { Account: accounts, startPosition: 1, maxResults: 2 } } : unpackReports(sources)[name] };
     } } });
     const reader = createBusinessReportReader({ access: { authorize: async () => ({ actorId: 'c'.repeat(24), ownerId: 'd'.repeat(24) }), resolveClient: async () => client }, now: () => h.clock });
     h.onReport = () => reader(scope, sources.period);
-    assert.equal((await h.execute()).complete, true); assert.equal(calls.length, 6); assert.ok(calls.every(call => call.method === 'GET'));
+    assert.equal((await h.execute()).complete, true); assert.equal(calls.length, 8); assert.ok(calls.every(call => call.method === 'GET'));
     assert.equal(h.data.Evidence[0].proof.assertions.length, 2); assert.equal(h.data.Evidence[0].sources.accounts.length, 2);
   } finally { config.qbo.environment = previous; }
 });
@@ -115,4 +117,40 @@ test('retained evidence model rejects ordinary replacement and deletion without 
   const Model = require('../src/models/OperationEvidence');
   assert.equal(Model.schema.options.autoCreate, false); assert.equal(Model.schema.options.autoIndex, false);
   for (const action of [() => Model.updateOne({}, {}), () => Model.replaceOne({}, {}), () => Model.deleteMany({}), () => Model.findOneAndUpdate({}, {}), () => Model.findOneAndDelete({})]) await assert.rejects(action(), /append-only/);
+});
+
+function historicalFiveReportProof(h) {
+  const row = h.data.Evidence[0], raw = row.sources;
+  delete raw.sourceHash; raw.version = 1; delete raw.reports.GeneralLedger; delete raw.reports.CashFlow;
+  const sourceHash = hash(raw); raw.sourceHash = sourceHash;
+  for (const assertion of row.proof.assertions) if (assertion.evidenceType !== 'record-readback') assertion.sourceHash = sourceHash;
+  row.evidenceHash = hash(row.proof); h.run().verificationCandidateHash = row.evidenceHash;
+  return row;
+}
+test('historical five-report proof cannot advance a pending period but committed recovery preserves its meaning', async () => {
+  const h = harness(), finish = h.periods.finish;
+  h.periods.finish = async () => { throw Error('Fixture interrupted before calendar commit'); };
+  assert.equal((await h.execute()).complete, false); h.periods.finish = finish;
+  const row = historicalFiveReportProof(h), before = structuredClone(h.calendar());
+  h.run().status = 'awaiting-evidence'; h.run().leaseToken = null; h.run().leaseExpiresAt = null;
+  await assert.rejects(h.collector.loadProof(h.run()), /fresh seven-report/);
+  await assert.rejects(h.periods.finish(operationId, scope), /fresh seven-report/); assert.deepEqual(h.calendar(), before);
+  // Recreate a coherent historical v1 commit, with its own exact prepared and
+  // committed audit chain. No previous v2 cursor or committed audit is reused.
+  const validation = require('../src/modules/business-period-store').validatePeriodProof(h.run(), row.proof, h.clock);
+  const baseAudit = h.writeAudit, exactAudit = async (eventKey, details) => {
+    const existing = h.audits.find(value => value.eventKey === eventKey);
+    if (existing) assert.deepEqual(existing.details, details, 'idempotent audit metadata is exact');
+    return baseAudit(eventKey, details);
+  };
+  const actorId = h.run().approval.actorId;
+  const prepared = await exactAudit('business-period:' + operationId + ':prepared:' + validation.evidenceHash, {...scope,actorId,action:'Business period verification prepared',operationId,evidenceHash:validation.evidenceHash});
+  h.run().status = 'committing'; h.calendar().verifiedThrough = h.run().throughDate; h.calendar().revision++;
+  h.calendar().pendingCommit = {operationId,planHash:h.run().planHash,blueprintHash:h.run().blueprintHash,...validation,actorId,preparedAuditId:prepared.id,committedAt:new Date(h.clock).toISOString()};
+  assert.equal(hash(await h.collector.loadProof(h.run())), row.evidenceHash, 'committed original five-report proof remains inspectable');
+  const revision = h.calendar().revision, writes = h.writes, reads = h.sourceCalls;
+  const recovery = createBusinessPeriodStore({...h.models,Writer:h.writerFence,transaction:h.transaction,authorize:h.authorize,assertReady:h.assertReady,writeAudit:exactAudit,loadProof:async()=>{throw Error('Committed recovery must not recollect reports');},now:()=>h.clock});
+  await recovery.repair(scope, operationId);
+  assert.equal(h.run().status, 'verified'); assert.equal(h.calendar().pendingCommit, null); assert.equal(h.calendar().revision, revision); assert.equal(h.writes, writes); assert.equal(h.sourceCalls, reads);
+  assert.equal(h.data.Evidence[0].sources.version, 1);
 });

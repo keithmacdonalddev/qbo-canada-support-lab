@@ -8,7 +8,7 @@ const cell = value => ({ value });
 const data = (id, debit, credit) => ({ type: 'Data', ColData: [{ id, value: id }, cell(debit), cell(credit)] });
 const total = (group, values) => ({ type: 'Section', group, Summary: { ColData: values.map(cell) } });
 const report = (columns, rows) => ({ Header: { ...header }, Columns: { Column: columns.map(ColTitle => ({ ColTitle })) }, Rows: { Row: rows } });
-function fixture() {
+function fixture(critical = false) {
   const reports = {
     TrialBalance: report(['Account', 'Debit', 'Credit'], [data('ar', '100.00', ''), data('ap', '', '50.00'), data('other', '', '50.00'), total('GrandTotal', ['TOTAL', '100.00', '100.00'])]),
     BalanceSheet: report(['Account', 'Total'], [data('bank', '100.00', ''), total('Assets', ['Total Assets', '100.00']), total('LiabilitiesAndEquity', ['Total Liabilities and Equity', '100.00'])]),
@@ -16,6 +16,7 @@ function fixture() {
     AgedReceivables: report(['Name', 'Current', 'Total'], [data('customer', '100.00', '100.00'), total('GrandTotal', ['TOTAL', '100.00', '100.00'])]),
     AgedPayables: report(['Name', 'Current', 'Total'], [data('vendor', '50.00', '50.00'), total('GrandTotal', ['TOTAL', '50.00', '50.00'])]),
   };
+  if (critical) { for (const name of ['BalanceSheet','ProfitAndLoss']) for (const row of reports[name].Rows.Row) if (row.ColData) row.ColData = row.ColData.slice(0,2); reports.GeneralLedger = report(['Account', 'Debit', 'Credit'], [data('ar', '100.00', '')]); reports.CashFlow = report(['Activity', 'Total'], [{ColData:[{value:'Cash'},{value:'100.00'}]}]); }
   for (const [name, result] of Object.entries(reports)) result.Header.ReportName = name;
   return reports;
 }
@@ -63,24 +64,21 @@ test('date and amount parsing rejects impossible dates and ambiguous amounts', (
   assert.equal(money('1.001'), null);
 });
 test('book reads use fixed GET report names and SELECT accounts only', async () => {
-  const calls = [];
-  const fixtures = fixture();
-  const qbo = { query: async query => { calls.push(['query', query]); return { QueryResponse: { Account: accounts.records } }; }, apiCall: async (method, endpoint) => {
-    calls.push([method, endpoint]); return fixtures[endpoint.split('/')[1].split('?')[0]];
-  } };
-  const result = await readBookEvidence(qbo, { ...period, today: period.throughDate });
-  assert.equal(result.status, 'checks-passed');
-  assert.equal(calls.length, 6);
-  assert.ok(calls.every(([method]) => ['GET', 'query'].includes(method)));
-  assert.ok(calls.filter(([method]) => method === 'GET').every(([, endpoint]) => endpoint.includes('accounting_method=Accrual')));
+  const fixtures=fixture(true);fixtures.TrialBalance.Rows.Row[0].ColData[0].id='1';fixtures.TrialBalance.Rows.Row[1].ColData[0].id='2';
+  const h=require('./helpers/book-read-fixture').bookReadFixture(fixtures);
+  const result=await readBookEvidence(h.access,h.scope,period);
+  assert.equal(result.status,'checks-passed');assert.equal(h.calls.length,8);assert.ok(h.calls.every(call=>call.method==='GET'));assert.ok(h.actions.every(action=>action==='reports.observe'));assert.ok(h.calls.filter(call=>call.url.includes('/reports/')).every(call=>call.url.includes('accounting_method=Accrual')));
 });
-test('invalid or future periods cause no QuickBooks calls', async () => {
-  let called = false;
-  const qbo = { query: async () => { called = true; }, apiCall: async () => { called = true; } };
-  await assert.rejects(readBookEvidence(qbo, { ...period, throughDate: '2026-10-07', today: '2026-10-06' }), error => error.status === 400);
-  assert.equal(called, false);
+test('invalid or future periods cause no QuickBooks calls',async()=>{
+ const h=require('./helpers/book-read-fixture').bookReadFixture(fixture(true));await assert.rejects(readBookEvidence(h.access,h.scope,{...period,throughDate:'2026-10-07'},{now:()=>Date.parse('2026-10-06T12:00:00Z')}),{status:400});assert.equal(h.calls.length,0);
 });
-
+test('public book reads stop after revocation, enforce detail budgets and cancel stuck observations',async()=>{
+ const make=()=>{const reports=fixture(true);reports.TrialBalance.Rows.Row[0].ColData[0].id='1';reports.TrialBalance.Rows.Row[1].ColData[0].id='2';return require('./helpers/book-read-fixture').bookReadFixture(reports);};
+ const revoked=make();revoked.onCall=async()=>{revoked.revoked=true;};await assert.rejects(readBookEvidence(revoked.access,revoked.scope,period),{code:'BUSINESS_ACCESS_DENIED'});assert.ok(revoked.calls.length<=2,'at most already-started reads finish after revocation');
+ const large=make();large.reports.GeneralLedger.Rows.Row[0].ColData[0].value='x'.repeat(6000000);await assert.rejects(readBookEvidence(large.access,large.scope,period),{code:'BUSINESS_REPORT_UNVERIFIED'});
+ const stuck=make(),controller=new AbortController();let release;const held=new Promise(resolve=>{release=resolve;});stuck.onCall=async options=>{if(options.url.includes('/reports/GeneralLedger')){controller.abort();await held;}};
+ try{await assert.rejects(readBookEvidence(stuck.access,stuck.scope,period,{signal:controller.signal}),/cancelled/);}finally{release();}
+});
 test('report traversal bounds flat and nested data and rejects invalid row lists', () => {
   const row = data('1', '1.00', '');
   assert.throws(() => rowsOf({ Rows: { Row: Array(100001).fill(row) } }), /budget/);
@@ -140,4 +138,44 @@ test('an explicitly empty zero P&L and aging retain scope checks and require ind
  for(const name of ['TrialBalance','BalanceSheet','AgedReceivables','AgedPayables']){reports[name].Rows.Row=[];reports[name].Header.Option=[{Name:'NoReportData',Value:'true'}];}
  assert.equal(evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}).status,'checks-passed');assert.equal(evaluateBooks(reports,period,{},accounts).status,'verification-incomplete');
  reports.TrialBalance.Header.Currency='USD';assert.equal(evaluateBooks(reports,period,{},accounts,{allowExplicitZero:true}).checks[0].status,'unverified');
+});
+
+test('v2 availability cannot pass missing P&L, ledger or cash flow merely because four arithmetic checks agree',()=>{
+ for(const name of ['ProfitAndLoss','GeneralLedger','CashFlow']){const reports=fixture(true);delete reports[name];const result=evaluateBooks(reports,period,{},accounts,{includeCritical:true});assert.ok(result.checks.every(row=>row.status==='passed'));assert.equal(result.status,'verification-incomplete');assert.equal(result.reportCoverage.complete,false);assert.ok(result.reportCoverage.missing.includes(name));}
+ // The immutable v1 evaluator keeps its original output; new decisions use v2.
+ const old=fixture();delete old.ProfitAndLoss;const legacy=evaluateBooks(old,period,{},accounts);assert.equal(legacy.status,'checks-passed');assert.equal('reportCoverage'in legacy,false);
+});
+test('critical detail and cash-flow observations require both dates and their own accounting semantics',()=>{
+ for(const name of ['GeneralLedger','CashFlow'])for(const patch of [{StartPeriod:'2026-09-01'},{EndPeriod:'2026-10-05'},{Currency:'USD'},{ReportBasis:'Cash'},{ReportName:'GeneralLedgerDetail'}]){const reports=fixture(true);Object.assign(reports[name].Header,patch);assert.equal(evaluateBooks(reports,period,{},accounts,{includeCritical:true}).reportCoverage.complete,false);}
+ const reports=fixture(true);delete reports.CashFlow.Header.ReportBasis;const result=evaluateBooks(reports,period,{},accounts,{includeCritical:true});assert.equal(result.reportCoverage.complete,true);assert.equal(result.reports.find(row=>row.name==='CashFlow').evidenceType,'cash-movement-statement');assert.equal(result.reports.find(row=>row.name==='GeneralLedger').evidenceType,'ledger-detail');assert.equal(result.reconciled,false);
+});
+
+test('malformed critical report columns, rows and cells never count as available',()=>{
+ for(const name of ['GeneralLedger','CashFlow'])for(const mutate of [r=>{r.Columns.Column=[];r.Rows.Row=[{ColData:[]}];},r=>{r.Rows.Row=[{ColData:[{value:'Only one cell'}]}];},r=>{r.Rows.Row[0].ColData[0].value={unparsed:true};},r=>{r.Columns.Column[0]={};}]){const reports=fixture(true);mutate(reports[name]);const result=evaluateBooks(reports,period,{},accounts,{includeCritical:true});assert.equal(result.reportCoverage.complete,false);assert.equal(result.status,'verification-incomplete');assert.ok(result.checks.every(row=>row.status==='passed'));}
+});
+
+test('critical report sections require bounded string cells before availability and public summaries', () => {
+  for (const name of ['GeneralLedger', 'CashFlow']) {
+    for (const section of ['Header', 'Summary']) {
+      for (const cells of [[{value:'TOTAL'}, {value:{bad:true}}], [{value:123}], [], Array(33).fill({value:'0.00'}), [{value:'TOTAL',id:{bad:true}}]]) {
+        const reports = fixture(true); reports[name].Rows.Row.push({[section]:{ColData:cells}});
+        const result = evaluateBooks(reports, period, {}, accounts, {includeCritical:true});
+        assert.equal(result.reportCoverage.complete, false); assert.equal(result.reports.find(row=>row.name===name).status, 'unavailable');
+      }
+    }
+    const reports = fixture(true); reports[name].Rows.Row.push({Header:{ColData:[{value:'Account section'}]}});
+    assert.equal(evaluateBooks(reports, period, {}, accounts, {includeCritical:true}).reportCoverage.complete, true);
+  }
+});
+
+test('v2 report metadata, supported summary shapes and explicit truncation warnings fail closed', () => {
+  for (const name of Object.keys(fixture(true))) {
+    for (const key of ['ReportName','StartPeriod','EndPeriod','Currency','ReportBasis']) {
+      const reports = fixture(true); reports[name].Header[key] = {bad:true};
+      assert.equal(evaluateBooks(reports, period, {}, accounts, {includeCritical:true}).reports.find(row=>row.name===name).status, 'unavailable');
+    }
+    const reports = fixture(true), width = reports[name].Columns.Column.length;
+    reports[name].Rows.Row.push({ColData:Array.from({length:width},(_,i)=>({value:i?'':'Unable to display more data. Please reduce the date range.'}))});
+    assert.equal(evaluateBooks(reports, period, {}, accounts, {includeCritical:true}).reportCoverage.complete,false);
+  }
 });
