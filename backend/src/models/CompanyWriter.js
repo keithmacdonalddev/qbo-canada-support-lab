@@ -10,6 +10,7 @@ const schema = new mongoose.Schema({
   revision: { type: Number, min: 0, required: true },
   operationId: { type: mongoose.Schema.Types.ObjectId, default: null },
   planHash: { type: String, default: null },
+  workflowKind: { type: String, enum: ['master-preparation', null], default: null },
   // No expiration. An uncertain external request cannot release company ownership.
   unresolved: { type: mongoose.Schema.Types.Mixed, default: null },
   lastReleasedOperationId: { type: mongoose.Schema.Types.ObjectId, default: null },

@@ -83,6 +83,7 @@ function prepareMasterPlan({ view, input, setup, masters, country, periodControl
   }
   const inventoryNeeded = entries.some(row => row.entity === 'Item' && row.itemType === 'Inventory');
   if (inventoryNeeded) {
+    if (setup.observations.closingDateVerified !== true) block('inventoryStartDate', 'QuickBooks accounting and closing preferences must be explicitly readable before any master create.');
     if (setup.observations.inventoryTracking !== true) block('inventory', 'Quantity-on-hand tracking must already be enabled and verified. This workflow does not change preferences.');
     // The first stock purchase order starts on the opening day. Retain the chosen date exactly.
     if (input.inventoryStartDate > today || input.inventoryStartDate > draft.business.openingDate) block('inventoryStartDate', 'The inventory date must be elapsed and on or before the first planned stock activity (' + draft.business.openingDate + ').');

@@ -2,24 +2,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { hash } = require('../src/modules/business-calendar');
-const { proposalView, buildDraftDefinition, draftView, readDraftSetup } = require('../src/modules/blueprint-draft');
+const { readDraftSetup } = require('../src/modules/blueprint-draft');
 const { masterRequirements, inspectBusinessMasters, readBusinessMasters } = require('../src/modules/business-master-data');
 const { checkBlueprintMappings } = require('../src/modules/blueprint-mapping-check');
 const { prepareMasterPlan, compileMasterEntry, verifyMasterReadback, assertMasterPlan } = require('../src/modules/business-master-preparation-plan');
-const scope = { realmId: '123', environment: 'production', connectionId: '000000000000000000000001' }, ownerId = '000000000000000000000002', now = Date.parse('2026-10-15T12:00:00.000Z'), stamp = new Date(now).toISOString();
-function fixture() {
-  const initial = proposalView(), input = { requestKey: '00000000-0000-0000-0000-000000000001', connectionId: scope.connectionId, baseHash: null, business: { ...initial.business, displayName: 'Harbour Pine Services', openingDate: '2023-10-01', volumeProfile: 'development' }, mappings: { ...initial.mappings, accountsReceivable: '1', accountsPayable: '2', undepositedFunds: '3', salesTax: '4', purchaseTax: '4' }, masterBindings: {} };
-  const definition = buildDraftDefinition(input), view = { ...scope, draft: draftView({ _id: '000000000000000000000003', version: 1, contentHash: hash(definition), definition, connectionId: scope.connectionId }, scope.connectionId) };
-  const setup = { ...scope, observedAt: stamp, complete: true, completeness: { accounts: true, taxCodes: true, preferences: true }, options: { accounts: [
-    { id: '1', name: 'Receivables', active: true, type: 'Accounts Receivable', subtype: 'AccountsReceivable', currency: 'CAD' },
-    { id: '2', name: 'Payables', active: true, type: 'Accounts Payable', subtype: 'AccountsPayable', currency: 'CAD' },
-    { id: '3', name: 'Undeposited', active: true, type: 'Other Current Asset', subtype: 'UndepositedFunds', currency: 'CAD' },
-  ], taxCodes: [{ id: '4', name: 'Fixture tax', active: true, sales: true, purchases: true }] }, observations: { homeCurrency: 'CAD', closedThrough: null, inventoryTracking: true }, sourceHash: hash('setup') };
-  const masters = { ...scope, observedAt: stamp, options: { Customer: [], Vendor: [], Item: [], Employee: [] }, completeness: { Customer: true, Vendor: true, Item: true, Employee: true }, sourceHash: hash('masters') };
-  const control = { version: 1, scope, status: 'owner-recorded', ownerId, closedThrough: null, reconciledThrough: null, evidenceNote: 'Fixture owner verified protected accounting periods.', recordedAt: stamp };
-  const f = { view, setup, masters, country: { version: 1, scope, country: 'CA', companyInfoId: '1', recordHash: hash('country'), observedAt: stamp }, periodControl: { ...control, contentHash: hash(control) }, ownerId, input: { connectionId: scope.connectionId, baseHash: view.draft.contentHash, inventoryStartDate: '2023-10-01' }, now };
-  return f;
-}
+const { fixture, scope } = require('./helpers/business-master-preparation-fixture');
 test('prepares only bounded missing business roles, with no financial writes or existing-record edits', () => {
   const f = fixture(), plan = prepareMasterPlan(f);
   assert.deepEqual(plan.blockers, []); assert.equal(plan.runnable, true); assert.equal(plan.entries.length, 32);
@@ -155,4 +142,21 @@ test('existing stock and missing parties remain runnable when the unused invento
   f.input.inventoryStartDate = '2026-10-01'; const plan = prepareMasterPlan(f);
   assert.equal(plan.runnable, true); assert.ok(!plan.entries.some(row => row.itemType === 'Inventory')); assertMasterPlan(plan);
   for (const entry of plan.entries) assert.ok(compileMasterEntry(plan, entry.ordinal).payload);
+});
+
+test('unreadable accounting preferences block before any unrelated master create', () => {
+  const f = fixture(); f.setup.observations.closingDateVerified = false; const plan = prepareMasterPlan(f);
+  assert.equal(plan.runnable, false); assert.ok(plan.blockers.some(row => /closing preferences/.test(row.reason)));
+});
+
+test('closing preference projection distinguishes explicit absence from malformed falsy values', async () => {
+  for (const [accounting, verified, closed] of [
+    [undefined, false, null], [[], false, null], [{}, true, null],
+    [{ BookCloseDate: '' }, true, null], [{ BookCloseDate: null }, true, null],
+    [{ BookCloseDate: '2023-09-30' }, true, '2023-09-30'],
+    [{ BookCloseDate: false }, false, false], [{ BookCloseDate: 0 }, false, 0], [{ BookCloseDate: '2023-02-30' }, false, '2023-02-30'],
+  ]) {
+    const qbo = { query: async query => { const entity = /FROM (\w+)/.exec(query)[1]; return { QueryResponse: { [entity]: entity === 'Preferences' ? [{ AccountingInfoPrefs: accounting, ProductAndServicesPrefs: { QuantityOnHand: true }, CurrencyPrefs: { HomeCurrency: { value: 'CAD' } } }] : [] } }; } };
+    const observed = await readDraftSetup(qbo, scope); assert.equal(observed.observations.closingDateVerified, verified); assert.equal(observed.observations.closedThrough, closed);
+  }
 });

@@ -6,7 +6,7 @@ const schema = new mongoose.Schema({
   realmId: { type: String, required: true, immutable: true }, environment: { type: String, enum: ['sandbox', 'production'], required: true, immutable: true },
   connectionId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true },
   ownerId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true }, actorId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true },
-  kind: { type: String, enum: ['business', 'legacy'], required: true, immutable: true },
+  kind: { type: String, enum: ['business', 'legacy', 'master-preparation'], required: true, immutable: true },
   operationId: { type: mongoose.Schema.Types.ObjectId, immutable: true }, logicalKey: { type: String, immutable: true },
   dispatchKey: { type: String, required: true, immutable: true }, requestHash: { type: String, required: true, immutable: true },
   entity: { type: String, required: true, immutable: true }, operation: { type: String, required: true, immutable: true },

@@ -1,6 +1,6 @@
 # Business master preparation
 
-Status: foundation implemented and verified non-live, 2026-10-15; approval, execution, recovery, draft application and the normal UI remain in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
+Status: foundation and transport adapters implemented non-live, 2026-10-15; the public approval/worker/recovery/apply workflow and normal UI remain in progress. This document records the reviewed boundary; it does not establish a completed workflow or live records.
 
 The normal business setup currently requires exact accounts, customers, suppliers, products and a time-entry worker, but only offers selection of records that already exist. The legacy seeder creates an unrelated population and cannot satisfy this outcome. The intended result is an owner action on Company: prepare the missing roles for the saved business, review the exact proposed creates, execute that approved plan, then explicitly use verified IDs in a new draft. Publication and financial baseline acceptance remain separate actions.
 
@@ -23,6 +23,14 @@ Master setup has its own prepublication gate branch; it cannot borrow published 
 The bounded preparation owns the company writer while creating records. Each accepted ID is retained transactionally with its mandatory transport result, then read back against an entity-specific projection before any dependent create or draft application. This is independent of later audit/UI acknowledgement. No name lookup grants ownership.
 
 Recovery distinguishes: exact no-receipt/proved-unsent attempts; known accepted IDs; definite reviewed ValidationFault refusals with fresh attempt identities; terminal unknown outcomes needing exact-ID owner attribution; and possibly-sent requests without terminal evidence. The last state remains blocked. Absence, name matches or lease age never grant replay. Unknown attribution checks immutable payload/parent IDs, preplan complete ID inventory and all-company/environment creation ownership. Account, Item, Customer, Vendor and Employee use their own minimal projections; transaction markers and financial readback cannot be assumed. Stop never clears an uncertain barrier or undoes an admitted accounting request.
+
+## Planned owner transitions
+
+The open claim is distinct from the company writer. Preparing a proposal saves a local reviewed role set and holds the unique claim without sending QBO requests. Approval is exact and permits the bounded creates; each dispatch still needs a current owner, live worker lease, original latest draft and fresh setup evidence. Completed verified creation may release the writer while retaining the open claim until IDs are applied or explicitly retained unassigned. No startup scan or GET request invents a new approval.
+
+A changed draft blocks subsequent creates. An owner can review an exact compatible subset of already verified IDs against the current draft. Applying that subset and its disposition writes one new immutable draft plus the run's apply receipt in the same transaction. Exact retries return the original saved version even if another later draft exists. Existing choices with different IDs are not silently overwritten. Unselected created IDs remain discoverable; closing retires only proved-unsent tails and preserves every accepted ID. A later plan must disclose previously retained IDs for unassigned roles and cannot automatically create a second set.
+
+Stopping records intent immediately; it does not claim an admitted request has stopped. Metadata recovery and retaining records must remain possible while account automation is paused. A settled accepted ID may be retained unassigned even when fresh compatibility fails; it cannot be applied as a verified role. Unknown or possibly-sent work cannot be closed, reissued or released merely because a worker lease expired. Repeated attempts require an owner decision tied to the exact old no-effect evidence and a fresh identity; admission independently checks the old mandatory receipt or its company-wide reverse absence.
 
 ## Apply, visibility and proof
 
