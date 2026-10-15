@@ -8,8 +8,8 @@ const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_DISPATCH_BLOCKED' }); }
 // Internal runner boundary. No startup, approval, storage preparation or retry loop.
 // Every provider write still passes through the existing client's durable gate.
-function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, now = () => Date.now() }) {
-  if (['evidence', 'claim', 'beginDispatch', 'recover', 'verifyGraph'].some(key => typeof steps?.[key] !== 'function') || [loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, now].some(fn => typeof fn !== 'function')) throw new TypeError('Business dispatch requires explicit runtime adapters');
+function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, beforeDispatch = async () => {}, now = () => Date.now() }) {
+  if (['evidence', 'claim', 'beginDispatch', 'recover', 'verifyGraph'].some(key => typeof steps?.[key] !== 'function') || [loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, beforeDispatch, now].some(fn => typeof fn !== 'function')) throw new TypeError('Business dispatch requires explicit runtime adapters');
   return async function dispatch(scope, operationId, logicalKey, { signal, leaseToken, recoveryOnly = false } = {}) {
     scope = scoped(scope);
     if (typeof recoveryOnly !== 'boolean' || (leaseToken !== undefined && (typeof leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(leaseToken))) || !ID.test(operationId || '') || !HASH.test(logicalKey || '')) fail('An exact saved operation and activity are required.', 400);
@@ -64,6 +64,7 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, observationFence: observations?.observationFence, now: now() });
       if (compiled.dispatchEvidence.operationId !== operationId || compiled.intentHash !== intent.fingerprint) fail('Compiled observations belong to another operation.');
       await authority('operations.execute'); check(); checkClient();
+      await beforeDispatch({ scope, operationId, logicalKey, signal }); check();
       // A thrown/ambiguous marker commit never grants permission to send.
       const marked = await steps.beginDispatch(scope, operationId, logicalKey, handle, compiled.dispatchEvidence, { runLeaseToken: leaseToken });
       const request = compiled.request, dispatchKey = hash({ ...scope, operationId, logicalKey, fingerprint: intent.fingerprint, requestHash: request.requestHash, ...(marked?.dispatch?.retryGeneration ? { retryGeneration: marked.dispatch.retryGeneration } : {}) });

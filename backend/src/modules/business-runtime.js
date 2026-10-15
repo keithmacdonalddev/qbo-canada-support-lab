@@ -74,20 +74,25 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   async function validateOpening({ signal }) {
     const run = await models.Runs.findOne({ _id: operationId, ...scope }).maxTimeMS(3000).lean();
     const plan = await models.Plans.findOne({ _id: run.planId, ...scope, operationId, planHash: boundPlanHash }).maxTimeMS(3000).lean();
-    if (!plan?.manifest) fail('The exact saved business plan is unavailable.');
+    if (!plan?.manifest || require('./business-calendar').hash(plan.manifest) !== run.planHash) fail('The exact saved business plan is unavailable.');
+    require('./business-financial-movements').assertMovementCapacity(plan.manifest);
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
     const before = await verification.readFence(scope, { signal });
     const source = await createBusinessReportReader({ access, now, purpose: 'operation' })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
     const evaluation = require('./book-evidence').evaluateReportSources(source, { allowExplicitZero: true });
     if (source.version !== 2 || evaluation.status !== 'checks-passed' || !require('./business-financial-summary').reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before the first business write.');
     const actual = plan.manifest.incomeExpectation ? require('./business-income-evidence').incomeCents(source.reports.ProfitAndLoss, { fromDate: run.fromDate, throughDate: run.throughDate }) : null;
+    if (plan.manifest.incomeExpectation && actual !== plan.manifest.incomeExpectation.openingIncomeCents) fail('Period income changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
+    if (plan.manifest.financialExpectation) {
+      const opening = require('./business-financial-movements').compareFinancialMovements(plan.manifest.financialExpectation, [], source);
+      if (opening.status !== 'passed') fail('Selected financial account balances changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
+    }
     const after = await verification.readFence(scope, { signal });
     if (require('./business-calendar').canonical(before) !== require('./business-calendar').canonical(after)) fail('Company activity changed during the starting-income check.');
-    if (plan.manifest.incomeExpectation && actual !== plan.manifest.incomeExpectation.openingIncomeCents) fail('Period income changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
   }
   async function execute({ signal } = {}) {
     await bind();
-    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, now }), resolveClient: access.resolveClient, authorize, assertReady, now });
+    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
     return createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence: evidence.prepareEvidence, validateOpening })(scope, operationId, { signal });
   }
   return Object.freeze({ execute, settleStop: async () => {
@@ -100,6 +105,21 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
       return { operationId, state:'verified', complete:true, completedRecords:saved.nextOrdinal, recordCount:saved.recordCount, ...saved.completion };
     }
     return state.settleStop(scope, operationId);
-  }, inspect: async () => { const saved = await bind(); const { leaseToken, ...visible } = saved; return visible; }, stop: () => periods.requestStop(operationId, scope) });
+  }, inspect: async () => {
+    const saved = await bind(), { leaseToken, ...visible } = saved;
+    let financialMovements;
+    try {
+      const run = await models.Runs.findOne({ _id: operationId, ...scope }).maxTimeMS(3000).lean();
+      financialMovements = await evidence.financialSummary(run);
+    }
+    catch {
+      // Optional financial assurance cannot remove core progress or Stop. Current
+      // access is checked again so auth/scope failures are never hidden.
+      await authorize(scope, 'operations.read');
+      financialMovements = { status: 'integrity-unavailable', complete: false, checks: [], period: { fromDate: saved.fromDate, throughDate: saved.throughDate }, observedAt: null, reason: 'Saved financial evidence could not be verified. Progress and Stop remain available; no financial assurance is shown.', limitation: 'Inspect the retained evidence before relying on financial completion.' };
+    }
+    await authorize(scope, 'operations.read');
+    return { ...visible, financialMovements };
+  }, stop: () => periods.requestStop(operationId, scope) });
 }
 module.exports = { createBusinessRuntime, loadModels };

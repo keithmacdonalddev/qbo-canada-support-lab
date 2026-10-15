@@ -79,6 +79,12 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
     openingDate: copy.openingDate, fromDate: copy.fromDate, throughDate: copy.throughDate, expectedCursor: copy.expectedCursor, expectedRevision: copy.expectedRevision,
     requiredAssertions: copy.requiredAssertions, recordCount: records.length, createCount: records.filter(row => row.kind === 'create').length, expectedRecordSetHash, records: ordered.map(key => descriptors.get(key)) };
   if (copy.incomeExpectation !== undefined) manifest.incomeExpectation = require('./business-income-evidence').validateIncomeExpectation(copy.incomeExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
+  const financialRequired = copy.requiredAssertions.some(row => row.key === 'financial-movements');
+  if (financialRequired !== (copy.financialExpectation !== undefined)) fail('The selected-account movement requirement needs its exact retained starting source.');
+  if (financialRequired) {
+    manifest.financialExpectation = require('./business-financial-movements').validateFinancialExpectation(copy.financialExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
+    require('./business-financial-movements').assertMovementCapacity(manifest);
+  }
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };

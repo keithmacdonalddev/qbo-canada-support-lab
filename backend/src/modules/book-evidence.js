@@ -157,4 +157,4 @@ async function readBookEvidence(access, scope, { fromDate, throughDate }, { sign
   await access.authorize(scope, 'reports.observe', { signal });
   return { checkedAt: source.observedAt, readAttempts, ...evaluateReportSources(source, { allowExplicitZero: true }) };
 }
-module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport };
+module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport, inspectReport };

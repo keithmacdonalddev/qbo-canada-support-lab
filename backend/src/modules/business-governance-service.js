@@ -16,6 +16,7 @@ const { createBusinessReportReader } = require('./business-report-evidence');
 const { assertPeriodControl } = require('./qbo-write-period');
 const { financialSummary, reportComplete } = require('./business-financial-summary');
 const { createIncomeExpectation } = require('./business-income-evidence');
+const { createFinancialExpectation } = require('./business-financial-movements');
 const { readCanadianCompany } = require('./business-country');
 const { assertPublishedBusiness, assertAuthorityDocument } = require('./business-authority');
 const { draftView, proposalView, readDraftSetup } = require('./blueprint-draft');
@@ -227,7 +228,8 @@ function createBusinessGovernanceService(dependencies = {}) {
     const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
     reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports);
     const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, startingReports.reports.ProfitAndLoss, startingReports.observedAt);
-    const candidate = { ...boundCandidate.candidate, authorityHash: active.authority.contentHash, incomeExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
+    const financialExpectation = createFinancialExpectation(scope, { fromDate, throughDate: input.throughDate }, active.view.mappings, startingReports);
+    const candidate = { ...boundCandidate.candidate, requiredAssertions: [...boundCandidate.candidate.requiredAssertions, { key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }], authorityHash: active.authority.contentHash, incomeExpectation, financialExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
     await transaction(async session => {
       await fence(bound, session, 'operations.preview');
       await assertPublishedBusiness({ ...models, scope, manifest: candidate, session, fence: true });
