@@ -3,7 +3,7 @@ const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/, HASH = /^[a-f0-9]{64}$/;
 const ENTITIES = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']);
-const TRANSACTIONS = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment']);
+const TRANSACTIONS = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo']);
 // Definition contract v1: do not expand these exclusions without a new version.
 // Balances and stock are current observations, not approved master definitions.
 const DYNAMIC = Object.freeze({ Customer: ['Balance', 'BalanceWithJobs'], Vendor: ['Balance'], Employee: [], Item: ['QtyOnHand'], Account: ['CurrentBalance', 'CurrentBalanceWithSubAccounts'], TaxCode: [] });

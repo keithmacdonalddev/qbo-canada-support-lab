@@ -93,7 +93,7 @@ function validateFinancialExpectation(value, scope, period, entries) {
 // Version3 proves only the selected earnings roles. It does not infer tax or
 // inventory cost from cash, nor use today's mutable item price/account routing.
 function earningsLines(expectation, step, payload, policy, add) {
-  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'Bill'].includes(step.entity)) return;
+  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'CreditMemo', 'Bill'].includes(step.entity)) return;
   const planned = step.details?.lines, sales = step.entity !== 'Bill';
   if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || !Array.isArray(planned) || !planned.length || !Array.isArray(payload.Line) || payload.Line.length !== planned.length || new Set(payload.Line.map(row => row.DetailType)).size !== 1) fail('Selected earnings require complete original pretax line intent.');
   const selected = new Map(expectation.accounts.map(row => [row.key, row]));
@@ -118,7 +118,7 @@ function earningsLines(expectation, step, payload, policy, add) {
       if (line.DetailType !== kind || !exact(detail, ['ItemRef', 'Qty', 'UnitPrice', 'TaxCodeRef']) || detail.ItemRef?.value !== binding('Item', original.itemKey).id || detail.TaxCodeRef?.value !== taxId || detail.Qty !== original.quantity || cents(detail.UnitPrice) !== original.unitPriceCents || !Number.isFinite(original.quantity) || original.quantity <= 0 || Math.abs(original.quantity * original.unitPriceCents - original.amountCents) > 0.00001) fail('The posted earnings line differs from its original item, quantity, price or tax intent.');
       if (sales) {
         if (!INCOME_KEYS.includes(original.accountMapping)) fail('The original item line has no supported selected income role.');
-        account(original.accountMapping); add(original.accountMapping, -original.amountCents);
+        account(original.accountMapping); add(original.accountMapping, (step.entity === 'CreditMemo' ? 1 : -1) * original.amountCents);
       } else if (original.accountMapping !== 'inventoryAsset') fail('A stock purchase cannot be counted as operating expense.');
     } else {
       if (line.DetailType !== 'AccountBasedExpenseLineDetail' || original.accountMapping !== 'operatingExpense' || original.billableStatus !== 'NotBillable' || !exact(detail, ['AccountRef', 'BillableStatus', 'TaxCodeRef']) || detail.AccountRef?.value !== account('operatingExpense') || detail.BillableStatus !== 'NotBillable' || detail.TaxCodeRef?.value !== taxId) fail('The operating expense differs from its original nonbillable account and tax intent.');
@@ -137,10 +137,18 @@ function movementRow(expectation, step, compiled, policy, origin) {
   if (payload.CurrencyRef?.value !== 'CAD' && compiled.entity !== 'TimeActivity') fail('Financial basis requires CAD transaction intent.');
   switch (compiled.entity) {
     case 'Invoice': add(ref('accountsReceivable', payload.ARAccountRef), gross()); break;
+    case 'CreditMemo':
+      if (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || policy.lifecycle?.mode !== 'credit-adjustment') fail('A credit movement needs its original selected-earnings lifecycle.');
+      add(ref('accountsReceivable', payload.ARAccountRef), -gross()); break;
     case 'SalesReceipt': add(ref('operatingBank', payload.DepositToAccountRef), gross()); break;
     case 'Bill': add(ref('accountsPayable', payload.APAccountRef), -gross()); break;
     case 'Payment': {
       const amount = cents(payload.TotalAmt);
+      if (policy.lifecycle?.mode === 'credit-application') {
+        const lines = payload.Line || [], types = lines.map(line => line.LinkedTxn?.[0]?.TxnType).sort();
+        if (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || amount !== 0 || lines.length !== 2 || !equal(types, ['CreditMemo', 'Invoice']) || lines.some(line => line.LinkedTxn?.length !== 1) || cents(lines[0].Amount) <= 0 || cents(lines[0].Amount) !== cents(lines[1].Amount)) fail('The original credit application must have two exact equal links and zero funds.');
+        ref('accountsReceivable', payload.ARAccountRef); ref('operatingBank', payload.DepositToAccountRef); break;
+      }
       if (net() !== amount || payload.Line.length !== 1 || payload.Line[0].LinkedTxn?.length !== 1 || payload.Line[0].LinkedTxn[0].TxnType !== 'Invoice') fail('Only the original exact invoice settlement is supported.');
       add(ref('accountsReceivable', payload.ARAccountRef), -amount);
       const key = payload.DepositToAccountRef?.value === selected.operatingBank ? 'operatingBank' : 'undepositedFunds';

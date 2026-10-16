@@ -9,7 +9,8 @@ const HASH = /^[a-f0-9]{64}$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_CONTINUITY_UNVERIFIED' }); }
 function stableBusiness(previous, next) {
   for (const key of ['openingDate', 'fiscalYearStartMonth']) if (previous.business[key] !== next.business[key]) fail('Keep the original business opening and fiscal calendar.');
-  if (activityTemplateVersion(previous.business) !== activityTemplateVersion(next.business) || canonical(previous.mappings) !== canonical(next.mappings)) fail('This change must retain the original schedule version and every account and tax mapping.');
+  const before = activityTemplateVersion(previous.business), after = activityTemplateVersion(next.business);
+  if ((before !== after && !(before === 2 && after === 3)) || canonical(previous.mappings) !== canonical(next.mappings)) fail('Keep the original schedule or review the continuing-to-customer-credit upgrade, retaining every account and tax mapping.');
   for (const [key, id] of Object.entries(previous.masterBindings || {})) if (id && next.masterBindings?.[key] !== id) fail('Retain every previously selected business record, including dormant roles: ' + key + '.');
 }
 function retainedBaselineIdentity(row, root, scope) {

@@ -8,8 +8,11 @@ const PROFILES = Object.freeze({ development: { field: 8, supply: 5, care: 5 }, 
 function activityTemplateVersion(business) {
   const version = business?.activityTemplateVersion;
   if (version === undefined) return 1;
-  if (![1, 2].includes(version)) throw problem('Choose a supported business schedule.');
+  if (![1, 2, 3].includes(version)) throw problem('Choose a supported business schedule.');
   return version;
+}
+function assertActivityTemplateAccepted(business, scope) {
+  if (activityTemplateVersion(business) === 3 && scope?.environment === 'production') throw Object.assign(problem('The customer-credit schedule needs a direct Canadian company acceptance check before Production use. Keep the continuing schedule while that check is pending.', 409), { code: 'BUSINESS_SCHEDULE_ACCEPTANCE_REQUIRED' });
 }
 function businessDate(now = new Date()) {
   const fields = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map(part => [part.type, part.value]));
@@ -24,14 +27,20 @@ function activityDefinition(business) {
   const add = (cohort, count, divisionKey, steps) => {
     for (let index = 0; index < count; index++) {
       const key = cohort + '-' + String(index + 1).padStart(3, '0');
-      const selected = templateVersion === 2 && index % 5 === 0;
-      let chosen = steps.map(item => ({ ...item, dependsOn: [...item.dependsOn], intent: { ...item.intent, cohort: key, templateVersion, ...(templateVersion === 2 ? { openingDate: business.openingDate } : {}) } }));
-      if (templateVersion === 2) {
+      const selected = templateVersion >= 2 && index % 5 === 0;
+      let chosen = steps.map(item => ({ ...item, dependsOn: [...item.dependsOn], intent: { ...item.intent, cohort: key, templateVersion, ...(templateVersion >= 2 ? { openingDate: business.openingDate } : {}) } }));
+      if (templateVersion >= 2) {
         if (cohort === 'field-job' && selected) {
           chosen.find(item => item.key === 'payment').intent.settlementStage = 'first';
           chosen.push(step('final-payment', 'Payment', 45, ['invoice', 'payment'], { purpose: 'Collect the exact remaining job invoice', cohort: key, templateVersion, openingDate: business.openingDate, settlementStage: 'remainder' }), step('final-deposit', 'Deposit', 46, ['final-payment'], { purpose: 'Deposit the final job collection', cohort: key, templateVersion, openingDate: business.openingDate, bankMapping: 'operatingBank' }));
         }
         if (cohort === 'care-subscription' && selected) chosen.find(item => item.key === 'payment').offsetDays = 45;
+        if (templateVersion === 3 && cohort === 'care-subscription' && index % 5 === 1) {
+          const payment = chosen.find(item => item.key === 'payment');
+          payment.dependsOn = ['invoice', 'credit', 'credit-application']; payment.intent.creditStage = 'remainder';
+          const extra = (stepKey, entity, offsetDays, dependsOn, purpose, creditStage) => step(stepKey, entity, offsetDays, dependsOn, { purpose, cohort: key, templateVersion, openingDate: business.openingDate, creditStage });
+          chosen.splice(1, 0, extra('credit', 'CreditMemo', 10, ['invoice'], 'Credit a ten-percent care-service adjustment', 'adjustment'), extra('credit-application', 'Payment', 11, ['invoice', 'credit'], 'Apply the saved care-service credit without collecting cash', 'application'));
+        }
         if (cohort === 'supply-order' && selected) chosen.find(item => item.key === 'bill-payment').offsetDays = 45;
       }
       rules.push({ key, divisionKey: typeof divisionKey === 'function' ? divisionKey(index) : divisionKey, startsOn: business.openingDate, cadence: { kind: 'monthly', day: 1 + (index * 5) % 28, every: 1 },
@@ -55,11 +64,11 @@ function activityDefinition(business) {
     step('invoice', 'Invoice', 0, [], { purpose: 'Bill the monthly care service', incomeMapping: 'careIncome' }),
     step('payment', 'Payment', 14, ['invoice'], { purpose: 'Collect the care-plan invoice' }),
   ]);
-  if (templateVersion === 2) add('operating-overhead', 3, index => ['supply-workshop', 'field-advisory', 'care-plans'][index], [
+  if (templateVersion >= 2) add('operating-overhead', 3, index => ['supply-workshop', 'field-advisory', 'care-plans'][index], [
     step('bill', 'Bill', 0, [], { purpose: 'Record monthly nonbillable operating overhead' }),
     step('bill-payment', 'BillPayment', 20, ['bill'], { purpose: 'Pay the monthly operating supplier', bankMapping: 'operatingBank' }),
   ]);
-  return { version: 1, businessKey: 'harbour-pine-v' + templateVersion, openingDate: business.openingDate, rules };
+  return { version: 1, businessKey: 'harbour-pine-v' + (templateVersion === 3 ? 2 : templateVersion), openingDate: business.openingDate, rules };
 }
 function validatePreviewRequest(input) {
   if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).some(key => !['connectionId', 'baseHash', 'fromDate', 'throughDate'].includes(key))) throw problem('Activity preview contains unsupported fields.');
@@ -82,7 +91,7 @@ function previewBusinessActivity(view, input, today = businessDate()) {
   const volumes = createDefinitionsService().getVolumeProfiles();
   const templateVersion = activityTemplateVersion(source.business);
   const originalTarget = volumes.profiles.find(profile => profile.key === source.business.volumeProfile);
-  const target = templateVersion === 2 ? { targetTransactionsPerMonth: source.business.volumeProfile === 'flagship' ? 278 : 80 } : originalTarget;
+  const target = templateVersion >= 2 ? { targetTransactionsPerMonth: source.business.volumeProfile === 'flagship' ? (templateVersion === 3 ? 288 : 278) : (templateVersion === 3 ? 82 : 80) } : originalTarget;
   if (!target || definition.rules.reduce((sum, rule) => sum + rule.steps.length, 0) !== target.targetTransactionsPerMonth) throw problem('The activity template and approved volume targets no longer agree.', 409);
   const totals = {};
   for (const event of plan.events) totals[event.entity] = (totals[event.entity] || 0) + 1;
@@ -93,7 +102,7 @@ function previewBusinessActivity(view, input, today = businessDate()) {
       'These proposed activity patterns have not been activated. Counts describe scheduled records, not missing records to create.',
       'Existing company records have not been compared with this schedule. Earlier prerequisites need saved evidence before any follow-up can run.',
       'Proposed quantities and prices are not approved transaction policy. Actual parties, items, tax treatment and account mappings still require validation.',
-      templateVersion === 2 ? 'Credits, returns, retainer accounting, monthly close, bank reconciliation and other coverage requirements remain to be planned.' : 'Credits, returns, late or partial payments, retainer accounting, monthly close, bank reconciliation and other coverage requirements remain to be planned.',
+      templateVersion === 3 ? 'Care-service credits are proposed. Returns, retainers, dimensions and wider accounting proof remain separate. Production use awaits a direct company acceptance check.' : templateVersion >= 2 ? 'Credits, returns, retainer accounting, monthly close, bank reconciliation and other coverage requirements remain to be planned.' : 'Credits, returns, late or partial payments, retainer accounting, monthly close, bank reconciliation and other coverage requirements remain to be planned.',
     ] };
 }
-module.exports = { activityDefinition, previewBusinessActivity, validatePreviewRequest, businessDate, activityTemplateVersion, TEMPLATE_VERSION };
+module.exports = { activityDefinition, previewBusinessActivity, validatePreviewRequest, businessDate, activityTemplateVersion, assertActivityTemplateAccepted, TEMPLATE_VERSION };

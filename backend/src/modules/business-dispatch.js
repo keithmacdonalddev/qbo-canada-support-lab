@@ -3,7 +3,8 @@ const { hash } = require('./business-calendar');
 const { scoped, withBusinessWritePermit } = require('./qbo-write-contract');
 const { compileBusinessTransaction } = require('./business-transaction-compiler');
 const { runAsActor } = require('./actor-context');
-const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE } = require('./qbo-write-period');
+const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
+const ADMISSION_REASONS = new Map([[AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE], [CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE]]);
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_DISPATCH_BLOCKED' }); }
@@ -72,17 +73,17 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       if (marked?.dispatch?.key !== dispatchKey || marked.dispatch.requestHash !== request.requestHash || marked.dispatch.actorId !== actorId) fail('The committed dispatch differs from its compiled request.');
       // Once the marker exists, every failure is reconciled from durable state.
       // Do not race the request against a timer or forward cancellation to a POST.
-      let creditRefused = false;
+      let admissionRefusal = null;
       try {
         check(); checkClient();
         await withBusinessWritePermit({ scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: marked.revision, stepLeaseToken: marked.leaseToken, ...(leaseToken !== undefined ? { leaseToken } : {}) }, () => client.apiCall(request.method, request.endpoint, JSON.parse(request.body)));
       } catch (error) {
         // Only retain the fixed server-owned reason. A thrown exception cannot
         // establish whether a write was sent; the exact receipt recovery below does.
-        creditRefused = error?.code === AUTOMATIC_CREDITS_CODE && error.qboStage === 'write_admission' && error.outcomeUnknown === false;
+        if (error?.qboStage === 'write_admission' && error.outcomeUnknown === false && ADMISSION_REASONS.has(error.code)) admissionRefusal = { code: error.code, message: ADMISSION_REASONS.get(error.code) };
       }
       const recovered = await reconcile();
-      if (creditRefused && recovered.state === 'not_sent') throw Object.assign(Error(AUTOMATIC_CREDITS_MESSAGE), { status: 409, code: AUTOMATIC_CREDITS_CODE });
+      if (admissionRefusal && recovered.state === 'not_sent') throw Object.assign(Error(admissionRefusal.message), { status: 409, code: admissionRefusal.code });
       return recovered;
     });
   };

@@ -3,7 +3,7 @@ const { hash, canonical, date } = require('./business-calendar');
 const { assertPublishedBusiness, assertAuthorityDocument } = require('./business-authority');
 const { MAX_AUTHORITIES, stableBusiness, readAuthorityLineage } = require('./business-authority-lineage');
 const { draftView, proposalView, readDraftSetup } = require('./blueprint-draft');
-const { activityDefinition, activityTemplateVersion } = require('./business-activity-preview');
+const { activityDefinition, activityTemplateVersion, assertActivityTemplateAccepted } = require('./business-activity-preview');
 const { readBusinessMasters, inspectBusinessMasters, masterRequirements } = require('./business-master-data');
 const { checkBlueprintMappings } = require('./blueprint-mapping-check');
 const { readCanadianCompany } = require('./business-country');
@@ -61,7 +61,7 @@ function createBusinessContinuityService({ models, connection, transaction, now,
     if (!blueprint || !blueprint.auditId || hash(blueprint.definition) !== input.blueprintHash || !Number.isSafeInteger(blueprint.version) || blueprint.version <= lineage.entries.at(-1).blueprint.version || input.blueprintHash === active.value.blueprintHash) fail('Choose a newer, changed saved business draft.');
     const draftAudit = await read(models.Audits, { _id: blueprint.auditId, userId: ownerId, realmId: scope.realmId, action: 'Business plan draft saved', outcome: 'success', 'afterState.blueprintId': input.blueprintId, 'afterState.contentHash': input.blueprintHash, 'afterState.environment': scope.environment }, session);
     if (!draftAudit) fail('The original saved business revision audit is unavailable.');
-    const view = draftView(blueprint, scope.connectionId); stableBusiness(active.view, view);
+    const view = draftView(blueprint, scope.connectionId); stableBusiness(active.view, view); assertActivityTemplateAccepted(view.business, scope);
     const previousFrom = lineage.segments.at(-1).effectiveFrom;
     if (input.effectiveFrom <= active.calendar.verifiedThrough || input.effectiveFrom <= previousFrom) fail('Choose an occurrence date after verified activity and every earlier business change.');
     if (session && !observed) fail('Retain fresh company observations before accepting the revision.');
@@ -79,7 +79,7 @@ function createBusinessContinuityService({ models, connection, transaction, now,
       blueprintId: input.blueprintId, blueprintHash: input.blueprintHash, blueprintVersion: blueprint.version, effectiveFrom: input.effectiveFrom,
       completion, verifiedThrough: active.calendar.verifiedThrough, calendarRevision: active.calendar.revision, calendarWriterRevision: active.calendar.writerRevision, authorityRevision: active.calendar.authorityRevision,
       policyRevision: state.policy.revision, writerRevision: state.writer.revision, periodControlHash: state.policy.periodControl.contentHash, setupHash: setup.sourceHash, masterHash: masters.sourceHash, countryHash: hash(country), qboClosedThrough: closing || null,
-      changes: { displayName: { from: active.view.business.displayName, to: view.business.displayName }, volumeProfile: { from: active.view.business.volumeProfile, to: view.business.volumeProfile }, historicalMonths: { from: active.view.business.historicalMonths, to: view.business.historicalMonths }, addedMasterRoles: Object.keys(view.masterBindings || {}).filter(key => !active.view.masterBindings?.[key]).sort().map(key => { const role = masterRequirements(view.business).find(row => row.key === key); if (!role) fail('A newly selected role is outside this business revision.'); const id = view.masterBindings[key], record = masters.options[role.entity].find(row => row.id === id); return { key, entity: role.entity, id, name: record?.name || role.entity + ' #' + id }; }) } };
+      changes: { ...(activityTemplateVersion(active.view.business) !== activityTemplateVersion(view.business) ? { activityTemplateVersion: { from: activityTemplateVersion(active.view.business), to: activityTemplateVersion(view.business) } } : {}), displayName: { from: active.view.business.displayName, to: view.business.displayName }, volumeProfile: { from: active.view.business.volumeProfile, to: view.business.volumeProfile }, historicalMonths: { from: active.view.business.historicalMonths, to: view.business.historicalMonths }, addedMasterRoles: Object.keys(view.masterBindings || {}).filter(key => !active.view.masterBindings?.[key]).sort().map(key => { const role = masterRequirements(view.business).find(row => row.key === key); if (!role) fail('A newly selected role is outside this business revision.'); const id = view.masterBindings[key], record = masters.options[role.entity].find(row => row.id === id); return { key, entity: role.entity, id, name: record?.name || role.entity + ' #' + id }; }) } };
     return { active, lineage, state, blueprint, view, observed, review, reviewHash: hash(review) };
   }
   async function review(user, input, { signal } = {}) {

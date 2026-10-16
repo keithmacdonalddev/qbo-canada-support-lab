@@ -70,7 +70,7 @@ function validateOperationContinuity(value, candidate) {
     date(origin.occurrence); seen.add(origin.logicalKey);
     const selected = value.segments.filter(segment => segment.effectiveFrom <= origin.occurrence).at(-1), step = creates.get(origin.logicalKey);
     if (!selected || ['authorityHash', 'blueprintId', 'blueprintHash'].some(key => origin[key] !== selected[key]) || origin.occurrence > step.txnDate || origin.logicalKey !== hash({ realmId: candidate.scope.realmId, environment: candidate.scope.environment, businessKey: candidate.businessKey, ruleKey: origin.ruleKey, occurrence: origin.occurrence, stepKey: origin.stepKey })) fail('An activity differs from its original occurrence window.');
-    if (step.details.activityTemplateVersion === 2 && canonical(step.details.origin) !== canonical({ openingDate: candidate.openingDate, occurrence: origin.occurrence, ruleKey: origin.ruleKey, stepKey: origin.stepKey })) fail('The saved lifecycle and business revision origins differ.');
+    if ([2, 3].includes(step.details.activityTemplateVersion) && canonical(step.details.origin) !== canonical({ openingDate: candidate.openingDate, occurrence: origin.occurrence, ruleKey: origin.ruleKey, stepKey: origin.stepKey })) fail('The saved lifecycle and business revision origins differ.');
   }
   return JSON.parse(canonical(value));
 }

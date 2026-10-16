@@ -5,8 +5,8 @@ const { businessDate } = require('./business-activity-preview');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment']);
-const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
+const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo']);
+const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TRANSACTION_UNVERIFIED' }); }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
 function fresh(stamp, now) { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= now && now - value <= 300000; }
@@ -72,7 +72,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
-  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], BillPayment: ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
+  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: ['Invoice'], BillPayment: ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
+  if (step.entity === 'CreditMemo' && lifecycle?.mode !== 'credit-adjustment') fail('Credit memos require the explicit approved service-credit lifecycle.');
   if (canonical(parentTypes) !== canonical([...expectedParents].sort())) fail('The transaction has unsupported or missing business dependencies.');
   const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey }) };
   if (lifecycle?.dueDate) payload.DueDate = lifecycle.dueDate;
@@ -97,7 +98,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (details.taxMapping !== taxKey || policy.tax[taxKey] !== tax.Id) fail('The approved Canadian tax code does not match the transaction.');
     payload.GlobalTaxCalculation = 'TaxExcluded';
     if (!sales) payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
-    if (step.entity === 'Invoice') payload.ARAccountRef = ref(account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id);
+    if (['Invoice', 'CreditMemo'].includes(step.entity)) payload.ARAccountRef = ref(account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id);
     if (step.entity === 'SalesReceipt') { payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id); payload.ProcessPayment = false; }
     const lineKeys = new Set(), stockRequired = new Map();
     payload.Line = details.lines.map(line => {
@@ -115,6 +116,12 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       return { Amount: money(line.amountCents), DetailType: detailType, [detailType]: { ItemRef: ref(item.Id), Qty: line.quantity, UnitPrice: money(line.unitPriceCents), TaxCodeRef: ref(tax.Id) } };
     });
     if (details.baseAmountCents !== details.lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The planned transaction subtotal changed.');
+    if (step.entity === 'CreditMemo') {
+      const source = parent('Invoice'), invoice = source.record, original = sourceItemLines(invoice, 'SalesItemLineDetail'), issued = payload.Line[0], originalLine = original[0], taxLines = invoice.TxnTaxDetail?.TaxLine || [], expectedTax = policy.readbackTax;
+      if (source.logicalKey !== lifecycle.credit.invoiceKey || invoice.TxnDate !== details.origin.occurrence || invoice.CustomerRef?.value !== payload.CustomerRef.value || invoice.ARAccountRef?.value !== payload.ARAccountRef.value || invoice.GlobalTaxCalculation !== 'TaxExcluded' || original.length !== 1 || payload.Line.length !== 1 || originalLine.SalesItemLineDetail?.ItemRef?.value !== issued.SalesItemLineDetail.ItemRef.value || originalLine.SalesItemLineDetail?.Qty !== 1 || originalLine.SalesItemLineDetail?.TaxCodeRef?.value !== issued.SalesItemLineDetail.TaxCodeRef.value || cents(originalLine.Amount) !== cents(originalLine.SalesItemLineDetail.UnitPrice) || cents(originalLine.Amount) !== cents(issued.Amount) * 10 || cents(invoice.Balance) !== cents(invoice.TotalAmt) || links(invoice).length) fail('The original care invoice changed or is no longer wholly unsettled.');
+      if (!expectedTax || !Array.isArray(taxLines) || taxLines.length !== expectedTax.lines?.length || taxLines.some(line => line.DetailType !== 'TaxLineDetail') || expectedTax.lines.some(line => taxLines.filter(originalTax => originalTax.TaxLineDetail?.TaxRateRef?.value === line.rateId && originalTax.TaxLineDetail?.TaxPercent === line.percent && originalTax.TaxLineDetail?.PercentBased === true).length !== 1)) fail('The original invoice and credit require the same exact tax-rate identities and percentages.');
+      const relationship = relationships.find(row => row.logicalKey === source.logicalKey); relationship.sourceTxnDate = invoice.TxnDate;
+    }
     if (step.entity === 'Bill' || (step.entity === 'Invoice' && parentTypes.length)) {
       const source = parent(step.entity === 'Bill' ? 'PurchaseOrder' : 'Estimate');
       if (source.record[party]?.value !== payload[party].value || source.record.GlobalTaxCalculation !== 'TaxExcluded') fail('The source party or tax calculation changed.');
@@ -150,13 +157,25 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (quoted.length !== 1 || quoted[0].SalesItemLineDetail?.ItemRef?.value !== item.Id || quoted[0].SalesItemLineDetail?.Qty !== details.hours) fail('Recorded time does not match the quoted service hours.');
     Object.assign(payload, { NameOf: 'Employee', EmployeeRef: ref(get('Employee', details.workerKey).Id), ItemRef: ref(item.Id), Hours: details.hours, Minutes: 0, BillableStatus: 'Billable', Description: 'Test Data Lab activity ' + step.logicalKey });
   } else {
-    if ((!lifecycle?.settlement && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
+    if ((!lifecycle?.settlement && !['credit-application', 'credit-remainder'].includes(lifecycle?.mode) && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
     const source = parent({ Payment: 'Invoice', BillPayment: 'Bill', Deposit: 'Payment' }[step.entity]);
     if (details.amountSourceKey !== source.logicalKey) fail('Settlement names another originating transaction.');
     const original = cents(source.record.TotalAmt); let amount = original; if (!amount) fail('Settlement requires a positive saved total.');
     const party = step.entity === 'BillPayment' ? 'VendorRef' : 'CustomerRef';
     if (!payload[party] || source.record[party]?.value !== payload[party].value) fail('Settlement party differs from the saved source.');
-    if (lifecycle?.settlement) {
+    if (['credit-application', 'credit-remainder'].includes(lifecycle?.mode)) {
+      const credit = parent('CreditMemo'), cm = credit.record, credited = cents(cm.TotalAmt), ar = account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id;
+      if (step.entity !== 'Payment' || source.logicalKey !== lifecycle.credit.invoiceKey || credit.logicalKey !== lifecycle.credit.creditMemoKey || source.record.CustomerRef?.value !== payload.CustomerRef.value || cm.CustomerRef?.value !== payload.CustomerRef.value || cm.ARAccountRef?.value !== ar || source.record.ARAccountRef?.value !== ar || credited <= 0 || credited >= original) fail('The exact invoice and managed credit do not form this customer settlement.');
+      if (lifecycle.mode === 'credit-application') {
+        if (cents(source.record.Balance) !== original || cents(cm.RemainingCredit) !== credited || links(source.record).length || links(cm).length) fail('The managed invoice or credit has already been consumed.');
+        amount = 0;
+      } else {
+        const prior = parent('Payment'), record = prior.record, invoiceLinks = links(source.record), creditLinks = links(cm), lines = record.Line || [];
+        const matched = (type, id) => lines.filter(line => cents(line.Amount) === credited && line.LinkedTxn?.length === 1 && line.LinkedTxn[0].TxnType === type && line.LinkedTxn[0].TxnId === id && [undefined, '0'].includes(line.LinkedTxn[0].TxnLineId)).length === 1;
+        if (prior.logicalKey !== lifecycle.credit.applicationKey || record.CustomerRef?.value !== payload.CustomerRef.value || record.ARAccountRef?.value !== ar || record.DepositToAccountRef?.value !== account('operatingBank', 'Bank').Id || record.ProcessPayment === true || cents(record.TotalAmt) !== 0 || cents(record.UnappliedAmt) !== 0 || lines.length !== 2 || !matched('Invoice', source.qboId) || !matched('CreditMemo', credit.qboId) || cents(cm.RemainingCredit) !== 0 || cents(source.record.Balance) !== original - credited || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || creditLinks.length !== 1 || creditLinks[0].TxnType !== 'Payment' || creditLinks[0].TxnId !== prior.qboId) fail('The original zero-funds application and exact remaining balances changed.');
+        amount = original - credited;
+      }
+    } else if (lifecycle?.settlement) {
       if (step.entity !== 'Payment') fail('Installments can only settle the original managed invoice.');
       const first = installmentCents(original);
       if (first <= 0 || first >= original) fail('The accepted total cannot be split into two positive installments.');
@@ -171,6 +190,10 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       }
     } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
     payload.TotalAmt = money(amount); payload.Line = [{ Amount: money(amount), LinkedTxn: [relate(source, 'Line.0.LinkedTxn')] }];
+    if (lifecycle?.mode === 'credit-application') {
+      const credit = parent('CreditMemo'), amount = cents(credit.record.TotalAmt);
+      payload.Line = [{ Amount: money(amount), LinkedTxn: payload.Line[0].LinkedTxn }, { Amount: money(amount), LinkedTxn: [relate(credit, 'Line.1.LinkedTxn')] }];
+    }
     if (step.entity === 'Payment') {
       const destination = details.destination === 'undeposited_funds' ? account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds') : details.destination === 'operating_bank' ? account(details.bankMapping, 'Bank') : null;
       if (!destination || source.record.ARAccountRef?.value !== account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) fail('Payment destination or receivables account is not verified.');

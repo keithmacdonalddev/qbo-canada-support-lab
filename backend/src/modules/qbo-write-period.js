@@ -4,6 +4,8 @@ const { scoped, denied } = require('./qbo-write-contract');
 const TRANSACTIONS = new Map(['Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate', 'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment', 'TaxPayment'].map(name => [name.toLowerCase(), name]));
 const LISTS = new Map(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term', 'TaxCode', 'TaxRate', 'PaymentMethod'].map(name => [name.toLowerCase(), name]));
 const ID = /^\d{1,30}$/, HASH = /^[a-f0-9]{64}$/;
+const CREDIT_SOURCE_PROTECTED_CODE = 'BUSINESS_CREDIT_SOURCE_PROTECTED';
+const CREDIT_SOURCE_PROTECTED_MESSAGE = 'The original care invoice is in a closed or reconciled period, so its credit application cannot run. This credit was not sent. Review protected dates on the Company page, then explicitly continue the saved work.';
 const AUTOMATIC_CREDITS_CODE = 'BUSINESS_AUTOMATIC_CREDITS_BLOCKED';
 const AUTOMATIC_CREDITS_MESSAGE = 'QuickBooks must have Automatically apply credits switched off before this request. Check Settings → Account and settings → Advanced → Automation, then explicitly continue the saved work. This request was not sent.';
 const plain = value => Boolean(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -123,4 +125,4 @@ function assertWritePeriod(request, evidence, controls, now = Date.now(), ownerI
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { evidenceHash, controlHash: controls.contentHash, protectedThrough: cutoff, affectedDates: [...source.affectedDates], evidence, controls: JSON.parse(canonical(controls)) };
 }
-module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE };
+module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE };

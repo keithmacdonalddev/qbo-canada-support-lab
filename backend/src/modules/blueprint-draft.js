@@ -33,7 +33,7 @@ function validateDraftInput(input) {
   if (!Number.isInteger(business.historicalMonths) || business.historicalMonths < 1 || business.historicalMonths > 60) throw problem('Choose 1 to 60 months of planned history');
   if (!Number.isInteger(business.fiscalYearStartMonth) || business.fiscalYearStartMonth < 1 || business.fiscalYearStartMonth > 12) throw problem('Choose a valid fiscal-year starting month');
   if (!['development', 'flagship'].includes(business.volumeProfile)) throw problem('Choose a supported business volume');
-  if (business.activityTemplateVersion !== undefined && ![1, 2].includes(business.activityTemplateVersion)) throw problem('Choose a supported business schedule.');
+  if (business.activityTemplateVersion !== undefined && ![1, 2, 3].includes(business.activityTemplateVersion)) throw problem('Choose a supported business schedule.');
   strict(input.mappings, Object.keys(MAPPINGS), 'Company mappings');
   const mappings = {};
   for (const key of Object.keys(MAPPINGS)) {
@@ -50,7 +50,7 @@ function buildDraftDefinition(input, proposal = createDefinitionsService().getFl
     publicSafeIdentity: { ...proposal.publicSafeIdentity, displayName: value.business.displayName, legalName: value.business.displayName },
     calendar: { openingDate: value.business.openingDate, historicalMonths: value.business.historicalMonths, fiscalYearStartMonth: value.business.fiscalYearStartMonth, timeZone: 'America/Halifax' },
     divisions: proposal.divisions.map(division => ({ ...division })), realismRules: [...proposal.realismRules],
-    ...(value.business.activityTemplateVersion === 2 ? { activityTemplateVersion: 2 } : {}),
+    ...([2, 3].includes(value.business.activityTemplateVersion) ? { activityTemplateVersion: value.business.activityTemplateVersion } : {}),
     generationSeed: proposal.generationSeed, volumeProfile: value.business.volumeProfile, mappings: value.mappings, masterBindings: value.masterBindings,
   };
 }

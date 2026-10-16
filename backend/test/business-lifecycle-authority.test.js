@@ -19,6 +19,6 @@ test('published authority must agree with its exact saved template, even when it
 });
 test('only missing version means the legacy schedule and draft changes retain unused explicit supplier IDs',()=>{
  const p=proposalView(),input={requestKey:'11111111-1111-4111-8111-111111111111',connectionId:'a'.repeat(24),baseHash:null,business:p.business,mappings:p.mappings,masterBindings:{'overhead-supplier-1':'101','overhead-supplier-2':'102','overhead-supplier-3':'103'}};
- for(const activityTemplateVersion of [null,0,3,'2',false])assert.throws(()=>validateDraftInput({...input,business:{...input.business,activityTemplateVersion}}),/supported business schedule/);
+ for(const activityTemplateVersion of [null,0,4,'2','3',false])assert.throws(()=>validateDraftInput({...input,business:{...input.business,activityTemplateVersion}}),/supported business schedule/);
  const revised=buildDraftDefinition({...input,business:{...input.business,activityTemplateVersion:1}});assert.equal(revised.activityTemplateVersion,undefined);assert.deepEqual(revised.masterBindings,input.masterBindings);assert.equal(masterRequirements({...input.business,activityTemplateVersion:1}).filter(row=>row.key.startsWith('overhead-supplier')).length,0);
 });

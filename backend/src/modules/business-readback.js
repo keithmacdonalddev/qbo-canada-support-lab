@@ -1,5 +1,5 @@
 'use strict';
-const { hash, canonical } = require('./business-calendar');
+const { hash, canonical, date } = require('./business-calendar');
 const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
 const { SUPPORTED } = require('./business-transaction-compiler');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -18,6 +18,12 @@ function validateCompilation(compiled) {
   for (const link of compiled.relationships) {
     if (!HASH.test(link.logicalKey || '') || keys.has(link.logicalKey) || !SUPPORTED.has(link.entity) || typeof link.qboId !== 'string' || !QBO_ID.test(link.qboId) || typeof link.syncToken !== 'string' || !VERSION.test(link.syncToken) || !HASH.test(link.fingerprint || '') || !['linked', 'prerequisite'].includes(link.kind) || !Array.isArray(link.links) || link.links.length > 101) invalid('The original relationship contract is invalid.');
     keys.add(link.logicalKey);
+  }
+  if (compiled.entity === 'CreditMemo') {
+    const source = compiled.relationships[0], payload = JSON.parse(request.body);
+    if (compiled.relationships.length !== 1 || source.entity !== 'Invoice' || source.kind !== 'prerequisite' || source.links.length) invalid('A service credit needs its exact invoice prerequisite.');
+    try { date(source.sourceTxnDate); date(payload.TxnDate); } catch { invalid('The original credit source accounting date is unavailable.'); }
+    if (source.sourceTxnDate > payload.TxnDate) invalid('The credit cannot precede its original invoice.');
   }
   return request;
 }
@@ -116,7 +122,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (!Array.isArray(record.Line) || record.Line.length > 101) invalid('Saved transaction lines are unavailable.');
     const expectedLines = payload.Line, actualLines = record.Line.filter(line => line.DetailType !== 'SubTotalLineDetail'), subtotals = record.Line.filter(line => line.DetailType === 'SubTotalLineDetail');
     const beforeTax = expectedLines.reduce((sum, line) => sum + cents(line.Amount), 0);
-    if (subtotals.length > 1 || subtotals.some(line => record.Line.at(-1) !== line || cents(line.Amount) !== beforeTax || !['Estimate', 'Invoice', 'SalesReceipt'].includes(compiled.entity))) mismatch('Unexpected subtotal lines were saved.');
+    if (subtotals.length > 1 || subtotals.some(line => record.Line.at(-1) !== line || cents(line.Amount) !== beforeTax || !['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo'].includes(compiled.entity))) mismatch('Unexpected subtotal lines were saved.');
     const used = new Set();
     if (actualLines.length !== expectedLines.length) mismatch('The saved financial line count differs.');
     for (const expected of expectedLines) {
@@ -127,7 +133,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       if (detail) for (const key of ['CustomerRef', 'ClassRef', 'ProjectRef', 'AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) mismatch('An unplanned line relationship is present.');
       if (!expected.LinkedTxn && linkList(actual.LinkedTxn).length) mismatch('An unplanned line transaction link is present.');
     }
-    if (['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill'].includes(compiled.entity)) {
+    if (['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill'].includes(compiled.entity)) {
       if (!taxMatches(taxPolicy, compiled, record)) mismatch('Approved tax amounts and rates remain unverified.');
       if (cents(record.TotalAmt) !== beforeTax + cents(record.TxnTaxDetail?.TotalTax)) mismatch('The saved total does not equal item amounts plus tax.');
     } else if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== beforeTax) mismatch('The saved deposit total differs from its linked receipt.');
@@ -146,6 +152,19 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       }
     }
     if (cents(record.Balance) !== cents(record.TotalAmt) - applied) mismatch('The saved balance does not reconcile to verified settlements.');
+  }
+  if (compiled.entity === 'CreditMemo') {
+    let consumed = 0;
+    for (const child of descendants) {
+      if (child.entity !== 'Payment') { mismatch('An unsupported settlement affects this credit.'); continue; }
+      for (const line of child.record.Line || []) {
+        const linked = linkList(line.LinkedTxn);
+        if (!linked.some(link => link.TxnType === 'CreditMemo' && link.TxnId === record.Id)) continue;
+        if (linked.length !== 1) { mismatch('A credit application amount has ambiguous transaction links.'); continue; }
+        consumed += cents(line.Amount);
+      }
+    }
+    if (consumed > cents(record.TotalAmt) || cents(record.RemainingCredit) !== cents(record.TotalAmt) - consumed) mismatch('The remaining credit does not reconcile to its verified applications.');
   }
   if (compiled.entity === 'PurchaseOrder') {
     let fullyReceived = true;

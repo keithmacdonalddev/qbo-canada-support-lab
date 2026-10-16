@@ -6,7 +6,7 @@ const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessGraphReader } = require('./business-graph-readback');
 const { createBusinessTransactionReader } = require('./business-reference');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
-const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill']);
+const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }); }
 const cents = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000000000;
@@ -23,7 +23,7 @@ function taxExpectation(policy, compiled) {
     sum += line.amountCents;
   }
   if (sum !== expected.totalTaxCents) fail('Approved tax lines do not match their expected total.');
-  const payload = JSON.parse(compiled.request.body), sales = ['Estimate', 'Invoice', 'SalesReceipt'].includes(compiled.entity);
+  const payload = JSON.parse(compiled.request.body), sales = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo'].includes(compiled.entity);
   const code = policy.tax?.[sales ? 'salesTax' : 'purchaseTax'];
   if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || typeof code !== 'string' || !QBO_ID.test(code) || !Array.isArray(payload.Line) || !payload.Line.length || payload.Line.some(line => line[line.DetailType]?.TaxCodeRef?.value !== code)) fail('The compiled transaction differs from its approved tax code policy.');
   return { version: 1, totalTaxCents: expected.totalTaxCents, lines: expected.lines.map(line => ({ rateId: line.rateId, percent: line.percent, taxableCents: line.taxableCents, amountCents: line.amountCents })) };

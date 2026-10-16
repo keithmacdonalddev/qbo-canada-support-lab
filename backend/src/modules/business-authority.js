@@ -5,7 +5,7 @@ const { draftView } = require('./blueprint-draft');
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_AUTHORITY_CHANGED' }); }
 function assertAuthorityDocument(row, scope) {
   const value = row?.payload;
-  if (!row || ![1, 2].includes(row.contractVersion) || row.contractVersion !== value?.version || !row.auditId || hash(value) !== row.contentHash || ![1, 2].includes(value?.version) || value.status !== 'published' || canonical(value.scope) !== canonical(scope) || typeof value.ownerId !== 'string' || value.ownershipDisposition !== 'retain-unmanaged' || ![1, 2].includes(value.activityTemplateVersion) || !/^[a-f0-9]{64}$/.test(value.baselineHash || '') || !/^[a-f0-9]{64}$/.test(value.inventoryHash || '')) fail('The exact published business authority is unavailable.');
+  if (!row || ![1, 2].includes(row.contractVersion) || row.contractVersion !== value?.version || !row.auditId || hash(value) !== row.contentHash || ![1, 2].includes(value?.version) || value.status !== 'published' || canonical(value.scope) !== canonical(scope) || typeof value.ownerId !== 'string' || value.ownershipDisposition !== 'retain-unmanaged' || ![1, 2, 3].includes(value.activityTemplateVersion) || !/^[a-f0-9]{64}$/.test(value.baselineHash || '') || !/^[a-f0-9]{64}$/.test(value.inventoryHash || '')) fail('The exact published business authority is unavailable.');
   if (value.version === 2) require('./business-authority-lineage').assertContinuityDocument(value);
   return value;
 }
@@ -29,6 +29,7 @@ async function readPublishedBusiness({ Authorities, Versions, Calendars, Connect
 async function assertPublishedBusiness(input) {
   const active = await readPublishedBusiness(input), { authority: row, value, calendar, lineage } = active;
   const { Calendars, scope, manifest, session, fence = false } = input;
+  if (input.requireScheduleAcceptance === true) require('./business-activity-preview').assertActivityTemplateAccepted(active.view.business, scope);
   if (calendar.pendingCommit || (manifest && (manifest.authorityHash !== calendar.authorityHash || calendar.blueprintHash !== manifest.blueprintHash || calendar.baseline?.evidenceHash !== manifest.baselineHash || calendar.verifiedThrough !== manifest.expectedCursor || calendar.revision !== manifest.expectedRevision))) fail('The active calendar differs from this reviewed operation.');
   if (manifest && (value.version === 2 ? manifest.continuity?.lineageHash !== lineage.lineageHash || manifest.continuity?.authorityHash !== row.contentHash || canonical(manifest.continuity?.segments || null) !== canonical(lineage.segments) : manifest.continuity !== undefined)) fail('The operation differs from its complete reviewed business lineage.');
   if (fence) {

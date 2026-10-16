@@ -48,7 +48,7 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date())
     const accountKeys = new Set([details.bankMapping, ...details.lines.map(line => line.accountMapping)].filter(Boolean));
     // Product account dependencies matter even where QBO obtains them through the item.
     for (const line of details.lines) for (const key of Object.values(masterRows.get(line.itemKey)?.accountMappings || {})) accountKeys.add(key);
-    if (['Invoice', 'Payment'].includes(event.entity)) accountKeys.add('accountsReceivable');
+    if (['Invoice', 'CreditMemo', 'Payment'].includes(event.entity)) accountKeys.add('accountsReceivable');
     if (['PurchaseOrder', 'Bill', 'BillPayment'].includes(event.entity)) accountKeys.add('accountsPayable');
     if (details.destination === 'undeposited_funds' || event.entity === 'Deposit') accountKeys.add('undepositedFunds');
     for (const key of accountKeys) references.set('Account:' + key, bind(key, 'Account', mappingRows, setup.options.accounts));
