@@ -1,5 +1,12 @@
 # Codex Project Memory
 
+## Execution correction (2026-10-16)
+
+The whole conversation was audited against original records and direct company receipts. Follow docs/agent-harness/FULL_GOAL_EXECUTION.md for the complete outcome, existing authority, branch-specific blockers and concrete next step. A report/code/setup milestone is not completion, and the owner’s status questions do not replace the full goal. Ordinary new company work was wrongly held behind the cleanup/stock questions.
+
+Goal tracking remained paused after the owner’s continue request and is still paused in the current audit; tools cannot resume it. The owner’s intent is to continue. Keep authorized current-turn work moving, state the resume-control limitation once, and verify active tracking before promising automatic continuation. This is not a new owner pause or permission requirement. Raw source index: artifacts/goal-realization/conversation-execution-audit-20261016.json.
+
+
 ## Verified company population (2026-10-16T17:35:14.167Z)
 
 - Production company ending 2856 now has 60 actual newly created native masters: 7 accounts, 48 customers, 1 employee and 4 Service Items. Every ID has its original accepted receipt and independent readback. The app visibly shows 60 verified records and saved draft v4. This does not establish historical transactions, report acceptance or full-goal completion.

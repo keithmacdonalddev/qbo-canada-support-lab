@@ -36,6 +36,12 @@ The practical mental model is:
 - Separate what exists now from what is missing or optional, and say whether the user needs to do anything.
 - The user is a self-taught solo developer. Technical language is useful when it teaches; unexplained jargon and long abstract framing are not.
 
+## Full-goal execution
+
+For the owner’s full product/company request, follow [the execution contract and current handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md). Keep the complete outcome as the finish line and continue the next authorized step after each verified milestone. An unanswered decision blocks only its dependent actions; check independent branches before calling the whole job blocked. Reuse valid target-specific authorization while respecting explicit budgets and factual/destructive boundaries. Status questions and frustration do not cancel the goal or justify an acknowledgement-only final response.
+
+Check the actual goal-control state before promising automatic continuation and after a resume instruction. If it remains paused despite the owner’s continue instruction, keep authorized work moving in the current turn, report the unavailable resume control once, and do not claim the automatic task is active. These instructions do not grant new QBO, database, provider or service authority.
+
 ## Current UI Target
 
 The owner uses this app on desktop. Prioritize desktop UI and rendered desktop verification. Do not spend time on mobile or 390px viewport checks unless the owner explicitly requests them. Responsive improvements may be made when useful, but they do not create a mobile testing requirement for current work. This project-specific direction overrides the generic responsive check in `AGENT_WORKFLOW.md`.
@@ -52,7 +58,7 @@ Multiple coding-agent sessions may work in this checkout at the same time.
 
 ## Current Implementation Snapshot
 
-Treat docs as useful but potentially stale. Re-check source before making status claims.
+Treat docs as useful but potentially stale. Re-check source before making status claims. Use [the current full-goal handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md) and its direct evidence for current company progress; the dated early-rebuild snapshots below are historical and must not reset an already prepared company to an empty state.
 
 - Rebuild authority: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, and `REBUILD_RELEASE_EVIDENCE.md`.
 - Rebuild status (2026-08-09): Phase 0 is complete; Phase 1's catalog/profile/volume direction is owner-approved and all 48 report rows are statically classified, while 24 create/update cells, six void operations, two lower-tier API questions, and dataset evidence remain open; Phase 2's fixture-design gate is accepted, with React interaction/NVDA/forced-colours checks deferred to Phase 4; an initial non-live Phase 3 read-only server foundation exists. No new rebuild QBO mutation path exists.
