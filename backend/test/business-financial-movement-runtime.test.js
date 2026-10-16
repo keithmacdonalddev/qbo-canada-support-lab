@@ -15,7 +15,7 @@ test('normal v1 and v2 operations derive exact original accepted movements, reta
   const outcome=await runtime.execute();assert.equal(outcome.complete,true,JSON.stringify(outcome));
   const stored=proof(h),basis=stored.financialBasis,creates=candidate.records.filter(row=>row.kind==='create');assert.equal(basis.length,creates.length);assert.equal(new Set(basis.map(row=>row.logicalKey)).size,basis.length);
   for(const row of basis){assert.equal(row.operationId,p.operationId);assert.equal(row.policyHash,h.data.Steps.find(step=>step.logicalKey===row.logicalKey).dispatch.policyHash);assert.equal(row.policy,undefined);assert.equal(row.compilation,undefined);assert.equal(row.receiptSource,h.data.Steps.find(step=>step.logicalKey===row.logicalKey).receipt.source);assert.ok(['create-response','request-correlated-readback'].includes(row.receiptSource));}
-  const summary=(await runtime.inspect()).financialMovements;assert.equal(summary.status,'passed');assert.equal(summary.complete,true);assert.equal(summary.checks.length,4);assert.ok(summary.checks.every(row=>row.differenceCents===0));
+  const summary=(await runtime.inspect()).financialMovements;assert.equal(summary.status,'passed');assert.equal(summary.complete,true);assert.equal(summary.checks.length,8);assert.ok(summary.checks.every(row=>row.differenceCents===0));
   const tb=h.reportSources({fromDate:'2026-10-01',throughDate:'2026-10-08'}).reports.TrialBalance;
   for(const row of summary.checks){const cells=tb.Rows.Row.find(record=>record.ColData?.[0].id===row.accountId).ColData;assert.equal(row.actualCents,cents(cells[1].value)-cents(cells[2].value));}
   const before=h.posts;assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,before);

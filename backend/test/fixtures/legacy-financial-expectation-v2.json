@@ -1,0 +1,512 @@
+{
+  "capturedFrom": "287f94e",
+  "scope": {
+    "environment": "sandbox",
+    "realmId": "123",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "period": {
+    "fromDate": "2026-10-01",
+    "throughDate": "2026-10-31"
+  },
+  "mappings": {
+    "operatingBank": "1",
+    "accountsReceivable": "2",
+    "accountsPayable": "3",
+    "undepositedFunds": "4",
+    "serviceIncome": "5",
+    "supplyIncome": "6",
+    "careIncome": "7",
+    "operatingExpense": "8",
+    "inventoryAsset": "9",
+    "costOfGoods": "10",
+    "salesTax": "11",
+    "purchaseTax": "12"
+  },
+  "expectation": {
+    "version": 2,
+    "scope": {
+      "realmId": "123",
+      "environment": "sandbox",
+      "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "period": {
+      "fromDate": "2026-10-01",
+      "throughDate": "2026-10-31"
+    },
+    "accounts": [
+      {
+        "key": "operatingBank",
+        "id": "1",
+        "definitionHash": "21549e3dc66abcd00dc5d90855a41f5132ba72aca1478ab7830e18ef31ed3205"
+      },
+      {
+        "key": "undepositedFunds",
+        "id": "4",
+        "definitionHash": "aa88fd8b1587817aee0eb5e0500a5bf4c8caa15199f5ba8eda94ebfda234ec90"
+      },
+      {
+        "key": "accountsReceivable",
+        "id": "2",
+        "definitionHash": "192368f1dbdaed1b1175964606e52d405c7b86faa66018df5b747685720c7ec3"
+      },
+      {
+        "key": "accountsPayable",
+        "id": "3",
+        "definitionHash": "b21aaa63f1bc7bd8a4180d01cc92d9801dd0ee8476f5a26dbb335809cb18532d"
+      }
+    ],
+    "opening": {
+      "operatingBank": 100000,
+      "undepositedFunds": 0,
+      "accountsReceivable": 0,
+      "accountsPayable": 0
+    },
+    "source": {
+      "version": 2,
+      "reportSourceVersion": 3,
+      "scope": {
+        "realmId": "123",
+        "environment": "sandbox",
+        "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "period": {
+        "fromDate": "2026-10-01",
+        "throughDate": "2026-10-31"
+      },
+      "startedAt": "2026-12-01T14:59:59.999Z",
+      "observedAt": "2026-12-01T15:00:00.000Z",
+      "observationHash": "1be8e94113077cca59584f8556fcee85bc56a4b6120d9fd58bd90ddfa1b7113e",
+      "report": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 1295,
+        "sha256": "ea70da012e7cb5f40827b38ef9324ee50db7a2225aeef3afdf4c915caa72de47",
+        "body": "H4sIAAAAAAAACq2UTUvDQBCG/0qZcyqbVqzm1g9RQWxJ40l6mGbHsrjZDZtN21Dy32XTGhMqKiW34WV43pnZmT3AVMs8URkEh1MIwVsVRsJKggDGcaxzZaH0WvKM1uJMnBriTl2VHjwScjIVNzeGVFy4hPEMPLhXfEFGaA4BDNjgpu+z/tAHD0JKtbETzER2dDY5ylp/wcSZREagnKBEFRN4sLRo7BmO+VB6EOpd1Vmod19tzdBiFQuX7ky3KHPHnaD6qBr6EnzG2BVjLe0orDywRVqNweFOU2ijrxvoV8Up1ZmwxH+gXYQfNPAhxSS2uJaUdYUfNvALLDpl3zXYT2pLympTdAYfsQY+wn13YL9Vd6wT6ortN2ue6sz29HtvozXvbuaj5sLMU1JCbXoxpsKi/N2kPoP/+Ny2XQxa50P7lFR28QYt8yRBU5z+qNqwfuR5NH7+83K/2yg92BidpxDAg0HFI13NYFWWn30Q7wUPBQAA"
+      },
+      "accounts": [
+        {
+          "Id": "1",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "operatingBank",
+          "AccountType": "Bank",
+          "AccountSubType": "Bank",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 1000
+        },
+        {
+          "Id": "2",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "accountsReceivable",
+          "AccountType": "Accounts Receivable",
+          "AccountSubType": "AccountsReceivable",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "3",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "accountsPayable",
+          "AccountType": "Accounts Payable",
+          "AccountSubType": "AccountsPayable",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "4",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "undepositedFunds",
+          "AccountType": "Other Current Asset",
+          "AccountSubType": "UndepositedFunds",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "5",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "serviceIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "6",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "supplyIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "7",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "careIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "8",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "operatingExpense",
+          "AccountType": "Expense",
+          "AccountSubType": "Expense",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "9",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "inventoryAsset",
+          "AccountType": "Other Current Asset",
+          "AccountSubType": "Inventory",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "10",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "costOfGoods",
+          "AccountType": "Cost of Goods Sold",
+          "AccountSubType": "Cost of Goods Sold",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "970",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 970",
+          "AccountType": "Other Current Liability",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "971",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 971",
+          "AccountType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "972",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 972",
+          "AccountType": "Equity",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        }
+      ]
+    },
+    "sourceHash": "2835c1cfe453d6583fd1606cb3859cd9a7f7b5cc72366c664ce3ddea071acc82"
+  },
+  "expectationHash": "144d448185fc027cc6b4f79999fddd82872e503e1e47acc46462f59e20ec1017",
+  "observation": {
+    "version": 3,
+    "scope": {
+      "environment": "sandbox",
+      "realmId": "123",
+      "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "period": {
+      "fromDate": "2026-10-01",
+      "throughDate": "2026-10-31"
+    },
+    "startedAt": "2026-12-01T14:59:59.999Z",
+    "observedAt": "2026-12-01T15:00:00.000Z",
+    "reports": {
+      "TrialBalance": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 1295,
+        "sha256": "ea70da012e7cb5f40827b38ef9324ee50db7a2225aeef3afdf4c915caa72de47",
+        "body": "H4sIAAAAAAAACq2UTUvDQBCG/0qZcyqbVqzm1g9RQWxJ40l6mGbHsrjZDZtN21Dy32XTGhMqKiW34WV43pnZmT3AVMs8URkEh1MIwVsVRsJKggDGcaxzZaH0WvKM1uJMnBriTl2VHjwScjIVNzeGVFy4hPEMPLhXfEFGaA4BDNjgpu+z/tAHD0JKtbETzER2dDY5ylp/wcSZREagnKBEFRN4sLRo7BmO+VB6EOpd1Vmod19tzdBiFQuX7ky3KHPHnaD6qBr6EnzG2BVjLe0orDywRVqNweFOU2ijrxvoV8Up1ZmwxH+gXYQfNPAhxSS2uJaUdYUfNvALLDpl3zXYT2pLympTdAYfsQY+wn13YL9Vd6wT6ortN2ue6sz29HtvozXvbuaj5sLMU1JCbXoxpsKi/N2kPoP/+Ny2XQxa50P7lFR28QYt8yRBU5z+qNqwfuR5NH7+83K/2yg92BidpxDAg0HFI13NYFWWn30Q7wUPBQAA"
+      },
+      "BalanceSheet": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 634,
+        "sha256": "4592e81508c9fcec52c8308b5f78a47d7e1b55ce3e3abf3b1f32d19337f790fe",
+        "body": "H4sIAAAAAAAACp2QS2sCMRSF/4qcdSwZC13MbrRCF6UUx11xcZ25tMFMYvOoDJL/XuahWKRUurscTr4v9x6xsDo2xiM/jiPyt35cq6AZOYqqstEEJPEjXttAGmmTBJ6YanY9ITrHpmqRY1E8QmBp6ld2ytbIMZOzh2kmp/cZBFa8ty7MySs/OFwkfc5fqOkcc9JkKi4/mAMEykAuXOFkhiSwsod+h5U9nBZ4pED9rLr6lswOAl+k44A2u36lU5BJKe+kRNoIhHbfRT2g65Sxaci1443O3EvWhIYz+V+gSeDd2bgf68WpfZaVXAVlzS2+wnu+RTT2/qN4VrRVWgXFfkKmnvBnVKH9W3nxrjD1cnh1/YFNSt8gQqdSegIAAA=="
+      },
+      "ProfitAndLoss": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 711,
+        "sha256": "0f73713e2be96b1ddcbcc74759780611c6c64fc9f509c0f1e7cff9d18ff920f8",
+        "body": "H4sIAAAAAAAACp2QT2vCQBTEv0qY81qihR5ys1HaQlEx3oqHJXnKQrIv7L6tFdnvXhL/lFKK4m3eMPyGNwfkXIfGemSHk0T20cuVkZqQYVyWHKwgql/2ikXXiOuo8Eq6ItcTgnNkyz0y5OMJFKa2WpAzXCHDKB09DYbp4HEIhSW17ORZe+OPHS7o+uLPdNN1LBxvjIxt9c7eQ6EQ7eQPLx0iKix51z+x5N35g4kW3WvTxY0tuSEofOo6dPS3o9H9dbbShzRFXCvIvu3untAFitA02u1PK13A11FRYes4tD+hC7ygUgzbW/g5e0l4k2yZK594rqsrXfn8pbirad6S02LsNqGvlqwnf6Vpeo7d0zYjScwt281I/p1vHeM3XoEHTMcCAAA="
+      },
+      "AgedReceivables": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 544,
+        "sha256": "11aeba9e85a6e748016eb2b6716f060479d22808593a4678db6057d31e00618d",
+        "body": "H4sIAAAAAAAACrXQwUrDMBzH8Xf5Xc0kXaGw3OomepBNuuJFdvjbhlFIm5ImG2MEfAff0CeRZJ1gd/YWPoHwze+MpVau7QaI83iEeI/HsrFKQmBNrYRnf2zpjJGdnXLy/fmV8qmmgbMbzgIvbnjB76ZUaksKfucZniXV0sTYmFCdQk2+AsNjV79K0+gaAnM+z2YJn6UJGDa9bfTlW/EvAmtdyF4buyJLYHgj5QJb4yT8juFy+0BDM0AgryrjSOHq4yP5XtaFrGRzoA8lBzBsLRl708ATeIZCH+PGhT7Gkq1rWzKncfYYEvgwppSbMn+JO1yF33P+TxCG3Rvtegg8Gerq38H9D5wwxgcgAgAA"
+      },
+      "AgedPayables": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 541,
+        "sha256": "ed6355bbec5dfac93714e287d3bcb71b368e4e9e2a92b07bd6a9ff54c15c2e18",
+        "body": "H4sIAAAAAAAACrXQwWqDMBzH8Xf5XZeOWEFobq4d22G0xcouo4f/NBQhGonJipTA3mFvuCcZpnYwPe8WPoHwze+CtVaubjqIy3iEeAvHvLJKQmBLtYRnf2ztjJGNnXL0/fkV86nGAyczTgZezXjF76aUa0sK/ugZniWV0oTYkFD0Q026AcNjU+6lqXQJgSVfJouIL+IIDLvWVvr6rfAXga3OZKuN3ZAlMLyScgNb4yT8keF6+0Bd1UEgLQrjSOHm4yPpSZZ76uldyQ4MB0vGzgJ4BM+Q6XMYONPnkHFwdU2mHzcPFQN/jB35Lk9fwgg34fec/xMMq56Mdi0Engw15e/a/gf8/fDZHQIAAA=="
+      },
+      "GeneralLedger": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 378,
+        "sha256": "d1274a9745d4c1f5627d60e9bb581fba18103895a3b67ff6f9d5c7f931da9556",
+        "body": "H4sIAAAAAAAACmWQwWrDMBBE/2XOCtgp9KBbGpf20CTFDb0EH7bWUgSyFNYSoQT9e7GSHmrfhre7w8xesQ0uDX6Evt4l9KnIo42OodFQZGT1jx2F/Eh9tMHPR5u+D8nHOd7TsHDZ8RDmrOEvuzjeCpuJdlnhlcmwlLhJhH3/My1sGig8e/POYoOBxrpaP67qavVQQ+FwLkmnYiWHxj60fA4SG4oEhU9yacJREiN3CrfpE412vHWSRA5//G7ywp6F3BubbxYofESSuEhQ1cgKbbiUH7fhAn3qcv4FuBW8vHoBAAA="
+      },
+      "CashFlow": {
+        "encoding": "gzip-canonical-json-v2",
+        "byteLength": 436,
+        "sha256": "28c1ab0312ddf7c2a1b555bae52366cd0b65b177ec50f8fddde725c99fd3576b",
+        "body": "H4sIAAAAAAAACpWPMWvDMBSE/4q5WSlyCh20pU5Lp7S42YqHhy1igSIZ6TnGBP33YpEUiqdsxz3ed3dXVN6OZxehrjcJ9ZPl0bDVUNi1bC6GZyTxzz96JovUJIEPTZ0OGTGGoF07Q6Ha7SHw5rovHYzvoLCV25dNKTfPJQRqPfjArxRNzCFtGMn++Qc6LxkVxf7d+gkC30yBVyhZIgnUfsoDaj/d2++JKesL2XFBfQ7aGXcqWop9nnI/lFLKJymRGgGeh8XKz7e5K9BBc9H25E66MG6Ne4hVWR8fK9Wk9AsBXdIdtAEAAA=="
+      }
+    },
+    "accounts": [
+      {
+        "Id": "1",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "operatingBank",
+        "AccountType": "Bank",
+        "AccountSubType": "Bank",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 1000
+      },
+      {
+        "Id": "2",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "accountsReceivable",
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "3",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "accountsPayable",
+        "AccountType": "Accounts Payable",
+        "AccountSubType": "AccountsPayable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "4",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "undepositedFunds",
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "UndepositedFunds",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "5",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "serviceIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "6",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "supplyIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "7",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "careIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "8",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "operatingExpense",
+        "AccountType": "Expense",
+        "AccountSubType": "Expense",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "9",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "inventoryAsset",
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "Inventory",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "10",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "costOfGoods",
+        "AccountType": "Cost of Goods Sold",
+        "AccountSubType": "Cost of Goods Sold",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "970",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 970",
+        "AccountType": "Other Current Liability",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "971",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 971",
+        "AccountType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "972",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 972",
+        "AccountType": "Equity",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      }
+    ],
+    "sourceHash": "1be8e94113077cca59584f8556fcee85bc56a4b6120d9fd58bd90ddfa1b7113e"
+  },
+  "comparison": {
+    "version": 1,
+    "status": "passed",
+    "checks": [
+      {
+        "key": "operatingBank",
+        "label": "Operating bank",
+        "accountId": "1",
+        "openingCents": 100000,
+        "changeCents": 0,
+        "expectedCents": 100000,
+        "actualCents": 100000,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "undepositedFunds",
+        "label": "Undeposited funds",
+        "accountId": "4",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "accountsReceivable",
+        "label": "Accounts receivable",
+        "accountId": "2",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "accountsPayable",
+        "label": "Accounts payable",
+        "accountId": "3",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      }
+    ],
+    "signConvention": "debit-minus-credit",
+    "limitation": "Four selected balance-sheet accounts only. Expense/tax posting, inventory cost, general-ledger and cash-flow movement, and bank-statement reconciliation are not established."
+  },
+  "comparisonHash": "b96ea3494c0027c5986fedf4e0be01edf513ecca6dab0b4fa9c2b6b0e88c0200"
+}

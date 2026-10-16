@@ -1,0 +1,1171 @@
+{
+  "capturedFrom": "287f94e",
+  "scope": {
+    "environment": "sandbox",
+    "realmId": "123",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "period": {
+    "fromDate": "2026-10-01",
+    "throughDate": "2026-10-31"
+  },
+  "mappings": {
+    "operatingBank": "1",
+    "accountsReceivable": "2",
+    "accountsPayable": "3",
+    "undepositedFunds": "4",
+    "serviceIncome": "5",
+    "supplyIncome": "6",
+    "careIncome": "7",
+    "operatingExpense": "8",
+    "inventoryAsset": "9",
+    "costOfGoods": "10",
+    "salesTax": "11",
+    "purchaseTax": "12"
+  },
+  "expectation": {
+    "version": 1,
+    "scope": {
+      "realmId": "123",
+      "environment": "sandbox",
+      "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "period": {
+      "fromDate": "2026-10-01",
+      "throughDate": "2026-10-31"
+    },
+    "accounts": [
+      {
+        "key": "operatingBank",
+        "id": "1",
+        "definitionHash": "21549e3dc66abcd00dc5d90855a41f5132ba72aca1478ab7830e18ef31ed3205"
+      },
+      {
+        "key": "undepositedFunds",
+        "id": "4",
+        "definitionHash": "aa88fd8b1587817aee0eb5e0500a5bf4c8caa15199f5ba8eda94ebfda234ec90"
+      },
+      {
+        "key": "accountsReceivable",
+        "id": "2",
+        "definitionHash": "192368f1dbdaed1b1175964606e52d405c7b86faa66018df5b747685720c7ec3"
+      },
+      {
+        "key": "accountsPayable",
+        "id": "3",
+        "definitionHash": "b21aaa63f1bc7bd8a4180d01cc92d9801dd0ee8476f5a26dbb335809cb18532d"
+      }
+    ],
+    "opening": {
+      "operatingBank": 100000,
+      "undepositedFunds": 0,
+      "accountsReceivable": 0,
+      "accountsPayable": 0
+    },
+    "source": {
+      "version": 1,
+      "scope": {
+        "realmId": "123",
+        "environment": "sandbox",
+        "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "period": {
+        "fromDate": "2026-10-01",
+        "throughDate": "2026-10-31"
+      },
+      "startedAt": "2026-12-01T14:59:59.999Z",
+      "observedAt": "2026-12-01T15:00:00.000Z",
+      "observationHash": "2faf8da4f2e33bfac1b2bd5ef65e538361784a6160fae0baf5a7e40e2c2288be",
+      "report": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Account"
+            },
+            {
+              "ColTitle": "Debit"
+            },
+            {
+              "ColTitle": "Credit"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "ReportBasis": "Accrual",
+          "ReportName": "TrialBalance",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "ColData": [
+                {
+                  "id": "1",
+                  "value": "Bank"
+                },
+                {
+                  "value": "1000.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "4",
+                  "value": "Undeposited"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "2",
+                  "value": "Receivables"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "3",
+                  "value": "Payables"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "9",
+                  "value": "Inventory"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "970",
+                  "value": "Tax"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "971",
+                  "value": "Income"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "10",
+                  "value": "Cost of goods"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "972",
+                  "value": "Opening capital"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "1000.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "8",
+                  "value": "Operating expenses"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "TOTAL"
+                  },
+                  {
+                    "value": "1000.00"
+                  },
+                  {
+                    "value": "1000.00"
+                  }
+                ]
+              },
+              "group": "GrandTotal"
+            }
+          ]
+        }
+      },
+      "accounts": [
+        {
+          "Id": "1",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "operatingBank",
+          "AccountType": "Bank",
+          "AccountSubType": "Bank",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 1000
+        },
+        {
+          "Id": "2",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "accountsReceivable",
+          "AccountType": "Accounts Receivable",
+          "AccountSubType": "AccountsReceivable",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "3",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "accountsPayable",
+          "AccountType": "Accounts Payable",
+          "AccountSubType": "AccountsPayable",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "4",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "undepositedFunds",
+          "AccountType": "Other Current Asset",
+          "AccountSubType": "UndepositedFunds",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "5",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "serviceIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "6",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "supplyIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "7",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "careIncome",
+          "AccountType": "Income",
+          "AccountSubType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "8",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "operatingExpense",
+          "AccountType": "Expense",
+          "AccountSubType": "Expense",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "9",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "inventoryAsset",
+          "AccountType": "Other Current Asset",
+          "AccountSubType": "Inventory",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "10",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "costOfGoods",
+          "AccountType": "Cost of Goods Sold",
+          "AccountSubType": "Cost of Goods Sold",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "970",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 970",
+          "AccountType": "Other Current Liability",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "971",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 971",
+          "AccountType": "Income",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        },
+        {
+          "Id": "972",
+          "SyncToken": "0",
+          "Active": true,
+          "Name": "Fixture 972",
+          "AccountType": "Equity",
+          "CurrencyRef": {
+            "value": "CAD"
+          },
+          "CurrentBalance": 0
+        }
+      ]
+    },
+    "sourceHash": "5f44389b0985aa558303c24f5b651440a9652202c61d4cb5cf39f5c3659457db"
+  },
+  "expectationHash": "c6647456dd03540eb9d085f07bc32256d09095d5b0aa2e4f8fbbc1920d04c860",
+  "observation": {
+    "version": 2,
+    "scope": {
+      "environment": "sandbox",
+      "realmId": "123",
+      "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "period": {
+      "fromDate": "2026-10-01",
+      "throughDate": "2026-10-31"
+    },
+    "startedAt": "2026-12-01T14:59:59.999Z",
+    "observedAt": "2026-12-01T15:00:00.000Z",
+    "reports": {
+      "TrialBalance": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Account"
+            },
+            {
+              "ColTitle": "Debit"
+            },
+            {
+              "ColTitle": "Credit"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "ReportBasis": "Accrual",
+          "ReportName": "TrialBalance",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "ColData": [
+                {
+                  "id": "1",
+                  "value": "Bank"
+                },
+                {
+                  "value": "1000.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "4",
+                  "value": "Undeposited"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "2",
+                  "value": "Receivables"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "3",
+                  "value": "Payables"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "9",
+                  "value": "Inventory"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "970",
+                  "value": "Tax"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "971",
+                  "value": "Income"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "10",
+                  "value": "Cost of goods"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "972",
+                  "value": "Opening capital"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "1000.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "ColData": [
+                {
+                  "id": "8",
+                  "value": "Operating expenses"
+                },
+                {
+                  "value": "0.00"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "TOTAL"
+                  },
+                  {
+                    "value": "1000.00"
+                  },
+                  {
+                    "value": "1000.00"
+                  }
+                ]
+              },
+              "group": "GrandTotal"
+            }
+          ]
+        }
+      },
+      "BalanceSheet": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Account"
+            },
+            {
+              "ColTitle": "Total"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "ReportBasis": "Accrual",
+          "ReportName": "BalanceSheet",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "ColData": [
+                {
+                  "id": "bank",
+                  "value": "Bank"
+                },
+                {
+                  "value": "1000.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Bank accounts"
+                  },
+                  {
+                    "value": "1000.00"
+                  }
+                ]
+              },
+              "group": "BankAccounts",
+              "type": "Section"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Assets"
+                  },
+                  {
+                    "value": "1000.00"
+                  }
+                ]
+              },
+              "group": "Assets",
+              "type": "Section"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Liabilities and equity"
+                  },
+                  {
+                    "value": "1000.00"
+                  }
+                ]
+              },
+              "group": "LiabilitiesAndEquity",
+              "type": "Section"
+            }
+          ]
+        }
+      },
+      "ProfitAndLoss": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Account"
+            },
+            {
+              "ColTitle": "Total"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "ReportBasis": "Accrual",
+          "ReportName": "ProfitAndLoss",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "ColData": [
+                {
+                  "id": "income",
+                  "value": "Income"
+                },
+                {
+                  "value": "0.00"
+                }
+              ],
+              "type": "Data"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Income"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "Income",
+              "type": "Section"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Cost of goods sold"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "COGS",
+              "type": "Section"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Operating expenses"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "Expenses",
+              "type": "Section"
+            },
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "Net income"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "NetIncome",
+              "type": "Section"
+            }
+          ]
+        }
+      },
+      "AgedReceivables": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Name"
+            },
+            {
+              "ColTitle": "Current"
+            },
+            {
+              "ColTitle": "1–30"
+            },
+            {
+              "ColTitle": "31–60"
+            },
+            {
+              "ColTitle": "61–90"
+            },
+            {
+              "ColTitle": "90+"
+            },
+            {
+              "ColTitle": "Total"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "Option": [
+            {
+              "Name": "NoReportData",
+              "Value": "true"
+            }
+          ],
+          "ReportBasis": "Accrual",
+          "ReportName": "AgedReceivables",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "TOTAL"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "GrandTotal"
+            }
+          ]
+        }
+      },
+      "AgedPayables": {
+        "Columns": {
+          "Column": [
+            {
+              "ColTitle": "Name"
+            },
+            {
+              "ColTitle": "Current"
+            },
+            {
+              "ColTitle": "1–30"
+            },
+            {
+              "ColTitle": "31–60"
+            },
+            {
+              "ColTitle": "61–90"
+            },
+            {
+              "ColTitle": "90+"
+            },
+            {
+              "ColTitle": "Total"
+            }
+          ]
+        },
+        "Header": {
+          "Currency": "CAD",
+          "EndPeriod": "2026-10-31",
+          "Option": [
+            {
+              "Name": "NoReportData",
+              "Value": "true"
+            }
+          ],
+          "ReportBasis": "Accrual",
+          "ReportName": "AgedPayables",
+          "StartPeriod": "2026-10-01"
+        },
+        "Rows": {
+          "Row": [
+            {
+              "Summary": {
+                "ColData": [
+                  {
+                    "value": "TOTAL"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  },
+                  {
+                    "value": "0.00"
+                  }
+                ]
+              },
+              "group": "GrandTotal"
+            }
+          ]
+        }
+      },
+      "GeneralLedger": {
+        "encoding": "gzip-canonical-json-v1",
+        "byteLength": 378,
+        "sha256": "d1274a9745d4c1f5627d60e9bb581fba18103895a3b67ff6f9d5c7f931da9556",
+        "body": "H4sIAAAAAAAACmWQwWrDMBBE/2XOCtgp9KBbGpf20CTFDb0EH7bWUgSyFNYSoQT9e7GSHmrfhre7w8xesQ0uDX6Evt4l9KnIo42OodFQZGT1jx2F/Eh9tMHPR5u+D8nHOd7TsHDZ8RDmrOEvuzjeCpuJdlnhlcmwlLhJhH3/My1sGig8e/POYoOBxrpaP67qavVQQ+FwLkmnYiWHxj60fA4SG4oEhU9yacJREiN3CrfpE412vHWSRA5//G7ywp6F3BubbxYofESSuEhQ1cgKbbiUH7fhAn3qcv4FuBW8vHoBAAA="
+      },
+      "CashFlow": {
+        "encoding": "gzip-canonical-json-v1",
+        "byteLength": 436,
+        "sha256": "28c1ab0312ddf7c2a1b555bae52366cd0b65b177ec50f8fddde725c99fd3576b",
+        "body": "H4sIAAAAAAAACpWPMWvDMBSE/4q5WSlyCh20pU5Lp7S42YqHhy1igSIZ6TnGBP33YpEUiqdsxz3ed3dXVN6OZxehrjcJ9ZPl0bDVUNi1bC6GZyTxzz96JovUJIEPTZ0OGTGGoF07Q6Ha7SHw5rovHYzvoLCV25dNKTfPJQRqPfjArxRNzCFtGMn++Qc6LxkVxf7d+gkC30yBVyhZIgnUfsoDaj/d2++JKesL2XFBfQ7aGXcqWop9nnI/lFLKJymRGgGeh8XKz7e5K9BBc9H25E66MG6Ne4hVWR8fK9Wk9AsBXdIdtAEAAA=="
+      }
+    },
+    "accounts": [
+      {
+        "Id": "1",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "operatingBank",
+        "AccountType": "Bank",
+        "AccountSubType": "Bank",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 1000
+      },
+      {
+        "Id": "2",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "accountsReceivable",
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "3",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "accountsPayable",
+        "AccountType": "Accounts Payable",
+        "AccountSubType": "AccountsPayable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "4",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "undepositedFunds",
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "UndepositedFunds",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "5",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "serviceIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "6",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "supplyIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "7",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "careIncome",
+        "AccountType": "Income",
+        "AccountSubType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "8",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "operatingExpense",
+        "AccountType": "Expense",
+        "AccountSubType": "Expense",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "9",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "inventoryAsset",
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "Inventory",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "10",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "costOfGoods",
+        "AccountType": "Cost of Goods Sold",
+        "AccountSubType": "Cost of Goods Sold",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "970",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 970",
+        "AccountType": "Other Current Liability",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "971",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 971",
+        "AccountType": "Income",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      },
+      {
+        "Id": "972",
+        "SyncToken": "0",
+        "Active": true,
+        "Name": "Fixture 972",
+        "AccountType": "Equity",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "CurrentBalance": 0
+      }
+    ],
+    "sourceHash": "2faf8da4f2e33bfac1b2bd5ef65e538361784a6160fae0baf5a7e40e2c2288be"
+  },
+  "comparison": {
+    "version": 1,
+    "status": "passed",
+    "checks": [
+      {
+        "key": "operatingBank",
+        "label": "Operating bank",
+        "accountId": "1",
+        "openingCents": 100000,
+        "changeCents": 0,
+        "expectedCents": 100000,
+        "actualCents": 100000,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "undepositedFunds",
+        "label": "Undeposited funds",
+        "accountId": "4",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "accountsReceivable",
+        "label": "Accounts receivable",
+        "accountId": "2",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      },
+      {
+        "key": "accountsPayable",
+        "label": "Accounts payable",
+        "accountId": "3",
+        "openingCents": 0,
+        "changeCents": 0,
+        "expectedCents": 0,
+        "actualCents": 0,
+        "differenceCents": 0,
+        "status": "passed"
+      }
+    ],
+    "signConvention": "debit-minus-credit",
+    "limitation": "Four selected balance-sheet accounts only. Expense/tax posting, inventory cost, general-ledger and cash-flow movement, and bank-statement reconciliation are not established."
+  },
+  "comparisonHash": "b96ea3494c0027c5986fedf4e0be01edf513ecca6dab0b4fa9c2b6b0e88c0200"
+}

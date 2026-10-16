@@ -1,14 +1,15 @@
 'use strict';
 // Independent double-entry projections of accepted simulated QBO records. This
 // fixture never reads the application's plan, tax policy or verification flags.
-function detailReports({transactions,mappings,saleCosts,period,closingBank}){
+function detailReports({transactions,mappings,saleCosts,period,closingBank,earningsPostings}){
  const ledger=[];let cashChange=0;
  const post=(r,account,label,debit,credit)=>ledger.push({type:'Data',ColData:[{value:r.TxnDate},{id:r.Id,value:r.DocNumber||r.Id},{id:account,value:label},{value:r.CustomerRef?.name||r.VendorRef?.name||''},{value:r.PrivateNote||''},{value:debit?debit.toFixed(2):''},{value:credit?credit.toFixed(2):''}]});
+ const income=(r,net)=>{const saved=earningsPostings?.get(r.Id)?.filter(row=>row.kind==='income');if(saved?.length)for(const line of saved)post(r,line.accountId,'Income',0,line.amountCents/100);else post(r,'971','Income',0,net);};
  const posting=transactions.filter(row=>['Invoice','SalesReceipt','Bill','Payment','BillPayment','Deposit'].includes(row.entity)&&row.record.TxnDate>=period.fromDate&&row.record.TxnDate<=period.throughDate);
  for(const {entity,record:r}of posting){const net=(r.Line||[]).reduce((sum,line)=>sum+(line.Amount||0),0),tax=r.TxnTaxDetail?.TotalTax||0,gross=r.TotalAmt||0;
-  if(entity==='Invoice'){post(r,mappings.accountsReceivable,'Receivables',gross,0);post(r,'971','Income',0,net);post(r,'970','Sales tax',0,tax);}
+  if(entity==='Invoice'){post(r,mappings.accountsReceivable,'Receivables',gross,0);income(r,net);post(r,'970','Sales tax',0,tax);}
   if(entity==='Bill'){for(const line of r.Line||[])post(r,line.DetailType==='AccountBasedExpenseLineDetail'?line.AccountBasedExpenseLineDetail.AccountRef.value:mappings.inventoryAsset,line.DetailType==='AccountBasedExpenseLineDetail'?'Operating expense':'Stock',line.Amount,0);post(r,'970','Input tax',tax,0);post(r,mappings.accountsPayable,'Payables',0,gross);}
-  if(entity==='SalesReceipt'){post(r,mappings.operatingBank,'Bank',gross,0);post(r,'971','Income',0,net);post(r,'970','Sales tax',0,tax);const cost=saleCosts.get(r.Id)||0;post(r,mappings.costOfGoods,'Cost of goods',cost,0);post(r,mappings.inventoryAsset,'Stock',0,cost);cashChange+=gross;}
+  if(entity==='SalesReceipt'){post(r,mappings.operatingBank,'Bank',gross,0);income(r,net);post(r,'970','Sales tax',0,tax);const cost=saleCosts.get(r.Id)||0;post(r,mappings.costOfGoods,'Cost of goods',cost,0);post(r,mappings.inventoryAsset,'Stock',0,cost);cashChange+=gross;}
   if(entity==='Payment'){post(r,r.DepositToAccountRef.value,'Receipt destination',gross,0);post(r,mappings.accountsReceivable,'Receivables',0,gross);if(r.DepositToAccountRef.value===mappings.operatingBank)cashChange+=gross;}
   if(entity==='BillPayment'){post(r,mappings.accountsPayable,'Payables',gross,0);post(r,mappings.operatingBank,'Bank',0,gross);cashChange-=gross;}
   if(entity==='Deposit'){post(r,mappings.operatingBank,'Bank',gross,0);post(r,mappings.undepositedFunds,'Undeposited',0,gross);cashChange+=gross;}

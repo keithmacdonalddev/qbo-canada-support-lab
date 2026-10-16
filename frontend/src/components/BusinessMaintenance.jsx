@@ -57,6 +57,8 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
     if (saved.operationId !== operationId) throw new Error('The saved plan changed.')
     if (mounted.current) { setPlan(saved); setAcceptPlan(false); setRetirement(null); setRetirementReason('') }
   }
+  const nextFrom = view?.calendar?.verifiedThrough ? new Date(Date.parse(view.calendar.verifiedThrough + 'T12:00:00Z') + 86400000).toISOString().slice(0, 10) : view?.published?.openingDate
+  const monthEnd = nextFrom ? new Date(Date.UTC(Number(nextFrom.slice(0, 4)), Number(nextFrom.slice(5, 7)), 0)).toISOString().slice(0, 10) : undefined
   if (!enabled) return null
   return <section id="business-maintenance" aria-label="Business publication and calendar" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
     <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3"><h2 className="text-[13px] font-semibold">Business publication and calendar</h2><Button variant="ghost" size="sm" disabled={busy} onClick={() => act(load)}>Refresh business state</Button></header>
@@ -96,8 +98,8 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
         {view.owner && view.calendar.verifiedThrough && <BusinessContinuity realmId={realmId} environment={environment} connectionId={view.connectionId} published={view.published} calendar={view.calendar} onChanged={async () => { await load(); onChanged?.() }} api={api} />}
         {view.currentOperation && <Button variant="outline" disabled={busy} onClick={() => act(() => readPlan(view.currentOperation.operationId))}>Review current operation and recovery</Button>}
         {!view.calendar.currentOperationId && <form className="flex flex-wrap items-end gap-3" onSubmit={event => { event.preventDefault(); act(async () => { const identity = view.published.contentHash + ':' + view.calendar.revision + ':' + throughDate, requestKey = requests.current.get(identity) || crypto.randomUUID(); requests.current.set(identity, requestKey); const response = await api.post('/company/business-governance/operations/prepare', { requestKey, throughDate }, { timeout: 190000 }); await readPlan(response.data.data.operationId); setNotice('The exact operation is saved for review. No QuickBooks records were created.'); onChanged?.() }) }}>
-          <label className="space-y-1">Prepare through<input required type="date" value={throughDate} onChange={event => setThroughDate(event.target.value)} className="block rounded border border-[var(--line)] bg-[var(--surface)] p-2" /></label>
-          <Button type="submit" disabled={busy || !throughDate}>Prepare next business period</Button><p className="text-[var(--ink-2)]">At most 31 elapsed days per operation.</p>
+          <label className="space-y-1">Prepare through<input required type="date" min={nextFrom} max={monthEnd} value={throughDate} onChange={event => setThroughDate(event.target.value)} className="block rounded border border-[var(--line)] bg-[var(--surface)] p-2" /></label>
+          <Button type="submit" disabled={busy || !throughDate}>Prepare next business period</Button><p className="text-[var(--ink-2)]">Prepare through this month’s end, then continue with the next period. Income and expense proof stays within one calendar month.</p>
         </form>}
         {view.pendingOperations?.length > 0 && <div className="space-y-2"><h3 className="font-semibold">Saved plans awaiting owner approval</h3>{view.pendingOperations.map(operation => <div key={operation.operationId} className="flex items-center justify-between gap-3 rounded border border-[var(--line)] p-3"><p>{operation.fromDate} – {operation.throughDate} · {operation.recordCount} records</p><Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => readPlan(operation.operationId))}>Review saved plan {operation.operationId.slice(-6)}</Button></div>)}</div>}
       </>}

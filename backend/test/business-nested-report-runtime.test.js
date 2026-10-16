@@ -16,7 +16,7 @@ test('nested original-SDK reports survive capture, publication, new expectations
   assert.ok(h.reportSequence >= 14, 'publication rereads the original SDK reports with different Header.Time');
   const prepared = await h.service.prepare(h.user, { requestKey: 'nested-report-period-0001', throughDate: '2026-10-02' }), plan = h.data.Plans.find(row => row.planHash === prepared.planHash);
   assert.equal(plan.manifest.incomeExpectation.version, 2); assert.equal(plan.manifest.incomeExpectation.source.reportSourceVersion, 3);
-  assert.equal(plan.manifest.financialExpectation.version, 2); assert.equal(plan.manifest.financialExpectation.source.reportSourceVersion, 3);
+  assert.equal(plan.manifest.financialExpectation.version, 3); assert.equal(plan.manifest.financialExpectation.source.reportSourceVersion, 3);
   assert.equal(plan.manifest.incomeExpectation.source.report.encoding, 'gzip-canonical-json-v2'); assert.doesNotThrow(() => hash(plan.manifest));
   await h.service.approve(h.user, prepared.operationId, { planHash: prepared.planHash });
   const run = h.data.Runs.find(row => row._id === prepared.operationId); assert.equal(run.approval.reportEvidence.sourceVersion, 3);
