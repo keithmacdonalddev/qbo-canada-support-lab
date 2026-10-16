@@ -50,3 +50,10 @@ test('cancellation during the starting observation retains the reserved unsent r
   const h = harness(), controller = new AbortController(); h.beforeProvider = async options => { if (options.url.includes('/reports/')) controller.abort(); };
   const result = await h.runtime.execute({signal:controller.signal}); assert.equal(result.state, 'interrupted'); assert.equal(result.complete, false); assert.equal(h.posts, 0); assert.equal(h.data.Steps.length, 0); assert.equal(h.data.Runs[0].leaseToken == null, true, 'No worker lease was claimed');
 });
+
+test('legacy plans without financial expectations admit fresh source BSON before any create', { timeout: 120000 }, async () => {
+  const h = harness(), original = h.onSend, beforeCursor = h.data.Calendars[0].verifiedThrough; assert.equal(h.data.Plans[0].manifest.financialExpectation, undefined);
+  h.onSend = async options => { const response = await original(options); if (options.method === 'GET' && response.json?.QueryResponse?.Account) { response.json.QueryResponse.Account.push({ Id: '99999', SyncToken: '0', AccountType: 'Other Asset', metadata: Array(1300000).fill(0) }); response.json.QueryResponse.maxResults++; } return response; };
+  await assert.rejects(h.runtime.execute(), error => error.code === 'BUSINESS_FINANCIAL_MOVEMENTS_UNVERIFIED' && /BSON storage budget/.test(error.message));
+  assert.equal(h.posts, 0); assert.equal(h.data.Steps.length, 0); assert.equal(h.data.Evidence.length, 0); assert.equal(h.data.Calendars[0].verifiedThrough, beforeCursor);
+});

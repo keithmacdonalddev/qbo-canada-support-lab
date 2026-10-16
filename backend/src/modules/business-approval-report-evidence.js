@@ -10,7 +10,7 @@ function fail() { throw Object.assign(Error('The exact retained seven-report app
 function validateApprovalReports(payload, scope, operationId, planHash, actorId, ownerId, approvedAt) {
   if (!payload || payload.version !== 1 || payload.kind !== KIND || canonical(payload.scope) !== canonical(scope) || payload.operationId !== operationId || payload.planHash !== planHash || payload.actorId !== actorId || payload.ownerId !== ownerId) fail();
   const source = payload.sources, started = Date.parse(source?.startedAt), ended = Date.parse(source?.observedAt), approved = Date.parse(approvedAt);
-  if (!source || source.version !== 2 || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical(payload.period) || !HASH.test(payload.sourceHash || '') || hash(source) !== payload.sourceHash || Buffer.byteLength(canonical(source)) > MAX_SOURCE_BYTES || !Number.isFinite(started) || !Number.isFinite(ended) || !Number.isFinite(approved) || ended < started || ended - started > 180000 || ended > approved || approved - started > 300000) fail();
+  if (!source || ![2, 3].includes(source.version) || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical(payload.period) || !HASH.test(payload.sourceHash || '') || hash(source) !== payload.sourceHash || Buffer.byteLength(canonical(source)) > MAX_SOURCE_BYTES || !Number.isFinite(started) || !Number.isFinite(ended) || !Number.isFinite(approved) || ended < started || ended - started > 180000 || ended > approved || approved - started > 300000) fail();
   const evaluation = evaluateReportSources(source, { allowExplicitZero: true });
   if (evaluation.status !== 'checks-passed' || !reportComplete(evaluation, source)) fail();
   return evaluation;
@@ -29,7 +29,7 @@ async function retainApprovalReports({ models, scope, operationId, planHash, act
   if (existing) fail();
   await models.Candidates.create([row], { session });
   await models.Audits.create([{ _id: auditId, userId: ownerId, ...(actorId !== ownerId ? { actorUserId: actorId } : {}), realmId: scope.realmId, action: 'Business approval report observation retained', actionType: 'manual', outcome: 'success', afterState: { ...scope, operationId, planHash, reportEvidenceHash: evidenceHash, reportSourceHash: sourceHash, observedAt: source.observedAt, reports: 7 } }], { session });
-  return { version: 1, sourceVersion: 2, evidenceHash, sourceHash, observedAt: source.observedAt };
+  return { version: 1, sourceVersion: source.version, evidenceHash, sourceHash, observedAt: source.observedAt };
 }
 function auditIdentity(audit, ownerId, actorId, scope, action) {
   return audit && String(audit.userId) === ownerId && String(audit.actorUserId || audit.userId) === actorId && audit.realmId === scope.realmId && audit.action === action && audit.actionType === 'manual' && audit.outcome === 'success';
@@ -46,9 +46,9 @@ async function readApprovalReports({ models, run, ownerId, session }) {
   // damaged mutable run. Removing the pointer cannot downgrade a new approval.
   const marked = details.reportEvidenceHash !== undefined || details.reportSourceHash !== undefined;
   if (!marked) { if (pointer !== undefined) fail(); return null; }
-  if (!pointer || pointer.version !== 1 || pointer.sourceVersion !== 2 || !HASH.test(pointer.evidenceHash || '') || !HASH.test(pointer.sourceHash || '') || details.reportEvidenceHash !== pointer.evidenceHash || details.reportSourceHash !== pointer.sourceHash) fail();
+  if (!pointer || pointer.version !== 1 || ![2, 3].includes(pointer.sourceVersion) || !HASH.test(pointer.evidenceHash || '') || !HASH.test(pointer.sourceHash || '') || details.reportEvidenceHash !== pointer.evidenceHash || details.reportSourceHash !== pointer.sourceHash) fail();
   const row = await models.Candidates.findOne({ ...scope, candidateHash: pointer.evidenceHash }).session(session).maxTimeMS(3000).lean();
-  if (!row || row.contractVersion !== 1 || String(row.actorId) !== actorId || !row.auditId || hash(row.payload) !== pointer.evidenceHash || row.payload.sourceHash !== pointer.sourceHash || row.payload.sources?.observedAt !== pointer.observedAt || canonical(row.payload.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate })) fail();
+  if (!row || row.contractVersion !== 1 || String(row.actorId) !== actorId || !row.auditId || hash(row.payload) !== pointer.evidenceHash || row.payload.sourceHash !== pointer.sourceHash || row.payload.sources?.version !== pointer.sourceVersion || row.payload.sources?.observedAt !== pointer.observedAt || canonical(row.payload.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate })) fail();
   const evaluation = validateApprovalReports(row.payload, scope, operationId, run.planHash, actorId, ownerId, run.approval.approvedAt);
   const observation = await models.Audits.findOne({ _id: row.auditId }).session(session).maxTimeMS(3000).lean();
   const expected = { ...scope, operationId, planHash: run.planHash, reportEvidenceHash: pointer.evidenceHash, reportSourceHash: pointer.sourceHash, observedAt: pointer.observedAt, reports: 7 };

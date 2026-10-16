@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const { fixture, scope } = require('./helpers/business-governance-fixture');
-const { hash } = require('../src/modules/business-calendar');
+const { hash, canonical } = require('../src/modules/business-calendar');
 const { freezeWriteRequest } = require('../src/modules/qbo-write-contract');
 const { KEYS, balances, createFinancialExpectation, movementRow, compareFinancialMovements, assertMovementCapacity } = require('../src/modules/business-financial-movements');
 const period = { fromDate: '2026-10-01', throughDate: '2026-10-31' };
@@ -100,4 +100,11 @@ test('a selected parent with an explicit unambiguous direct row remains supporte
  assert.equal(compareFinancialMovements(expectation,[],source).status,'passed');
  tb.Rows.Row=tb.Rows.Row.filter(row=>row.ColData?.[0].id!==expectation.accounts[0].id);
  assert.equal(compareFinancialMovements(expectation,[],source).status,'unavailable');
+});
+
+test('fresh source BSON overhead is admitted with the worst complete proof before creates', () => {
+ const {expectation}=state(),manifest={financialExpectation:expectation,records:Array.from({length:500},()=>({kind:'create',relationships:[]}))};
+ assert.doesNotThrow(()=>assertMovementCapacity(manifest,{accounts:[{metadata:[0,0]}]}));
+ const source={accounts:[{metadata:Array(1300000).fill(0)}]}; assert.ok(Buffer.byteLength(canonical(source))<6000000);
+ assert.throws(()=>assertMovementCapacity(manifest,source),/BSON storage budget/);
 });

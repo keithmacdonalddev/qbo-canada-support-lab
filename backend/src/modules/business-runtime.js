@@ -79,9 +79,10 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
     const before = await verification.readFence(scope, { signal });
     const source = await createBusinessReportReader({ access, now, purpose: 'operation' })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
+    require('./business-financial-movements').assertMovementCapacity(plan.manifest, source);
     const evaluation = require('./book-evidence').evaluateReportSources(source, { allowExplicitZero: true });
-    if (source.version !== 2 || evaluation.status !== 'checks-passed' || !require('./business-financial-summary').reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before the first business write.');
-    const actual = plan.manifest.incomeExpectation ? require('./business-income-evidence').incomeCents(source.reports.ProfitAndLoss, { fromDate: run.fromDate, throughDate: run.throughDate }) : null;
+    if (![2, 3].includes(source.version) || evaluation.status !== 'checks-passed' || !require('./business-financial-summary').reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before the first business write.');
+    const actual = plan.manifest.incomeExpectation ? require('./business-income-evidence').incomeCents(require('./business-report-source').unpackReport('ProfitAndLoss', source.reports.ProfitAndLoss, source.version), { fromDate: run.fromDate, throughDate: run.throughDate }, source.version) : null;
     if (plan.manifest.incomeExpectation && actual !== plan.manifest.incomeExpectation.openingIncomeCents) fail('Period income changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
     if (plan.manifest.financialExpectation) {
       const opening = require('./business-financial-movements').compareFinancialMovements(plan.manifest.financialExpectation, [], source);

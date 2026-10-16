@@ -12,7 +12,7 @@ async function approve(h) { return h.service.approve(h.user, h.p.operationId, { 
 const retained = h => h.data.Candidates.filter(row => row.payload.kind === KIND);
 test('actual approval retains full seven-report sources and both exact audit links without financial writes', async () => {
   const h = await prepared(); await approve(h); const run = h.data.Runs[0], row = retained(h)[0];
-  assert.equal(h.posts, 0); assert.equal(retained(h).length, 1); assert.equal(row.payload.sources.version, 2); assert.equal(Object.keys(row.payload.sources.reports).length, 7);
+  assert.equal(h.posts, 0); assert.equal(retained(h).length, 1); assert.equal(row.payload.sources.version, 3); assert.ok(Object.values(row.payload.sources.reports).every(report => report.encoding === 'gzip-canonical-json-v2')); assert.equal(Object.keys(row.payload.sources.reports).length, 7);
   assert.equal(hash(row.payload), run.approval.reportEvidence.evidenceHash); assert.throws(() => validateOperationCandidate(row.payload, scope, h.clock));
   const audit = h.data.Audits.find(value => value._id === run.approval.auditId); assert.equal(audit.inputParams.details.reportEvidenceHash, row.candidateHash); assert.equal(audit.inputParams.details.reportSourceHash, row.payload.sourceHash);
   const reads = h.reads, review = await h.service.reviewOperation(h.user, h.p.operationId, 0);
@@ -57,4 +57,15 @@ test('fresh incomplete ledger or cash flow blocks first POST and the same approv
     const approval = structuredClone(h.data.Runs[0].approval); await assert.rejects(h.runtime(h.p.operationId).execute(), /seven critical reports/); assert.equal(h.posts, 0); assert.equal(h.data.Calendars[0].verifiedThrough, null);
     h.reportSources = source; assert.equal((await h.runtime(h.p.operationId).execute()).complete,true); assert.deepEqual(h.data.Runs[0].approval,approval);
   }
+});
+
+test('genuine version2 retained approval sources keep their original seven-report meaning', async () => {
+  const h = await prepared(); await approve(h); const run = h.data.Runs[0], row = retained(h)[0], approvalAudit = h.data.Audits.find(value => value._id === run.approval.auditId), observationAudit = h.data.Audits.find(value => value._id === row.auditId);
+  row.payload.sources.reports = Object.fromEntries(Object.entries(row.payload.sources.reports).map(([name, value]) => [name, packReport(name, unpackReport(name, value, 3), 2)])); row.payload.sources.version = 2;
+  row.payload.sourceHash = hash(row.payload.sources); row.candidateHash = hash(row.payload); row._id = hash({ scope, evidenceHash: row.candidateHash }).slice(0, 24); row.auditId = hash({ approvalReports: row.candidateHash }).slice(0, 24);
+  Object.assign(run.approval.reportEvidence, { sourceVersion: 2, evidenceHash: row.candidateHash, sourceHash: row.payload.sourceHash });
+  Object.assign(approvalAudit.inputParams.details, { reportEvidenceHash: row.candidateHash, reportSourceHash: row.payload.sourceHash });
+  observationAudit._id = row.auditId; Object.assign(observationAudit.afterState, { reportEvidenceHash: row.candidateHash, reportSourceHash: row.payload.sourceHash });
+  const reads = h.reads, original = hash(row.payload); const evidence = await readApprovalReports({ models: h.models, run, ownerId: h.user.id });
+  assert.equal(evidence.sourceVersion, 2); assert.equal(evidence.available, 7); assert.equal(hash(row.payload), original); assert.equal(h.reads, reads); assert.equal(h.posts, 0);
 });

@@ -57,10 +57,13 @@ function isQboError(err) {
  * @param {*} err
  * @returns {boolean} true if a QBO error response was sent
  */
-function respondQboError(res, err) {
+function respondQboError(res, err, readMetadata) {
+  // Only a trusted bounded-read caller supplies this count; never spread raw
+  // errors or arbitrary diagnostic data into a public response.
+  const readDetails = Number.isSafeInteger(readMetadata?.readAttempts) && readMetadata.readAttempts >= 0 && readMetadata.readAttempts <= 12 ? { readAttempts: readMetadata.readAttempts } : {};
   if (['write_admission', 'write_receipt'].includes(err?.qboStage)) {
     res.status(err.qboStage === 'write_receipt' ? 503 : 409).json({
-      error: err.message, code: err.qboStage === 'write_receipt' ? 'QBO_WRITE_OUTCOME_UNKNOWN' : 'QBO_WRITE_NOT_ADMITTED',
+      ...readDetails, error: err.message, code: err.qboStage === 'write_receipt' ? 'QBO_WRITE_OUTCOME_UNKNOWN' : 'QBO_WRITE_NOT_ADMITTED',
       outcomeUnknown: err.outcomeUnknown === true, intuit_tid: err.intuit_tid || null, qboStatus: null,
     });
     return true;
@@ -70,7 +73,7 @@ function respondQboError(res, err) {
   const httpStatus = err.status === 429 ? 429 : 502;
 
   res.status(httpStatus).json({
-    error: err.message || 'QBO API error',
+    ...readDetails, error: err.message || 'QBO API error',
     intuit_tid: err.intuit_tid || null,
     qboStatus: typeof err.status === 'number' ? err.status : null,
     ...(err.outcomeUnknown === true ? { outcomeUnknown: true, code: 'QBO_WRITE_OUTCOME_UNKNOWN' } : {}),

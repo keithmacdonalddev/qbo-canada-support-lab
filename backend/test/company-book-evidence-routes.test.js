@@ -30,13 +30,14 @@ test('authenticated status and book results use the same current connection ID a
 test('report permission, revocation and connection changes stop actual route reads', async t=>routes(t,async(h,request)=>{
   h.data.Memberships[0].role='reviewer'; h.data.Memberships[0].permissionOverrides=['-reports.read'];
   // Invalid overrides fail closed; use suspended membership for an ordinary denial too.
-  assert.equal((await request(period)).status,403); assert.equal(h.reads,0); h.data.Memberships[0].permissionOverrides=[]; h.data.Memberships[0].status='suspended'; assert.equal((await request(period)).status,403); assert.equal(h.reads,0);
+  const deniedBeforeReads=await request(period); assert.equal(deniedBeforeReads.status,403); assert.equal((await deniedBeforeReads.json()).readAttempts,0); assert.equal(h.reads,0); h.data.Memberships[0].permissionOverrides=[]; h.data.Memberships[0].status='suspended'; assert.equal((await request(period)).status,403); assert.equal(h.reads,0);
   h.data.Memberships[0].status='active'; h.onGet=async()=>{h.data.Connections[0]._id='e'.repeat(24);}; const changed=await request(period); assert.equal(changed.status,409); assert.ok(h.reads<=2); assert.equal(h.posts,0);
 }));
 test('public report parameters, oversized detail and upstream authorization stay bounded and never expire the app session',async t=>routes(t,async(h,request)=>{
   for(const query of ['?realmId=456','?fromDate=2026-02-30','?throughDate=2026-10-01&throughDate=2026-10-02']) assert.equal((await request('/api/company/book-evidence'+query)).status,400);
   assert.equal(h.reads,0); const original=h.client.oauthClient.makeApiCall;
-  h.client.oauthClient.makeApiCall=async()=>({status:401,json:{Fault:{Error:[{Message:'Fixture upstream denied'}]}}}); const denied=await request(period); assert.equal(denied.status,502); assert.equal((await denied.json()).qboStatus,401);
+  h.client.oauthClient.makeApiCall=async()=>({status:401,json:{Fault:{Error:[{Message:'Fixture upstream denied'}]}}}); const denied=await request(period); assert.equal(denied.status,502); const deniedBody=await denied.json(); assert.equal(deniedBody.qboStatus,401); assert.ok(deniedBody.readAttempts>=1&&deniedBody.readAttempts<=2);
+  h.client.oauthClient.makeApiCall=async()=>({status:429,json:{Fault:{Error:[{Message:'Fixture rate limit'}]}}}); const limited=await request(period); assert.equal(limited.status,429); assert.ok((await limited.json()).readAttempts>=1);
   h.client.oauthClient.makeApiCall=async options=>{const result=await original(options);if(options.url.includes('/reports/GeneralLedger'))result.json.Rows.Row=[{ColData:[{value:'x'.repeat(6000001)},{value:''}]}];return result;};
-  const large=await request(period); assert.equal(large.status,409); assert.equal((await large.json()).code,'BUSINESS_REPORT_UNVERIFIED'); assert.equal(h.posts,0);
+  const large=await request(period); assert.equal(large.status,409); const largeBody=await large.json(); assert.equal(largeBody.code,'BUSINESS_REPORT_UNVERIFIED'); assert.ok(largeBody.readAttempts>=1&&largeBody.readAttempts<=12); assert.equal(h.posts,0);
 }));

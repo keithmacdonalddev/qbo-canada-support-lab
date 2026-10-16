@@ -10,14 +10,15 @@ export default function BookEvidence({ realmId, environment, connectionId, enabl
   const [result, setResult] = useState(null)
   const [state, setState] = useState('idle')
   const [error, setError] = useState(null)
+  const [failureReads, setFailureReads] = useState(null)
   const counter = useRef({ value: 0, controller: null })
   useEffect(() => { const requests = counter.current; return () => { requests.value++; requests.controller?.abort() } }, [])
   async function check(event) {
     event.preventDefault()
-    setResult(null); setError(null)
+    setResult(null); setError(null); setFailureReads(null)
     const fields = new FormData(event.currentTarget)
     const fromDate = String(fields.get('fromDate') || ''), throughDate = String(fields.get('throughDate') || '')
-    if (!fromDate || !throughDate || fromDate > throughDate || throughDate > today) { setError('Choose a valid elapsed reporting period.'); return }
+    if (!fromDate || !throughDate || fromDate > throughDate || throughDate > today) { setFailureReads(0); setError('Choose a valid elapsed reporting period.'); return }
     const requests = counter.current
     if (requests.controller) return
     const controller = new AbortController()
@@ -34,6 +35,8 @@ export default function BookEvidence({ realmId, environment, connectionId, enabl
     } catch (failure) {
       if (request !== requests.value) return
       setError(typeof failure.response?.data?.error === 'string' ? failure.response.data.error : failure.message || 'The report check failed.')
+      const count = failure.response?.data?.readAttempts
+      setFailureReads(Number.isSafeInteger(count) && count >= 0 && count <= 12 ? count : null)
       setState('error')
     } finally {
       if (requests.controller === controller) requests.controller = null
@@ -43,20 +46,20 @@ export default function BookEvidence({ realmId, environment, connectionId, enabl
     counter.current.value++
     counter.current.controller?.abort()
     counter.current.controller = null
-    setState('idle'); setResult(null); setError('Report check stopped.')
+    setState('idle'); setResult(null); setFailureReads(null); setError('Report check stopped.')
   }
   return <section aria-label="Book checks" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
     <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3"><h2 className="text-[13px] font-semibold text-[var(--ink)]">Book checks</h2>{!standalone && <Link to="/company/reports" className="text-[12.5px] font-medium text-[var(--link)]">Open book checks</Link>}</header>
     <div className="px-5 py-4">
       <p className="text-[13px] text-[var(--ink-2)]">Read the seven critical financial reports and compare the trial balance, balance sheet, receivables and payables. Reads without changing records.</p>
       <form onSubmit={check} className="mt-3 flex flex-wrap items-end gap-3">
-        <label className="text-[12px] text-[var(--ink-2)]">From<input aria-label="Book checks from date" name="fromDate" type="date" defaultValue={today.slice(0, 7) + '-01'} max={today} required disabled={state === 'loading'} onChange={() => setResult(null)} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--ink)]" /></label>
-        <label className="text-[12px] text-[var(--ink-2)]">Through<input aria-label="Book checks through date" name="throughDate" type="date" defaultValue={today} max={today} required disabled={state === 'loading'} onChange={() => setResult(null)} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--ink)]" /></label>
+        <label className="text-[12px] text-[var(--ink-2)]">From<input aria-label="Book checks from date" name="fromDate" type="date" defaultValue={today.slice(0, 7) + '-01'} max={today} required disabled={state === 'loading'} onChange={() => { setResult(null); setError(null); setFailureReads(null) }} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--ink)]" /></label>
+        <label className="text-[12px] text-[var(--ink-2)]">Through<input aria-label="Book checks through date" name="throughDate" type="date" defaultValue={today} max={today} required disabled={state === 'loading'} onChange={() => { setResult(null); setError(null); setFailureReads(null) }} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2 text-[var(--ink)]" /></label>
         <button type="submit" disabled={!enabled || state === 'loading'} className={buttonVariants({ size: 'sm' })}>{state === 'loading' ? 'Reading reports…' : 'Check reports'}</button>
         {state === 'loading' && <button type="button" onClick={stop} className={buttonVariants({ size: 'sm', variant: 'outline' })}>Cancel check</button>}
         <span className="pb-2 text-[12px] text-[var(--ink-3)]">Accrual ledger · CAD</span>
       </form>
-      {error && <p role="alert" className="mt-3 text-[13px] text-[var(--danger-ink)]">{error}</p>}
+      {error && <div role="alert" className="mt-3 text-[13px] text-[var(--danger-ink)]"><p>{error}</p><p className="mt-1 text-[12px]">{failureReads === null ? 'A completed read count is unavailable; this check may have used up to 12 read attempts.' : failureReads + ' QuickBooks read attempts were made before this failure.'}</p></div>}
       {state === 'loading' && <p role="status" className="mt-3 text-[13px] text-[var(--ink-2)]">Reading seven reports for {requestedPeriod?.fromDate} through {requestedPeriod?.throughDate} and matching ledger account IDs…</p>}
       {result && <div className="mt-4">
         <p className="mb-2 text-[12px] text-[var(--ink-2)]">Observed period: {result.period?.fromDate} through {result.period?.throughDate}.</p>

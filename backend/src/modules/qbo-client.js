@@ -17,10 +17,10 @@ const pendingRefreshSaves = new Map();
 const ACCESS_TOKEN_MARGIN_MS = 30_000;
 function snapshotReadControl(value, method) {
   if (value === undefined) return null;
-  if (method !== 'GET' || !value || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).some(key => !['signal','beforeAttempt','onFailure'].includes(key)) || Reflect.ownKeys(value).length !== 3) throw new TypeError('Bounded read controls require an exact GET-only contract.');
-  const { signal, beforeAttempt, onFailure } = value;
-  if (!(signal instanceof AbortSignal) || typeof beforeAttempt !== 'function' || typeof onFailure !== 'function') throw new TypeError('Bounded reads require a signal and trusted admission/failure callbacks.');
-  return Object.freeze({ signal, beforeAttempt, onFailure });
+  if (method !== 'GET' || !value || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).some(key => !['signal','beforeAttempt','onFailure','onSdkAttempt'].includes(key)) || ![3,4].includes(Reflect.ownKeys(value).length)) throw new TypeError('Bounded read controls require an exact GET-only contract.');
+  const { signal, beforeAttempt, onFailure, onSdkAttempt } = value;
+  if (!(signal instanceof AbortSignal) || typeof beforeAttempt !== 'function' || typeof onFailure !== 'function' || (onSdkAttempt !== undefined && typeof onSdkAttempt !== 'function')) throw new TypeError('Bounded reads require a signal and trusted admission/failure callbacks.');
+  return Object.freeze({ signal, beforeAttempt, onFailure, onSdkAttempt });
 }
 function readCancelled() { return Object.assign(new Error('The bounded QuickBooks read was cancelled.'), {status:409,code:'QBO_READ_CANCELLED'}); }
 function assertReadActive(control) { if (control?.signal.aborted) throw readCancelled(); }
@@ -312,7 +312,11 @@ class QBOClient {
       // itself (QBO 5xx or a network failure), which intuit-oauth rejects
       // rather than resolves.
       reachedApiCall = true;
-      response = await this.oauthClient.makeApiCall(opts);
+      // Observe the synchronous SDK invocation, including a synchronous throw.
+      // The admission budget stays separate: abort may win after admission.
+      try { response = this.oauthClient.makeApiCall(opts); }
+      finally { if (control?.onSdkAttempt) try { const observed = control.onSdkAttempt(); observed?.catch?.(() => {}); } catch { /* A metrics observer cannot alter transport authority or its result. */ } }
+      response = await response;
       if (control) {
         if (typeof response?.status === 'number' && response.status >= 400) {
           const fault = this._extractFaultMessage(response), error = new Error('QBO API error (HTTP ' + response.status + ')' + (fault ? ': ' + fault : ''));

@@ -9,7 +9,8 @@ const { createBusinessAuditWriter } = require('./business-runtime-audit');
 const { createBusinessOperationPlanStore } = require('./business-operation-plan-store');
 const { validateBaselineObservation } = require('./business-baseline');
 const { evaluateReportSources } = require('./book-evidence');
-const { unpackReport } = require('./business-report-source');
+const { unpackReport, unpackReports } = require('./business-report-source');
+const { canonicalReportCollection } = require('./report-json');
 const { retainApprovalReports, readApprovalReports } = require('./business-approval-report-evidence');
 const { createBusinessInventoryReader, validateInventoryObservation } = require('./business-record-inventory');
 const { createBusinessReportReader } = require('./business-report-evidence');
@@ -34,7 +35,12 @@ const { createBusinessPolicyAmendment } = require('./business-policy-amendment')
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_GOVERNANCE_REQUIRED' }); }
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function exact(input, keys) { if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join(',') !== [...keys].sort().join(',')) fail('Use the exact reviewed action without company or state overrides.', 400); }
-function reportHash(reports) { return hash(Object.fromEntries(Object.entries(reports).map(([key, report]) => { const copy = structuredClone(report?.encoding ? unpackReport(key, report, 2) : report); delete copy.Header?.Time; return [key, copy]; }))); }
+function reportHash(source) {
+  const reports = Object.fromEntries(Object.entries(unpackReports(source)).map(([name, report]) => {
+    const copy = structuredClone(report); delete copy.Header?.Time; return [name, copy];
+  }));
+  return require('node:crypto').createHash('sha256').update(canonicalReportCollection(reports)).digest('hex');
+}
 function createBusinessGovernanceService(dependencies = {}) {
   const connection = dependencies.connection || require('mongoose').connection;
   const models = dependencies.models || { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Candidates: require('../models/BusinessCandidate'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
@@ -80,7 +86,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const audit = await read(models.Audits, { _id: baseline.auditId, userId: ownerId, realmId: scope.realmId, action: 'Business baseline observation saved', outcome: 'success', 'afterState.evidenceHash': baseline.evidenceHash, 'afterState.sourceHash': baseline.payload.sourceHash, 'afterState.inventoryHash': baseline.inventorySources.sourceHash }, session);
     if (!audit) fail('The retained opening observation audit is unavailable.');
     const acceptanceEvaluation = evaluateReportSources(baseline.sources, { allowExplicitZero: true });
-    if (baseline.sources.version !== 2 || baseline.contractVersion !== 2 || checked.payload.purpose !== 'opening-balances' || checked.payload.blueprint.contentHash !== input.blueprintHash || acceptanceEvaluation.status !== 'checks-passed') fail('A complete opening observation with all accounting checks is required.');
+    if (![2, 3].includes(baseline.sources.version) || baseline.contractVersion !== 2 || checked.payload.purpose !== 'opening-balances' || checked.payload.blueprint.contentHash !== input.blueprintHash || acceptanceEvaluation.status !== 'checks-passed') fail('A complete opening observation with all accounting checks is required.');
     const blueprint = await read(models.Versions, { _id: checked.payload.blueprint.id, ...scope, contractVersion: 2, contentHash: input.blueprintHash }, session);
     if (!blueprint || !blueprint.auditId || hash(blueprint.definition) !== input.blueprintHash || checked.payload.period.throughDate !== shift(blueprint.definition.calendar.openingDate, -1)) fail('The opening evidence does not match this saved business.');
     const { policy, writer } = await coordination(bound, session), view = draftView(blueprint, scope.connectionId), definition = activityDefinition(view.business);
@@ -138,7 +144,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const inventory = await (dependencies.readInventory || createBusinessInventoryReader({ access, now }))(scope, { signal });
     validateInventoryObservation(inventory, scope);
     const reports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'baseline' }))(scope, selected.baseline.payload.period, { signal });
-    if (hash(inventory.records) !== selected.review.inventoryHash || reportHash(reports.reports) !== reportHash(selected.baseline.sources.reports)) fail('The company changed since the opening observation. Capture and review it again.');
+    if (hash(inventory.records) !== selected.review.inventoryHash || reportHash(reports) !== reportHash(selected.baseline.sources)) fail('The company changed since the opening observation. Capture and review it again.');
     const payload = { ...selected.review, status: 'published', ownerId, requestHash, ownershipDisposition: input.ownershipDisposition, reviewNote: input.reviewNote.trim(), reviewedAt: new Date(now()).toISOString() }, contentHash = hash(payload), auditId = hash({ publication: contentHash }).slice(0, 24);
     return transaction(async session => {
       await fence(bound, session, 'operations.execute');
@@ -227,7 +233,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
     const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
     reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports);
-    const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, startingReports.reports.ProfitAndLoss, startingReports.observedAt);
+    const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, unpackReport('ProfitAndLoss', startingReports.reports.ProfitAndLoss, startingReports.version), startingReports.observedAt, startingReports.version);
     const financialExpectation = createFinancialExpectation(scope, { fromDate, throughDate: input.throughDate }, active.view.mappings, startingReports);
     const candidate = { ...boundCandidate.candidate, requiredAssertions: [...boundCandidate.candidate.requiredAssertions, { key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }], authorityHash: active.authority.contentHash, incomeExpectation, financialExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
     await transaction(async session => {
@@ -244,7 +250,7 @@ function createBusinessGovernanceService(dependencies = {}) {
   }
   function reportObservation(scope, period, value) {
     const { sourceHash, evaluation: ignored, ...source } = value || {}, startedAt = Date.parse(source.startedAt), observedAt = Date.parse(source.observedAt);
-    if (source.version !== 2 || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical(period) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || !Number.isFinite(startedAt) || !Number.isFinite(observedAt) || observedAt < startedAt || observedAt > now() || now() - startedAt > 300000) fail('A fresh scoped seven-report observation is required before new business approval.');
+    if (![2, 3].includes(source.version) || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical(period) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || !Number.isFinite(startedAt) || !Number.isFinite(observedAt) || observedAt < startedAt || observedAt > now() || now() - startedAt > 300000) fail('A fresh scoped seven-report observation is required before new business approval.');
     const evaluation = evaluateReportSources(source, { allowExplicitZero: true });
     if (evaluation.status !== 'checks-passed' || !reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before business writes.');
     return { sourceHash, startedAt, observedAt };

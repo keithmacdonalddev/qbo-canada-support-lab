@@ -20,7 +20,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
     if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(abort, 180000); timer.unref?.();
     const check = () => { if (controller.signal.aborted || !Number.isFinite(now()) || now() < started || now() - started > 180000) fail('Report observation was cancelled or exceeded three minutes.'); };
-    let failure = null, attempts = 0;
+    let failure = null, attempts = 0, sdkAttempts = 0;
     const stopReads = error => {
       if (!failure) {
         if (controller.signal.aborted) { try { check(); } catch (cancelled) { failure = cancelled; } }
@@ -53,8 +53,8 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       const readControl = { signal: controller.signal, onFailure: stopReads, beforeAttempt: async () => {
         await authorizeCurrent(); check(); guard();
         if (attempts >= 12) fail('Report observation exceeds its twelve-request budget.');
-        attempts++; onAttempt(attempts);
-      } };
+        attempts++;
+      }, onSdkAttempt: () => { sdkAttempts++; onAttempt(sdkAttempts); } };
       async function readCurrent(factory) {
         await authorizeCurrent(); const result = await call(factory); await authorizeCurrent(); return result;
       }
@@ -66,7 +66,8 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
           if (name.startsWith('Aged')) params.set('report_date', throughDate);
           check(); guard(); const report = await readCurrent(() => client.apiCall('GET', 'reports/' + name + '?' + params, undefined, 0, 0, readControl)); check(); guard();
           if (!report || Object.keys(report).some(key => !['Header', 'Columns', 'Rows'].includes(key))) fail('Report response is incomplete or contains unsupported warnings.');
-          reports[name] = retain(packReport(name, report));
+          try { reports[name] = retain(packReport(name, report, 3)); }
+          catch (error) { if (error?.code === 'BUSINESS_REPORT_UNVERIFIED') fail(name + ': ' + error.message); throw error; }
         } catch (error) { stopReads(error); throw failure || error; }
       });
       jobs.push(async () => {
@@ -89,7 +90,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       let next = 0; await Promise.all(Array.from({ length: 2 }, async () => { while (next < jobs.length) { check(); await jobs[next++](); } }));
       check(); guard(); const current = await call(() => access.authorize(scope, action, { signal: controller.signal })); check(); guard();
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('Report authority changed during observation.');
-      const source = { version: 2, scope, period: { fromDate, throughDate }, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), reports, accounts };
+      const source = { version: 3, scope, period: { fromDate, throughDate }, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), reports, accounts };
       if (Buffer.byteLength(canonical(source)) > MAX_SOURCE_BYTES) fail('The complete report source exceeds its retained evidence budget.');
       return { ...source, sourceHash: hash(source), evaluation: evaluateReportSources(source) };
     } catch (error) { stopReads(error); throw failure || error; }

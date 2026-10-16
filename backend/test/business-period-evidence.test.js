@@ -154,3 +154,23 @@ test('historical five-report proof cannot advance a pending period but committed
   assert.equal(h.run().status, 'verified'); assert.equal(h.calendar().pendingCommit, null); assert.equal(h.calendar().revision, revision); assert.equal(h.writes, writes); assert.equal(h.sourceCalls, reads);
   assert.equal(h.data.Evidence[0].sources.version, 1);
 });
+
+test('period evidence checks actual BSON overhead before storage and on historical reload', async () => {
+  const h = harness(0); h.onReport = () => {
+    const { sourceHash, ...source } = h.reportSources(); source.accounts = clone(source.accounts); source.accounts[0].metadata = Array(1300000).fill(0);
+    assert.ok(Buffer.byteLength(require('../src/modules/business-calendar').canonical(source)) < 6000000);
+    return { ...source, sourceHash: hash(source) };
+  };
+  const result = await h.execute(); assert.equal(result.complete, false); assert.match(result.error, /BSON storage budget/); assert.equal(h.data.Evidence.length, 0); assert.equal(h.calendar().verifiedThrough, '2026-10-05');
+  for (const version of [1, 2]) {
+    const saved = harness(0); assert.equal((await saved.execute()).complete, true); if (version === 1) historicalFiveReportProof(saved);
+    const row = saved.data.Evidence[0]; row.sources.accounts[0].metadata = Array(1300000).fill(0);
+    const rebind = () => { const { sourceHash, ...source } = row.sources; row.sources.sourceHash = hash(source); for (const check of row.proof.assertions) if (check.evidenceType !== 'record-readback') check.sourceHash = row.sources.sourceHash; row.evidenceHash = hash(row.proof); saved.run().verificationCandidateHash = row.evidenceHash; };
+    rebind(); const bytes = require('mongoose').mongo.BSON.calculateObjectSize(row); assert.ok(bytes > 15000000 && bytes < 16 * 1024 * 1024, String(bytes));
+    assert.equal(hash(await saved.collector.loadProof(saved.run())), row.evidenceHash, 'coherent legacy evidence keeps its original admission meaning');
+    if (version === 2) {
+      row.sources.reports = Object.fromEntries(Object.entries(unpackReports(row.sources)).map(([name, report]) => [name, packReport(name, report, 3)])); row.sources.version = 3; rebind();
+      await assert.rejects(saved.collector.loadProof(saved.run()), /BSON storage budget/);
+    }
+  }
+});

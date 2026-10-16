@@ -62,3 +62,16 @@ test('failure callback cannot replace the original upstream failure',async()=>qu
 test('controlled original SDK reaches axios only once on failure',async()=>quiet(async()=>{
  const h=fixture(),OAuthClient=require('intuit-oauth'),sdk=new OAuthClient({clientId:'fixture-client',clientSecret:'fixture-secret',environment:'sandbox',redirectUri:'http://fixture.invalid'});sdk.log=()=>{};sdk.setToken({access_token:'fixture-token'});let calls=0;sdk.axiosInstance=async()=>{calls++;throw Object.assign(Error('Fixture service unavailable'),{response:{status:503,headers:{intuit_tid:'fixture-503'},data:{Fault:{Error:[{Message:'Fixture upstream failure'}]}}}});};h.client.oauthClient=sdk;await assert.rejects(h.read(),error=>error.status===503);assert.equal(calls,1);assert.equal(h.failures.length,1);
 }));
+
+test('actual SDK observer distinguishes admitted cancellation from a transport invocation', async () => {
+  const cancelled = fixture(); let observed = 0; cancelled.control.onSdkAttempt = () => { observed++; }; cancelled.before = async () => cancelled.controller.abort();
+  await assert.rejects(cancelled.read(), { code: 'QBO_READ_CANCELLED' }); assert.equal(cancelled.admissions, 1); assert.equal(cancelled.calls.length, 0); assert.equal(observed, 0);
+  const sent = fixture(); sent.control.onSdkAttempt = () => { observed++; }; await sent.read(); assert.equal(sent.calls.length, 1); assert.equal(observed, 1);
+  sent.client.oauthClient.makeApiCall = () => { throw Error('Fixture synchronous transport failure'); };
+  await assert.rejects(sent.read(), /synchronous transport/); assert.equal(observed, 2, 'the SDK invocation is counted even when it throws synchronously');
+});
+test('SDK attempt metrics are snapshotted and cannot mask transport success or the original failure', async () => {
+  const h = fixture(); let observed = 0; h.control.onSdkAttempt = () => { observed++; }; h.prepare = async () => { h.control.onSdkAttempt = () => { throw Error('Changed observer'); }; };
+  await h.read(); assert.equal(observed, 1);
+  const broken = fixture(); broken.control.onSdkAttempt = () => { throw Error('Metrics unavailable'); }; await broken.read(); assert.equal(broken.calls.length, 1);
+});

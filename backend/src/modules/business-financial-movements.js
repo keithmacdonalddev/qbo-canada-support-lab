@@ -2,6 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { rowsOf, money, inspectReport } = require('./book-evidence');
+const { unpackReport } = require('./business-report-source');
 const { referenceDefinition } = require('./business-reference');
 const { validateCompilation } = require('./business-readback');
 const { taxExpectation } = require('./business-verification-runtime');
@@ -59,16 +60,17 @@ function accountSelection(scope, mappings, accounts) {
 function createFinancialExpectation(scope, period, mappings, observation) {
   scope = scoped(scope);
   const { sourceHash, evaluation, ...source } = observation || {};
-  if (source.version !== 2 || !equal(source.scope, scope) || !equal(source.period, period) || hash(source) !== sourceHash) fail('The original scoped starting report observation is required.');
+  if (![2, 3].includes(source.version) || !equal(source.scope, scope) || !equal(source.period, period) || hash(source) !== sourceHash) fail('The original scoped starting report observation is required.');
   const selected = accountSelection(scope, mappings, source.accounts);
-  const retained = structuredClone({ version: 1, scope, period, startedAt: source.startedAt, observedAt: source.observedAt, observationHash: sourceHash, report: source.reports.TrialBalance, accounts: source.accounts });
-  const value = { version: 1, scope, period, accounts: selected, opening: balances(retained.report, retained.accounts, selected, period), source: retained, sourceHash: hash(retained) };
+  const version = source.version === 3 ? 2 : 1;
+  const retained = structuredClone({ version, ...(version === 2 ? { reportSourceVersion: 3 } : {}), scope, period, startedAt: source.startedAt, observedAt: source.observedAt, observationHash: sourceHash, report: source.reports.TrialBalance, accounts: source.accounts });
+  const value = { version, scope, period, accounts: selected, opening: balances(unpackReport('TrialBalance', retained.report, source.version), retained.accounts, selected, period), source: retained, sourceHash: hash(retained) };
   return validateFinancialExpectation(value, scope, period);
 }
 function validateFinancialExpectation(value, scope, period, entries) {
-  if (value?.version !== 1 || !equal(value.scope, scoped(scope)) || !equal(value.period, period) || !equal(value.source?.scope, scope) || !equal(value.source.period, period) || value.source.version !== 1 || !HASH.test(value.source.observationHash || '') || value.sourceHash !== hash(value.source) || !Number.isFinite(Date.parse(value.source.observedAt)) || !Number.isFinite(Date.parse(value.source.startedAt)) || Date.parse(value.source.startedAt) > Date.parse(value.source.observedAt) || !Array.isArray(value.accounts) || !equal(value.accounts.map(row => row.key), KEYS) || new Set(value.accounts.map(row => row.id)).size !== KEYS.length) fail('The original selected-account starting observation changed.');
+  if (![1, 2].includes(value?.version) || !equal(value.scope, scoped(scope)) || !equal(value.period, period) || !equal(value.source?.scope, scope) || !equal(value.source.period, period) || value.source.version !== value.version || (value.version === 2 && value.source.reportSourceVersion !== 3) || !HASH.test(value.source.observationHash || '') || value.sourceHash !== hash(value.source) || !Number.isFinite(Date.parse(value.source.observedAt)) || !Number.isFinite(Date.parse(value.source.startedAt)) || Date.parse(value.source.startedAt) > Date.parse(value.source.observedAt) || !Array.isArray(value.accounts) || !equal(value.accounts.map(row => row.key), KEYS) || new Set(value.accounts.map(row => row.id)).size !== KEYS.length) fail('The original selected-account starting observation changed.');
   const mappings = Object.fromEntries(value.accounts.map(row => [row.key, row.id]));
-  if (!equal(accountSelection(scope, mappings, value.source.accounts), value.accounts) || !equal(balances(value.source.report, value.source.accounts, value.accounts, period), value.opening)) fail('The starting account balances differ from their retained source.');
+  if (!equal(accountSelection(scope, mappings, value.source.accounts), value.accounts) || !equal(balances(unpackReport('TrialBalance', value.source.report, value.version === 2 ? 3 : 2), value.source.accounts, value.accounts, period), value.opening)) fail('The starting account balances differ from their retained source.');
   for (const entry of entries || []) for (const ref of entry.step.references.filter(ref => ref.entity === 'Account' && KEYS.includes(ref.key))) {
     const expected = value.accounts.find(row => row.key === ref.key);
     if (ref.id !== expected.id || ref.definition?.hash !== expected.definitionHash) fail('A managed activity uses a different approved financial account.');
@@ -119,7 +121,7 @@ function compareFinancialMovements(expectation, basis, observation) {
     if (!equal(observation.scope, expectation.scope) || !equal(observation.period, expectation.period)) fail('Financial report observation changed company or period.');
     const mappings = Object.fromEntries(expectation.accounts.map(row => [row.key, row.id]));
     if (!equal(accountSelection(expectation.scope, mappings, observation.accounts), expectation.accounts)) fail('Selected financial account definitions changed.');
-    actual = balances(observation.reports.TrialBalance, observation.accounts, expectation.accounts, expectation.period);
+    actual = balances(unpackReport('TrialBalance', observation.reports.TrialBalance, observation.version), observation.accounts, expectation.accounts, expectation.period);
   } catch (error) { if (error.code !== 'BUSINESS_FINANCIAL_MOVEMENTS_UNVERIFIED') throw error; reason = error.message; }
   const checks = KEYS.map(key => {
     const expectedCents = sum([expectation.opening[key], deltas[key]]), actualCents = actual?.[key] ?? null, differenceCents = actualCents === null ? null : sum([actualCents, -expectedCents]);
@@ -146,13 +148,19 @@ async function loadMovementBasis(models, scope, run, manifest, stepRows, session
 }
 // Only compact identities/cents are added to proof. Bound their worst encoded size
 // before a create, independent of potentially long shared historical tax policies.
-function assertMovementCapacity(manifest) {
-  if (!manifest.financialExpectation) return;
+function assertMovementCapacity(manifest, currentSource) {
+  if (!manifest.financialExpectation && !currentSource) return;
   const text = n => '9'.repeat(n), h = text(64), amounts = Object.fromEntries(KEYS.map(key => [key, -Number.MAX_SAFE_INTEGER]));
   const records = manifest.records.map(row => ({ logicalKey: h, entity: 'PurchaseOrder', fingerprint: h, qboId: text(30), state: 'verified', observedHash: h, syncToken: text(64), observedAt: text(24), auditId: text(100), relationships: row.relationships.map(() => ({ logicalKey: h, entity: 'PurchaseOrder', qboId: text(30), syncToken: text(64) })) }));
-  const basis = manifest.records.filter(row => row.kind === 'create').map(() => ({ logicalKey: h, entity: 'PurchaseOrder', fingerprint: h, operationId: text(24), planHash: h, qboId: text(30), receiptSource: 'owner-attributed-readback', receiptHash: h, dispatchKey: h, policyHash: h, policyAmendmentHash: h, compilationHash: h, requestHash: h, postings: amounts }));
+  const basis = (manifest.financialExpectation ? manifest.records.filter(row => row.kind === 'create') : []).map(() => ({ logicalKey: h, entity: 'PurchaseOrder', fingerprint: h, operationId: text(24), planHash: h, qboId: text(30), receiptSource: 'owner-attributed-readback', receiptHash: h, dispatchKey: h, policyHash: h, policyAmendmentHash: h, compilationHash: h, requestHash: h, postings: amounts }));
   const budget = Buffer.byteLength(canonical({ records, financialBasis: basis })) + 1000000;
   if (budget > 5500000) fail('This operation cannot retain its complete financial proof within the evidence budget. Prepare a shorter period.');
+  if (currentSource) {
+    // BSON array indices/types cost more than JSON. Reserve the same one-megabyte
+    // proof/header allowance before any create, using the fresh opening source.
+    const projected = require('mongoose').mongo.BSON.calculateObjectSize({ proof: { records, financialBasis: basis }, sources: currentSource }) + 1000000;
+    if (projected > 15000000) fail('This operation cannot retain its source and complete financial proof within the BSON storage budget. Prepare a shorter period.');
+  }
   return budget;
 }
 module.exports = { KEYS, balances, createFinancialExpectation, validateFinancialExpectation, movementRow, compareFinancialMovements, loadMovementBasis, assertMovementCapacity };

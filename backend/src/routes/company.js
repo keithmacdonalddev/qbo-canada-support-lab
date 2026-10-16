@@ -299,28 +299,29 @@ router.get('/health', authenticate, async (req, res) => {
 
 /** Read-only, bounded evidence for a requested accounting period. */
 router.get('/book-evidence', authenticate, async (req, res) => {
+  let readAttempts = 0;
   const controller = new AbortController(), abort = () => controller.abort();
   req.once('aborted', abort); res.once('close', abort); if (req.aborted || res.destroyed) abort();
   res.set('Cache-Control', 'no-store');
   try {
-    if (Object.keys(req.query).some(key => !['fromDate', 'throughDate'].includes(key))) return res.status(400).json({ error: 'Book checks accept only the requested dates.' });
+    if (Object.keys(req.query).some(key => !['fromDate', 'throughDate'].includes(key))) return res.status(400).json({ readAttempts, error: 'Book checks accept only the requested dates.' });
     const connection = await getActiveConnection(req.user.id);
-    if (!connection) return res.status(404).json({ error: 'No active QBO connection' });
+    if (!connection) return res.status(404).json({ readAttempts, error: 'No active QBO connection' });
     const { readBookEvidence, validDate } = require('../modules/book-evidence');
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Halifax', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const throughDate = req.query.throughDate || today;
-    if (!validDate(throughDate)) return res.status(400).json({ error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
+    if (!validDate(throughDate)) return res.status(400).json({ readAttempts, error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
     const fromDate = req.query.fromDate || throughDate.slice(0, 7) + '-01';
-    if (!validDate(fromDate) || !validDate(throughDate)) return res.status(400).json({ error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
+    if (!validDate(fromDate) || !validDate(throughDate)) return res.status(400).json({ readAttempts, error: 'Dates must be valid YYYY-MM-DD calendar dates.' });
     const scope = { realmId: String(connection.realmId), environment: require('../config').qbo.environment, connectionId: String(connection._id) };
     const access = require('../modules/business-runtime-access').createBusinessRuntimeAccess({ actorId: String(req.user.actorId || req.user.id), ownerId: String(req.user.id) });
-    const evidence = await readBookEvidence(access, scope, { fromDate, throughDate }, { signal: controller.signal });
+    const evidence = await readBookEvidence(access, scope, { fromDate, throughDate }, { signal: controller.signal, onAttempt: count => { readAttempts = count } });
     return res.json({ data: { ...scope, ...evidence } });
   } catch (error) {
-    if ([403, 409].includes(error.status) && ['BUSINESS_ACCESS_DENIED', 'BUSINESS_REPORT_UNVERIFIED'].includes(error.code)) return res.status(error.status).json({ error: error.message, code: error.code });
-    if (error.status === 400 && !error.qboStage) return res.status(400).json({ error: error.message });
-    if (respondQboError(res, error)) return;
-    return res.status(500).json({ error: 'Book evidence could not be checked.' });
+    if ([403, 409].includes(error.status) && ['BUSINESS_ACCESS_DENIED', 'BUSINESS_REPORT_UNVERIFIED'].includes(error.code)) return res.status(error.status).json({ readAttempts, error: error.message, code: error.code });
+    if (error.status === 400 && !error.qboStage) return res.status(400).json({ readAttempts, error: error.message });
+    if (respondQboError(res, error, { readAttempts })) return;
+    return res.status(500).json({ readAttempts, error: 'Book evidence could not be checked.' });
   } finally {
     req.off('aborted', abort); res.off('close', abort);
   }

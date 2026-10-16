@@ -9,6 +9,8 @@ const { createBusinessGovernanceService } = require('../../src/modules/business-
 const { createBusinessRuntime } = require('../../src/modules/business-runtime');
 const { QBOClient } = require('../../src/modules/qbo-client');
 const { packReport, unpackReport } = require('../../src/modules/business-report-source');
+const { createBusinessReportReader } = require('../../src/modules/business-report-evidence');
+const { nestedReport } = require('./nested-report-fixture');
 const { detailReports } = require('./business-detail-report-fixture');
 const { controls } = require('./period-controls');
 const { TYPES } = require('../../src/modules/business-record-inventory');
@@ -73,7 +75,7 @@ function fixture(options = {}) {
   const url=new URL(opts.url),path=url.pathname.split('/').slice(4),query=url.searchParams.get('query');h.events.push({method:opts.method,path:url.pathname});
   if(opts.method==='GET'){h.reads++;if(h.onGet)await h.onGet(opts);
    if(query){if(query.includes('FROM CompanyInfo'))return{status:200,json:{QueryResponse:{CompanyInfo:[{Id:'123',Country:h.country||'CA'}]}}};if(query.includes('FROM Preferences'))return{status:200,json:{QueryResponse:{Preferences:[{AccountingInfoPrefs:h.closedThrough?{BookCloseDate:h.closedThrough}:{},CurrencyPrefs:{HomeCurrency:ref('CAD')}}]}}};const entity=[...['Account','Customer','Vendor','Item','Employee','TaxCode','Deposit']].find(name=>query.includes('FROM '+name));assert.ok(entity,query);const rows=[...h.records.values()].filter(row=>row.entity===entity).map(row=>clone(row.record));return{status:200,json:{QueryResponse:{[entity]:rows,startPosition:1,maxResults:rows.length}}};}
-   if(url.pathname.includes('/reports/')){const period={fromDate:url.searchParams.get('start_date'),throughDate:url.searchParams.get('end_date')};return{status:200,json:unpackReport(path.at(-1),h.reportSources(period).reports[path.at(-1)],2)};}
+   if(url.pathname.includes('/reports/')){const period={fromDate:url.searchParams.get('start_date'),throughDate:url.searchParams.get('end_date')};let report=unpackReport(path.at(-1),h.reportSources(period).reports[path.at(-1)],2);if(options.nestedReportLevels)report=nestedReport(report,options.nestedReportLevels);if(options.reportTimeChanges){h.reportSequence=(h.reportSequence||0)+1;report.Header.Time=new Date(h.clock+h.reportSequence).toISOString();}return{status:200,json:report};}
    const entity=url.pathname.split('/').at(-2),id=url.pathname.split('/').at(-1),found=h.records.get(entity+':'+id);assert.ok(found,entity+':'+id);const record=clone(found.record);delete record._cost;return{status:200,json:{[found.entity]:record}};
   }
   assert.equal(opts.method,'POST');h.posts++;if(h.beforePost)await h.beforePost(opts);if(h.rejectNext){h.rejectNext=false;return{status:400,json:{Fault:{type:'ValidationFault',Error:[{code:'6000',Message:'Fixture deliberate refusal'}]}}};}
@@ -84,10 +86,16 @@ function fixture(options = {}) {
   if(entity==='Bill'||entity==='SalesReceipt')for(const line of r.Line){const detail=line[line.DetailType];if(line.DetailType==='AccountBasedExpenseLineDetail')continue;const item=h.records.get('item:'+detail.ItemRef.value).record;if(entity==='Bill'){item.QtyOnHand+=detail.Qty;h.itemCosts.set(item.Id,detail.UnitPrice);}else{item.QtyOnHand-=detail.Qty;h.saleCosts.set(r.Id,(h.saleCosts.get(r.Id)||0)+detail.Qty*(h.itemCosts.get(item.Id)||0));}item.SyncToken=String(Number(item.SyncToken)+1);}
   put(entity,r);const returned=clone(r);delete returned._cost;if(h.afterPost)await h.afterPost(opts,r);const override=h.responseOverride;h.responseOverride=null;return override||{status:200,json:{[entity]:returned}};
  }}});
+ if(options.originalSdkTransport){
+  const simulated=h.client.oauthClient.makeApiCall,OAuthClient=require('intuit-oauth'),sdk=new OAuthClient({clientId:'fixture-client',clientSecret:'fixture-secret',environment:'sandbox',redirectUri:'http://fixture.invalid'});
+  sdk.log=()=>{};sdk.setToken({access_token:'fixture-token'});
+  sdk.axiosInstance=async(url,request)=>{const response=await simulated({url,method:request.method,body:request.data});return{status:response.status,statusText:'Fixture response',headers:response.headers||{},data:response.json};};
+  h.client.oauthClient=sdk;
+ }
  h.accessFor=options=>createBusinessRuntimeAccess({...options,...h.models,environment:()=>scope.environment,createClient:async()=>h.client});
  h.assertReady=async()=>{if(h.notReady)throw Object.assign(Error('Fixture storage unprepared'),{status:409,code:'BUSINESS_STORAGE_UNPREPARED'});};
  const access=h.accessFor({actorId:ownerId,ownerId}),openingThrough=new Date(Date.parse(business.openingDate+'T12:00:00Z')-86400000).toISOString().slice(0,10),openingPeriod={fromDate:openingThrough.slice(0,7)+'-01',throughDate:openingThrough};
- const baselineStore=createBusinessBaselineStore({scope,actorId:ownerId,ownerId,...h.models,access,assertReady:h.assertReady,assertCaptureReady:async()=>{},transaction:h.transaction,readReports:async()=>h.reportSources(openingPeriod),readInventory:async()=>h.inventory(),now:()=>h.clock});
+ const baselineStore=createBusinessBaselineStore({scope,actorId:ownerId,ownerId,...h.models,access,assertReady:h.assertReady,assertCaptureReady:async()=>{},transaction:h.transaction,readReports:options.originalReportCapture?()=>createBusinessReportReader({access,now:()=>h.clock,purpose:'baseline'})(scope,openingPeriod):async()=>h.reportSources(openingPeriod),readInventory:async()=>h.inventory(),now:()=>h.clock});
  h.capture=()=>baselineStore.capture({requestKey:'opening-evidence-0001',connectionId:scope.connectionId,blueprintId,blueprintHash:h.data.Versions[0].contentHash,purpose:'opening-balances',...openingPeriod});
  h.legacy=Object.fromEntries(['aiplans','generationruns','seedruns','issuepackruns','masterpreparationruns'].map(name=>[name,[]]));h.db={collection:name=>({find:(filter,options)=>({limit:value=>({toArray:async()=>{if(h.failOwnership===name)throw Error('Fixture ownership unavailable');assert.equal(options.maxTimeMS,3000);return h.legacy[name].filter(row=>matches(row,filter)).slice(0,value).map(row=>({_id:row._id}));}})})})};
  h.service=createBusinessGovernanceService({models:h.models,connection:{db:h.db},transaction:h.transaction,assertReady:h.assertReady,now:()=>h.clock,accessFor:h.accessFor,resolveContext:async()=>({environment:scope.environment,connection:{connected:true,...scope,companyName:'Fixture Harbour Business'}}),readInventory:async()=>h.inventory()});

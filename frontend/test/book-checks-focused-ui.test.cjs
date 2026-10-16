@@ -27,7 +27,7 @@ test('focused desktop book checks make no QBO reads until explicit period check'
       if (request.method() !== 'GET') { status = 403; body = { error: 'No writes in focused report inspection' }; }
       else if (url.pathname === '/api/auth/me') body = { user: { id: 'b'.repeat(24), role: 'agent', displayName: 'Fixture owner' } };
       else if (url.pathname === '/api/qbo/status') body = { connected, status: connected ? 'active' : 'none', ...scope, companyName: 'Fixture Harbour Business' };
-      else if (url.pathname === '/api/company/book-evidence') { if (mode === 'hold') await new Promise(resolve => { release = resolve; }); if (mode === 'error') { status = 429; body = { error: 'Fixture read limit reached' }; } else body = { data: { ...scope, ...evidence, readAttempts: 7, checkedAt: new Date().toISOString() } }; }
+      else if (url.pathname === '/api/company/book-evidence') { if (mode === 'hold') await new Promise(resolve => { release = resolve; }); if (mode === 'error') { status = 429; body = { error: 'Fixture read limit reached', readAttempts: 2 }; } else body = { data: { ...scope, ...evidence, readAttempts: 7, checkedAt: new Date().toISOString() } }; }
       else { status = 503; body = { error: 'Unexpected API request in focused report workflow' }; }
       await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     });
@@ -54,9 +54,9 @@ test('focused desktop book checks make no QBO reads until explicit period check'
     assert.equal(await panel.getByLabel('Book checks from date').inputValue(), period.fromDate); assert.equal(await panel.getByLabel('Book checks through date').inputValue(), period.throughDate);
     const aborted = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/company/book-evidence');
     await panel.getByRole('button', { name: 'Cancel check', exact: true }).click(); await aborted;
-    await panel.getByRole('alert').filter({ hasText: 'Report check stopped.' }).waitFor();
+    await panel.getByRole('alert').filter({ hasText: 'Report check stopped.' }).waitFor(); await panel.getByText('A completed read count is unavailable; this check may have used up to 12 read attempts.', { exact: true }).waitFor();
     release(); release = null; assert.equal(await panel.getByText(/7 of 7 critical reports confirm/).count(), 0);
-    mode = 'error'; await check.click(); await panel.getByRole('alert').filter({ hasText: 'Fixture read limit reached' }).waitFor(); assert.equal(await panel.getByText(/7 of 7 critical reports confirm/).count(), 0);
+    mode = 'error'; await check.click(); await panel.getByRole('alert').filter({ hasText: 'Fixture read limit reached' }).waitFor(); await panel.getByText('2 QuickBooks read attempts were made before this failure.', { exact: true }).waitFor(); assert.equal(await panel.getByText(/7 of 7 critical reports confirm/).count(), 0);
     await page.screenshot({ path: path.join(artifacts, 'book-checks-focused-error.png') });
     connected = false; await page.reload(); assert.equal(await check.isEnabled(), false); await page.getByText('No QuickBooks company is connected yet.', { exact: true }).waitFor();
     assert.deepEqual(errors, []); assert.deepEqual(escaped, []); assert.ok(requests.every(row => row.method === 'GET')); assert.ok(requests.every(row => ['/api/auth/me', '/api/qbo/status', '/api/company/book-evidence'].includes(row.path)));
