@@ -19,7 +19,7 @@ const { financialSummary, reportComplete } = require('./business-financial-summa
 const { createIncomeExpectation } = require('./business-income-evidence');
 const { createFinancialExpectation } = require('./business-financial-movements');
 const { readCanadianCompany } = require('./business-country');
-const { assertPublishedBusiness, assertAuthorityDocument } = require('./business-authority');
+const { assertPublishedBusiness, assertAuthorityDocument, readPublishedBusiness } = require('./business-authority');
 const { draftView, proposalView, readDraftSetup } = require('./blueprint-draft');
 const { activityDefinition, activityTemplateVersion, businessDate } = require('./business-activity-preview');
 const { readBusinessMasters, inspectBusinessMasters } = require('./business-master-data');
@@ -118,9 +118,10 @@ function createBusinessGovernanceService(dependencies = {}) {
     return { ...selected, coreReviewHash: selected.reviewHash, review, reviewHash: hash(review) };
   }
   async function status(user) {
-    const bound = await bind(user), { scope } = bound, calendar = await read(models.Calendars, { ...scope });
-    const authority = calendar?.authorityHash ? await read(models.Authorities, { ...scope, contentHash: calendar.authorityHash }) : null;
-    if (authority) assertAuthorityDocument(authority, scope);
+    const bound = await bind(user), { scope } = bound;
+    let calendar = await read(models.Calendars, { ...scope });
+    let authority = calendar?.authorityHash ? await read(models.Authorities, { ...scope, contentHash: calendar.authorityHash }) : null;
+    if (authority) { assertAuthorityDocument(authority, scope); if (authority.payload.version === 2) ({ authority, calendar } = await readPublishedBusiness({ ...models, scope })); }
     const pendingOperations = await models.Runs.find({ ...scope, authorityHash: calendar?.authorityHash || null, status: 'previewed' }).sort({ createdAt: -1, _id: -1 }).limit(20).maxTimeMS(3000).lean();
     const currentRun = calendar?.currentOperationId ? await read(models.Runs, { _id: calendar.currentOperationId, ...scope }) : null;
     return { ...scope, currentOperation: currentRun ? { operationId: String(currentRun._id), planHash: currentRun.planHash, status: currentRun.status } : null, canReviseBeforeActivity: Boolean(calendar && calendar.verifiedThrough === null && calendar.currentOperationId === null && !await read(models.Steps, { environment: scope.environment, realmId: scope.realmId })), pendingOperations: pendingOperations.map(run => ({ operationId: String(run._id), planHash: run.planHash, fromDate: run.fromDate, throughDate: run.throughDate, recordCount: run.recordCount })), companyName: bound.companyName, owner: bound.actorId === bound.ownerId, published: authority ? { contentHash: authority.contentHash, ...authority.payload } : null,
@@ -201,7 +202,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       if (!saved || saved.manifest.throughDate !== input.throughDate || String(saved.createdBy) !== actorId) fail('This request identifier belongs to different work.');
       return { operationId, planHash: existing.planHash, status: existing.status, reused: true };
     }
-    const active = await assertPublishedBusiness({ ...models, scope }), current = await coordination(bound);
+    const active = await assertPublishedBusiness({ ...models, scope, verifyBaseline: true }), current = await coordination(bound);
     if (current.policy.state !== 'active' || active.calendar.currentOperationId !== null) fail('Enable write coordination and finish the current operation first.');
     const fromDate = active.calendar.verifiedThrough ? shift(active.calendar.verifiedThrough, 1) : active.value.openingDate;
     const request = validateOperationRequest({ connectionId: scope.connectionId, baseHash: active.value.blueprintHash, fromDate, throughDate: input.throughDate });
@@ -212,7 +213,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     await readCanadianCompany(client, scope, now);
     const view = { ...scope, draft: active.view, proposal: proposalView() };
     const setup = await (dependencies.readSetup || readDraftSetup)(client, scope, now), masters = await (dependencies.readMasters || readBusinessMasters)(client, scope, now);
-    let prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()));
+    let prepared = active.lineage ? require('./business-continuity-plan').prepareContinuingBusiness(active, scope, request, setup, masters, new Date(now())) : prepareBusinessOperation(view, request, setup, masters, new Date(now()));
     // The owner's published tax choices are resolved structurally here. Their
     // dated rates and exact expected tax are derived independently below.
     for (const step of prepared.steps) {
@@ -226,7 +227,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const sign = () => { const { operationHash, preparedAt, readyToExecute, persisted, summary, limitations, ...body } = prepared; prepared.operationHash = hash(body); }; sign();
     prepared = await bindPreparedOperationReferences(prepared, { authorize: access.authorize, resolveClient: access.resolveClient, now, signal });
     const store = planStore(bound), history = await store.history(scope, operationHistoryRoots(prepared), { signal });
-    const context = { scope, businessKey: active.value.businessKey, blueprintId: active.value.blueprintId, blueprintHash: active.value.blueprintHash, baselineHash: active.value.baselineHash, openingDate: active.value.openingDate, expectedCursor: active.calendar.verifiedThrough, expectedRevision: active.calendar.revision,
+    const context = { scope, authorityHash: active.authority.contentHash, businessKey: active.value.businessKey, blueprintId: active.value.blueprintId, blueprintHash: active.value.blueprintHash, baselineHash: active.value.baselineHash, openingDate: active.value.openingDate, expectedCursor: active.calendar.verifiedThrough, expectedRevision: active.calendar.revision,
       requiredAssertions: [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, ...['trial-balance', 'balance-sheet', 'profit-and-loss'].map(key => ({ key, evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' })), ...['receivables', 'payables'].map(key => ({ key, evidenceType: 'open-balances-at-date', currency: 'CAD' }))] };
     const assembly = assembleBusinessOperation({ prepared, history, context, now: now() });
     const policies = await (dependencies.derivePolicies || deriveBusinessPolicies)(assembly, client, active.authority.contentHash, now());
@@ -283,12 +284,13 @@ function createBusinessGovernanceService(dependencies = {}) {
     const rejected = await models.Steps.find({ ...bound.scope, operationId, state: 'rejected' }).limit(21).maxTimeMS(3000).lean();
     const uncertain = await models.Steps.find({ ...bound.scope, operationId, state: { $in: ['dispatched', 'unknown'] } }).limit(21).maxTimeMS(3000).lean();
     return { ...page, approvalReports, uncertainActivities: uncertain.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.compilation ? JSON.parse(row.compilation.request.body).TxnDate : null })), rejectedActivities: rejected.slice(0,20).map(row => ({ logicalKey: row.logicalKey, entity: row.entity, faultCodes: row.rejection?.faultCodes || [] })), recoveryReason: run.lastError || null, queuedContinuation: run.executionRequest?.pending === true, scope: bound.scope, fromDate: plan.manifest.fromDate, throughDate: plan.manifest.throughDate, createCount: plan.manifest.createCount, requiredAssertions: plan.manifest.requiredAssertions,
-      entries: page.entries.map(entry => ({ logicalKey: entry.step.logicalKey, kind: entry.kind, entity: entry.step.entity, txnDate: entry.step.txnDate, details: entry.step.details, expectedTaxCents: entry.policy.readbackTax?.totalTaxCents ?? null, references: entry.step.references.map(ref => ({ entity: ref.entity, key: ref.key, id: ref.id })), dependencies: entry.step.dependencies.map(link => ({ entity: link.entity, logicalKey: link.logicalKey })) })) };
+      entries: page.entries.map(entry => ({ logicalKey: entry.step.logicalKey, kind: entry.kind, entity: entry.step.entity, txnDate: entry.step.txnDate, details: entry.step.details, ...(entry.businessOrigin ? { businessOrigin: entry.businessOrigin } : {}), expectedTaxCents: entry.policy.readbackTax?.totalTaxCents ?? null, references: entry.step.references.map(ref => ({ entity: ref.entity, key: ref.key, id: ref.id })), dependencies: entry.step.dependencies.map(link => ({ entity: link.entity, logicalKey: link.logicalKey })) })) };
   }
+  const continuity = require('./business-continuity-service').createBusinessContinuityService({ models, connection, transaction, now, bind, fence, coordination, touchCoordination, readSetup: dependencies.readSetup, readMasters: dependencies.readMasters });
   const retirement = createBusinessOperationRetirement({ models, transaction, now, bind, fence });
   const taxReview = createBusinessPolicyAmendment({ models, transaction, now, bind, fence });
   const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence });
   const unknownRecovery = createBusinessUnknownRecovery({ models, connection, transaction, now, bind, fence });
-  return { ...unknownRecovery, ...recovery, status, reviewPublication, publish, prepare, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
+  return { ...unknownRecovery, ...recovery, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
 }
 module.exports = { createBusinessGovernanceService, reportHash };

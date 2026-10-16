@@ -7,6 +7,7 @@ const schema = new mongoose.Schema({
   businessKey: immutable(String), connectionId: immutable(mongoose.Schema.Types.ObjectId),
   blueprintId: immutable(mongoose.Schema.Types.ObjectId), authorityHash: { type: String, immutable: true },
   blueprintHash: immutable(String),
+  continuity: { type: mongoose.Schema.Types.Mixed, immutable: true },
   planId: immutable(mongoose.Schema.Types.ObjectId), planHash: immutable(String),
   fromDate: immutable(String), throughDate: immutable(String),
   expectedCursor: { ...immutable(String, false), default: null },

@@ -30,7 +30,7 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
   const deferred = new Set(['baseline', 'business_policy', 'period_control', 'execution']);
   if (!Array.isArray(payload.remaining) || payload.remaining.length > 100 || new Set(payload.remaining.map(item => item?.key)).size !== payload.remaining.length || payload.remaining.some(item => !deferred.has(item?.key) || typeof item.reason !== 'string' || !item.reason || item.reason.length > 1000)) fail('Resolve the outstanding operation-wide requirements before assembly.');
   if (!sameScope(context.scope, scope) || context.blueprintHash !== payload.blueprintHash || context.blueprintId !== payload.blueprintId || context.businessKey !== payload.businessKey || context.openingDate !== payload.openingDate) fail('Preparation differs from its company or business plan.');
-  const base = { version: 1, scope, businessKey: context.businessKey, blueprintId: context.blueprintId, blueprintHash: context.blueprintHash, baselineHash: context.baselineHash,
+  const base = { version: 1, scope, ...(payload.continuity ? { authorityHash: context.authorityHash } : {}), businessKey: context.businessKey, blueprintId: context.blueprintId, blueprintHash: context.blueprintHash, baselineHash: context.baselineHash,
     openingDate: context.openingDate, fromDate: payload.fromDate, throughDate: payload.throughDate,
     expectedCursor: context.expectedCursor, expectedRevision: context.expectedRevision, requiredAssertions: context.requiredAssertions };
   // Validate dates, scope, calendar continuity and required checks without inventing policies.
@@ -94,7 +94,7 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
   };
   for (const key of [...current.keys()].sort()) visit(key);
   if (retained.size !== current.size + original.size) fail('History contains unrelated earlier activities.');
-  const value = { version: 1, candidate: { ...base, entries: [...retained.values()] }, sources: { operationHash, historyHash: sourceHash, preparedAt, historyObservedAt: source.observedAt }, origins,
+  const value = { version: 1, candidate: { ...base, ...(payload.continuity ? { continuity: payload.continuity } : {}), entries: [...retained.values()] }, sources: { operationHash, historyHash: sourceHash, preparedAt, historyObservedAt: source.observedAt }, origins,
     requirements: payload.remaining.map(({ key, reason }) => ({ key, reason })),
     policyRequests: [...retained.values()].filter(entry => entry.kind === 'create').map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) })),
     persisted: false, readyToExecute: false, requiresActivationFence: true, requiresOwnershipReview: true, requiresFreshReadback: true };

@@ -24,7 +24,7 @@ function loadModels() {
   const registered = require('mongoose').models;
   const legacy = new Set(['User', 'Connection', 'CompanyMembership', 'AuditLog']);
   for (const name of legacy) if (!registered[name]) fail('The existing application models must be registered before runtime composition.');
-  return Object.fromEntries(Object.entries({ Users: 'User', Connections: 'Connection', Memberships: 'CompanyMembership', Audits: 'AuditLog', Policies: 'CompanyWritePolicy', Writers: 'CompanyWriter', Calendars: 'BusinessCalendar', Runs: 'OperationRun', Plans: 'OperationPlan', Intents: 'OperationIntent', Steps: 'OperationStep', Receipts: 'QboWriteReceipt', Evidence: 'OperationEvidence', Authorities: 'BusinessAuthority', Versions: 'BlueprintVersion' }).map(([key, name]) => [key, legacy.has(name) ? registered[name] : require('../models/' + name)]));
+  return Object.fromEntries(Object.entries({ Users: 'User', Connections: 'Connection', Memberships: 'CompanyMembership', Audits: 'AuditLog', Policies: 'CompanyWritePolicy', Writers: 'CompanyWriter', Calendars: 'BusinessCalendar', Runs: 'OperationRun', Plans: 'OperationPlan', Intents: 'OperationIntent', Steps: 'OperationStep', Receipts: 'QboWriteReceipt', Evidence: 'OperationEvidence', Authorities: 'BusinessAuthority', Versions: 'BlueprintVersion', Baselines: 'BusinessBaseline' }).map(([key, name]) => [key, legacy.has(name) ? registered[name] : require('../models/' + name)]));
 }
 // Internal server composition for one SAVED operation. No construction-time reads,
 // startup, activation, plan approval, migration or scheduler. Actor/owner/scope

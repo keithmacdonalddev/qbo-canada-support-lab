@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const { hash } = require('../modules/business-calendar');
 const fixed = type => ({ type, required: true, immutable: true });
 const schema = new mongoose.Schema({
-  contractVersion: { ...fixed(Number), enum: [1] },
+  contractVersion: { ...fixed(Number), enum: [1, 2] },
   environment: { ...fixed(String), enum: ['sandbox', 'production'] }, realmId: fixed(String), connectionId: fixed(mongoose.Schema.Types.ObjectId),
   contentHash: fixed(String), payload: fixed(mongoose.Schema.Types.Mixed), actorId: fixed(mongoose.Schema.Types.ObjectId), auditId: fixed(String),
 }, { timestamps: { createdAt: true, updatedAt: false }, autoCreate: false, autoIndex: false });

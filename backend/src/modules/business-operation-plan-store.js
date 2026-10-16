@@ -85,12 +85,13 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
     manifest.financialExpectation = require('./business-financial-movements').validateFinancialExpectation(copy.financialExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
     require('./business-financial-movements').assertMovementCapacity(manifest);
   }
+  if (copy.continuity !== undefined) manifest.continuity = require('./business-continuity-plan').validateOperationContinuity(copy.continuity, copy);
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };
 }
 function runFields(manifest, planId, actorId) {
-  return { contractVersion: 1, ...manifest.scope, ...(manifest.authorityHash ? { authorityHash: manifest.authorityHash } : {}), businessKey: manifest.businessKey, blueprintId: manifest.blueprintId, blueprintHash: manifest.blueprintHash, planId, planHash: hash(manifest),
+  return { contractVersion: 1, ...manifest.scope, ...(manifest.authorityHash ? { authorityHash: manifest.authorityHash } : {}), ...(manifest.continuity ? { continuity: manifest.continuity } : {}), businessKey: manifest.businessKey, blueprintId: manifest.blueprintId, blueprintHash: manifest.blueprintHash, planId, planHash: hash(manifest),
     fromDate: manifest.fromDate, throughDate: manifest.throughDate, expectedCursor: manifest.expectedCursor, expectedRevision: manifest.expectedRevision, baselineHash: manifest.baselineHash,
     expectedRecordSetHash: manifest.expectedRecordSetHash, requiredAssertions: manifest.requiredAssertions, recordCount: manifest.recordCount, createdBy: actorId };
 }
@@ -196,9 +197,14 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     return transaction(async session => {
       await authority(scope, 'operations.preview', session);
       const { run, plan, rows } = await loadEntries(scope, operationId, offset, limit, session);
-      const cache = new Map(), entries = [];
-      for (const row of rows) entries.push(snapshot({ kind: row.kind, step: row.step, policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, run, row, session, cache) }));
-      return { operationId, planHash: plan.planHash, status: run.status, recordCount: plan.manifest.recordCount, offset, nextOffset: offset + rows.length < plan.manifest.recordCount ? offset + rows.length : null,
+      const cache = new Map(), entries = [], continuity = plan.manifest.continuity;
+      const origins = new Map((continuity?.origins || []).map(origin => [origin.logicalKey, origin]));
+      for (const row of rows) {
+        const origin = origins.get(row.logicalKey), segment = origin && continuity.segments.find(value => value.authorityHash === origin.authorityHash);
+        entries.push(snapshot({ kind: row.kind, step: row.step, policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, run, row, session, cache),
+          ...(origin && segment ? { businessOrigin: { occurrence: origin.occurrence, effectiveFrom: segment.effectiveFrom } } : {}) }));
+      }
+      return { operationId, planHash: plan.planHash, status: run.status, recordCount: plan.manifest.recordCount, ...(continuity ? { businessTerms: continuity.segments.map(segment => ({ effectiveFrom: segment.effectiveFrom })) } : {}), offset, nextOffset: offset + rows.length < plan.manifest.recordCount ? offset + rows.length : null,
         entries };
     });
   }
