@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import client from '../api/client'
 import { Button } from './ui/button'
 
@@ -72,6 +73,7 @@ export default function BusinessSetup({ enabled, onChanged }) {
         </div>
         <label className="block space-y-1">Evidence note<textarea className="block w-full rounded border border-[var(--line)] bg-[var(--surface)] p-2" required minLength={10} maxLength={2000} value={evidenceNote} onChange={event => setEvidenceNote(event.target.value)} /></label>
         <p className="text-[var(--ink-2)]">These owner-recorded limits protect historical writes. They do not certify bank reconciliation. Saved cutoffs can only move forward here.</p>
+        <Link to="/company/period-close" className="inline-block text-[var(--link)] underline">Review reconciliation, close or reopening</Link>
         {view.coordination.periodControl && <p role="status">Saved protection: closed through {view.coordination.periodControl.closedThrough || 'none'} · reconciled through {view.coordination.periodControl.reconciledThrough || 'none'}.</p>}
         <Button type="submit" disabled={busy || evidenceNote.trim().length < 10}>{view.coordination.periodControl ? 'Update protected dates' : 'Record protected dates'}</Button>
       </form>}

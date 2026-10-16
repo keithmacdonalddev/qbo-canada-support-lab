@@ -1,7 +1,7 @@
 const express = require('express');
 const DefaultConnection = require('../models/Connection');
 const DefaultAuditLog = require('../models/AuditLog');
-const { publicAuditEvent } = require('../modules/report-evidence-contract');
+const { publicAuditEvent } = require('../modules/audit-event-projection');
 const { authenticate } = require('../middleware/auth');
 
 function createAuditRouter({ Connection = DefaultConnection, AuditLog = DefaultAuditLog } = {}) {

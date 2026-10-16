@@ -9,6 +9,7 @@ import Case from './pages/Case'
 import Company from './pages/Company'
 import BookChecks from './pages/BookChecks'
 import Reports from './pages/Reports'
+import Reconciliation from './pages/Reconciliation'
 import CompanySetup from './pages/CompanySetup'
 import Coverage from './pages/Coverage'
 import Onboarding from './pages/Onboarding'
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/company/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
         <Route path="/company/reports" element={<ProtectedRoute><BookChecks /></ProtectedRoute>} />
         <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+        <Route path="/company/period-close" element={<ProtectedRoute><Reconciliation /></ProtectedRoute>} />
         <Route path="/coverage" element={<ProtectedRoute><Coverage /></ProtectedRoute>} />
         <Route path="/dashboard" element={<Navigate to="/company" replace />} />
         <Route

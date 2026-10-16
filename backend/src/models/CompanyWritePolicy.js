@@ -11,6 +11,8 @@ const schema = new mongoose.Schema({
   // Separate from CompanyWriter, so a missing writer never restores legacy bypass.
   preparationEvidenceHash: String,
   periodControl: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Optional pointer to a separately retained owner close/reopen decision.
+  periodDecisionId: { type: String, default: null },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1 }, { unique: true });
 module.exports = mongoose.model('CompanyWritePolicy', schema);

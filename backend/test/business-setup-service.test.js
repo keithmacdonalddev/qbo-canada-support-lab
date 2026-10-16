@@ -95,6 +95,21 @@ test('period choices are owner-only, elapsed, monotonic, audited and require a s
  h.failAudit=true;const before=clone(h.data);await assert.rejects(h.record({...input,reconciledThrough:'2026-09-30'}),/audit/);assert.deepEqual(h.data,before);
 });
 
+test('unchanged legacy protection retry retains its decision pointer; a new forward choice clears it', async () => {
+  const h = fixture(); await h.prepare();
+  const input = { closedThrough: '2026-09-30', reconciledThrough: null, evidenceNote: 'Reviewed the September closing evidence.' };
+  await h.record(input); h.data.Policies[0].periodDecisionId = 'e'.repeat(24);
+  const before = clone(h.data);
+  assert.equal((await h.record(input)).reused, true);
+  assert.deepEqual(h.data.Policies, before.Policies); assert.deepEqual(h.data.Writers, before.Writers); assert.deepEqual(h.data.Audits, before.Audits);
+  assert.equal(h.data.Connections[0].businessSetupVersion, before.Connections[0].businessSetupVersion + 1);
+  assert.equal(h.data.Memberships[0].businessSetupVersion, before.Memberships[0].businessSetupVersion + 1);
+  assert.equal(h.data.Users[0].connectionSwitchVersion, before.Users[0].connectionSwitchVersion + 1);
+  await h.record({ ...input, reconciledThrough: '2026-09-30' });
+  assert.equal(h.data.Policies[0].periodDecisionId, null);
+  assert.equal(h.data.Audits.at(-1).beforeState.periodControl.contentHash, before.Policies[0].periodControl.contentHash);
+});
+
 test('occupied, uncertain and changed company writers refuse new jobs before creating a durable run', async () => {
   for (const fields of [{ operationId: 'e'.repeat(24), planHash: 'f'.repeat(64), workflowKind: 'master-preparation' }, { operationId: 'e'.repeat(24), planHash: 'f'.repeat(64) }, { unresolved: { key: 'unknown' } }, { connectionId: 'e'.repeat(24) }]) {
     const h = fixture(), preparation = await h.prepare(); await h.activate(preparation); Object.assign(h.data.Writers[0], fields);

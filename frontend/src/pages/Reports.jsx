@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button'
 import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 const families = ['financial','cash','receivables','sales','payables','expenses','inventory','projects','tax','budget','reconciliation','audit']
 const title = text => text[0].toUpperCase() + text.slice(1)
 export default function Reports() {
@@ -25,7 +25,7 @@ function ReportLibrary(props) {
   const selected = catalog?.items.find(row => row.key === selectedKey) || catalog?.items[0], selectedButton = useRef(null)
   useEffect(() => { selectedButton.current?.scrollIntoView({ block: 'nearest' }) }, [selected?.key])
   return <Layout><div className="mx-auto max-w-[1280px]">
-    <h1 className="text-[22px] font-semibold">Reports</h1>
+    <div className="flex flex-wrap items-center justify-between gap-3"><h1 className="text-[22px] font-semibold">Reports</h1><Link to="/company/period-close" className="text-[13px] text-[var(--link)] underline">Reconciliation and period close</Link></div>
     <p className="mt-1 max-w-[85ch] text-[13.5px] text-[var(--ink-2)]">Inspect the intended accounting story, what each report needs, and the evidence kept for this company. Opening a report definition reads no QuickBooks accounting data.</p>
     <div className="mt-5 flex flex-wrap items-end gap-3 text-[13px]"><label>Report family<select aria-label="Report family" value={family} onChange={event => { setFamily(event.target.value); setOffset(0); setCatalog(null) }} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2"><option value="">All families</option>{families.map(value => <option key={value} value={value}>{title(value)}</option>)}</select></label><label>Report priority<select aria-label="Report priority" value={tier} onChange={event => { setTier(event.target.value); setOffset(0); setCatalog(null) }} className="mt-1 block rounded border border-[var(--line)] bg-[var(--surface)] p-2"><option value="">All priorities</option>{['critical','supporting','edge','deferred'].map(value => <option key={value} value={value}>{title(value)}</option>)}</select></label>{catalog && <p className="py-2 text-[var(--ink-2)]">{catalog.total} report definitions · company evidence stays separate</p>}</div>
     {error && <div className="mt-5 space-y-2"><p role="alert" className="text-[var(--danger-ink)]">{error}</p><Button variant="outline" onClick={() => setRetry(value => value + 1)}>Retry report catalog</Button></div>}

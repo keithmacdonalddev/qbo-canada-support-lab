@@ -103,7 +103,7 @@ function createBusinessSetupService(dependencies = {}) {
       }
       if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) fail('Finish the current operation or recover its uncertain request before changing protected dates.');
       const value = { ...choice, recordedAt: new Date(now()).toISOString() }, periodControl = { ...value, contentHash: hash(value) };
-      const saved = await models.Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: policy.state, revision: policy.revision }, { $set: { periodControl }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const saved = await models.Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: policy.state, revision: policy.revision }, { $set: { periodControl, periodDecisionId: null }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!saved) fail('Company protected dates changed while saving.');
       await models.Audits.create([{ _id: hash({ periodControl: periodControl.contentHash }).slice(0, 24), userId: ownerId, realmId: scope.realmId, action: 'Company protected accounting dates recorded', actionType: 'manual', outcome: 'success', beforeState: { periodControl: previous || null }, afterState: { periodControl, qboWrites: 0, reconciliationVerifiedByApi: false } }], { session });
       return { periodControl, reused: false };

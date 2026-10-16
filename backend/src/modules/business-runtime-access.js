@@ -8,6 +8,8 @@ const ID = /^[a-f0-9]{24}$/;
 const ACTIONS = Object.freeze({
   'reports.observe': Object.freeze(['reports.read', 'company.read', 'app_data.read']),
   'reports.manual.record': Object.freeze(['reports.validate', 'reports.read', 'app_data.read']),
+  'periods.read': Object.freeze(['reconciliation.read', 'app_data.read', 'company.read']),
+  'periods.manage': Object.freeze(['operations.execute', 'reconciliation.read', 'reports.validate', 'app_data.read']),
   'baseline.review': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read', 'qbo_data.read']),
   'baseline.read': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read']),
   'baseline.capture': Object.freeze(['reports.validate', 'blueprint.manage', 'qbo_data.read', 'app_data.read', 'reports.read', 'blueprint.read']),
@@ -58,7 +60,7 @@ function createBusinessRuntimeAccess({ actorId, ownerId, Users = require('../mod
     if (membership && (!same(membership.userId, actorId) || membership.realmId !== scope.realmId || membership.status !== 'active' || !Object.hasOwn(ROLE_PERMISSIONS, membership.role) || (membership.permissionOverrides !== undefined && !Array.isArray(membership.permissionOverrides)) || (membership.permissionOverrides || []).some(value => !ALL_PERMISSIONS.includes(value)))) fail('Current company membership is unavailable or invalid.');
     if (!membership && actorId !== ownerId) fail('Active membership in this shared company is required.');
     const access = resolvePermissionSnapshot({ membership, legacyRole: actor.role });
-    if (!permissions.every(permission => access.permissions.includes(permission)) || (!['operations.read', 'baseline.read', 'baseline.review', 'reports.observe'].includes(action) && access.source !== 'company-membership')) fail('Current company permission does not allow this operation.');
+    if (!permissions.every(permission => access.permissions.includes(permission)) || (!['operations.read', 'baseline.read', 'baseline.review', 'reports.observe', 'periods.read'].includes(action) && access.source !== 'company-membership')) fail('Current company permission does not allow this operation.');
     if (scope.environment !== environment()) fail('The configured company environment changed.', 409);
     return { actorId, ownerId, scope, action, source: access.source };
   }

@@ -15,6 +15,7 @@ router.use('/business-setup', require('./business-setup').createBusinessSetupRou
 router.use('/business-plan', require('./business-plan').createBusinessPlanRouter());
 router.use('/business-baseline', require('./business-baseline').createBusinessBaselineRouter());
 router.use('/report-evidence', require('./report-evidence').createReportEvidenceRouter());
+router.use('/period-close', require('./period-close').createPeriodCloseRouter());
 
 /**
  * Helper -- find the user's active Connection or return 404.

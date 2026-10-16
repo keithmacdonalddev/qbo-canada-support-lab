@@ -50,7 +50,8 @@ test('legacy owner role retains read access only and never grants execution', as
   assert.equal((await h.access.authorize(scope, 'baseline.read')).source, 'legacy-role-bridge');
   assert.equal((await h.access.authorize(scope, 'baseline.review')).source, 'legacy-role-bridge');
   assert.equal((await h.access.authorize(scope, 'reports.observe')).source, 'legacy-role-bridge');
-  for (const action of Object.keys(ACTIONS).filter(action => !['operations.read', 'baseline.read', 'baseline.review', 'reports.observe'].includes(action))) await assert.rejects(h.access.authorize(scope, action), /permission/);
+  assert.equal((await h.access.authorize(scope, 'periods.read')).source, 'legacy-role-bridge');
+  for (const action of Object.keys(ACTIONS).filter(action => !['operations.read', 'baseline.read', 'baseline.review', 'reports.observe', 'periods.read'].includes(action))) await assert.rejects(h.access.authorize(scope, action), /permission/);
 });
 test('suspended or retired memberships cannot fall back to legacy owner access', async () => {
   for (const status of ['suspended', 'retired']) { const h = harness(false); h.data.Memberships[0].status = status; await assert.rejects(h.access.authorize(scope, 'operations.read'), /membership/); }
