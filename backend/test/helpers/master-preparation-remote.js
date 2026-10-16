@@ -15,7 +15,7 @@ function remoteMasters(h) {
     return { status: 200, json: { [entity]: h.changeRead ? h.changeRead(clone(record)) : clone(record) } };
   };
   h.onSDK = async opts => {
-    const entity = entities[new URL(opts.url).pathname.split('/').at(-1)], record = { ...JSON.parse(opts.body), Id: String(nextId++), SyncToken: '0' };
+    const entity = entities[new URL(opts.url).pathname.split('/').at(-1)], record = { ...JSON.parse(opts.body), Id: String(nextId++), SyncToken: '0', ...(h.source.view.draft.business.stockCosting ? {MetaData:{CreateTime:new Date(h.clock).toISOString(),LastUpdatedTime:new Date(h.clock).toISOString()}}:{}) };
     if (!remote[entity]) throw new Error('Unmodeled fixture write'); remote[entity].push(clone(record));
     if (h.afterCreate) await h.afterCreate(record, entity);
     return { status: 200, json: { [entity]: clone(record) } };

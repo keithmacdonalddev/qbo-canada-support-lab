@@ -81,6 +81,9 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   if (copy.incomeExpectation !== undefined) manifest.incomeExpectation = require('./business-income-evidence').validateIncomeExpectation(copy.incomeExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
   const financialRequired = copy.requiredAssertions.some(row => row.key === 'financial-movements');
   if (financialRequired !== (copy.financialExpectation !== undefined)) fail('The selected-account movement requirement needs its exact retained starting source.');
+  const stockRequired = copy.requiredAssertions.some(row => row.key === 'stock-costs');
+  if (stockRequired !== (copy.stockCostExpectation !== undefined) || (stockRequired && !financialRequired)) fail('The stock-cost requirement needs its exact retained opening and financial proof.');
+  if (stockRequired) manifest.stockCostExpectation = require('./business-stock-evidence').validateStockExpectation(copy.stockCostExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
   if (financialRequired) {
     manifest.financialExpectation = require('./business-financial-movements').validateFinancialExpectation(copy.financialExpectation, scope, { fromDate: copy.fromDate, throughDate: copy.throughDate }, copy.entries);
     require('./business-financial-movements').assertMovementCapacity(manifest);

@@ -81,6 +81,8 @@ function PlanContent({ realmId, environment, enabled }) {
   const choices = value => JSON.stringify({ business: value?.business, mappings: value?.mappings, masterBindings: value?.masterBindings || {} })
   const hasUnsavedEdits = Boolean(form && view && choices(form) !== choices(view.draft || view.proposal))
   const editable = view?.permissionToSave && !saving
+  const stockPolicy = form?.business.stockCosting
+  const stockReady = !stockPolicy || (stockPolicy.methodEvidence.reference.trim().length >= 5 && /^\d{4}-\d{2}-\d{2}$/.test(stockPolicy.methodEvidence.observedOn) && stockPolicy.purchaseTax.evidenceReference.trim().length >= 5 && /^\d{4}-\d{2}-\d{2}$/.test(stockPolicy.purchaseTax.confirmedOn) && stockPolicy.purchaseTax.treatment === 'fully-recoverable')
   const mappingEntries = Object.entries(view?.mappingDefinitions || {})
   const missing = mappingEntries.filter(([key]) => !form?.mappings?.[key]).length
   return <section aria-label="Business plan" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
@@ -105,6 +107,22 @@ function PlanContent({ realmId, environment, enabled }) {
         </div>
         <label className="block max-w-xl space-y-1"><span>Business schedule</span><select aria-label="Business schedule" className={inputClass} value={form.business.activityTemplateVersion ?? 1} disabled={!editable} onChange={event => change('business', 'activityTemplateVersion', Number(event.target.value))}><option value={3}>Customer credits · continuing business with care-service adjustments</option><option value={2}>Continuing business · staged payments, stock buffer and overheads</option><option value={1}>Original schedule · full settlements and complete stock batches</option></select></label>
         <p className="text-[12px]">{form.business.activityTemplateVersion === 3 ? 'The customer-credit schedule proposes 288 monthly records for the full business or 82 for a small build. Selected care invoices receive a ten-percent service adjustment before the exact remainder is collected. You can save and preview it; Production use awaits a Canadian company check.' : (form.business.activityTemplateVersion ?? 1) === 2 ? 'The continuing schedule proposes 278 monthly records for the full business or 80 for a small build. Review quantities, terms, prices and tax before publication.' : 'This saved schedule keeps its original 260 or 70 monthly record target.'} Saving a different draft does not replace an already published business or its obligations.</p>
+        <fieldset className="space-y-3 rounded border border-[var(--line)] p-3" disabled={!editable}>
+          <legend className="px-1 font-medium text-[var(--ink)]">Stock costs</legend>
+          <p>FIFO means the oldest purchases supply each sale. Confirm the company’s method and purchase-tax treatment before requiring this check. It starts from newly prepared zero-stock products; existing stock history needs separate evidence.</p>
+          <label className="flex items-start gap-2"><input type="checkbox" checked={Boolean(form.business.stockCosting)} onChange={event => change('business', 'stockCosting', event.target.checked ? { version: 1, method: 'FIFO', methodEvidence: { kind: 'owner-observation', reference: '', observedOn: '' }, purchaseTax: { treatment: 'unconfirmed', evidenceReference: '', confirmedOn: '' } } : undefined)} />Require stock value and cost-of-sales checks before the calendar advances</label>
+          {form.business.stockCosting ? <>
+            <p className="text-[12px]">The company owner accepts these observations when publishing. Unknown methods, moving-average costing and taxes added to stock cost are outside this check. Retain these choices and every stock product in later business revisions.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1"><span>Where you confirmed FIFO in QuickBooks</span><input className={inputClass} maxLength={500} value={form.business.stockCosting.methodEvidence.reference} onChange={event => change('business', 'stockCosting', { ...form.business.stockCosting, methodEvidence: { ...form.business.stockCosting.methodEvidence, reference: event.target.value } })} /></label>
+              <label className="space-y-1"><span>Method checked on</span><input type="date" className={inputClass} value={form.business.stockCosting.methodEvidence.observedOn} onChange={event => change('business', 'stockCosting', { ...form.business.stockCosting, methodEvidence: { ...form.business.stockCosting.methodEvidence, observedOn: event.target.value } })} /></label>
+              <label className="space-y-1"><span>Purchase-tax treatment evidence</span><input className={inputClass} maxLength={500} value={form.business.stockCosting.purchaseTax.evidenceReference} onChange={event => change('business', 'stockCosting', { ...form.business.stockCosting, purchaseTax: { ...form.business.stockCosting.purchaseTax, evidenceReference: event.target.value } })} /></label>
+              <label className="space-y-1"><span>Tax treatment confirmed on</span><input type="date" className={inputClass} value={form.business.stockCosting.purchaseTax.confirmedOn} onChange={event => change('business', 'stockCosting', { ...form.business.stockCosting, purchaseTax: { ...form.business.stockCosting.purchaseTax, confirmedOn: event.target.value } })} /></label>
+            </div>
+            <label className="flex items-start gap-2"><input type="checkbox" checked={form.business.stockCosting.purchaseTax.treatment === 'fully-recoverable'} onChange={event => change('business', 'stockCosting', { ...form.business.stockCosting, purchaseTax: { ...form.business.stockCosting.purchaseTax, treatment: event.target.checked ? 'fully-recoverable' : 'unconfirmed' } })} />Purchase tax is fully recoverable and adds no cost to these products</label>
+            {!stockReady && <p role="status" className="text-[12px]">Complete both evidence references and dates, and confirm the purchase-tax treatment before saving.</p>}
+          </> : <p className="text-[12px] text-[var(--ink-3)]">Stock-cost verification is not included in this draft.</p>}
+        </fieldset>
         <p className="text-[12px] text-[var(--ink-3)]">Saving this name does not rename the connected QuickBooks company.</p>
         <div><h3 className="font-medium text-[var(--ink)]">Operating divisions</h3><ul className="mt-1 flex flex-wrap gap-x-5 gap-y-1">{form.divisions.map(division => <li key={division.key}>{division.name}</li>)}</ul></div>
         <details className="border-t border-[var(--line)] pt-3">
@@ -133,7 +151,7 @@ function PlanContent({ realmId, environment, enabled }) {
         <BusinessActivityPreview view={view} />
         <div className="border-t border-[var(--line)] pt-3"><h3 className="font-medium text-[var(--ink)]">Before this can drive business activity</h3><ul className="mt-1 list-disc space-y-1 pl-5">{view.activationNeeds.map(need => <li key={need}>{need}</li>)}</ul></div>
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving || Boolean(pendingDraftVersion)} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
+          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving || Boolean(pendingDraftVersion) || !stockReady} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
           {!view.permissionToSave ? <p>Your company role has read-only access to business plans.</p> : !view.storage.ready ? <p>{view.storage.reason}</p> : <p className="text-[12px]">Saved in this app. No QuickBooks transactions are created.</p>}
         </div>
       </>}

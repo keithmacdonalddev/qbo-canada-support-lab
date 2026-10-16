@@ -25,7 +25,7 @@ function validateDraftInput(input) {
   if (typeof input.requestKey !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.requestKey)) throw problem('A save request identifier is required');
   if (typeof input.connectionId !== 'string' || !/^[a-f0-9]{24}$/.test(input.connectionId)) throw problem('Reload the business plan before saving it');
   if (input.baseHash !== null && (typeof input.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.baseHash))) throw problem('The previously loaded plan version is required');
-  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile', 'activityTemplateVersion'], 'Business settings');
+  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile', 'activityTemplateVersion', 'stockCosting'], 'Business settings');
   const business = input.business;
   if (typeof business.displayName !== 'string' || business.displayName.trim().length < 2 || business.displayName.length > 120 || /[\u0000-\u001f]/.test(business.displayName)) throw problem('Use a business name of 2 to 120 characters');
   try { date(business.openingDate); } catch { throw problem('Choose a valid business opening date'); }
@@ -34,6 +34,7 @@ function validateDraftInput(input) {
   if (!Number.isInteger(business.fiscalYearStartMonth) || business.fiscalYearStartMonth < 1 || business.fiscalYearStartMonth > 12) throw problem('Choose a valid fiscal-year starting month');
   if (!['development', 'flagship'].includes(business.volumeProfile)) throw problem('Choose a supported business volume');
   if (business.activityTemplateVersion !== undefined && ![1, 2, 3].includes(business.activityTemplateVersion)) throw problem('Choose a supported business schedule.');
+  if (business.stockCosting !== undefined) require('./business-stock-cost').validateStockCostPolicy(business.stockCosting);
   strict(input.mappings, Object.keys(MAPPINGS), 'Company mappings');
   const mappings = {};
   for (const key of Object.keys(MAPPINGS)) {
@@ -51,6 +52,7 @@ function buildDraftDefinition(input, proposal = createDefinitionsService().getFl
     calendar: { openingDate: value.business.openingDate, historicalMonths: value.business.historicalMonths, fiscalYearStartMonth: value.business.fiscalYearStartMonth, timeZone: 'America/Halifax' },
     divisions: proposal.divisions.map(division => ({ ...division })), realismRules: [...proposal.realismRules],
     ...([2, 3].includes(value.business.activityTemplateVersion) ? { activityTemplateVersion: value.business.activityTemplateVersion } : {}),
+    ...(value.business.stockCosting !== undefined ? { stockCosting: value.business.stockCosting } : {}),
     generationSeed: proposal.generationSeed, volumeProfile: value.business.volumeProfile, mappings: value.mappings, masterBindings: value.masterBindings,
   };
 }
@@ -58,7 +60,7 @@ function draftView(doc, connectionId) {
   if (!doc) return null;
   const definition = doc.definition;
   return { id: String(doc._id), version: doc.version, contentHash: doc.contentHash, savedAt: doc.createdAt, status: 'draft', connectionMatches: String(doc.connectionId) === String(connectionId),
-    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile, ...(definition.activityTemplateVersion !== undefined ? { activityTemplateVersion: definition.activityTemplateVersion } : {}) },
+    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile, ...(definition.activityTemplateVersion !== undefined ? { activityTemplateVersion: definition.activityTemplateVersion } : {}), ...(definition.stockCosting !== undefined ? { stockCosting: definition.stockCosting } : {}) },
     mappings: definition.mappings, masterBindings: definition.masterBindings || {}, divisions: definition.divisions,
   };
 }

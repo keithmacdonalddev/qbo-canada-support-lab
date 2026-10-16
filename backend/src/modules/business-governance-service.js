@@ -109,8 +109,10 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (closing !== null && closing !== undefined) date(closing);
     const cutoff = [selected.policy.periodControl.closedThrough, selected.policy.periodControl.reconciledThrough, closing].filter(Boolean).sort().at(-1);
     if (cutoff && selected.review.openingDate <= cutoff) fail('Business opening is inside a closed or reconciled period through ' + cutoff + '. Review and reopen that history explicitly before publication, or choose a later opening.');
-    const { observedAt: companyObservedAt, ...companyEvidence } = await readCanadianCompany(client, scope, now);
-    return { setupHash: setup.sourceHash, masterHash: masters.sourceHash, qboClosedThrough: closing || null, country: 'CA', companyEvidence };
+    const company = await readCanadianCompany(client, scope, now, { fiscalCalendar: view.draft.business.stockCosting !== undefined });
+    const { observedAt: companyObservedAt, ...companyEvidence } = company;
+    const stockRoot = view.draft.business.stockCosting === undefined ? null : await require('./business-stock-root').buildStockRoot({ models, scope, ownerId: bound.ownerId, view: view.draft, baseline: selected.baseline, company, stockObservation: await (dependencies.readStockRoot || createBusinessInventoryReader({ access, now, stockMetadata: true }))(scope), now: now() });
+    return { ...(stockRoot ? { stockRoot } : {}), setupHash: setup.sourceHash, masterHash: masters.sourceHash, qboClosedThrough: closing || null, country: 'CA', companyEvidence };
   }
   async function publicationSelection(bound, input) {
     const selected = await baselineReview(bound, input), setup = await publicationSetup(bound, selected);
@@ -154,6 +156,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       if (repeated) return { published: true, authorityHash: repeated.contentHash, reused: true };
       const current = await baselineReview(bound, input, session);
       if (current.reviewHash !== selected.coreReviewHash) fail('The business evidence changed. Review publication again.');
+      if (payload.stockRoot) await require('./business-stock-root').assertStockRootOrigins(models, payload.stockRoot, ownerId, session);
       const calendar = await read(models.Calendars, { environment: scope.environment, realmId: scope.realmId }, session);
       if (calendar && (calendar.authorityHash !== selected.review.replacesAuthorityHash || String(calendar.connectionId) !== scope.connectionId || calendar.verifiedThrough !== null || calendar.currentOperationId !== null || calendar.pendingCommit !== null || calendar.openingDate !== payload.openingDate || calendar.businessKey !== payload.businessKey || await read(models.Steps, { environment: scope.environment, realmId: scope.realmId }, session))) fail('An existing business calendar has activity and requires a reviewed continuity change; it was not replaced.');
       const policyFence = await models.Policies.findOneAndUpdate({ _id: current.policy._id, ...scope, revision: selected.policy.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
@@ -176,6 +179,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       await fence(bound, session, 'operations.execute');
       const state = await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest, session, fence: true });
       if (state.calendar.currentOperationId !== null) fail('An existing operation owns the calendar.');
+      if (manifest.stockCostExpectation) await require('./business-stock-history').assertFrozenStockOpening(models, state, manifest.stockCostExpectation, session);
       const current = await coordination(bound, session);
       if (current.policy.state !== 'active') fail('Enable company write coordination first.');
       if (!reportFence || reportFence.operationId !== operationId || reportFence.planHash !== planHash || canonical(reportFence.scope) !== canonical(scope) || canonical(reportFence.period) !== canonical({ fromDate: manifest.fromDate, throughDate: manifest.throughDate }) || !HASH.test(reportFence.sourceHash || '') || now() < reportFence.observedAt || now() - reportFence.startedAt > 300000 || reportFence.policyRevision !== current.policy.revision || reportFence.writerRevision !== current.writer.revision || reportFence.calendarRevision !== state.calendar.revision || reportFence.authorityRevision !== state.calendar.authorityRevision || reportFence.calendarWriterRevision !== state.calendar.writerRevision || reportFence.authorityHash !== state.authority.contentHash) fail('The fresh seven-report approval observation or company state changed. Review approval again.');
@@ -233,14 +237,23 @@ function createBusinessGovernanceService(dependencies = {}) {
     const assembly = assembleBusinessOperation({ prepared, history, context, now: now() });
     const policies = await (dependencies.derivePolicies || deriveBusinessPolicies)(assembly, client, active.authority.contentHash, now());
     const boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
+    let stockPreparation = null;
+    if (active.value.stockRoot) {
+      const { state, carry } = await require('./business-stock-history').readCommittedStockOpening(models, active);
+      const purchaseOrigins = await require('./business-stock-evidence').loadPurchaseOrigins(models, state);
+      const stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now, purpose: 'operations.preview' })(scope, state, { signal });
+      stockPreparation = { opening: state, carry, purchaseOrigins, stockSource };
+    }
     const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
     reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports);
     const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, unpackReport('ProfitAndLoss', startingReports.reports.ProfitAndLoss, startingReports.version), startingReports.observedAt, startingReports.version);
     const financialExpectation = createFinancialExpectation(scope, { fromDate, throughDate: input.throughDate }, active.view.mappings, startingReports);
-    const candidate = { ...boundCandidate.candidate, requiredAssertions: [...boundCandidate.candidate.requiredAssertions, { key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }], authorityHash: active.authority.contentHash, incomeExpectation, financialExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
+    const stockCostExpectation = stockPreparation ? require('./business-stock-evidence').createStockExpectation({ scope, period: { fromDate, throughDate: input.throughDate }, root: active.value.stockRoot, ...stockPreparation, reports: startingReports }) : null;
+    const candidate = { ...boundCandidate.candidate, ...(stockCostExpectation ? { stockCostExpectation } : {}), requiredAssertions: [...boundCandidate.candidate.requiredAssertions, ...(stockCostExpectation ? [{ key: 'stock-costs', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }] : []), { key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }], authorityHash: active.authority.contentHash, incomeExpectation, financialExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
     await transaction(async session => {
       await fence(bound, session, 'operations.preview');
-      await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: candidate, session, fence: true });
+      const latestBusiness = await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: candidate, session, fence: true });
+      if (stockCostExpectation) await require('./business-stock-history').assertFrozenStockOpening(models, latestBusiness, stockCostExpectation, session);
       const latest = await coordination(bound, session);
       if (latest.policy.revision !== current.policy.revision || latest.writer.revision !== current.writer.revision || signal?.aborted) fail('Company activity changed during preparation.');
       await touchCoordination(bound, latest, session);

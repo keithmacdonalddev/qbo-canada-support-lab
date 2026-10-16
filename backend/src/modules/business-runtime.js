@@ -69,7 +69,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     if (!verification) verification = createBusinessVerificationRuntime({ scope, operationId, planHash: boundPlanHash, ...models, transaction, assertReady, access, writerFence, plans, now });
     return saved;
   };
-  const evidence = createBusinessPeriodEvidence({ ...models, transaction, access, assertReady, writerFence, steps, readReports: createBusinessReportReader({ access, now }), writeAudit, now });
+  const evidence = createBusinessPeriodEvidence({ ...models, transaction, access, assertReady, writerFence, steps, readStock: require('./business-stock-source').createBusinessStockReader({ access, now }), readReports: createBusinessReportReader({ access, now }), writeAudit, now });
   const periods = createBusinessPeriodStore({ ...models, Writer: writerFence, transaction, authorize, assertReady, writeAudit, loadProof: evidence.loadProof, now });
   async function validateOpening({ signal }) {
     const run = await models.Runs.findOne({ _id: operationId, ...scope }).maxTimeMS(3000).lean();
@@ -78,6 +78,13 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     require('./business-financial-movements').assertMovementCapacity(plan.manifest);
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
     const before = await verification.readFence(scope, { signal });
+    let stockSource = null;
+    if (plan.manifest.stockCostExpectation) {
+      const expected = plan.manifest.stockCostExpectation;
+      const origins = await require('./business-stock-evidence').loadPurchaseOrigins(models, expected.opening);
+      if (require('./business-calendar').canonical(origins) !== require('./business-calendar').canonical(expected.purchaseOrigins)) fail('Original stock purchase costs changed before the first write.');
+      stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now })(scope, expected.opening, { signal });
+    }
     const source = await createBusinessReportReader({ access, now, purpose: 'operation' })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
     require('./business-financial-movements').assertMovementCapacity(plan.manifest, source);
     const evaluation = require('./book-evidence').evaluateReportSources(source, { allowExplicitZero: true });
@@ -87,6 +94,10 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     if (plan.manifest.financialExpectation) {
       const opening = require('./business-financial-movements').compareFinancialMovements(plan.manifest.financialExpectation, [], source);
       if (opening.status !== 'passed') fail('Selected financial account balances changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
+    }
+    if (plan.manifest.stockCostExpectation) {
+      const opening = require('./business-stock-evidence').compareStockCosts(plan.manifest.stockCostExpectation, [], source, stockSource, { openingOnly: true });
+      if (opening.status !== 'passed') fail('Stock quantity, original purchase cost or selected cost balances changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
     }
     const after = await verification.readFence(scope, { signal });
     if (require('./business-calendar').canonical(before) !== require('./business-calendar').canonical(after)) fail('Company activity changed during the starting-income check.');

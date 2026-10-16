@@ -108,3 +108,11 @@ test('fresh source BSON overhead is admitted with the worst complete proof befor
  const source={accounts:[{metadata:Array(1300000).fill(0)}]}; assert.ok(Buffer.byteLength(canonical(source))<6000000);
  assert.throws(()=>assertMovementCapacity(manifest,source),/BSON storage budget/);
 });
+
+test('combined stock proof reserves refuse JSON and BSON overflow before creates while old account-only capacity remains usable',()=>{
+ const {expectation}=state(),records=Array.from({length:500},()=>({kind:'create',relationships:[]})),old={financialExpectation:expectation,records},stock={...old,stockCostExpectation:{version:1}};
+ assert.doesNotThrow(()=>assertMovementCapacity(stock,{accounts:[]}));
+ const connected={...old,records:records.map(row=>({...row,relationships:Array(20).fill(hash('parent'))}))};assert.doesNotThrow(()=>assertMovementCapacity(connected));assert.throws(()=>assertMovementCapacity({...connected,stockCostExpectation:{version:1}}),/combined account and stock-cost proof/);
+ const jsonSource={notes:'x'.repeat(6500000)};assert.doesNotThrow(()=>assertMovementCapacity(old,jsonSource));assert.throws(()=>assertMovementCapacity(stock,jsonSource),/JSON storage budget/);
+ const bsonSource={metadata:Array(750000).fill(0)};assert.ok(Buffer.byteLength(canonical(bsonSource))<2000000);assert.doesNotThrow(()=>assertMovementCapacity(old,bsonSource));assert.throws(()=>assertMovementCapacity(stock,bsonSource),/BSON storage budget/);
+});

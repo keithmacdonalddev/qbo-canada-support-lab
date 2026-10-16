@@ -6,6 +6,10 @@ function fail(message) { throw Object.assign(new Error(message), { status: 409, 
 function assertAuthorityDocument(row, scope) {
   const value = row?.payload;
   if (!row || ![1, 2].includes(row.contractVersion) || row.contractVersion !== value?.version || !row.auditId || hash(value) !== row.contentHash || ![1, 2].includes(value?.version) || value.status !== 'published' || canonical(value.scope) !== canonical(scope) || typeof value.ownerId !== 'string' || value.ownershipDisposition !== 'retain-unmanaged' || ![1, 2, 3].includes(value.activityTemplateVersion) || !/^[a-f0-9]{64}$/.test(value.baselineHash || '') || !/^[a-f0-9]{64}$/.test(value.inventoryHash || '')) fail('The exact published business authority is unavailable.');
+  if (value.stockRoot !== undefined) {
+    require('./business-stock-root').validateStockRoot(value.stockRoot, scope);
+    if (value.stockRoot.baselineHash !== value.baselineHash || value.stockRoot.inventoryHash !== value.inventoryHash || value.stockRoot.openingDate !== value.openingDate) fail('Published stock evidence differs from the accepted business opening.');
+  }
   if (value.version === 2) require('./business-authority-lineage').assertContinuityDocument(value);
   return value;
 }
@@ -23,6 +27,8 @@ async function readPublishedBusiness({ Authorities, Versions, Calendars, Connect
   if (!blueprint || blueprint.contentHash !== value.blueprintHash || hash(blueprint.definition) !== value.blueprintHash || !blueprint.auditId) fail('The published business definition changed.');
   const view = draftView(blueprint, scope.connectionId);
   if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || hash(activityDefinition(view.business)) !== value.activityRulesHash) fail('The published activity rules no longer match this application version.');
+  if ((view.business.stockCosting !== undefined) !== (value.stockRoot !== undefined)) fail('The published stock-cost requirement changed.');
+  if (value.stockRoot) require('./business-stock-root').validateStockRoot(value.stockRoot, scope, view);
   const lineage = value.version === 2 ? await require('./business-authority-lineage').readAuthorityLineage({ Authorities, Versions, Audits, Baselines, scope, head: row, session, verifyBaseline }) : null;
   return { authority: row, value, calendar, view, lineage };
 }
@@ -32,6 +38,12 @@ async function assertPublishedBusiness(input) {
   if (input.requireScheduleAcceptance === true) require('./business-activity-preview').assertActivityTemplateAccepted(active.view.business, scope);
   if (calendar.pendingCommit || (manifest && (manifest.authorityHash !== calendar.authorityHash || calendar.blueprintHash !== manifest.blueprintHash || calendar.baseline?.evidenceHash !== manifest.baselineHash || calendar.verifiedThrough !== manifest.expectedCursor || calendar.revision !== manifest.expectedRevision))) fail('The active calendar differs from this reviewed operation.');
   if (manifest && (value.version === 2 ? manifest.continuity?.lineageHash !== lineage.lineageHash || manifest.continuity?.authorityHash !== row.contentHash || canonical(manifest.continuity?.segments || null) !== canonical(lineage.segments) : manifest.continuity !== undefined)) fail('The operation differs from its complete reviewed business lineage.');
+  if (manifest) {
+    const required = manifest.requiredAssertions?.some(row => row.key === 'stock-costs');
+    if (Boolean(value.stockRoot) !== Boolean(required)) fail('The operation cannot omit or invent its published stock-cost requirement.');
+    if (manifest.records && required && !manifest.stockCostExpectation) fail('The operation lost its original stock-cost expectation.');
+    if (manifest.stockCostExpectation && (manifest.stockCostExpectation.rootHash !== value.stockRoot?.rootHash || manifest.stockCostExpectation.policyHash !== value.stockRoot?.policyHash)) fail('The operation differs from its published stock-cost root.');
+  }
   if (fence) {
     if (!session?.inTransaction?.()) fail('Active business authority requires a transaction fence.');
     const touched = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, authorityHash: row.contentHash, revision: calendar.revision, writerRevision: calendar.writerRevision, currentOperationId: calendar.currentOperationId, pendingCommit: null }, { $inc: { authorityRevision: 1 } }, { new: true, session }).lean();

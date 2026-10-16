@@ -29,6 +29,10 @@ function validateBlueprintDefinition(definition) {
   if (definition.activityTemplateVersion !== undefined && ![1, 2, 3].includes(definition.activityTemplateVersion)) {
     errors.push({ path: '/activityTemplateVersion', message: 'Unsupported business activity template version' })
   }
+  if (definition.stockCosting !== undefined) {
+    try { require('./business-stock-cost').validateStockCostPolicy(definition.stockCosting) }
+    catch (error) { errors.push({ path: '/stockCosting', message: error.message }) }
+  }
   if (!Array.isArray(definition.divisions) || definition.divisions.length === 0) {
     errors.push({ path: '/divisions', message: 'At least one operating division is required' })
   }

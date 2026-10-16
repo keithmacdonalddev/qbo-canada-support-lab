@@ -18,6 +18,9 @@ function masterRequirements(business) {
       accountMappings: { IncomeAccountRef: value.incomeMapping, ...(stock ? { AssetAccountRef: 'inventoryAsset', ExpenseAccountRef: 'costOfGoods' } : {}) } });
     if (value.cohort === 'field-job') add({ key: 'field-technician', entity: 'Employee', purpose: 'Time-entry worker' });
   }
+  if (business.stockCosting !== undefined) {
+    for (let index = 1; index <= 5; index++) add({ key: 'workshop-stock-' + index, entity: 'Item', purpose: 'Supplies stock, including dormant roles', itemType: 'Inventory', accountMappings: { IncomeAccountRef: 'supplyIncome', AssetAccountRef: 'inventoryAsset', ExpenseAccountRef: 'costOfGoods' } });
+  }
   return [...rows.values()].sort((a, b) => a.entity.localeCompare(b.entity) || a.key.localeCompare(b.key));
 }
 function validateMasterBindings(bindings, business) {

@@ -1,0 +1,18 @@
+const money = value => value == null ? '—' : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(value / 100)
+const labels = { inventoryAsset: 'Remaining stock value', costOfGoods: 'Cost of sales · company fiscal year' }
+export default function BusinessStockCosts({ evidence, required, unavailable }) {
+  if (!required && !evidence) return null
+  return <section aria-label="Stock cost evidence" className="space-y-3 rounded border border-[var(--line)] p-3">
+    <h4 className="font-semibold">Stock costs · {unavailable || !evidence ? 'evidence unavailable' : evidence.status}</h4>
+    {!evidence ? <p>{unavailable ? 'Saved stock-cost evidence could not be verified. Progress and Stop remain available.' : 'Stock-cost evidence is required before this period can complete. It will appear after the saved records and reports are checked.'}</p> : <>
+      <p>FIFO carries the original cost of the oldest purchases into each sale. This check uses the owner’s retained confirmation of FIFO and fully recoverable purchase tax.</p>
+      {evidence.ownerAttributedSourceLines > 0 && <p>{evidence.ownerAttributedSourceLines} source line(s) rely on the owner identifying a saved record after its original response was lost. Those transport results remain unknown.</p>}
+      {evidence.reason && <p role="status">{evidence.reason}</p>}
+      <div className="overflow-x-auto"><table className="w-full text-left"><caption className="sr-only">Modeled stock costs compared with selected QuickBooks accounts</caption><thead><tr><th className="p-2">Account</th><th className="p-2">Expected</th><th className="p-2">Reported</th><th className="p-2">Difference</th><th className="p-2">Result</th></tr></thead><tbody>{evidence.checks.map(row => <tr key={row.key} className="border-t border-[var(--line)]"><th scope="row" className="p-2 font-normal">{labels[row.key]} #{row.accountId}</th><td className="p-2 tabular whitespace-nowrap">{money(row.expectedCents)}</td><td className="p-2 tabular whitespace-nowrap">{money(row.actualCents)}</td><td className="p-2 tabular whitespace-nowrap">{money(row.differenceCents)}</td><td className="p-2">{row.status}</td></tr>)}</tbody></table></div>
+      {evidence.quantities.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left"><caption className="sr-only">Remaining products and original purchase layers</caption><thead><tr><th className="p-2">Product</th><th className="p-2">Expected units</th><th className="p-2">Reported units</th><th className="p-2">Original cost</th><th className="p-2">Purchase layers</th><th className="p-2">Result</th></tr></thead><tbody>{evidence.quantities.map(row => <tr key={row.itemId} className="border-t border-[var(--line)]"><th scope="row" className="p-2 font-normal">{row.itemKey} #{row.itemId}</th><td className="p-2 tabular">{row.quantity}</td><td className="p-2 tabular">{row.actualQuantity ?? '—'}</td><td className="p-2 tabular whitespace-nowrap">{money(row.valueCents)}</td><td className="p-2 tabular">{row.lotCount}</td><td className="p-2">{row.status}</td></tr>)}</tbody></table></div>}
+      {evidence.calculation && <p>Purchases this period: {money(evidence.calculation.purchaseCents)}. Cost carried into sales: {money(evidence.calculation.costOfSalesCents)}.</p>}
+      <p className="text-[var(--ink-2)]">{evidence.limitation}</p>
+      <details className="text-[11px] text-[var(--ink-3)]"><summary className="cursor-pointer">Stock evidence references</summary><p className="break-all">Accepted starting stock: {evidence.rootHash}</p><p className="break-all">Carried purchase layers: {evidence.openingHash}</p><p className="break-all">Stock observation: {evidence.stockSourceHash}</p></details>
+    </>}
+  </section>
+}

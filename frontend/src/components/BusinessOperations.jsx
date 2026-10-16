@@ -1,4 +1,5 @@
 import BusinessFinancialMovements from './BusinessFinancialMovements'
+import BusinessStockCosts from './BusinessStockCosts'
 import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw } from 'lucide-react'
 import client from '../api/client'
@@ -144,6 +145,7 @@ export function BusinessOperationsPanel({ realmId, environment, enabled, api = c
             <p>{detail.nextOrdinal} of {detail.recordCount} records checked. A business period is complete only after its required records and reports are verified.</p>
             {detail.completion && <p className={detail.financialMovements?.status === 'integrity-unavailable' ? 'text-[var(--attention)]' : 'text-[var(--ok)]'}>{detail.financialMovements?.status === 'integrity-unavailable' ? 'The calendar was advanced through ' + date(detail.completion.throughDate) + '. Saved financial evidence needs inspection.' : 'This operation has verified evidence through ' + date(detail.completion.throughDate) + '.'}</p>}
             <BusinessFinancialMovements evidence={detail.financialMovements} />
+            <BusinessStockCosts evidence={detail.financialMovements?.stockCosts} required={detail.stockCostRequired} unavailable={detail.financialMovements?.status === 'integrity-unavailable'} />
             {detail.unresolved && <p className="text-[var(--attention)]">A QuickBooks request still needs its outcome checked. The app must account for that request before creating another record.</p>}
             {detail.execution?.result?.error && <p role="status" className="text-[var(--attention)]">{detail.execution.result.error}</p>}
             {pending(detail) && <p role="status">The app has a saved request to continue this work. Progress refreshes automatically.</p>}

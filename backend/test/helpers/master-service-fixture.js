@@ -6,8 +6,8 @@ const { createBusinessRuntimeAccess } = require('../../src/modules/business-runt
 const { createMasterRuntime } = require('../../src/modules/business-master-runtime');
 const { createMasterService } = require('../../src/modules/business-master-service');
 function fixture(t, options = {}) {
-  const { lifecycleVersion = 1, ...serviceOptions } = options;
-  const h = scenario({ activityTemplateVersion: lifecycleVersion }); t.mock.method(Date, 'now', () => h.clock); remoteMasters(h); h.qboReads = []; h.workQueries = []; h.setups = [];
+  const { lifecycleVersion = 1, stockCosting, openingDate, ...serviceOptions } = options;
+  const h = scenario({ activityTemplateVersion: lifecycleVersion, stockCosting, openingDate }); t.mock.method(Date, 'now', () => h.clock); remoteMasters(h); h.qboReads = []; h.workQueries = []; h.setups = [];
   const original = h.onGET; h.onGET = async opts => { h.qboReads.push(opts.url); return original(opts); };
   h.db.collection = name => ({ findOne: async (filter, settings) => { h.workQueries.push({name,filter,settings}); return h.busyCollection === name ? {_id:'earlier-work'} : null; }, find: () => ({ limit() { return this; }, toArray: async () => [] }) });
   h.connection = { db: h.db, getClient: () => ({}) };

@@ -9,6 +9,7 @@ const HASH = /^[a-f0-9]{64}$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_CONTINUITY_UNVERIFIED' }); }
 function stableBusiness(previous, next) {
   for (const key of ['openingDate', 'fiscalYearStartMonth']) if (previous.business[key] !== next.business[key]) fail('Keep the original business opening and fiscal calendar.');
+  if (canonical(previous.business.stockCosting ?? null) !== canonical(next.business.stockCosting ?? null)) fail('Keep the published stock-cost method and tax evidence; existing purchase layers cannot be reset by a business revision.');
   const before = activityTemplateVersion(previous.business), after = activityTemplateVersion(next.business);
   if ((before !== after && !(before === 2 && after === 3)) || canonical(previous.mappings) !== canonical(next.mappings)) fail('Keep the original schedule or review the continuing-to-customer-credit upgrade, retaining every account and tax mapping.');
   for (const [key, id] of Object.entries(previous.masterBindings || {})) if (id && next.masterBindings?.[key] !== id) fail('Retain every previously selected business record, including dormant roles: ' + key + '.');
@@ -35,6 +36,8 @@ async function readAuthorityLineage({ Authorities, Versions, Audits, Baselines, 
     if (!blueprint || !blueprint.auditId || blueprint.contentHash !== value.blueprintHash || hash(blueprint.definition) !== value.blueprintHash) fail('An original business definition is unavailable or changed.');
     const view = draftView(blueprint, scope.connectionId);
     if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || hash(activityDefinition(view.business)) !== value.activityRulesHash || view.business.openingDate !== value.openingDate) fail('An original business schedule changed.');
+    if ((view.business.stockCosting !== undefined) !== (value.stockRoot !== undefined)) fail('An original stock-cost requirement changed.');
+    if (value.stockRoot) require('./business-stock-root').validateStockRoot(value.stockRoot, scope, view);
     const action = value.version === 1 ? 'Business published and opening evidence accepted' : 'Future business revision accepted';
     const audit = await read(Audits, { _id: row.auditId, userId: value.ownerId, realmId: scope.realmId, action, outcome: 'success', 'afterState.authorityHash': row.contentHash });
     if (!audit || audit.afterState?.blueprintHash !== value.blueprintHash || audit.afterState?.baselineHash !== value.baselineHash || audit.afterState?.inventoryHash !== value.inventoryHash) fail('An original business authority audit is unavailable or changed.');
@@ -53,6 +56,7 @@ async function readAuthorityLineage({ Authorities, Versions, Audits, Baselines, 
     const priorDate = previous.value.version === 1 ? root.value.openingDate : previous.value.continuity.effectiveFrom;
     if (c.effectiveFrom <= priorDate || c.effectiveFrom <= c.review.verifiedThrough || c.review.previousAuthorityHash !== previous.authority.contentHash || c.review.lineageHash !== hash(entries.slice(0, index).map(segment))) fail('The business revision windows overlap or differ from their original review.');
     stableBusiness(previous.view, current.view);
+    if (canonical(previous.value.stockRoot ?? null) !== canonical(current.value.stockRoot ?? null)) fail('A business revision cannot replace its original stock-cost root.');
   }
   if (entries.length > 1 || verifyBaseline) {
     if (!Baselines) fail('The original accepted opening evidence is unavailable.');

@@ -59,7 +59,8 @@ function inventorySummary(value, scope) {
 }
 // Fixed GET-only surface. Compact identities are private evidence for later review;
 // no records are adopted, changed, or authorized for subsequent writes here.
-function createBusinessInventoryReader({ access, now = () => Date.now() }) {
+function createBusinessInventoryReader({ access, now = () => Date.now(), stockMetadata = false }) {
+  if (typeof stockMetadata !== 'boolean') throw new TypeError('Stock metadata mode must be explicit');
   if ([access?.authorize, access?.resolveClient, now].some(fn => typeof fn !== 'function')) throw new TypeError('Inventory observations require current scoped access');
   return async function read(scope, { signal } = {}) {
     scope = scoped(scope);
@@ -84,15 +85,16 @@ function createBusinessInventoryReader({ access, now = () => Date.now() }) {
         if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall || client.query !== QBOClient.prototype.query || client.apiBase !== base || client.realmId !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active' || String(client.connection?.userId) !== actor.ownerId) fail('Inventory client changed company or owner.');
       };
       const authority = async () => { check(); guard(); const current = await call(() => access.authorize(scope, 'baseline.capture', { signal: controller.signal })); check(); guard(); if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('Inventory authority changed during observation.'); };
-      let rawBytes = 0;
+      let rawBytes = 0, stockAttempts = 0, stockFailure = null;
+      const stockControl = stockMetadata ? { signal: controller.signal, onFailure: error => { stockFailure ||= error; abort(); }, beforeAttempt: async () => { await authority(); if (stockAttempts++ >= 240) fail('Stock-root inventory exceeds its request budget.'); } } : null;
       async function scan() {
-        const scanStart = now(), records = {}, seenByType = {}, jobs = [...TYPES]; let next = 0, count = 0, bytes = 0;
+        const scanStart = now(), records = {}, seenByType = {}, jobs = [...TYPES], stock = { items: [], transactionCount: 0, latestTransactionUpdate: null, completeMetadata: true }; let next = 0, count = 0, bytes = 0, stockBytes = 0;
         async function entity(type) {
           const values = records[type] = [], seen = seenByType[type] = new Set(); let declared = null;
           for (let start = 1; ; start += LIMITS.page) {
             await authority();
             const query = 'SELECT * FROM ' + type + (LISTS.has(type) ? ' WHERE Active IN (true, false)' : '') + ' ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS ' + LIMITS.page;
-            const body = await call(() => client.query(query)); check(); guard(); await authority();
+            const body = stockMetadata ? await client.query(query, stockControl) : await call(() => client.query(query)); check(); guard(); await authority();
             rawBytes += Buffer.byteLength(encoded(body, LIMITS.pageBytes)); if (rawBytes > LIMITS.rawBytes) fail('Inventory reads exceed their response budget.');
             if (!plain(body) || Object.keys(body).some(key => !['QueryResponse', 'time'].includes(key)) || !plain(body.QueryResponse)) fail('A complete inventory query response is required.');
             const page = body.QueryResponse, rows = page[type] === undefined ? [] : page[type];
@@ -101,19 +103,37 @@ function createBusinessInventoryReader({ access, now = () => Date.now() }) {
             for (const record of rows) {
               const row = compact(type, record); if (seen.has(row.id)) fail('Inventory pagination repeated a record.');
               count++; bytes += Buffer.byteLength(encoded(row, LIMITS.recordBytes)); if (count > LIMITS.records || bytes > LIMITS.compactBytes) fail('Inventory exceeds its retained evidence budget.');
+              if (stockMetadata) {
+                if (type === 'Item' && record.Type === 'Inventory') {
+                  stockBytes += Buffer.byteLength(encoded(record, LIMITS.recordBytes));
+                  if (stock.items.length >= 100 || stockBytes > 2500000) fail('Stock-origin metadata exceeds its source budget.');
+                  stock.items.push(JSON.parse(canonical(record)));
+                } else if (!LISTS.has(type)) {
+                  stock.transactionCount++;
+                  const created = Date.parse(record.MetaData?.CreateTime), updated = Date.parse(record.MetaData?.LastUpdatedTime);
+                  if (!Number.isFinite(created) || !Number.isFinite(updated) || updated < created) stock.completeMetadata = false;
+                  else if (stock.latestTransactionUpdate === null || updated > Date.parse(stock.latestTransactionUpdate)) stock.latestTransactionUpdate = new Date(updated).toISOString();
+                }
+              }
               seen.add(row.id); values.push(row);
             }
             if (rows.length < LIMITS.page) { if (declared !== null && declared !== values.length) fail('Inventory pagination omitted records.'); ordered(values); return; }
           }
         }
-        await Promise.all(Array.from({ length: 2 }, async () => { while (next < jobs.length) { check(); await entity(jobs[next++]); } }));
-        check(); return { records, evidence: { startedAt: new Date(scanStart).toISOString(), observedAt: new Date(now()).toISOString(), count, manifestHash: manifestHash(records) } };
+        const workers = Array.from({ length: 2 }, async () => { while (next < jobs.length) { check(); try { await entity(jobs[next++]); } catch (error) { if (stockMetadata) { stockFailure ||= error; abort(); } throw error; } } });
+        if (stockMetadata) { const settled = await Promise.allSettled(workers); const failed = settled.find(row => row.status === 'rejected'); if (failed) throw stockFailure || failed.reason; }
+        else await Promise.all(workers);
+        check(); stock.items.sort((a, b) => a.Id < b.Id ? -1 : a.Id > b.Id ? 1 : 0); return { records, stock, evidence: { startedAt: new Date(scanStart).toISOString(), observedAt: new Date(now()).toISOString(), count, manifestHash: manifestHash(records) } };
       }
       guard(); const first = await scan(); check(); const second = await scan(); check();
       if (first.evidence.count !== second.evidence.count || first.evidence.manifestHash !== second.evidence.manifestHash) fail('QuickBooks records changed between inventory scans. Capture a fresh observation.');
       await authority();
       const source = { version: 1, policy: POLICY, scope, coverage: [...TYPES], scans: [first.evidence, second.evidence], records: first.records };
-      const result = { ...source, sourceHash: hash(source) }; validateInventoryObservation(result, scope); return result;
+      const result = { ...source, sourceHash: hash(source) }; validateInventoryObservation(result, scope);
+      if (!stockMetadata) return result;
+      if (canonical(first.stock) !== canonical(second.stock)) fail('Stock metadata changed between complete inventory scans.');
+      const stock = { version: 1, scope, recordsHash: hash(first.records), ...first.stock };
+      return { inventory: result, stockSource: { ...stock, sourceHash: hash(stock) } };
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
 }

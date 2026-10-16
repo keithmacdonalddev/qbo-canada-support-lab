@@ -216,12 +216,14 @@ function assertMovementCapacity(manifest, currentSource) {
   const basis = (manifest.financialExpectation ? manifest.records.filter(row => row.kind === 'create') : []).map(() => ({ logicalKey: h, entity: 'PurchaseOrder', fingerprint: h, operationId: text(24), planHash: h, qboId: text(30), receiptSource: 'owner-attributed-readback', receiptHash: h, dispatchKey: h, policyHash: h, policyAmendmentHash: h, compilationHash: h, requestHash: h, postings: amounts }));
   const budget = Buffer.byteLength(canonical({ records, financialBasis: basis })) + 1000000;
   if (budget > 5500000) fail('This operation cannot retain its complete financial proof within the evidence budget. Prepare a shorter period.');
+  if (manifest.stockCostExpectation && budget + 4500000 > 8000000) fail('This operation cannot retain its combined account and stock-cost proof. Prepare a shorter period.');
   if (currentSource) {
+    if (manifest.stockCostExpectation && budget + 4500000 + Buffer.byteLength(canonical(currentSource)) > 12000000) fail('The combined report and stock-cost evidence exceeds its JSON storage budget. Prepare a shorter period.');
     // BSON array indices/types cost more than JSON. Reserve the same one-megabyte
     // proof/header allowance before any create, using the fresh opening source.
-    const projected = require('mongoose').mongo.BSON.calculateObjectSize({ proof: { records, financialBasis: basis }, sources: currentSource }) + 1000000;
+    const projected = require('mongoose').mongo.BSON.calculateObjectSize({ proof: { records, financialBasis: basis }, sources: currentSource }) + 1000000 + (manifest.stockCostExpectation ? 6500000 : 0);
     if (projected > 15000000) fail('This operation cannot retain its source and complete financial proof within the BSON storage budget. Prepare a shorter period.');
   }
   return budget;
 }
-module.exports = { KEYS, EARNINGS_KEYS, balances, createFinancialExpectation, validateFinancialExpectation, movementRow, compareFinancialMovements, loadMovementBasis, assertMovementCapacity };
+module.exports = { KEYS, EARNINGS_KEYS, balances, accountSelection, createFinancialExpectation, validateFinancialExpectation, movementRow, compareFinancialMovements, loadMovementBasis, assertMovementCapacity };

@@ -1,0 +1,55 @@
+'use strict';
+process.env.QBO_ENVIRONMENT='production';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {fixture,scope}=require('./helpers/business-stock-fixture');
+const {hash}=require('../src/modules/business-calendar');
+const {evaluateReportSources}=require('../src/modules/book-evidence');
+async function prepared(h,throughDate,key){const saved=await h.service.prepare(h.user,{requestKey:key,throughDate});await h.service.approve(h.user,saved.operationId,{planHash:saved.planHash,confirmProduction:true});return{saved,runtime:h.runtime(saved.operationId)};}
+test('balanced wrong cost posting passes prior controls but cannot advance; corrected cost completes without another create',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const {runtime}=await prepared(h,'2026-10-08','stock-balanced-wrong-cost-001'),originalCosts=new Map();let changed=false;
+ h.afterPost=(_opts,record)=>{if(!changed&&h.saleCosts.has(record.Id)){changed=true;originalCosts.set(record.Id,h.saleCosts.get(record.Id));h.saleCosts.set(record.Id,h.saleCosts.get(record.Id)+1);}};
+ const outcome=await runtime.execute();assert.equal(changed,true);assert.equal(outcome.complete,false);assert.equal(h.data.Calendars[0].verifiedThrough,null);const evidence=h.data.Evidence.at(-1),summary=(await runtime.inspect()).financialMovements;
+ assert.equal(evaluateReportSources(evidence.sources,{allowExplicitZero:true}).status,'checks-passed');assert.equal(summary.status,'passed');assert.equal(summary.complete,false);assert.equal(summary.stockCosts.status,'failed');assert.deepEqual(summary.stockCosts.checks.map(row=>row.differenceCents),[-100,100]);assert.ok(summary.stockCosts.quantities.every(row=>row.status==='passed'));
+ const posts=h.posts;h.afterPost=null;for(const[id,cost]of originalCosts)h.saleCosts.set(id,cost);assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,posts);assert.equal((await runtime.inspect()).financialMovements.stockCosts.status,'passed');assert.equal(h.data.Evidence[0].proof.complete,false);
+});
+test('quantity drift before the first write refuses without an accepted business receipt',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const {runtime}=await prepared(h,'2026-10-08','stock-unsent-quantity-drift-001'),stock=[...h.records.values()].find(row=>row.entity==='Item'&&row.record.Type==='Inventory').record;stock.QtyOnHand=1;
+ await assert.rejects(runtime.execute(),error=>error.code==='BUSINESS_RUNTIME_UNAVAILABLE'&&/Stock quantity/.test(error.message));assert.equal(h.posts,0);assert.equal(h.data.Receipts.filter(row=>row.kind==='business').length,0);assert.equal(h.data.Calendars[0].verifiedThrough,null);
+});
+test('remaining original purchase cost edits cannot be absorbed into the next opening even with unchanged report amounts',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const first=await prepared(h,'2026-10-08','stock-source-prior-001');assert.equal((await first.runtime.execute()).complete,true);
+ const root=(await first.runtime.inspect()).financialMovements.stockCosts.calculation.closing, lot=root.items.flatMap(item=>item.lots)[0], bill=h.records.get('bill:'+lot.source.qboId).record, line=bill.Line[lot.source.lineIndex];line.ItemBasedExpenseLineDetail.UnitPrice+=1;
+ const posts=h.posts,candidates=h.data.Candidates.length;await assert.rejects(h.service.prepare(h.user,{requestKey:'stock-source-edited-next-001',throughDate:'2026-10-31'}),/purchase changed|original.*cost|original.*price/i);assert.equal(h.posts,posts);assert.equal(h.data.Candidates.length,candidates);assert.equal(h.data.Calendars[0].verifiedThrough,'2026-10-08');
+});
+test('observed company fiscal rollover resets COGS while original stock lots survive',{timeout:120000},async t=>{
+ const h=await fixture(t,{actualFiscalYearStartMonth:11});await h.publish();assert.equal(h.data.Authorities[0].payload.stockRoot.fiscalYearStartMonth,11);
+ const first=await prepared(h,'2026-10-31','stock-fiscal-before-001');assert.equal((await first.runtime.execute()).complete,true);const before=(await first.runtime.inspect()).financialMovements.stockCosts;
+ const next=await prepared(h,'2026-11-08','stock-fiscal-after-001'),plan=h.data.Plans.find(row=>row.operationId===next.saved.operationId).manifest.stockCostExpectation;assert.equal(plan.openingCostCents,0);assert.equal(plan.opening.stateHash,before.calculation.closing.stateHash);assert.ok(plan.carry.costCents>0);assert.equal((await next.runtime.execute()).complete,true);
+ const after=(await next.runtime.inspect()).financialMovements.stockCosts;assert.equal(after.checks.find(row=>row.key==='costOfGoods').actualCents,after.calculation.costOfSalesCents);assert.ok(after.calculation.allocations.some(row=>row.consumed.some(source=>before.calculation.closing.items.some(item=>item.lots.some(lot=>lot.lotKey===source.lotKey)))));
+});
+test('Stop and explicit continuation preserve accepted purchases and frozen cost opening',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const {saved,runtime}=await prepared(h,'2026-10-08','stock-stop-original-001');let stopped=false;
+ h.afterPost=async(opts)=>{if(!stopped&&new URL(opts.url).pathname.endsWith('/bill')){stopped=true;await runtime.stop();}};const first=await runtime.execute();assert.equal(stopped,true);assert.equal(first.state,'stopped');assert.equal(h.data.Calendars[0].verifiedThrough,null);const accepted=h.data.Steps.filter(row=>row.qboId).map(row=>[row.logicalKey,row.qboId]);h.afterPost=null;
+ const review=await h.service.reviewResume(h.user,saved.operationId,{planHash:saved.planHash});await h.service.resume(h.user,saved.operationId,{planHash:saved.planHash,reviewHash:review.reviewHash,reason:'Owner reviewed stopped stock purchases and continues the exact retained period.'});assert.equal((await runtime.execute()).complete,true);
+ for(const[key,id]of accepted)assert.equal(h.data.Steps.find(row=>row.logicalKey===key).qboId,id);assert.equal(new Set(h.data.Steps.map(row=>row.qboId)).size,h.data.Steps.length);assert.equal((await runtime.inspect()).financialMovements.stockCosts.status,'passed');
+});
+test('owner identification of an unknown purchase retains uncertainty provenance and completes without replacement',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const {saved,runtime}=await prepared(h,'2026-10-08','stock-unknown-purchase-001');let candidate=null;
+ h.afterPost=(opts,record)=>{if(!candidate&&new URL(opts.url).pathname.endsWith('/bill')&&record.Line.some(line=>line.DetailType==='ItemBasedExpenseLineDetail')){candidate=record.Id;h.responseOverride={status:200,json:{unexpected:'Ambiguous original stock response'}};}};
+ const first=await runtime.execute();assert.equal(first.complete,false);assert.ok(candidate);const step=h.data.Steps.find(row=>row.state==='dispatched'),receipt=h.data.Receipts.find(row=>row.dispatchKey===step.dispatch.key),original=structuredClone(receipt.observed),posts=h.posts;
+ const input={planHash:saved.planHash,logicalKey:step.logicalKey,qboId:candidate},review=await h.service.reviewUnknown(h.user,saved.operationId,input);await h.service.attributeUnknown(h.user,saved.operationId,{...input,reviewHash:review.reviewHash,confirmOwnership:true,reason:'Owner identified the exact saved stock purchase from the original attempt and retains the unknown transport evidence.'});assert.equal(h.posts,posts);h.afterPost=null;
+ assert.equal((await runtime.execute()).complete,true);const retained=h.data.Receipts.find(row=>row._id===receipt._id);assert.equal(retained.state,'unknown');assert.deepEqual(retained.observed,original);assert.equal(h.data.Steps.filter(row=>row.entity==='Bill'&&row.qboId===candidate).length,1);assert.ok((await runtime.inspect()).financialMovements.stockCosts.ownerAttributedSourceLines>0);
+});
+test('pending calendar completion repairs from original proof without new company eligibility reads',{timeout:120000},async t=>{
+ const h=await fixture(t);await h.publish();const {saved,runtime}=await prepared(h,'2026-10-08','stock-pending-completion-001'),create=h.models.Audits.create;let fail=true;
+ h.models.Audits.create=async(rows,options)=>{if(fail&&rows.some(row=>row.inputParams?.eventKey==='business-period:'+saved.operationId+':committed')){throw Error('Fixture completion audit unavailable');}return create(rows,options);};
+ await assert.rejects(runtime.execute(),/Fixture completion audit unavailable/);assert.ok(h.data.Calendars[0].pendingCommit);assert.equal(h.data.Runs[0].status,'committing');const posts=h.posts,reads=h.reads,evidenceHash=h.data.Evidence.at(-1).evidenceHash;h.country='US';fail=false;
+ const final=await runtime.execute();assert.equal(final.complete,true);assert.equal(h.posts,posts);assert.equal(h.reads,reads);assert.equal(h.data.Calendars[0].pendingCommit,null);assert.equal(h.data.Runs[0].verification.evidenceHash,evidenceHash);assert.equal((await runtime.inspect()).financialMovements.stockCosts.status,'passed');
+});
+
+test('future business changes preserve the original cost root and committed layers while policy removal or replacement refuses',{timeout:180000},async t=>{
+ const h=await fixture(t,{continuity:true});await h.publish();const first=await prepared(h,'2026-10-08','stock-continuity-first-001');assert.equal((await first.runtime.execute()).complete,true);const root=structuredClone(h.data.Authorities[0].payload.stockRoot),closing=(await first.runtime.inspect()).financialMovements.stockCosts.calculation.closing,posts=h.posts;
+ for(const stockCosting of [undefined,{...h.policy,methodEvidence:{...h.policy.methodEvidence,reference:'A different unsupported replacement observation'}}]){const draft=h.saveRevision({stockCosting});await assert.rejects(h.service.reviewContinuity(h.user,{blueprintId:draft._id,blueprintHash:draft.contentHash,effectiveFrom:'2026-10-09'}),/published stock-cost method and tax evidence/);assert.equal(h.data.Authorities.length,1);assert.equal(h.posts,posts);}
+ const draft=h.saveRevision({stockCosting:h.policy,displayName:'Harbour stock business continuing'}),input={blueprintId:draft._id,blueprintHash:draft.contentHash,effectiveFrom:'2026-10-09'},review=await h.service.reviewContinuity(h.user,input);assert.equal((await h.service.applyContinuity(h.user,{...input,reviewHash:review.reviewHash,reason:'Owner retains original stock method, taxes, physical products and every purchase layer while changing the future business name.'})).applied,true);assert.deepEqual(h.data.Authorities.at(-1).payload.stockRoot,root);assert.equal(h.posts,posts);
+ const next=await prepared(h,'2026-10-31','stock-continuity-next-001'),expectation=h.data.Plans.find(row=>row.operationId===next.saved.operationId).manifest.stockCostExpectation;assert.equal(expectation.opening.stateHash,closing.stateHash);assert.equal(expectation.rootHash,root.rootHash);assert.equal((await next.runtime.execute()).complete,true);assert.equal((await first.runtime.inspect()).financialMovements.stockCosts.calculation.closing.stateHash,closing.stateHash);
+});
