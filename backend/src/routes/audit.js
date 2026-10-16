@@ -1,8 +1,10 @@
 const express = require('express');
-const Connection = require('../models/Connection');
-const AuditLog = require('../models/AuditLog');
+const DefaultConnection = require('../models/Connection');
+const DefaultAuditLog = require('../models/AuditLog');
+const { publicAuditEvent } = require('../modules/report-evidence-contract');
 const { authenticate } = require('../middleware/auth');
 
+function createAuditRouter({ Connection = DefaultConnection, AuditLog = DefaultAuditLog } = {}) {
 const router = express.Router();
 
 /**
@@ -63,7 +65,7 @@ router.get('/', authenticate, async (req, res) => {
     ]);
 
     return res.json({
-      logs,
+      logs: logs.map(publicAuditEvent),
       pagination: {
         total,
         limit: parseInt(limit, 10),
@@ -103,11 +105,14 @@ router.get('/:id', authenticate, async (req, res) => {
       }
     }
 
-    return res.json({ entry });
+    return res.json({ entry: publicAuditEvent(entry) });
   } catch (err) {
     console.error('[audit/get]', err.message);
     return res.status(500).json({ error: 'Failed to fetch audit entry' });
   }
 });
 
-module.exports = router;
+return router;
+}
+module.exports = createAuditRouter();
+module.exports.createAuditRouter = createAuditRouter;

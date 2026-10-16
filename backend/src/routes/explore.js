@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const { readRecordOrigin } = require('../modules/record-origin');
 const Connection = require('../models/Connection');
 const AuditLog = require('../models/AuditLog');
+const { publicAuditEvent } = require('../modules/report-evidence-contract');
 const { authenticate } = require('../middleware/auth');
 const { createQBOClient } = require('../modules/qbo-client');
 const { respondQboError } = require('../modules/qbo-error');
@@ -12,6 +13,7 @@ const { searchQuery, pageResult, identity, canonicalType, integer, ENTITIES, inv
 function createExploreRouter(dependencies = {}) {
 const router = express.Router();
 const qboFor = dependencies.qboFor || createQBOClient;
+const auditFor = dependencies.Audits || AuditLog;
 const originFor = dependencies.originFor || (input => readRecordOrigin({ ...input, db: mongoose.connection.db, attributionModels: { Authorities: require('../models/BusinessAuthority'), Receipts: require('../models/QboWriteReceipt'), Audits: AuditLog }, userId: new mongoose.Types.ObjectId(input.userId) }));
 const getActiveConnection = dependencies.getActiveConnection || (userId => Connection.findOne({ userId, status: 'active' }).sort({ updatedAt: -1 }));
 const scope = connection => ({ realmId: connection.realmId, environment: config.qbo.environment, connectionId: String(connection._id) });
@@ -61,11 +63,11 @@ router.get('/timeline', authenticate, async (req, res) => {
       filter.action = new RegExp(entityType, 'i');
     }
 
-    const entries = await AuditLog.find(filter)
+    const entries = await auditFor.find(filter)
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(limit), 200));
 
-    return res.json({ entries });
+    return res.json({ entries: entries.map(publicAuditEvent) });
   } catch (err) {
     if (err.recordInputError) return res.status(400).json({ error: err.message });
     return res.status(500).json({ error: 'Failed to load timeline' });

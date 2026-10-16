@@ -12,6 +12,7 @@ export default function BookChecks() {
   const scope = [status?.realmId, status?.connectionId, connection?.environment, connection?.ready].join(':')
   return <Layout><div className="mx-auto max-w-[1080px]">
     <Link to="/company" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> Company</Link>
+    <Link to="/reports" className="ml-4 inline-flex text-[12.5px] text-[var(--link)] underline">Report catalog and saved evidence</Link>
     <h1 className="mt-2 text-[22px] font-semibold text-[var(--ink)]">Book checks</h1>
     <p className="mt-1 text-[13.5px] text-[var(--ink-2)]">Choose a period and inspect the saved accounting story in the connected company.</p>
     <BookEvidence key={scope} realmId={status?.realmId} environment={connection?.environment} connectionId={status?.connectionId} enabled={connection?.ready === true} standalone />

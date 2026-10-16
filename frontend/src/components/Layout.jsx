@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import '../styles/sidebar.css'
 import {
-  WandSparkles, Building2, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Bot, Layers, Archive,
+  WandSparkles, Building2, FileText, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Bot, Layers, Archive,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
@@ -11,14 +11,13 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { StatusDot, EnvironmentTag, connectionSummary } from '@/components/ui/status'
 import { cn } from '@/lib/utils'
 
-// The app exists to do one thing well: turn a customer's description of a
-// problem into that same situation in the QuickBooks company. Everything else
-// supports that job: Coverage shows what the company is missing, then where
-// its data lives and what the lab did.
+// Keep continuing business activity, report evidence, support reproduction,
+// company records and the retained history directly accessible.
 const NAV = [
   { to: '/', label: 'Reproduce', icon: WandSparkles, match: (p) => p === '/' || p.startsWith('/cases') },
   { to: '/coverage', label: 'Coverage', icon: LayoutGrid, match: (p) => p.startsWith('/coverage') },
-  { to: '/company', label: 'Company', icon: Building2, match: (p) => p.startsWith('/company') || p.startsWith('/lab') },
+  { to: '/company', label: 'Company', icon: Building2, match: (p) => (p.startsWith('/company') && !p.startsWith('/company/reports')) || p.startsWith('/lab') },
+  { to: '/reports', label: 'Reports', icon: FileText, match: (p) => p.startsWith('/reports') || p.startsWith('/company/reports') },
   { to: '/explorer', label: 'Records', icon: Table2, match: (p) => p.startsWith('/explorer') },
   { to: '/audit', label: 'History', icon: History, match: (p) => p.startsWith('/audit') },
 ]

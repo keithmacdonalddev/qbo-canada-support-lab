@@ -7,6 +7,7 @@ const ID = /^[a-f0-9]{24}$/;
 // memberships gain permissions merely because this runtime adapter is installed.
 const ACTIONS = Object.freeze({
   'reports.observe': Object.freeze(['reports.read', 'company.read', 'app_data.read']),
+  'reports.manual.record': Object.freeze(['reports.validate', 'reports.read', 'app_data.read']),
   'baseline.review': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read', 'qbo_data.read']),
   'baseline.read': Object.freeze(['app_data.read', 'reports.read', 'blueprint.read']),
   'baseline.capture': Object.freeze(['reports.validate', 'blueprint.manage', 'qbo_data.read', 'app_data.read', 'reports.read', 'blueprint.read']),
