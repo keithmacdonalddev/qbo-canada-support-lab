@@ -19,7 +19,7 @@ test('rendered owner setup separates review, storage, coordination and acknowled
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     await context.addInitScript(() => localStorage.setItem('token', 'isolated-fixture-token'));
     const page = await context.newPage(), origin = 'http://127.0.0.1:' + server.address().port;
-    const writes = [], escaped = [], pageErrors = [];
+    const writes = [], requests = [], escaped = [], pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     let view = { companyName: 'Fixture Company', environment: 'sandbox', realmId: '123', owner: true, storage: { ready: false }, coordination: { state: 'unprepared' } };
     await context.route('**/*', async route => {
@@ -28,6 +28,7 @@ test('rendered owner setup separates review, storage, coordination and acknowled
       if (!url.pathname.startsWith('/api/')) return route.continue();
       let status = 200, body;
       const key = url.pathname.replace('/api/', '');
+      requests.push({ method: request.method(), key, body: request.postDataJSON() });
       if (key === 'auth/me') body = { user: { id: 'b'.repeat(24), displayName: 'Fixture Owner', role: 'agent' } };
       else if (key === 'qbo/status') body = { connected: true, status: 'active', environment: 'sandbox', realmId: '123', companyName: 'Fixture Company' };
       else if (key === 'company/business-setup') body = { data: view };
@@ -42,13 +43,15 @@ test('rendered owner setup separates review, storage, coordination and acknowled
       } else { status = 503; body = { error: 'Other panel is outside this isolated setup fixture.' }; }
       return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     });
-    await page.goto(origin + '/company');
+    await page.goto(origin + '/company/setup');
+    await page.getByRole('heading', { name: 'Company preparation', exact: true }).waitFor();
     const panel = page.getByRole('region', { name: 'Business access and preparation' });
     await panel.getByRole('button', { name: 'Review preparation', exact: true }).waitFor();
     await panel.getByRole('button', { name: 'Review preparation', exact: true }).focus(); await page.keyboard.press('Enter');
     await panel.getByRole('button', { name: 'Prepare storage and owner access', exact: true }).waitFor();
     assert.equal(writes.length, 1); assert.match(await panel.innerText(), /creates no accounting records/);
-    await panel.screenshot({ path: path.join(artifacts, 'setup-preview.png') });
+    assert.ok(requests.every(row => ['auth/me', 'qbo/status', 'company/business-setup', 'company/business-setup/preview'].includes(row.key)), JSON.stringify(requests));
+    await page.screenshot({ path: path.join(artifacts, 'setup-preview.png') });
     await panel.getByRole('button', { name: 'Prepare storage and owner access', exact: true }).click();
     await panel.getByRole('button', { name: 'Prepare company write coordination', exact: true }).waitFor(); assert.equal(writes.length, 2);
     await panel.getByRole('button', { name: 'Prepare company write coordination', exact: true }).click();
@@ -63,11 +66,13 @@ test('rendered owner setup separates review, storage, coordination and acknowled
     await panel.getByText('Fixture lost activation acknowledgement', { exact: true }).waitFor();
     await page.waitForFunction(() => document.querySelector('[aria-label="Business access and preparation"]')?.textContent.includes('Company write coordination is ready.'));
     await panel.screenshot({ path: path.join(artifacts, 'setup-recovered.png') });
+    assert.deepEqual(requests.filter(row => row.key.endsWith('/apply')).map(row => row.body), [{ planHash: 'a'.repeat(64) }]);
     assert.equal(writes.length, 5); assert.equal(await panel.getByRole('button', { name: 'Enable coordinated company writes', exact: true }).count(), 0);
     view = { ...view, owner: false, storage: { ready: false }, coordination: { state: 'unprepared' } }; await page.reload();
     await panel.getByText('The connected company owner must complete this step.', { exact: true }).waitFor();
     assert.equal(await panel.getByRole('button', { name: 'Review preparation', exact: true }).count(), 0);
     assert.deepEqual(escaped, []); assert.deepEqual(pageErrors, []);
+    assert.ok(requests.every(row => ['auth/me', 'qbo/status', 'company/business-setup'].includes(row.key) || row.key.startsWith('company/business-setup/')), JSON.stringify(requests));
     await context.close();
   } finally { if (browser) await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });

@@ -172,6 +172,8 @@ function CompanyContent({ connection }) {
           </Panel>
         )}
 
+        <p className="mt-5 text-[13px]"><Link to="/company/setup" className="font-medium text-[var(--link)]">Open company preparation <ArrowRight className="inline size-3.5" /></Link></p>
+
         <BusinessSetup enabled={ready} onChanged={() => setSetupVersion(v => v + 1)} />
 
         <BusinessPlan key={`plan:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
