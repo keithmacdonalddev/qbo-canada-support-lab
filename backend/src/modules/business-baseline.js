@@ -72,7 +72,7 @@ function createBusinessBaselineStore({ scope, actorId, ownerId, Baselines, Versi
     day(row.definition?.calendar?.openingDate);
     return { id, contentHash: row.contentHash, openingDate: row.definition.calendar.openingDate };
   }
-  const auditDetails = row => ({ baselineId: String(row._id), ...scope, actorId: String(row.actorId), blueprintId: row.payload.blueprint.id, blueprintHash: row.payload.blueprint.contentHash, requestHash: row.requestHash, evidenceHash: row.evidenceHash, sourceHash: row.payload.sourceHash, purpose: row.payload.purpose, fromDate: row.payload.period.fromDate, throughDate: row.payload.period.throughDate, ...(row.contractVersion === 2 ? { inventoryVersion: 1, inventoryHash: row.payload.inventory.sourceHash, inventoryStartedAt: row.payload.inventory.startedAt, inventoryObservedAt: row.payload.inventory.observedAt } : {}), status: 'captured' });
+  const auditDetails = row => ({ baselineId: String(row._id), ...scope, actorId: String(row.actorId), blueprintId: row.payload.blueprint.id, blueprintHash: row.payload.blueprint.contentHash, requestHash: row.requestHash, evidenceHash: row.evidenceHash, sourceHash: row.payload.sourceHash, purpose: row.payload.purpose, fromDate: row.payload.period.fromDate, throughDate: row.payload.period.throughDate, ...(row.contractVersion === 2 ? { inventoryVersion: row.inventorySources.version, inventoryHash: row.payload.inventory.sourceHash, inventoryStartedAt: row.payload.inventory.startedAt, inventoryObservedAt: row.payload.inventory.observedAt } : {}), status: 'captured' });
   async function retained(row, session) {
     if (!row || !sameScope(row, scope) || String(row.ownerId) !== ownerId) fail('The baseline observation is unavailable.', 404);
     validateBaselineObservation(row);
@@ -159,7 +159,7 @@ function createBusinessBaselineStore({ scope, actorId, ownerId, Baselines, Versi
       const row = await read(Baselines, { _id: id, ...scope }, session); check(signal);
       const evidence = await retained(row, session); check(signal);
       if (row.contractVersion !== 2) fail('This older observation has no captured record inventory.');
-      return { baselineId: id, scope, entity, evidenceHash: row.evidenceHash, inventoryHash: row.inventorySources.sourceHash, observedAt: evidence.inventory.observedAt, records: row.inventorySources.records[entity] };
+      return { baselineId: id, scope, entity, ...(row.inventorySources.version === 2 ? { inventoryVersion: 2 } : {}), evidenceHash: row.evidenceHash, inventoryHash: row.inventorySources.sourceHash, observedAt: evidence.inventory.observedAt, records: row.inventorySources.records[entity] };
     });
     await authority('baseline.review', null, signal); return result;
   }

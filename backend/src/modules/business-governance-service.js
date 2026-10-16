@@ -111,7 +111,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (cutoff && selected.review.openingDate <= cutoff) fail('Business opening is inside a closed or reconciled period through ' + cutoff + '. Review and reopen that history explicitly before publication, or choose a later opening.');
     const company = await readCanadianCompany(client, scope, now, { fiscalCalendar: view.draft.business.stockCosting !== undefined });
     const { observedAt: companyObservedAt, ...companyEvidence } = company;
-    const stockRoot = view.draft.business.stockCosting === undefined ? null : await require('./business-stock-root').buildStockRoot({ models, scope, ownerId: bound.ownerId, view: view.draft, baseline: selected.baseline, company, stockObservation: await (dependencies.readStockRoot || createBusinessInventoryReader({ access, now, stockMetadata: true }))(scope), now: now() });
+    const stockRoot = view.draft.business.stockCosting === undefined ? null : await require('./business-stock-root').buildStockRoot({ models, scope, ownerId: bound.ownerId, view: view.draft, baseline: selected.baseline, company, stockObservation: await (dependencies.readStockRoot || createBusinessInventoryReader({ access, now, stockMetadata: true, version: selected.baseline.inventorySources.version }))(scope), now: now() });
     return { ...(stockRoot ? { stockRoot } : {}), setupHash: setup.sourceHash, masterHash: masters.sourceHash, qboClosedThrough: closing || null, country: 'CA', companyEvidence };
   }
   async function publicationSelection(bound, input) {
@@ -145,7 +145,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     const selected = await publicationSelection(bound, input);
     if (selected.reviewHash !== input.reviewHash) fail('The reviewed opening evidence or company state changed. Review it again.');
     if (selected.review.financialSummary.blockers.length) fail('Resolve the listed opening-balance anomalies and report gaps before publication. A general acceptance note does not resolve them.');
-    const inventory = await (dependencies.readInventory || createBusinessInventoryReader({ access, now }))(scope, { signal });
+    const inventory = await (dependencies.readInventory || createBusinessInventoryReader({ access, now, version: selected.baseline.inventorySources.version }))(scope, { signal });
     validateInventoryObservation(inventory, scope);
     const reports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'baseline' }))(scope, selected.baseline.payload.period, { signal });
     if (hash(inventory.records) !== selected.review.inventoryHash || reportHash(reports) !== reportHash(selected.baseline.sources)) fail('The company changed since the opening observation. Capture and review it again.');

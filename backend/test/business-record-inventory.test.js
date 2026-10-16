@@ -1,6 +1,6 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
-const { createBusinessInventoryReader, validateInventoryObservation, inventorySummary, TYPES } = require('../src/modules/business-record-inventory');
+const { createBusinessInventoryReader, validateInventoryObservation, inventorySummary, compactInventoryRecord, TYPES } = require('../src/modules/business-record-inventory');
 const { QBOClient } = require('../src/modules/qbo-client');
 const { hash } = require('../src/modules/business-calendar');
 const config = require('../src/config'), previous = config.qbo.environment;
@@ -24,7 +24,7 @@ function harness() {
     return { status: 200, json: body };
   } } });
   h.access = { authorize: async (requested, action) => { assert.deepEqual(requested, scope); assert.equal(action, 'baseline.capture'); h.authorityCalls++; if (h.revoked) throw new Error('permission revoked'); return { actorId, ownerId: h.changedOwner ? actorId : ownerId }; }, resolveClient: async () => h.client };
-  h.read = options => createBusinessInventoryReader({ access: h.access, now: () => h.clock })(scope, options);
+  h.read = options => createBusinessInventoryReader({ access: h.access, now: () => h.clock, ...h.readerOptions })(scope, options);
   return h;
 }
 test('both complete scans agree and retained data excludes names, addresses and accounting lines', async () => {
@@ -89,5 +89,18 @@ test('default baseline service composes both actual readers and retains their or
   const result = await service.capture({ id: ownerId, actorId }, base.input);
   assert.equal(result.inventory.status, 'matching-scans'); assert.equal(result.inventory.count, 4); assert.equal(result.evaluation.status, 'checks-passed');
   assert.equal(base.data.Baselines.length, 1); assert.equal(base.data.Audits.length, 1); assert.equal(result.accepted, false);
+  assert.equal(base.data.Baselines[0].inventorySources.version, 2); assert.equal(result.inventory.version, 2); assert.equal(base.data.Audits[0].afterState.inventoryVersion, 2);
   assert.deepEqual(base.data.Baselines[0].inventorySources.records.Account.map(row => row.contentHash), h.rows.Account.map(hash));
+});
+
+function linkedBill(){return{Id:'900',SyncToken:'1',TxnDate:'2026-09-01',TotalAmt:30,LinkedTxn:[{TxnId:'902',TxnType:'BillPayment',TxnLineId:'2'},{TxnId:'901',TxnType:'PurchaseOrder',TxnLineId:'1'}],Line:[{Id:'1',Amount:10},{Id:'2',Amount:20}]};}
+test('v2 accepts only reordered complete Bill-level link members and leaves original v1 bytes and source objects unchanged',async()=>{
+ const raw=linkedBill(),before=structuredClone(raw),reversed={...raw,LinkedTxn:[...raw.LinkedTxn].reverse()};assert.equal(compactInventoryRecord('Bill',raw).contentHash,hash(raw));assert.notEqual(compactInventoryRecord('Bill',raw).contentHash,compactInventoryRecord('Bill',reversed).contentHash);assert.equal(compactInventoryRecord('Bill',raw,2).contentHash,compactInventoryRecord('Bill',reversed,2).contentHash);assert.deepEqual(raw,before);assert.notEqual(compactInventoryRecord('Invoice',raw,2).contentHash,compactInventoryRecord('Invoice',reversed,2).contentHash);
+ for(const version of [1,2]){const h=harness();h.readerOptions={version};h.rows.Bill=[linkedBill()];h.onRead=async()=>{if(h.calls.length===TYPES.length+1)h.rows.Bill[0].LinkedTxn.reverse();};if(version===1)await assert.rejects(h.read(),/changed between inventory/);else{const observed=await h.read();assert.equal(observed.version,2);assert.equal(inventorySummary(observed,scope).version,2);assert.equal(validateInventoryObservation(observed,scope).count,3);}}
+});
+test('v2 still refuses changed link values, types, multiplicity, absent fields, line order and versions',async()=>{
+ for(const mutate of [r=>r.LinkedTxn[0].TxnId='999',r=>r.LinkedTxn[0].TxnId=902,r=>r.LinkedTxn.push({...r.LinkedTxn[0]}),r=>delete r.LinkedTxn[0].TxnLineId,r=>r.LinkedTxn[0].Additional='changed',r=>r.Line.reverse(),r=>r.SyncToken='2']){const h=harness();h.readerOptions={version:2};h.rows.Bill=[linkedBill()];h.onRead=async()=>{if(h.calls.length===TYPES.length+1)mutate(h.rows.Bill[0]);};await assert.rejects(h.read(),/changed between inventory/);}
+});
+test('inventory version and policy are paired; unsupported or relabelled observations cannot pass',async()=>{
+ const h=harness();h.readerOptions={version:2};const observed=await h.read(),old=await harness().read();for(const [version,policy]of [[1,observed.policy],[2,old.policy],[3,observed.policy]]){const changed={...observed,version,policy};const{sourceHash,...body}=changed;changed.sourceHash=hash(body);assert.throws(()=>validateInventoryObservation(changed,scope));}assert.throws(()=>createBusinessInventoryReader({access:h.access,version:'2'}),/version/);
 });

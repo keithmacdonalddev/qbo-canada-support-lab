@@ -7,14 +7,24 @@ const LISTS = new Set(['Customer', 'Vendor', 'Item', 'Account']);
 const ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/, HASH = /^[a-f0-9]{64}$/;
 const LIMITS = Object.freeze({ page: 1000, records: 100000, compactBytes: 25000000, pageBytes: 8000000, recordBytes: 1000000, rawBytes: 300000000, milliseconds: 180000 });
 const POLICY = 'all-current-records-including-inactive-lists-two-complete-scans-v1';
+const POLICIES = Object.freeze({ 1: POLICY, 2: 'all-current-records-including-inactive-lists-two-complete-scans-bill-link-multiset-v2' });
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_INVENTORY_UNVERIFIED' }); }
 const plain = value => value && Object.getPrototypeOf(value) === Object.prototype;
 const exact = (value, keys) => plain(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 function encoded(value, limit) { let text; try { text = canonical(value); } catch { fail('Inventory response is not plain JSON.'); } if (typeof text !== 'string' || Buffer.byteLength(text) > limit) fail('Inventory response exceeds its evidence budget.'); return text; }
 function stamp(value) { const n = typeof value === 'string' ? Date.parse(value) : NaN; if (!Number.isFinite(n) || new Date(n).toISOString() !== value) fail('Inventory observation time is invalid.'); return n; }
-function compact(type, record) {
+function compact(type, record, version = 1) {
+  if (![1, 2].includes(version)) fail('Choose the retained inventory comparison version.');
   if (!plain(record) || typeof record.Id !== 'string' || !QID.test(record.Id) || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken) || (record.sparse !== undefined && record.sparse !== false)) fail('Inventory record identity or version is incomplete.');
-  const contentHash = hash(JSON.parse(encoded(record, LIMITS.recordBytes)));
+  // Bill-level links are an unordered relationship collection in the observed API.
+  // Keep every complete member, duplicate, type and all other array ordering.
+  let compared = record;
+  if (version === 2 && type === 'Bill' && Array.isArray(record.LinkedTxn)) {
+    if (record.LinkedTxn.some(link => !plain(link))) fail('Bill links must retain complete JSON members.');
+    const links = record.LinkedTxn.map(link => ({ link, key: canonical(link) })).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    compared = { ...record, LinkedTxn: links.map(row => row.link) };
+  }
+  const contentHash = hash(JSON.parse(encoded(compared, LIMITS.recordBytes)));
   if (LISTS.has(type)) {
     if (typeof record.Active !== 'boolean') fail('Inventory list activity is missing.');
     return { id: record.Id, syncToken: record.SyncToken, contentHash, active: record.Active };
@@ -25,7 +35,7 @@ function compact(type, record) {
 const ordered = records => records.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const manifestHash = entities => hash(TYPES.map(entity => ({ entity, records: entities[entity] })));
 function validateInventoryObservation(value, scope) {
-  if (!exact(value, ['version', 'policy', 'scope', 'coverage', 'scans', 'records', 'sourceHash']) || value.version !== 1 || value.policy !== POLICY || canonical(value.scope) !== canonical(scoped(scope)) || canonical(value.coverage) !== canonical(TYPES) || !exact(value.records, TYPES) || !Array.isArray(value.scans) || value.scans.length !== 2) fail('The current inventory source is incomplete or scoped elsewhere.');
+  if (!exact(value, ['version', 'policy', 'scope', 'coverage', 'scans', 'records', 'sourceHash']) || ![1, 2].includes(value.version) || value.policy !== POLICIES[value.version] || canonical(value.scope) !== canonical(scoped(scope)) || canonical(value.coverage) !== canonical(TYPES) || !exact(value.records, TYPES) || !Array.isArray(value.scans) || value.scans.length !== 2) fail('The current inventory source is incomplete or scoped elsewhere.');
   let count = 0, bytes = 0;
   for (const type of TYPES) {
     const rows = value.records[type]; if (!Array.isArray(rows)) fail('Inventory records are missing.');
@@ -49,7 +59,7 @@ function validateInventoryObservation(value, scope) {
 }
 function inventorySummary(value, scope) {
   const observation = validateInventoryObservation(value, scope);
-  return { version: 1, ...observation, sourceHash: value.sourceHash, coverage: [...TYPES], status: 'matching-scans', atomic: false, ownership: 'unverified',
+  return { version: value.version, ...observation, sourceHash: value.sourceHash, coverage: [...TYPES], status: 'matching-scans', atomic: false, ownership: 'unverified',
     entities: TYPES.map(entity => {
       const rows = value.records[entity];
       return LISTS.has(entity) ? { entity, count: rows.length, active: rows.filter(row => row.active).length, inactive: rows.filter(row => !row.active).length }
@@ -59,7 +69,8 @@ function inventorySummary(value, scope) {
 }
 // Fixed GET-only surface. Compact identities are private evidence for later review;
 // no records are adopted, changed, or authorized for subsequent writes here.
-function createBusinessInventoryReader({ access, now = () => Date.now(), stockMetadata = false }) {
+function createBusinessInventoryReader({ access, now = () => Date.now(), stockMetadata = false, version = 1 }) {
+  if (![1, 2].includes(version)) throw new TypeError('Inventory comparison version must be explicit');
   if (typeof stockMetadata !== 'boolean') throw new TypeError('Stock metadata mode must be explicit');
   if ([access?.authorize, access?.resolveClient, now].some(fn => typeof fn !== 'function')) throw new TypeError('Inventory observations require current scoped access');
   return async function read(scope, { signal } = {}) {
@@ -101,7 +112,7 @@ function createBusinessInventoryReader({ access, now = () => Date.now(), stockMe
             if (Object.keys(page).some(key => ![type, 'startPosition', 'maxResults', 'totalCount'].includes(key)) || !Array.isArray(rows) || rows.length > LIMITS.page || (rows.length && page.startPosition !== start) || (page.startPosition !== undefined && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== rows.length)) fail('Inventory pagination is incomplete.');
             if (page.totalCount !== undefined) { if (!Number.isSafeInteger(page.totalCount) || page.totalCount < 0 || page.totalCount > LIMITS.records || (declared !== null && declared !== page.totalCount)) fail('Inventory count changed or exceeds its budget.'); declared = page.totalCount; }
             for (const record of rows) {
-              const row = compact(type, record); if (seen.has(row.id)) fail('Inventory pagination repeated a record.');
+              const row = compact(type, record, version); if (seen.has(row.id)) fail('Inventory pagination repeated a record.');
               count++; bytes += Buffer.byteLength(encoded(row, LIMITS.recordBytes)); if (count > LIMITS.records || bytes > LIMITS.compactBytes) fail('Inventory exceeds its retained evidence budget.');
               if (stockMetadata) {
                 if (type === 'Item' && record.Type === 'Inventory') {
@@ -128,7 +139,7 @@ function createBusinessInventoryReader({ access, now = () => Date.now(), stockMe
       guard(); const first = await scan(); check(); const second = await scan(); check();
       if (first.evidence.count !== second.evidence.count || first.evidence.manifestHash !== second.evidence.manifestHash) fail('QuickBooks records changed between inventory scans. Capture a fresh observation.');
       await authority();
-      const source = { version: 1, policy: POLICY, scope, coverage: [...TYPES], scans: [first.evidence, second.evidence], records: first.records };
+      const source = { version, policy: POLICIES[version], scope, coverage: [...TYPES], scans: [first.evidence, second.evidence], records: first.records };
       const result = { ...source, sourceHash: hash(source) }; validateInventoryObservation(result, scope);
       if (!stockMetadata) return result;
       if (canonical(first.stock) !== canonical(second.stock)) fail('Stock metadata changed between complete inventory scans.');

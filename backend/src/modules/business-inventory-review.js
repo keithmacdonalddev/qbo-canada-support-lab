@@ -12,7 +12,7 @@ function createBusinessInventoryReviewReader({ access, readOrigin, now = () => D
   if ([access?.authorize, access?.resolveClient, readOrigin, now].some(fn => typeof fn !== 'function')) throw new TypeError('Inventory review requires scoped read authority');
   return async function review(evidence, { signal } = {}) {
     const scope = scoped(evidence?.scope), entity = evidence?.entity, saved = evidence?.record;
-    if (!ID.test(evidence?.baselineId || '') || !HASH.test(evidence?.evidenceHash || '') || !HASH.test(evidence?.inventoryHash || '') || !TYPES.includes(entity) || typeof saved?.id !== 'string' || !QID.test(saved.id) || typeof saved.syncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(saved.syncToken) || !HASH.test(saved.contentHash || '')) fail('An exact captured record is required.', 400);
+    if ((evidence?.inventoryVersion !== undefined && ![1, 2].includes(evidence.inventoryVersion)) || !ID.test(evidence?.baselineId || '') || !HASH.test(evidence?.evidenceHash || '') || !HASH.test(evidence?.inventoryHash || '') || !TYPES.includes(entity) || typeof saved?.id !== 'string' || !QID.test(saved.id) || typeof saved.syncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(saved.syncToken) || !HASH.test(saved.contentHash || '')) fail('An exact captured record is required.', 400);
     const started = now(), controller = new AbortController(), abort = () => controller.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(abort, 60000); timer.unref?.();
@@ -41,7 +41,7 @@ function createBusinessInventoryReviewReader({ access, readOrigin, now = () => D
       const page = body.QueryResponse, rows = page[entity] === undefined ? [] : page[entity];
       if (Object.keys(page).some(key => ![entity, 'startPosition', 'maxResults', 'totalCount'].includes(key)) || !Array.isArray(rows) || rows.length > 1 || (rows.length && page.startPosition !== 1) || (page.startPosition !== undefined && page.startPosition !== 1) || (page.maxResults !== undefined && page.maxResults !== rows.length) || (page.totalCount !== undefined && page.totalCount !== rows.length)) fail('The current record response is ambiguous or incomplete.');
       let current = null;
-      if (rows.length) { current = compactInventoryRecord(entity, rows[0]); if (current.id !== saved.id) fail('QuickBooks returned a different record.'); }
+      if (rows.length) { current = compactInventoryRecord(entity, rows[0], evidence.inventoryVersion ?? 1); if (current.id !== saved.id) fail('QuickBooks returned a different record.'); }
       await authority();
       let origin;
       try {

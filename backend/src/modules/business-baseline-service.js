@@ -25,7 +25,7 @@ function createBusinessBaselineService(dependencies = {}) {
     const scope = scoped({ environment: context.environment, realmId: context.connection.realmId, connectionId: context.connection.connectionId });
     const access = accessFor({ actorId, ownerId, ...models });
     const readReports = dependencies.readReports || createBusinessReportReader({ access, purpose: 'baseline', ...(dependencies.now ? { now: dependencies.now } : {}) });
-    const readInventory = dependencies.readInventory || createBusinessInventoryReader({ access, ...(dependencies.now ? { now: dependencies.now } : {}) });
+    const readInventory = dependencies.readInventory || createBusinessInventoryReader({ access, version: 2, ...(dependencies.now ? { now: dependencies.now } : {}) });
     const assertCaptureReady = dependencies.assertCaptureReady || (async ({ session } = {}) => {
       try { await require('./business-storage-setup').assertBaselineSetupCompleted(connection.db, { ...scope, ownerId }, session); }
       catch { throw Object.assign(new Error('Complete the reviewed baseline observation storage setup before capturing reports.'), { code: 'BUSINESS_STORAGE_UNPREPARED', status: 409 }); }

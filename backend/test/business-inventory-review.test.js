@@ -61,3 +61,8 @@ test('service resolves only audited captured records before using the default li
   const result = await service.review(user, saved.id, 'Invoice', '20'); assert.equal(result.comparison, 'different-content'); assert.equal(h.calls.length, 1); assert.equal(result.entity, 'Invoice'); assert.equal(result.baselineId, saved.id);
   base.data.Audits = []; await assert.rejects(service.review(user, saved.id, 'Invoice', '20'), /audit/); assert.equal(h.calls.length, 1);
 });
+
+test('exact record review uses its saved v2 comparison policy while legacy v1 remains order-sensitive',async()=>{
+ for(const version of [1,2]){const h=harness('Bill');h.row.LinkedTxn=[{TxnId:'901',TxnType:'BillPayment',TxnLineId:'1'},{TxnId:'902',TxnType:'PurchaseOrder',TxnLineId:'2'}];h.evidence.record=compactInventoryRecord('Bill',h.row,version);if(version===2)h.evidence.inventoryVersion=2;h.row.LinkedTxn.reverse();assert.equal((await h.review()).comparison,version===2?'matches':'different-content');h.row.LinkedTxn[0].TxnLineId='9';assert.equal((await h.review()).comparison,'different-content');}
+ const invalid=harness('Bill');invalid.evidence.inventoryVersion=3;await assert.rejects(invalid.review(),/captured record/);assert.equal(invalid.calls.length,0);
+});
