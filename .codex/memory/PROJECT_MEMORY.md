@@ -1,5 +1,14 @@
 # Codex Project Memory
 
+## Verified company population (2026-10-16T17:35:14.167Z)
+
+- Production company ending 2856 now has 60 actual newly created native masters: 7 accounts, 48 customers, 1 employee and 4 Service Items. Every ID has its original accepted receipt and independent readback. The app visibly shows 60 verified records and saved draft v4. This does not establish historical transactions, report acceptance or full-goal completion.
+- Original plan 9d373b4c is closed after native subset application; its 5 Inventory and 6 Vendor entries were proved untouched and retired. Never replay it or recreate the 60 existing IDs. The final retained receipt is artifacts/goal-realization/company-native-masters-prefix-completion-execute-result-20261016.json.
+- An actual MongoDB cursor-continuation failure stopped ordinal 51 before admission. Three native proved-unsent attempts remain in its history; the fourth succeeded after the bounded snapshot-query fix. All earlier IDs are unchanged, no unknown result remains, and the final child/token/database cleanup succeeded. Source fixes c6cd381 and 630a684 are pushed to origin/main; focused snapshot regression passed 74/74. See docs/architecture/intent-completion-2026-10.md and business-master-preparation.md for direct evidence and limits.
+- A native company survey is now saved and reread successfully for 2026-10-01 through 2026-10-16 against draft v4: all 7 critical report scopes, 4 displayed structural comparisons and 2 agreeing scans of 777 current records. It remains Saved · Not accepted; huge old balances and coherent managed history are not accepted. Its native validation/audit/current-draft/writer-idle storage proof is artifacts/goal-realization/company-native-survey-verification-20261016.json.
+- Continue the full flagship-company outcome, including actual history, meaningful variations and direct report acceptance. Existing full-goal authority covers necessary bounded reads, local preparation and ordinary new records in this exact company. Exact pre-existing-record destruction and unconfirmed money/workflow/costing facts remain pending decisions. Current generic master creation must not be treated as completion. Refresh the old cleanup inventory before use; its 718-record source predates these 60 masters.
+
+
 ## Owner-confirmed company context (2026-10-16T15:38:51.736Z)
 
 - The active outcome is a robust flagship QuickBooks company filled to Test Data Lab’s intended business/history/report standard. Code milestones and a saved draft alone do not finish that outcome; continue necessary authorized goal work. See `docs/architecture/intent-completion-2026-10.md` for current implementation and direct evidence.
