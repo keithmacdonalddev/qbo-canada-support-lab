@@ -33,13 +33,16 @@ async function loadMasterRecordSnapshot(models, scope, run, rows, session) {
   const ids = rows.map(row => row.attempts.at(-1)?.receiptId);
   if (ids.some(id => !/^[a-f0-9]{64}$/.test(id || '')) || new Set(ids).size !== ids.length) throw denied('Unique mandatory master receipts are required.');
   if (!rows.length) return { models: { Receipts: snapshotModel([]), Audits: snapshotModel([]) }, receipts: [] };
+  // Explicit first-batch counts avoid the installed driver's inherited transaction
+  // timeout leaking onto non-awaitData getMore. Byte-overflow still fails closed;
+  // lean() must read the complete cursor, never only its first batch.
   // Include every same-run receipt so a second workflow identity cannot hide
   // behind the acknowledged receipt ID. Legal history is bounded at 100 x 10.
-  const receipts = await models.Receipts.find({ environment: scope.environment, realmId: scope.realmId, $or: [{ _id: { $in: ids } }, { 'workflow.kind': 'master-preparation', 'workflow.runId': String(run._id) }] }).limit(1001).session(session).maxTimeMS(3000).lean();
+  const receipts = await models.Receipts.find({ environment: scope.environment, realmId: scope.realmId, $or: [{ _id: { $in: ids } }, { 'workflow.kind': 'master-preparation', 'workflow.runId': String(run._id) }] }, null, { batchSize: 1001 }).limit(1001).session(session).maxTimeMS(3000).lean();
   if (receipts.length > 1000) throw denied('Master transport history exceeds its approved attempt budget.');
   const current = receipts.filter(row => ids.includes(String(row._id)));
   const auditIds = [...new Set([...current.flatMap(row => [row.startAuditId, row.resultAuditId, row.terminal?.auditId]), ...rows.map(row => row.attempts.at(-1)?.ownerAttribution?.auditId)].filter(Boolean).map(String))];
-  const audits = await models.Audits.find({ _id: { $in: auditIds }, realmId: scope.realmId }).limit(auditIds.length + 1).session(session).maxTimeMS(3000).lean();
+  const audits = await models.Audits.find({ _id: { $in: auditIds }, realmId: scope.realmId }, null, { batchSize: auditIds.length + 1 }).limit(auditIds.length + 1).session(session).maxTimeMS(3000).lean();
   return { models: { Receipts: snapshotModel(receipts), Audits: snapshotModel(audits) }, receipts };
 }
 function matchingMasterReceipts(snapshot, run, row) {

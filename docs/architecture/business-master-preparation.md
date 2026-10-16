@@ -51,3 +51,14 @@ Intuit's [basic billing implementation](https://developer.intuit.com/app/develop
 ## Origin visibility
 
 Account, Customer, Vendor and Item creation history in Records and captured-inventory comparison now includes minimal master-preparation evidence. Confirmed response, independent readback and owner identification of an original unknown outcome remain distinct. Missing mandatory audits/receipts or conflicting creation evidence stay incomplete. Retaining or applying IDs never erases this history or classifies the records as part of the business. Employee inspection remains outside the general Explorer and immutable inventory contracts; the time-entry worker’s minimal ID and receipt stay available in preparation history.
+
+
+## Complete receipt snapshots (2026-10-16)
+
+Actual Production preparation created and independently verified 51 master records before the next admission failed. Its 102 original transport audits crossed the default initial cursor batch. The installed MongoDB 6.20 driver inherited the native transaction deadline but sent an invalid maxTimeMS on non-awaitData getMore; the original caught error was retained privately rather than classified from the generic UI refusal.
+
+The two bounded proof queries now request their complete count bounds in the initial batch. Their filters, 1,001-receipt overflow sentinel, three-second query limit, original transaction options and every receipt/audit assertion remain unchanged. This count choice does not guarantee arbitrary data fits MongoDB’s byte limit: lean() still consumes the whole cursor, and continuation failures propagate before admission. No partial snapshot or weaker fallback is accepted.
+
+A scoped read-only integration used the original native transaction and full validator against the retained company state: all 51 receipts and 102 transport audits passed, totaling 204,156 BSON bytes, with zero QuickBooks calls or application writes. Private receipt: artifacts/goal-realization/company-native-master-snapshot-read-proof-result-20261016.json. New real-Mongoose query tests cover 100 records and 200 audits, late audit tampering/missing evidence, duplicate workflow receipts beyond record 100, the 1,001-history refusal and cursor failure propagation.
+
+Verified gpt-6-luna/low focused checks passed 74/74 across snapshot, transport, store, recovery and runner tests, plus touched-test/source and company-wrapper syntax. The first new fixture used a plain session object that Mongoose cloned; using a real disconnected driver session preserves the strict identity assertion without any socket. Original failure and corrected receipts remain at artifacts/luna/goal-native-master-snapshot{,-corrected}-20261016.json. Distinct implementation/safety reviews found no remaining source blocker.
