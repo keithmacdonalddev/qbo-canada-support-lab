@@ -17,3 +17,10 @@ Setup reads share a bounded query budget. Incomplete sources remain incomplete; 
 Independent implementation and safety reviews corrected stale-connection and post-save-refresh races. Focused service/model and authenticated route tests cover optimistic conflicts, idempotency, audit rollback, integer allocation, permissions, source completeness, scope overrides and QBO error mapping. Tests use fixtures; no live save or database preparation has run.
 
 The desktop app visibly loads the proposal and reads the connected company's actual setup. Current owner access remains on the legacy read-only bridge; new business storage is absent. Live successful save/retry and real transaction rollback remain unverified. Version browsing, activation, baseline ownership review, activity rules and operations integration are still required.
+
+
+## Stored definition integrity (2026-10-16)
+
+New business snapshots preserve empty objects as part of the validated definition. In particular, empty masterBindings must survive Mongoose serialization: removing that field changes the content fingerprint and correctly blocks later master creation. BlueprintVersion and MasterPreparationRun disable empty-object minimization for their hashed Mixed content. Existing hash validators, transactional saves and append-only history rules remain in force.
+
+The original non-live evidence above is historical. Connected-company inspection found the missing-empty-field defect in saved drafts 1 and 2. The bounded owner-scoped recovery appended version 3 through the native save service only after restoring the single missing empty field reproduced the exact original hash and compiled owner choices. Independent raw readback confirmed the new definition fingerprint; the complete older documents remained unchanged. Current private receipts and live limits are recorded in the [October outcome ledger](intent-completion-2026-10.md#native-business-definition-storage-and-active-population-2026-10-16).

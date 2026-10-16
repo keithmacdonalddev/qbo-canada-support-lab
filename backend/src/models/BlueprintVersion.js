@@ -32,7 +32,7 @@ const blueprintVersionSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     publishedAt: { type: Date, default: null },
   },
-  { timestamps: true, autoIndex: false, autoCreate: false }
+  { minimize: false, timestamps: true, autoIndex: false, autoCreate: false }
 )
 
 blueprintVersionSchema.index({ realmId: 1, version: 1 }, { unique: true })

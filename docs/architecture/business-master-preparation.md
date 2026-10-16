@@ -14,6 +14,8 @@ Inventory needs confirmed quantity tracking and a separately displayed elapsed H
 
 Use a dedicated typed MasterPreparationRun with a bounded immutable hashed plan, embedded ordinal/attempt history, exact scope/owner/draft, approval, worker lease/stop, per-record receipts and local apply/close decisions. A separate explicit additive master-preparation storage contract prepares its collection/indexes and audits its target. Existing continual-business v4 definitions, hashes, setup receipts and initial-empty installation rules retain their meaning. No startup migration, incidental DDL or live preparation is authorized by this code task.
 
+Hashed master plans and their original business snapshots preserve empty objects during Mongoose serialization. An empty source masterBindings object is part of the immutable plan, so dropping it cannot be treated as an equivalent stored representation. Real Mongoose insert/BSON round-trip tests exercise this boundary and the normal unchanged-draft fence.
+
 A unique open claim per environment/company covers proposed, active, partial and completed-but-unapplied work. Refreshing or changing a draft cannot create another role set. Existing created IDs stay discoverable. A changed draft stops further dispatch; the owner can review verified IDs against the current draft, apply a compatible exact subset into a new version, or retain created records unassigned and retire only the proved-unsent tail. Every saved ID and attempt remains in origin/audit evidence when the claim closes. Uncertain or possibly-sent attempts retain both the company barrier and the claim.
 
 ## Dispatch and recovery

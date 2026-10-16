@@ -46,7 +46,7 @@ const schema = new mongoose.Schema({
   lastFailure: { type: mixed, default: null },
   applied: { type: mixed, default: null }, disposition: { type: mixed, default: null },
   lastAuditId: { type: objectId, required: true },
-}, { timestamps: true, autoCreate: false, autoIndex: false });
+}, { minimize: false, timestamps: true, autoCreate: false, autoIndex: false });
 schema.index({ environment: 1, realmId: 1, claim: 1 }, { unique: true, partialFilterExpression: { claim: 'open' } });
 schema.index({ environment: 1, realmId: 1, createdAt: -1 });
 schema.index({ environment: 1, realmId: 1, 'records.entity': 1, 'records.qboId': 1 });
