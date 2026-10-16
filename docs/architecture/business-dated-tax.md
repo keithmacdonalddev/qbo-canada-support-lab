@@ -1,0 +1,13 @@
+# Nova Scotia historical tax transition
+
+The flagship business starts before April 2025. The connected company has separate 15% and 14% HST codes, so choosing one code for all history would produce incorrect invoices and bills.
+
+The optional saved business choice `business.datedTax` selects the fixed `CA-NS-2025-postpaid` regime. The normal sales/purchase mappings cover 15% history; the two additional mappings cover 14% charges from April 1, 2025. Both directions require complete active company definitions and independently observed effective rates. This is a bounded business assumption: charges become payable when posted, with no advance payments. It does not implement every transitional tax rule. [CRA Notice 342](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/notice342/nova-scotia-hst-rate-decrease-questions-answers-general-transitional-rules-personal-property-services.html) sets the underlying paid/payable transition.
+
+Each charged activity retains the immutable transition context, selected code, original definitions and independent tax expectation. Payments and supplier settlements keep the original gross amount. Converting a March estimate or purchase order in April permits the precise code change only after checking its original retained intent, policy, date, lines, amounts and tax. Other conversion protections remain in force. Credit schedules require separate original-charge treatment and are refused with this option.
+
+New product defaults use explicit tax IDs retained in the reviewed preparation plan, selected by its observation date. The original inventory starting date does not choose current product tax defaults. Approval, compilation and dispatch verify that exact pair; fresh proof checks the actual payload codes. A changed date choice requires fresh review.
+
+The setting is optional and frozen by publication/continuity. Existing definitions, proposals and policies without it retain their original bytes and hashes. The desktop business form exposes both current code choices and prevents incomplete saves. The option does not change company tax preferences, existing records, filed returns or protected periods.
+
+Acceptance evidence includes original-SDK adjacent-period and recovery fixtures, explicit old/new rate denials, original-gross collections, product-default boundary approval and dispatch checks, legacy byte equality, and independent implementation, safety and desktop review. Current receipts are recorded in the intent-completion ledger. Fixtures establish supported behavior; live business completion requires direct company records and reports.

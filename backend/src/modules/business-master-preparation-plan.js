@@ -62,6 +62,8 @@ function prepareMasterPlan({ view, input, setup, masters, country, periodControl
   if (setup.observations.homeCurrency !== 'CAD') block('currency', 'This business requires an explicitly verified CAD home currency.');
   try { assertPeriodControl(periodControl, scope, ownerId); } catch { block('periods', 'Record current owner-reviewed protected dates before preparing records.'); }
   const draft = view.draft, mappingCheck = checkBlueprintMappings(view, setup, { connectionId: input.connectionId, baseHash: input.baseHash }), entries = [];
+  const datedTax = require('./business-dated-tax').bindDatedTax(draft.business, draft.mappings);
+  if (datedTax && !require('./business-dated-tax').datedTaxChoicesReady(datedTax, setup)) block('datedTax', 'Read complete active historical and current sales/purchase tax codes before preparing records.');
   for (const row of mappingCheck.rows) {
     if (row.id) {
       if (row.status !== 'compatible' && !(MAPPINGS[row.key].entity === 'TaxCode' && row.status === 'review_required' && (() => { const code = setup.options.taxCodes.find(record => record.id === row.id); return code?.[row.key === 'salesTax' ? 'sales' : 'purchases'] === true || code?.taxable === false; })())) block(row.key, row.reason);
@@ -108,7 +110,8 @@ function prepareMasterPlan({ view, input, setup, masters, country, periodControl
     if (names.has(key)) block(entry.key, 'A proposed name already exists. Explicitly select or rename the intended record; name matches are never adopted.');
     names.set(key, true);
   }
-  const plan = { version: 1, scope, ownerId, source: { id: draft.id, version: draft.version, contentHash: draft.contentHash, business: draft.business, mappings: draft.mappings, masterBindings: draft.masterBindings || {} },
+  const taxDefaults = datedTax ? Object.fromEntries(['salesTax', 'purchaseTax'].map(key => [key, require('./business-dated-tax').datedTaxChoice(datedTax, key, today).id])) : null;
+  const plan = { version: 1, ...(taxDefaults ? { taxDefaults } : {}), scope, ownerId, source: { id: draft.id, version: draft.version, contentHash: draft.contentHash, business: draft.business, mappings: draft.mappings, masterBindings: draft.masterBindings || {} },
     inventoryStartDate: input.inventoryStartDate, salesTaxable: setup.options.taxCodes.find(row => row.id === draft.mappings.salesTax)?.taxable !== false, entries, inventoryBefore, observedAt: new Date(now).toISOString(), evidence: { setupHash: setup.sourceHash, mastersHash: masters.sourceHash, countryHash: country?.recordHash || null, periodControlHash: periodControl?.contentHash || null }, blockers,
     runnable: blockers.length === 0 && entries.length > 0, proposedQboCreates: entries.length, qboWrites: 0, openingQuantity: 0, openingBalances: false, edits: 0 };
   if (Buffer.byteLength(canonical(plan)) > 2000000) throw problem('Master preparation exceeds its retained evidence budget.', 409);
@@ -119,11 +122,13 @@ function assertMasterPlan(plan) {
   const { planHash, ...content } = plan || {};
   if (content.version !== 1 || !HASH.test(planHash || '') || hash(content) !== planHash || content.runnable !== true || !Array.isArray(content.blockers) || content.blockers.length || !Array.isArray(content.entries) || !content.entries.length || content.entries.length > 100 || content.proposedQboCreates !== content.entries.length || content.qboWrites !== 0 || content.edits !== 0 || content.openingBalances !== false || content.openingQuantity !== 0 || typeof content.salesTaxable !== 'boolean' || !/^[a-f0-9]{24}$/.test(content.ownerId || '')) invalid();
   if (canonical(scoped(plan.scope)) !== canonical(plan.scope) || Buffer.byteLength(canonical(plan)) > 2000000) invalid();
-  if (Object.keys(content).sort().join(',') !== 'blockers,edits,entries,evidence,inventoryBefore,inventoryStartDate,observedAt,openingBalances,openingQuantity,ownerId,proposedQboCreates,qboWrites,runnable,salesTaxable,scope,source,version') invalid();
+  if (Object.keys(content).filter(key => key !== 'taxDefaults').sort().join(',') !== 'blockers,edits,entries,evidence,inventoryBefore,inventoryStartDate,observedAt,openingBalances,openingQuantity,ownerId,proposedQboCreates,qboWrites,runnable,salesTaxable,scope,source,version') invalid();
   const source = plan.source;
   if (!source || Object.keys(source).sort().join(',') !== 'business,contentHash,id,mappings,masterBindings,version' || !/^[a-f0-9]{24}$/.test(source.id || '') || !HASH.test(source.contentHash || '') || !Number.isSafeInteger(source.version) || source.version < 1 || !Number.isFinite(Date.parse(plan.observedAt)) || new Date(Date.parse(plan.observedAt)).toISOString() !== plan.observedAt) invalid();
   const input = validateDraftInput({ requestKey: '00000000-0000-0000-0000-000000000000', connectionId: plan.scope.connectionId, baseHash: source.contentHash, business: source.business, mappings: source.mappings, masterBindings: source.masterBindings });
   if (canonical(input.business) !== canonical(source.business) || canonical(input.mappings) !== canonical(source.mappings) || canonical(input.masterBindings) !== canonical(source.masterBindings) || Object.values(source.mappings).some(id => id !== null && !ID.test(id)) || Object.values(source.masterBindings).some(id => !ID.test(id))) invalid();
+  const dated = require('./business-dated-tax'), context = dated.bindDatedTax(source.business, source.mappings);
+  if (context) { const expected = Object.fromEntries(['salesTax', 'purchaseTax'].map(key => [key, dated.datedTaxChoice(context, key, businessDate(new Date(plan.observedAt))).id])); if (canonical(plan.taxDefaults ?? null) !== canonical(expected)) invalid(); } else if (Object.hasOwn(plan, 'taxDefaults')) invalid();
   try { date(plan.inventoryStartDate); } catch { invalid(); }
   if (plan.entries.some(row => row.entity === 'Item' && row.itemType === 'Inventory') && (plan.inventoryStartDate > source.business.openingDate || plan.inventoryStartDate > businessDate(new Date(plan.observedAt)))) invalid();
   if (!plan.evidence || Object.keys(plan.evidence).sort().join(',') !== 'countryHash,mastersHash,periodControlHash,setupHash' || Object.values(plan.evidence).some(value => !HASH.test(value || ''))) invalid();
@@ -169,10 +174,11 @@ function masterFields(plan, entry, accountRef) {
   else if (entry.entity === 'Item') {
     const requirement = masterRequirements(plan.source.business).find(row => row.key === entry.key);
     if (!requirement || requirement.itemType !== entry.itemType) throw problem('The product role no longer has its original definition.', 409);
-    payload = { Name: entry.name, Active: true, Type: entry.itemType, Taxable: plan.salesTaxable, IncomeAccountRef: accountRef(requirement.accountMappings.IncomeAccountRef), SalesTaxCodeRef: { value: plan.source.mappings.salesTax } };
+    const selectedTax = key => plan.taxDefaults?.[key] || plan.source.mappings[key];
+    payload = { Name: entry.name, Active: true, Type: entry.itemType, Taxable: plan.salesTaxable, IncomeAccountRef: accountRef(requirement.accountMappings.IncomeAccountRef), SalesTaxCodeRef: { value: selectedTax('salesTax') } };
     if (entry.itemType === 'Inventory') {
       const n = Number(entry.key.slice(-1)), cost = 18 + n * 2.5;
-      Object.assign(payload, { UnitPrice: cost * 2, PurchaseCost: cost, TrackQtyOnHand: true, QtyOnHand: 0, InvStartDate: plan.inventoryStartDate, AssetAccountRef: accountRef('inventoryAsset'), ExpenseAccountRef: accountRef('costOfGoods'), PurchaseTaxCodeRef: { value: plan.source.mappings.purchaseTax } });
+      Object.assign(payload, { UnitPrice: cost * 2, PurchaseCost: cost, TrackQtyOnHand: true, QtyOnHand: 0, InvStartDate: plan.inventoryStartDate, AssetAccountRef: accountRef('inventoryAsset'), ExpenseAccountRef: accountRef('costOfGoods'), PurchaseTaxCodeRef: { value: selectedTax('purchaseTax') } });
     } else payload.UnitPrice = entry.key === 'field-service-hour' ? 125 : 149 + (Number(entry.key.slice(-1)) - 1) * 50;
   } else throw problem('Unsupported master entity.', 409);
   return { entity: entry.entity, payload };

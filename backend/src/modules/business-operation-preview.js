@@ -21,6 +21,7 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date())
   if (activity.events.length > MAX_STEPS) throw problem('This operation exceeds 500 steps. Shorten the period.');
   const mappingInput = { connectionId: input.connectionId, baseHash: input.baseHash };
   const accounts = checkBlueprintMappings(view, setup, mappingInput), masterCheck = inspectBusinessMasters(view, masters);
+  const selectedBusiness = view.draft || view.proposal, dated = require('./business-dated-tax'), datedTax = dated.bindDatedTax(selectedBusiness.business, selectedBusiness.mappings), datedRows = new Map();
   const mappingRows = new Map(accounts.rows.map(row => [row.key, row]));
   const masterRows = new Map(masterCheck.rows.map(row => [row.key, row]));
   const eventByKey = new Map([...activity.prerequisites, ...activity.events, ...activity.future].map(event => [event.logicalKey, event]));
@@ -40,7 +41,7 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date())
       reason: structurallyValid ? null : checked?.status === 'compatible' ? 'A valid current record version is unavailable.' : checked?.reason || 'A saved choice is required.' };
   };
   const steps = activity.events.map(event => {
-    const { details, detailsHash } = activity.detailProposal.byLogicalKey[event.logicalKey];
+    const proposed = activity.detailProposal.byLogicalKey[event.logicalKey], details = datedTax && proposed.details.taxMapping ? { ...proposed.details, datedTax } : proposed.details, detailsHash = details === proposed.details ? proposed.detailsHash : hash({ calendarFingerprint: event.fingerprint, details });
     const references = new Map();
     const master = (key, entity) => { if (key) references.set(entity + ':' + key, bind(key, entity, masterRows, masters.options[entity])); };
     master(details.customerKey, 'Customer'); master(details.vendorKey, 'Vendor'); master(details.workerKey, 'Employee'); master(details.itemKey, 'Item');
@@ -52,7 +53,15 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date())
     if (['PurchaseOrder', 'Bill', 'BillPayment'].includes(event.entity)) accountKeys.add('accountsPayable');
     if (details.destination === 'undeposited_funds' || event.entity === 'Deposit') accountKeys.add('undepositedFunds');
     for (const key of accountKeys) references.set('Account:' + key, bind(key, 'Account', mappingRows, setup.options.accounts));
-    if (details.taxMapping) references.set('TaxCode:' + details.taxMapping, bind(details.taxMapping, 'TaxCode', mappingRows, setup.options.taxCodes));
+    if (details.taxMapping) {
+      let rows = mappingRows;
+      if (datedTax) {
+        const key = details.taxMapping, choice = dated.datedTaxChoice(datedTax, key, event.txnDate), cacheKey = key + ':' + choice.id;
+        if (!datedRows.has(cacheKey)) { const which = view.draft ? 'draft' : 'proposal', selected = { ...view, [which]: { ...selectedBusiness, mappings: { ...selectedBusiness.mappings, [key]: choice.id } } }; datedRows.set(cacheKey, checkBlueprintMappings(selected, setup, mappingInput).rows.find(row => row.key === key)); }
+        rows = new Map([[key, datedRows.get(cacheKey)]]);
+      }
+      references.set('TaxCode:' + details.taxMapping, bind(details.taxMapping, 'TaxCode', rows, setup.options.taxCodes));
+    }
     const dependencies = event.dependsOn.map(key => ({ logicalKey: key, entity: eventByKey.get(key).entity, source: currentKeys.has(key) ? 'this_operation' : 'prior_period', state: 'unverified' }));
     const blockers = [...references.values()].filter(reference => reference.status !== 'resolved').map(reference => ({ kind: 'record_choice', key: reference.key, reason: reference.reason }));
     for (const dependency of dependencies.filter(value => value.source === 'prior_period')) blockers.push({ kind: 'prior_record', key: dependency.logicalKey, reason: 'The earlier saved transaction and its relationships need verified evidence.' });
@@ -75,7 +84,7 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date())
   const payload = { version: 1, scope: { realmId: view.realmId, environment: view.environment, connectionId: view.connectionId },
     businessKey: activity.businessKey, openingDate: (view.draft || view.proposal).business.openingDate, blueprintId: view.draft?.id || null,
     blueprintHash: view.draft?.contentHash || null, fromDate: input.fromDate, throughDate: input.throughDate,
-    calendarHash: activity.planHash, detailsHash: activity.detailProposal.fingerprint,
+    calendarHash: activity.planHash, detailsHash: datedTax ? hash(steps.map(row => ({ logicalKey: row.logicalKey, detailsHash: row.detailsHash }))) : activity.detailProposal.fingerprint,
     observations: { setup: { sourceHash: setup.sourceHash, observedAt: setup.observedAt }, masters: { sourceHash: masters.sourceHash, observedAt: masters.observedAt } },
     steps, earlierRequirements: [...earlier.values()].map(event => ({ logicalKey: event.logicalKey, entity: event.entity, txnDate: event.txnDate })),
     futureFollowUps: activity.future.length, remaining,

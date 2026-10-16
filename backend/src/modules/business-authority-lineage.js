@@ -10,6 +10,7 @@ function fail(message) { throw Object.assign(new Error(message), { status: 409, 
 function stableBusiness(previous, next) {
   for (const key of ['openingDate', 'fiscalYearStartMonth']) if (previous.business[key] !== next.business[key]) fail('Keep the original business opening and fiscal calendar.');
   if (canonical(previous.business.stockCosting ?? null) !== canonical(next.business.stockCosting ?? null)) fail('Keep the published stock-cost method and tax evidence; existing purchase layers cannot be reset by a business revision.');
+  if (canonical(previous.business.datedTax ?? null) !== canonical(next.business.datedTax ?? null)) fail('Keep the published dated tax choices and their original postpaid business assumptions.');
   const before = activityTemplateVersion(previous.business), after = activityTemplateVersion(next.business);
   if ((before !== after && !(before === 2 && after === 3)) || canonical(previous.mappings) !== canonical(next.mappings)) fail('Keep the original schedule or review the continuing-to-customer-credit upgrade, retaining every account and tax mapping.');
   for (const [key, id] of Object.entries(previous.masterBindings || {})) if (id && next.masterBindings?.[key] !== id) fail('Retain every previously selected business record, including dormant roles: ' + key + '.');

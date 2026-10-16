@@ -111,8 +111,10 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (cutoff && selected.review.openingDate <= cutoff) fail('Business opening is inside a closed or reconciled period through ' + cutoff + '. Review and reopen that history explicitly before publication, or choose a later opening.');
     const company = await readCanadianCompany(client, scope, now, { fiscalCalendar: view.draft.business.stockCosting !== undefined });
     const { observedAt: companyObservedAt, ...companyEvidence } = company;
+    const dated = await require('./business-dated-tax').readDatedTaxEvidence(view.draft.business, view.draft.mappings, client, now());
+    const datedTaxEvidence = dated ? (({ observedAt, ...retained }) => retained)(dated) : null;
     const stockRoot = view.draft.business.stockCosting === undefined ? null : await require('./business-stock-root').buildStockRoot({ models, scope, ownerId: bound.ownerId, view: view.draft, baseline: selected.baseline, company, stockObservation: await (dependencies.readStockRoot || createBusinessInventoryReader({ access, now, stockMetadata: true, version: selected.baseline.inventorySources.version }))(scope), now: now() });
-    return { ...(stockRoot ? { stockRoot } : {}), setupHash: setup.sourceHash, masterHash: masters.sourceHash, qboClosedThrough: closing || null, country: 'CA', companyEvidence };
+    return { ...(stockRoot ? { stockRoot } : {}), ...(datedTaxEvidence ? { datedTaxEvidence } : {}), setupHash: setup.sourceHash, masterHash: masters.sourceHash, qboClosedThrough: closing || null, country: 'CA', companyEvidence };
   }
   async function publicationSelection(bound, input) {
     const selected = await baselineReview(bound, input), setup = await publicationSetup(bound, selected);

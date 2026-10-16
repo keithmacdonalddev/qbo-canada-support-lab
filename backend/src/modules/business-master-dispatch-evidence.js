@@ -7,7 +7,7 @@ const { businessDate } = require('./business-activity-preview');
 const HASH = /^[a-f0-9]{64}$/;
 const fresh = (value, now) => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toISOString() === value && Date.parse(value) <= now && now - Date.parse(value) <= 300000;
 function expectedMappings(run) {
-  return Object.fromEntries(Object.keys(MAPPINGS).map(key => [key, run.plan.source.mappings[key] || run.records.find(row => row.key === key && row.entity === 'Account' && row.state === 'verified')?.qboId || null]).filter(([, id]) => id));
+  return Object.fromEntries(Object.keys(MAPPINGS).map(key => [key, run.plan.taxDefaults?.[key] || run.plan.source.mappings[key] || run.records.find(row => row.key === key && row.entity === 'Account' && row.state === 'verified')?.qboId || null]).filter(([, id]) => id));
 }
 function assertSelections(run, selections) {
   const expected = expectedMappings(run);
@@ -16,6 +16,7 @@ function assertSelections(run, selections) {
     const definition = MAPPINGS[key], record = selections[key];
     if (!record || record.id !== id || record.active !== true || (definition.types && !definition.types.includes(record.type)) || (definition.subtypes && !definition.subtypes.includes(record.subtype)) || (definition.currency && record.currency !== definition.currency) || (definition.entity === 'TaxCode' && record[key === 'salesTax' ? 'sales' : 'purchases'] !== true && record.taxable !== false)) throw denied('The current ' + definition.label + ' no longer fits the approved business.');
   }
+  if (run.plan.taxDefaults) for (const key of ['salesTax', 'purchaseTax']) if (selections[key].taxable !== true || selections[key][key === 'salesTax' ? 'sales' : 'purchases'] !== true || typeof selections[key].syncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(selections[key].syncToken)) throw denied('The frozen current tax-code choice needs its active direction and a complete fresh version.');
   if ((selections.salesTax.taxable !== false) !== run.plan.salesTaxable) throw denied('The selected sales tax code changed taxable status after review.');
 }
 function assertMasterDispatchEvidence(run, ordinal, requestHash, proof, controls, now = Date.now()) {

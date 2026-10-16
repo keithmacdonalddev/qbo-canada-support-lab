@@ -25,7 +25,7 @@ function validateDraftInput(input) {
   if (typeof input.requestKey !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.requestKey)) throw problem('A save request identifier is required');
   if (typeof input.connectionId !== 'string' || !/^[a-f0-9]{24}$/.test(input.connectionId)) throw problem('Reload the business plan before saving it');
   if (input.baseHash !== null && (typeof input.baseHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.baseHash))) throw problem('The previously loaded plan version is required');
-  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile', 'activityTemplateVersion', 'stockCosting'], 'Business settings');
+  strict(input.business, ['displayName', 'openingDate', 'historicalMonths', 'fiscalYearStartMonth', 'volumeProfile', 'activityTemplateVersion', 'stockCosting', 'datedTax'], 'Business settings');
   const business = input.business;
   if (typeof business.displayName !== 'string' || business.displayName.trim().length < 2 || business.displayName.length > 120 || /[\u0000-\u001f]/.test(business.displayName)) throw problem('Use a business name of 2 to 120 characters');
   try { date(business.openingDate); } catch { throw problem('Choose a valid business opening date'); }
@@ -42,6 +42,7 @@ function validateDraftInput(input) {
     if (value !== null && (typeof value !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(value))) throw problem('Mappings must contain a record ID or remain unassigned');
     mappings[key] = value;
   }
+  if (business.datedTax !== undefined) require('./business-dated-tax').validateDatedTax(business.datedTax, business, mappings);
   const masterBindings = require('./business-master-data').validateMasterBindings(input.masterBindings, business);
   return { masterBindings, requestKey: input.requestKey.toLowerCase(), connectionId: input.connectionId, baseHash: input.baseHash, business: { ...business, displayName: business.displayName.trim() }, mappings };
 }
@@ -53,6 +54,7 @@ function buildDraftDefinition(input, proposal = createDefinitionsService().getFl
     divisions: proposal.divisions.map(division => ({ ...division })), realismRules: [...proposal.realismRules],
     ...([2, 3].includes(value.business.activityTemplateVersion) ? { activityTemplateVersion: value.business.activityTemplateVersion } : {}),
     ...(value.business.stockCosting !== undefined ? { stockCosting: value.business.stockCosting } : {}),
+    ...(value.business.datedTax !== undefined ? { datedTax: value.business.datedTax } : {}),
     generationSeed: proposal.generationSeed, volumeProfile: value.business.volumeProfile, mappings: value.mappings, masterBindings: value.masterBindings,
   };
 }
@@ -60,7 +62,7 @@ function draftView(doc, connectionId) {
   if (!doc) return null;
   const definition = doc.definition;
   return { id: String(doc._id), version: doc.version, contentHash: doc.contentHash, savedAt: doc.createdAt, status: 'draft', connectionMatches: String(doc.connectionId) === String(connectionId),
-    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile, ...(definition.activityTemplateVersion !== undefined ? { activityTemplateVersion: definition.activityTemplateVersion } : {}), ...(definition.stockCosting !== undefined ? { stockCosting: definition.stockCosting } : {}) },
+    business: { displayName: definition.publicSafeIdentity.displayName, openingDate: definition.calendar.openingDate, historicalMonths: definition.calendar.historicalMonths, fiscalYearStartMonth: definition.calendar.fiscalYearStartMonth, volumeProfile: definition.volumeProfile, ...(definition.activityTemplateVersion !== undefined ? { activityTemplateVersion: definition.activityTemplateVersion } : {}), ...(definition.stockCosting !== undefined ? { stockCosting: definition.stockCosting } : {}), ...(definition.datedTax !== undefined ? { datedTax: definition.datedTax } : {}) },
     mappings: definition.mappings, masterBindings: definition.masterBindings || {}, divisions: definition.divisions,
   };
 }

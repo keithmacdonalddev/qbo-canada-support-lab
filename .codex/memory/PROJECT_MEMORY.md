@@ -1,5 +1,12 @@
 # Codex Project Memory
 
+## Owner-confirmed company context (2026-10-16T15:38:51.736Z)
+
+- The active outcome is a robust flagship QuickBooks company filled to Test Data Lab’s intended business/history/report standard. Code milestones and a saved draft alone do not finish that outcome; continue necessary authorized goal work. See `docs/architecture/intent-completion-2026-10.md` for current implementation and direct evidence.
+- On 2026-10-16 the owner explicitly confirmed that Production company ending 2856 contains test data with no reconciled or bank-matched transactions, filed tax returns, or protected accounting periods to preserve. This is the owner’s dated factual statement for this company, not an API inference or an assertion about another company or future state.
+- The owner can open the connected QuickBooks account in a browser available to the agent when direct inspection is needed. Use that offer to check settings/evidence the API cannot establish; request the signed-in company view when needed without asking for passwords. Existing-record destruction still follows its exact disposition approval boundary.
+
+
 Last verified: 2026-08-09. Authority: `AGENTS.md`, `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, current source, and the live environment state verified without printing secrets.
 
 This memory is for coding agents working on `C:\Projects\qbo`.

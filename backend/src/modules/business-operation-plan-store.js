@@ -32,6 +32,7 @@ function validateEntry(entry, scope, fromDate, throughDate) {
   if (!Array.isArray(step.details.references) || canonical(step.details.references.map(link => ({ logicalKey: link.logicalKey, entity: link.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Activity and detail dependencies differ');
   if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== hash(step) || !validHash(policy.evidenceHash)) fail('Each activity requires its exact approved Canadian business policy');
   require('./business-lifecycle-policy').validateLifecyclePolicy(step, policy);
+  require('./business-dated-tax').assertDatedTaxPolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || policy.fromDate > policy.throughDate) fail('The business policy does not cover its activity date');
   return { logicalKey: step.logicalKey, entity: step.entity, fingerprint: hash(step), policyHash: hash(policy), kind: entry.kind, relationships: step.dependencies.map(link => link.logicalKey).sort() };

@@ -68,6 +68,7 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
       policy.readbackTax = { version: 1, totalTaxCents: lines.reduce((sum, line) => sum + line.amountCents, 0), lines };
       policy.taxSources = sources.filter(source => (source.entity === 'TaxCode' && source.id === codeId) || (source.entity === 'TaxRate' && ids.has(source.id))).map(source => ({ ...source }));
     }
+    if (step.details.datedTax !== undefined) { policy.datedTax = structuredClone(step.details.datedTax); require('./business-dated-tax').assertDatedTaxPolicy(step, policy); }
     policy.derivedAt = new Date(now).toISOString();
     policy.evidenceHash = hash(policy);
     policies.push({ logicalKey: step.logicalKey, policy });

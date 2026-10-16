@@ -27,6 +27,7 @@ async function readPublishedBusiness({ Authorities, Versions, Calendars, Connect
   if (!blueprint || blueprint.contentHash !== value.blueprintHash || hash(blueprint.definition) !== value.blueprintHash || !blueprint.auditId) fail('The published business definition changed.');
   const view = draftView(blueprint, scope.connectionId);
   if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || hash(activityDefinition(view.business)) !== value.activityRulesHash) fail('The published activity rules no longer match this application version.');
+  if (view.business.datedTax !== undefined) require('./business-dated-tax').bindDatedTax(view.business, view.mappings);
   if ((view.business.stockCosting !== undefined) !== (value.stockRoot !== undefined)) fail('The published stock-cost requirement changed.');
   if (value.stockRoot) require('./business-stock-root').validateStockRoot(value.stockRoot, scope, view);
   const lineage = value.version === 2 ? await require('./business-authority-lineage').readAuthorityLineage({ Authorities, Versions, Audits, Baselines, scope, head: row, session, verifyBaseline }) : null;

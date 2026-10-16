@@ -34,6 +34,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   if (!details || details.version !== 1 || details.currency !== 'CAD' || hash({ calendarFingerprint: step.calendarFingerprint, details }) !== step.detailsHash || !Array.isArray(details.lines) || details.lines.length > 100) fail('The transaction details changed.');
   if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== hash(step) || !HASH.test(policy.evidenceHash || '')) fail('An exact approved Canadian transaction policy is required.');
   const lifecycle = validateLifecyclePolicy(step, policy);
+  require('./business-dated-tax').assertDatedTaxPolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || step.txnDate > businessDate(new Date(now))) fail('The transaction is outside its approved elapsed period.');
   if (!Array.isArray(referenceEvidence) || referenceEvidence.length > 100 || !Array.isArray(parents) || parents.length !== step.dependencies.length) fail('Complete current reference and dependency evidence is required.');
@@ -132,7 +133,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       if (sourceLines.length !== payload.Line.length) fail('The source item lines do not match the approved complete conversion.');
       payload.LinkedTxn = [relate(source, 'LinkedTxn')];
       payload.Line.forEach((line, index) => {
-        const wanted = line[line.DetailType], found = sourceLines.filter(value => value[detailType]?.ItemRef?.value === wanted.ItemRef.value && value[detailType]?.Qty === wanted.Qty && cents(value[detailType]?.UnitPrice) === cents(wanted.UnitPrice) && cents(value.Amount) === cents(line.Amount) && value[detailType]?.TaxCodeRef?.value === wanted.TaxCodeRef.value);
+        const wanted = line[line.DetailType], found = sourceLines.filter(value => value[detailType]?.ItemRef?.value === wanted.ItemRef.value && value[detailType]?.Qty === wanted.Qty && cents(value[detailType]?.UnitPrice) === cents(wanted.UnitPrice) && cents(value.Amount) === cents(line.Amount) && (value[detailType]?.TaxCodeRef?.value === wanted.TaxCodeRef.value || require('./business-dated-tax').permitsDatedConversion(step, policy, source, value[detailType]?.TaxCodeRef?.value, wanted.TaxCodeRef.value)));
         if (found.length !== 1 || used.has(found[0].Id)) fail('The originating line cannot be matched unambiguously.');
         const sourceLine = found[0]; id(sourceLine.Id); used.add(sourceLine.Id);
         if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');

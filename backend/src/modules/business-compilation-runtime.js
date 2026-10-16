@@ -97,7 +97,9 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         const observed = await call(() => verification.readRecord(scope, dependency.entity, saved.qboId, { signal: controller.signal })); check();
         const proof = saved.verification;
         if (!proof || proof.kind !== 'business-readback' || proof.observedHash !== observed.recordHash || proof.syncToken !== observed.record?.SyncToken || typeof proof.observedAt !== 'string' || !Number.isFinite(Date.parse(proof.observedAt)) || now() - Date.parse(proof.observedAt) > 300000 || Date.parse(proof.observedAt) > now()) fail('An originating record changed after graph verification.');
-        parents.push({ ...observed, ...tag, logicalKey: dependency.logicalKey, entity: dependency.entity, fingerprint: dependency.fingerprint, state: 'verified', qboId: saved.qboId, syncToken: observed.record.SyncToken });
+        let original = {};
+        if (intent.step.details.datedTax !== undefined && ['Estimate', 'PurchaseOrder'].includes(dependency.entity)) { const retained = await call(() => loadIntent(scope, operationId, dependency.logicalKey)); check(); if (!retained || retained.fingerprint !== dependency.fingerprint || retained.step?.txnDate !== observed.record.TxnDate) fail('The original dated-tax conversion policy is unavailable.'); original = { originalStep: retained.step, originalPolicy: retained.policy }; }
+        parents.push({ ...observed, ...tag, ...original, logicalKey: dependency.logicalKey, entity: dependency.entity, fingerprint: dependency.fingerprint, state: 'verified', qboId: saved.qboId, syncToken: observed.record.SyncToken });
       });
       let next = 0, error;
       await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, async () => {

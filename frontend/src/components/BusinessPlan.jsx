@@ -83,6 +83,8 @@ function PlanContent({ realmId, environment, enabled }) {
   const editable = view?.permissionToSave && !saving
   const stockPolicy = form?.business.stockCosting
   const stockReady = !stockPolicy || (stockPolicy.methodEvidence.reference.trim().length >= 5 && /^\d{4}-\d{2}-\d{2}$/.test(stockPolicy.methodEvidence.observedOn) && stockPolicy.purchaseTax.evidenceReference.trim().length >= 5 && /^\d{4}-\d{2}-\d{2}$/.test(stockPolicy.purchaseTax.confirmedOn) && stockPolicy.purchaseTax.treatment === 'fully-recoverable')
+  const datedTax = form?.business.datedTax
+  const datedTaxReady = !datedTax || (datedTax.salesTax && datedTax.purchaseTax && form.mappings.salesTax && form.mappings.purchaseTax && datedTax.salesTax !== form.mappings.salesTax && datedTax.purchaseTax !== form.mappings.purchaseTax && form.business.openingDate < '2025-04-01' && (form.business.activityTemplateVersion ?? 1) < 3)
   const mappingEntries = Object.entries(view?.mappingDefinitions || {})
   const missing = mappingEntries.filter(([key]) => !form?.mappings?.[key]).length
   return <section aria-label="Business plan" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
@@ -143,6 +145,18 @@ function PlanContent({ realmId, environment, enabled }) {
                 {options.map(option => <option key={option.id} value={option.id}>{option.name} · {option.id}</option>)}
               </select></label>
             })}</div>
+            <fieldset className="space-y-3 rounded-[8px] border border-[var(--line)] p-3" disabled={!editable}>
+              <legend className="px-1 font-medium text-[var(--ink)]">Nova Scotia historical tax change</legend>
+              <label className="flex items-start gap-2"><input type="checkbox" checked={Boolean(datedTax)} onChange={event => change('business', 'datedTax', event.target.checked ? { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '', purchaseTax: '' } : undefined)} />Use separate 14% codes from April 1, 2025</label>
+              {datedTax && <>
+                <p className="text-[12px]">For this Nova Scotia business, the sales and purchase choices above cover 15% history. New invoices, bills and cash sales use the 14% codes below from April 1, 2025. Payments keep their original invoice or bill amount. This assumes charges become payable when posted and no advance payments. Customer-credit schedules require separate treatment.</p>
+                <div className="grid grid-cols-2 gap-3">{[['salesTax', 'Sales code from April 2025', 'sales'], ['purchaseTax', 'Purchase code from April 2025', 'purchases']].map(([key, label, direction]) => {
+                  const options = (setup?.options.taxCodes || []).filter(option => option.active === true && option.taxable === true && option[direction] === true), selected = datedTax[key]
+                  return <label key={key} className="space-y-1"><span>{label}</span><select className={inputClass} value={selected || ''} disabled={!setup?.completeness.taxCodes} onChange={event => change('business', 'datedTax', { ...datedTax, [key]: event.target.value })}><option value="">Unassigned</option>{selected && !options.some(option => option.id === selected) && <option value={selected}>Saved record {selected} · read setup to check</option>}{options.map(option => <option key={option.id} value={option.id}>{option.name} · {option.id}</option>)}</select></label>
+                })}</div>
+                {!datedTaxReady && <p role="status" className="text-[12px]">Choose both separate 14% codes, the original historical codes, an opening before April 2025 and a supported business schedule before saving.</p>}
+              </>}
+            </fieldset>
           </div>
         </details>
         <BusinessMasterData view={view} form={form} editable={editable} onChange={change} />
@@ -151,7 +165,7 @@ function PlanContent({ realmId, environment, enabled }) {
         <BusinessActivityPreview view={view} />
         <div className="border-t border-[var(--line)] pt-3"><h3 className="font-medium text-[var(--ink)]">Before this can drive business activity</h3><ul className="mt-1 list-disc space-y-1 pl-5">{view.activationNeeds.map(need => <li key={need}>{need}</li>)}</ul></div>
         <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving || Boolean(pendingDraftVersion) || !stockReady} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
+          <button type="button" className={buttonVariants({ size: 'sm' })} disabled={!view.canSave || saving || Boolean(pendingDraftVersion) || !stockReady || !datedTaxReady} onClick={save}>{saving ? 'Saving draft…' : 'Save new draft version'}</button>
           {!view.permissionToSave ? <p>Your company role has read-only access to business plans.</p> : !view.storage.ready ? <p>{view.storage.reason}</p> : <p className="text-[12px]">Saved in this app. No QuickBooks transactions are created.</p>}
         </div>
       </>}

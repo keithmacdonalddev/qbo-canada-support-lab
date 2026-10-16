@@ -33,6 +33,10 @@ function validateBlueprintDefinition(definition) {
     try { require('./business-stock-cost').validateStockCostPolicy(definition.stockCosting) }
     catch (error) { errors.push({ path: '/stockCosting', message: error.message }) }
   }
+  if (definition.datedTax !== undefined) {
+    try { require('./business-dated-tax').validateDatedTax(definition.datedTax, { openingDate: definition.calendar?.openingDate, activityTemplateVersion: definition.activityTemplateVersion }, definition.mappings || {}) }
+    catch (error) { errors.push({ path: '/datedTax', message: error.message }) }
+  }
   if (!Array.isArray(definition.divisions) || definition.divisions.length === 0) {
     errors.push({ path: '/divisions', message: 'At least one operating division is required' })
   }
