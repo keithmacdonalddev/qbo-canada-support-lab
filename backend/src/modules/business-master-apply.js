@@ -24,11 +24,17 @@ function masterApplyReview(run, latest, ordinals, proofs, now = Date.now()) {
     if (!role || (role.itemType && role.itemType !== compiled.payload.Type) || (destination[entry.key] && destination[entry.key] !== row.qboId)) throw denied('A selected role is unavailable or already chooses a different record in the current draft.');
     destination[entry.key] = row.qboId; entries.push({ ordinal, key: row.key, entity: row.entity, qboId: row.qboId, provenance: row.attempts.at(-1)?.ownerAttribution ? 'owner-attributed-master-readback' : 'request-correlated-master-readback', proof });
   }
+  let itemTaxes = mappings;
+  if (run.plan.taxDefaults !== undefined && entries.some(entry => entry.entity === 'Item')) {
+    const { bindDatedTax } = require('./business-dated-tax');
+    if (canonical(bindDatedTax(view.business, mappings)) !== canonical(bindDatedTax(run.plan.source.business, run.plan.source.mappings))) throw denied('The current dated tax context differs from this prepared item.');
+    itemTaxes = run.plan.taxDefaults;
+  }
   for (const entry of entries.filter(value => value.entity === 'Item')) {
     const role = requirements.find(value => value.key === entry.key), fields = entry.proof.fields;
     for (const [reference, mapping] of Object.entries(role.accountMappings)) if (!mappings[mapping] || fields[reference]?.value !== mappings[mapping]) throw denied('The current product account choices differ from this prepared item. Select its verified accounts or retain it unassigned.');
     if (fields.Type === 'Inventory' && (typeof fields.InvStartDate !== 'string' || fields.InvStartDate > view.business.openingDate)) throw denied('This inventory item starts after the current business opening date. Retain it unassigned or choose compatible history.');
-    if (fields.SalesTaxCodeRef?.value !== mappings.salesTax || (fields.PurchaseTaxCodeRef && fields.PurchaseTaxCodeRef.value !== mappings.purchaseTax)) throw denied('The current tax choices differ from this prepared item.');
+    if (fields.SalesTaxCodeRef?.value !== itemTaxes.salesTax || (fields.PurchaseTaxCodeRef && fields.PurchaseTaxCodeRef.value !== itemTaxes.purchaseTax)) throw denied('The current tax choices differ from this prepared item.');
   }
   const input = validateDraftInput({ requestKey: ZERO_KEY, connectionId: scope.connectionId, baseHash: latest.contentHash, business: view.business, mappings, masterBindings });
   const disposition = run.records.map(row => ({ ordinal: row.ordinal, key: row.key, entity: row.entity, state: row.state, qboId: row.qboId || null, selected: ordinals.includes(row.ordinal), attempt: row.attempts.at(-1)?.number || 0 }));

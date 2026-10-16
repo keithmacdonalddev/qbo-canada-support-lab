@@ -78,3 +78,28 @@ test('fresh approval across the boundary cannot approve a retained plan with dif
   at('2025-03-31T12:00:00Z'); const plan = prepareMasterPlan(h.source); assert.deepEqual(plan.taxDefaults, { salesTax: '4', purchaseTax: '4' }); await h.store.propose(plan);
   at('2025-04-01T12:00:00Z'); const current = prepareMasterPlan(h.source); assert.deepEqual(current.taxDefaults, { salesTax: '5', purchaseTax: '6' }); await assert.rejects(h.store.approve(String(h.run()._id), plan.planHash, true, current), /prerequisites changed/); assert.equal(h.run().approval, null); assert.equal(h.sent.length, 0);
 });
+
+test('original SDK creates, verifies and applies dated Item defaults while changed tax contexts refuse the prepared IDs', async t => {
+  const { remoteMasters } = require('./helpers/master-preparation-remote'), { scope, ownerId, clone } = require('./helpers/master-transport-fixture');
+  const { createMasterPreparationRunner } = require('../src/modules/business-master-preparation-runner'), { masterApplyReview } = require('../src/modules/business-master-apply');
+  const previousEnvironment = config.qbo.environment; config.qbo.environment = scope.environment; t.after(() => { config.qbo.environment = previousEnvironment; });
+  const selected = { version: 1, regime: dated.REGIME, salesTax: '5', purchaseTax: '6' }, h = scenario({ activityTemplateVersion: 2, datedTax: selected });
+  t.mock.method(Date, 'now', () => h.clock); remoteMasters(h);
+  const simulated = h.client.oauthClient.makeApiCall, OAuthClient = require('intuit-oauth'), sdk = new OAuthClient({ clientId: 'fixture-client', clientSecret: 'fixture-secret', environment: scope.environment, redirectUri: 'http://fixture.invalid' });
+  sdk.log = () => {}; sdk.setToken({ access_token: 'fixture-token' });
+  sdk.axiosInstance = async (url, request) => { const response = await simulated({ url, method: request.method, body: request.data }); return { status: response.status, statusText: 'Fixture response', headers: response.headers || {}, data: response.json }; };
+  h.client.oauthClient = sdk; assert.equal(sdk.makeApiCall, OAuthClient.prototype.makeApiCall);
+  await h.propose(); await h.approve();
+  const execute = createMasterPreparationRunner({ scope, ownerId, store: h.store, authorize: h.access.authorize, clientFor: async () => h.client, readPolicy: async () => clone(h.data.Policies[0]), now: () => h.clock });
+  const runId = String(h.run()._id), completed = await execute(runId); assert.equal(completed.complete, true, JSON.stringify(completed)); assert.ok(h.run().records.every(row => row.state === 'verified'));
+  const sent = h.sent.length, ordinals = h.run().records.map(row => row.ordinal), review = await h.store.applyReview(runId, ordinals), proofs = review.entries.map((entry, index) => ({ proof: entry.proof, observedAt: review.observationTimes[index] }));
+  const items = h.remote.Item; assert.equal(items.length, 9); assert.ok(items.every(item => item.SalesTaxCodeRef.value === '5')); assert.ok(items.filter(item => item.Type === 'Inventory').every(item => item.PurchaseTaxCodeRef.value === '6'));
+  for (const change of [value => { delete value.datedTax; }, value => { value.datedTax.salesTax = '7'; }, value => { value.datedTax.purchaseTax = '8'; }, value => { value.mappings.salesTax = '9'; }, value => { value.calendar.openingDate = '2023-09-01'; }]) {
+    const latest = clone(h.data.Versions[0]); change(latest.definition); latest.contentHash = hash(latest.definition);
+    assert.throws(() => masterApplyReview(h.run(), latest, ordinals, proofs, h.clock), /dated tax context/);
+  }
+  const saved = await h.store.apply(runId, review, '11223344-1111-4111-8111-111111111111');
+  assert.deepEqual(saved.draft.business.datedTax, selected); assert.equal(saved.draft.mappings.salesTax, '4'); assert.equal(saved.draft.mappings.purchaseTax, '4'); assert.equal(saved.draft.version, 2); assert.equal(h.run().claim, 'closed'); assert.equal(h.sent.length, sent);
+  const { readBusinessMasters, inspectBusinessMasters } = require('../src/modules/business-master-data');
+  assert.equal(inspectBusinessMasters({ ...scope, draft: saved.draft }, await readBusinessMasters(h.client, scope, () => h.clock)).unresolved, 0);
+});
