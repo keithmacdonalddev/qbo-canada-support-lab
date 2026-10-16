@@ -36,7 +36,7 @@ function harness(business = false) {
   h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let output; try { output = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } if (h.loseReply) { h.loseReply = false; throw new Error('commit reply lost'); } return output; }); queue = result.catch(() => {}); return result; };
   h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, assertBusinessAuthority: async () => {}, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
   h.rawGate = h.gate;
-  h.periodClient = { query: async () => ({ QueryResponse: { Preferences: [{ AccountingInfoPrefs: {} }] } }) };
+  h.periodClient = { query: async () => ({ QueryResponse: { Preferences: [{ AccountingInfoPrefs: {}, SalesFormsPrefs: { AutoApplyCredit: false } }] } }) };
   h.gate = { ...h.rawGate, begin: async input => h.rawGate.begin({ ...input, periodEvidence: input.periodEvidence === undefined ? await h.rawGate.preflight({ request: input.request, client: h.periodClient }) : input.periodEvidence }) };
   h.input = { request, ownerId, actorId: ownerId };
   if (business) {
@@ -262,7 +262,7 @@ test('period admission rejects missing proof and concurrent writer or policy cha
  const h=harness();await assert.rejects(h.rawGate.begin(h.input),/changed during reading/);assert.equal(h.data.Receipts.length,0);
 });
 test('preflight refuses a writer changing while QBO preferences are being read',async()=>{
- const h=harness();h.periodClient.query=async()=>{h.writer().revision++;return{QueryResponse:{Preferences:[{AccountingInfoPrefs:{}}]}}};
+ const h=harness();h.periodClient.query=async()=>{h.writer().revision++;return{QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false}}]}}};
  await assert.rejects(h.rawGate.preflight({request,client:h.periodClient}),/changed during reading/);assert.equal(h.data.Receipts.length,0);
 });
 test('a saved receipt retains the bounded period evidence and exact owner choices',async()=>{
@@ -290,4 +290,36 @@ test('reserved accounts cannot dispatch before recovery or while retained automa
     const h=harness(business);Object.assign(h.data.Users[0],{email:'tester@testdatalab.local',authVersion:recovered?1:0,accessPolicyVersion:recovered?1:0,automationAccessPolicyVersion:0});
     await assert.rejects(h.gate.begin(h.input),recovered?/automation is paused/:/private credential recovery/);assert.equal(h.data.Receipts.length,0);
   }
+});
+
+
+test('installed SDK blocks automatic use of an unrelated old credit before POST, and explicit false uses the existing single preference read',async()=>{
+ const {QBOClient}=require('../src/modules/qbo-client'),OAuthClient=require('intuit-oauth'),config=require('../src/config'),previous=config.qbo.environment,{AUTOMATIC_CREDITS_CODE}=require('../src/modules/qbo-write-period');config.qbo.environment='sandbox';
+ try{for(const value of [true,undefined,'false',0,null,false]){
+  const h=harness(),oldCredit={Id:'500',SyncToken:'4',RemainingCredit:50},original=structuredClone(oldCredit),calls=[];
+  const sdk=new OAuthClient({clientId:'fixture-client',clientSecret:'fixture-secret',environment:'sandbox',redirectUri:'http://fixture.invalid'});sdk.log=()=>{};sdk.setToken({access_token:'fixture-token'});
+  sdk.axiosInstance=async(url,options)=>{calls.push({method:options.method,path:new URL(url).pathname});let data;
+   if(options.method==='GET'){assert.match(new URL(url).searchParams.get('query'),/^SELECT \* FROM Preferences/);data={QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:value}}]}};}
+   else{assert.equal(options.method,'POST');assert.ok(url.endsWith('/invoice'));if(value!==false){oldCredit.RemainingCredit=0;oldCredit.SyncToken='5';}data={Invoice:{Id:'100',SyncToken:'0'}};}
+   return{status:200,statusText:'Fixture response',headers:{},data};
+  };
+  const client=Object.create(QBOClient.prototype);Object.assign(client,{connection:clone(h.data.Connections[0]),realmId:scope.realmId,_requestLog:[],_retryAfterUntil:0,_windowMs:60000,ensureFreshToken:async()=>{},writeGate:h.rawGate,oauthClient:sdk});assert.equal(client.oauthClient.makeApiCall,OAuthClient.prototype.makeApiCall);
+  const send=()=>client.create('invoice',JSON.parse(request.body));
+  if(value===false){assert.equal((await send()).Invoice.Id,'100');assert.equal(calls.filter(row=>row.method==='POST').length,1);assert.equal(h.data.Receipts[0].state,'saved');assert.equal(h.data.Receipts[0].periodProof.evidence.version,2);assert.equal(h.data.Receipts[0].periodProof.evidence.autoApplyCredit,false);}
+  else{await assert.rejects(send(),error=>error.code===AUTOMATIC_CREDITS_CODE&&error.qboStage==='write_admission'&&error.outcomeUnknown===false);assert.equal(calls.filter(row=>row.method==='POST').length,0);assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);assert.equal(h.data.Audits.length,0);}
+  assert.deepEqual(oldCredit,original);assert.equal(calls.filter(row=>row.method==='GET').length,1);
+ }}finally{config.qbo.environment=previous;}
+});
+test('current begin refuses rehashed downgraded or missing credit preference proof without consuming the writer',async()=>{
+ for(const change of [row=>{row.version=1;delete row.autoApplyCredit;},row=>{delete row.autoApplyCredit;},row=>{row.autoApplyCredit=true;},row=>{row.autoApplyCredit=0;}]){
+  const h=harness(),evidence=await h.rawGate.preflight({request,client:h.periodClient});change(evidence);delete evidence.evidenceHash;evidence.evidenceHash=hash(evidence);const before=clone(h.data);
+  await assert.rejects(h.rawGate.begin({...h.input,periodEvidence:evidence}));assert.deepEqual(h.data,before);assert.equal(h.data.Receipts.length,0);
+ }
+});
+test('original v1 transport receipts remain readable when current preferences would refuse new invoices',async()=>{
+ const {createBusinessDispatchReceiptReader}=require('../src/modules/business-dispatch-receipt'),h=harness(true);h.data.Steps[0].dispatch.actorId=ownerId;const ticket=await h.gate.begin(h.input);await h.gate.complete(ticket,request,success);
+ const row=h.data.Receipts[0],old=row.periodProof.evidence;old.version=1;delete old.autoApplyCredit;delete old.evidenceHash;old.evidenceHash=hash(old);row.periodProof.evidenceHash=old.evidenceHash;
+ let queries=0;h.periodClient.query=async()=>{queries++;return{QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:true}}]}}};
+ const reader=createBusinessDispatchReceiptReader({...h.models,transaction:h.transaction,assertReady:async()=>{},authorize:async()=>({actorId:ownerId,ownerId})});const result=await reader({...scope,operationId,logicalKey,entity:'Invoice',state:'dispatched',dispatch:h.data.Steps[0].dispatch});assert.equal(result.status,'found');assert.equal(result.receipt.qboId,'100');assert.equal(queries,0);assert.equal(row.periodProof.evidence.version,1);
+ await assert.rejects(h.rawGate.preflight({request,client:h.periodClient}));assert.equal(queries,1);assert.equal(row.state,'saved');
 });

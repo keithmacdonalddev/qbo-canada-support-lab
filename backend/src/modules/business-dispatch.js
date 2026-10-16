@@ -3,6 +3,7 @@ const { hash } = require('./business-calendar');
 const { scoped, withBusinessWritePermit } = require('./qbo-write-contract');
 const { compileBusinessTransaction } = require('./business-transaction-compiler');
 const { runAsActor } = require('./actor-context');
+const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE } = require('./qbo-write-period');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_DISPATCH_BLOCKED' }); }
@@ -71,11 +72,18 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       if (marked?.dispatch?.key !== dispatchKey || marked.dispatch.requestHash !== request.requestHash || marked.dispatch.actorId !== actorId) fail('The committed dispatch differs from its compiled request.');
       // Once the marker exists, every failure is reconciled from durable state.
       // Do not race the request against a timer or forward cancellation to a POST.
+      let creditRefused = false;
       try {
         check(); checkClient();
         await withBusinessWritePermit({ scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: marked.revision, stepLeaseToken: marked.leaseToken, ...(leaseToken !== undefined ? { leaseToken } : {}) }, () => client.apiCall(request.method, request.endpoint, JSON.parse(request.body)));
-      } catch { /* A raw result/error cannot prove whether a transaction was saved. */ }
-      return reconcile();
+      } catch (error) {
+        // Only retain the fixed server-owned reason. A thrown exception cannot
+        // establish whether a write was sent; the exact receipt recovery below does.
+        creditRefused = error?.code === AUTOMATIC_CREDITS_CODE && error.qboStage === 'write_admission' && error.outcomeUnknown === false;
+      }
+      const recovered = await reconcile();
+      if (creditRefused && recovered.state === 'not_sent') throw Object.assign(Error(AUTOMATIC_CREDITS_MESSAGE), { status: 409, code: AUTOMATIC_CREDITS_CODE });
+      return recovered;
     });
   };
 }

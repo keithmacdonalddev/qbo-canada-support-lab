@@ -4,6 +4,14 @@ const { scoped, denied } = require('./qbo-write-contract');
 const TRANSACTIONS = new Map(['Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate', 'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment', 'TaxPayment'].map(name => [name.toLowerCase(), name]));
 const LISTS = new Map(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term', 'TaxCode', 'TaxRate', 'PaymentMethod'].map(name => [name.toLowerCase(), name]));
 const ID = /^\d{1,30}$/, HASH = /^[a-f0-9]{64}$/;
+const AUTOMATIC_CREDITS_CODE = 'BUSINESS_AUTOMATIC_CREDITS_BLOCKED';
+const AUTOMATIC_CREDITS_MESSAGE = 'QuickBooks must have Automatically apply credits switched off before this request. Check Settings → Account and settings → Advanced → Automation, then explicitly continue the saved work. This request was not sent.';
+const plain = value => Boolean(value) && Object.getPrototypeOf(value) === Object.prototype;
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+function automaticCreditsBlocked() { return Object.assign(denied(AUTOMATIC_CREDITS_MESSAGE), { code: AUTOMATIC_CREDITS_CODE }); }
+function needsCreditControl(request, payload) {
+  return request.operation === 'create' && (['invoice', 'creditmemo'].includes(request.entity) || (request.entity === 'payment' && linksIn(payload).some(link => link.entity === 'CreditMemo')));
+}
 function day(value) { try { date(value); return value; } catch { throw denied('A valid explicit accounting date is required before writing.'); } }
 function linksIn(value) {
   const found = new Map(); let visits = 0;
@@ -46,7 +54,7 @@ function postingDates(request, payload, records, directDates) {
   return [...new Set([...directDates, ...(settlementSources(request, payload) ? [] : records.flatMap(row => row.dates))])].sort();
 }
 async function readWritePeriodEvidence(request, client, now = () => Date.now(), coordination = null) {
-  const scope = scoped(request.scope), payload = JSON.parse(request.body), financial = TRANSACTIONS.has(request.entity);
+  const scope = scoped(request.scope), payload = JSON.parse(request.body), financial = TRANSACTIONS.has(request.entity), creditControl = needsCreditControl(request, payload);
   if (!financial && !LISTS.has(request.entity)) throw denied('This write type has no reviewed protected-period contract.');
   if (!financial && ['Balance', 'OpeningBalance', 'OpenBalanceDate', 'CurrentBalance'].some(key => payload[key] !== undefined)) throw denied('Opening balances require a separately reviewed dated transaction.');
   if (request.entity === 'item' && payload.QtyOnHand !== undefined) {
@@ -71,12 +79,13 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
   if (affectedDates.length) {
     const response = await client.query('SELECT * FROM Preferences MAXRESULTS 1'), preferences = response?.QueryResponse?.Preferences;
     if (!Array.isArray(preferences) || preferences.length !== 1 || !preferences[0]?.AccountingInfoPrefs || typeof preferences[0].AccountingInfoPrefs !== 'object') throw denied('QuickBooks closing preferences could not be verified. Nothing was sent.');
+    if (creditControl && (!plain(preferences[0]) || !plain(preferences[0].AccountingInfoPrefs) || !plain(preferences[0].SalesFormsPrefs) || !own(preferences[0].SalesFormsPrefs, 'AutoApplyCredit') || preferences[0].SalesFormsPrefs.AutoApplyCredit !== false)) throw automaticCreditsBlocked();
     const raw = preferences[0].AccountingInfoPrefs.BookCloseDate;
     if (raw !== undefined && raw !== null && raw !== '') qboClosedThrough = day(raw);
     preferencesHash = hash(preferences[0]);
   }
   if (now() < started || now() - started > 180000) throw denied('Protected-period evidence expired during reading. Nothing was sent.');
-  const evidence = { version: 1, scope, coordination, requestHash: request.requestHash, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), directDates, affectedDates, records: [...records.values()].sort((a, b) => (a.entity + ':' + a.id).localeCompare(b.entity + ':' + b.id)), preferencesHash, qboClosedThrough };
+  const evidence = { version: creditControl ? 2 : 1, ...(creditControl ? { autoApplyCredit: false } : {}), scope, coordination, requestHash: request.requestHash, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), directDates, affectedDates, records: [...records.values()].sort((a, b) => (a.entity + ':' + a.id).localeCompare(b.entity + ':' + b.id)), preferencesHash, qboClosedThrough };
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { ...evidence, evidenceHash: hash(evidence) };
 }
@@ -92,8 +101,10 @@ function assertWritePeriod(request, evidence, controls, now = Date.now(), ownerI
   assertPeriodControl(controls, request.scope, ownerId);
   if (!evidence) throw denied('Fresh protected-period and linked-record evidence is required.');
   const { evidenceHash, ...source } = evidence, started = Date.parse(source.startedAt), ended = Date.parse(source.observedAt);
-  if (source.version !== 1 || source.requestHash !== request.requestHash || canonical(source.scope) !== canonical(request.scope) || hash(source) !== evidenceHash || !Number.isFinite(started) || !Number.isFinite(ended) || ended < started || ended > now || now - started > 300000 || !Array.isArray(source.directDates) || !Array.isArray(source.affectedDates) || !Array.isArray(source.records) || source.records.length > 50 || (source.affectedDates.length && !HASH.test(source.preferencesHash || ''))) throw denied('Protected-period observations are stale, incomplete or changed.');
-  const payload = JSON.parse(request.body), direct = datesIn(request.entity, payload, TRANSACTIONS.has(request.entity) && request.operation === 'create');
+  const payload = JSON.parse(request.body), creditControl = needsCreditControl(request, payload);
+  if (source.version !== (creditControl ? 2 : 1) || source.requestHash !== request.requestHash || canonical(source.scope) !== canonical(request.scope) || hash(source) !== evidenceHash || !Number.isFinite(started) || !Number.isFinite(ended) || ended < started || ended > now || now - started > 300000 || !Array.isArray(source.directDates) || !Array.isArray(source.affectedDates) || !Array.isArray(source.records) || source.records.length > 50 || (source.affectedDates.length && !HASH.test(source.preferencesHash || ''))) throw denied('Protected-period observations are stale, incomplete or changed.');
+  if (creditControl && (!own(source, 'autoApplyCredit') || source.autoApplyCredit !== false)) throw automaticCreditsBlocked();
+  const direct = datesIn(request.entity, payload, TRANSACTIONS.has(request.entity) && request.operation === 'create');
   if (canonical(direct) !== canonical(source.directDates)) throw denied('The requested accounting dates changed.');
   const records = new Map();
   for (const row of source.records) {
@@ -112,4 +123,4 @@ function assertWritePeriod(request, evidence, controls, now = Date.now(), ownerI
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { evidenceHash, controlHash: controls.contentHash, protectedThrough: cutoff, affectedDates: [...source.affectedDates], evidence, controls: JSON.parse(canonical(controls)) };
 }
-module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS };
+module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE };

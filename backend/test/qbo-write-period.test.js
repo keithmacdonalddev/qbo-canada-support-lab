@@ -7,7 +7,7 @@ const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat
 function controls(closedThrough = null, reconciledThrough = null) { const value = { version: 1, status: 'owner-recorded', scope, ownerId, closedThrough, reconciledThrough, evidenceNote: 'Owner reviewed the accounting periods.', recordedAt: new Date(now).toISOString() }; return { ...value, contentHash: hash(value) }; }
 function fixture(records = {}, closedThrough = null) {
   const calls = [];
-  return { calls, client: { query: async query => { calls.push(query); return { QueryResponse: { Preferences: [{ AccountingInfoPrefs: { ...(closedThrough ? { BookCloseDate: closedThrough } : {}) } }] } }; }, read: async (entity, id) => { calls.push(entity + ':' + id); return { [entity[0].toUpperCase() + entity.slice(1)]: records[entity + ':' + id] }; } } };
+  return { calls, client: { query: async query => { calls.push(query); return { QueryResponse: { Preferences: [{ AccountingInfoPrefs: { ...(closedThrough ? { BookCloseDate: closedThrough } : {}) }, SalesFormsPrefs: { AutoApplyCredit: false } }] } }; }, read: async (entity, id) => { calls.push(entity + ':' + id); return { [entity[0].toUpperCase() + entity.slice(1)]: records[entity + ':' + id] }; } } };
 }
 const request = (endpoint, body) => freezeWriteRequest(scope, 'POST', endpoint, body);
 const check = (req, evidence, policy = controls(), clock = now) => assertWritePeriod(req, evidence, policy, clock, ownerId);
@@ -57,7 +57,7 @@ test('missing owner choices, changed controls and stale observations fail closed
 
 for (const [entity, source] of [['payment', 'Invoice'], ['billpayment', 'Bill']]) test('new '+entity+' can settle an unchanged protected source on a later posting date', async () => {
  const req=request(entity,{TxnDate:'2026-10-15',Line:[{Amount:50,LinkedTxn:[{TxnType:source,TxnId:'10'}]}]});
- const client={read:async()=>({[source]:{Id:'10',SyncToken:'3',TxnDate:'2026-09-10'}}),query:async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{BookCloseDate:'2026-09-30'}}]}})};
+ const client={read:async()=>({[source]:{Id:'10',SyncToken:'3',TxnDate:'2026-09-10'}}),query:async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{BookCloseDate:'2026-09-30'},SalesFormsPrefs:{AutoApplyCredit:false}}]}})};
  const evidence=await readWritePeriodEvidence(req,client,()=>now), proof=check(req,evidence,controls('2026-09-30'));
  assert.deepEqual(proof.affectedDates,['2026-10-15']);assert.equal(proof.evidence.records[0].syncToken,'3');assert.equal(proof.controls.closedThrough,'2026-09-30');
  const backdated=request(entity,{TxnDate:'2026-09-30',Line:[{Amount:50,LinkedTxn:[{TxnType:source,TxnId:'10'}]}]});
@@ -68,6 +68,36 @@ for (const [entity, source] of [['payment', 'Invoice'], ['billpayment', 'Bill']]
 for(const [entity,source,detail] of [['invoice','Estimate','SalesItemLineDetail'],['bill','PurchaseOrder','ItemBasedExpenseLineDetail'],['deposit','Payment','DepositLineDetail']])test('new '+entity+' retains its own posting date across a closed source month',async()=>{
  const link={TxnType:source,TxnId:'10'}, line={Amount:50,DetailType:detail,...(entity==='deposit'?{LinkedTxn:[link]}:{})};
  const req=request(entity,{TxnDate:'2026-10-15',Line:[line],...(entity==='deposit'?{}:{LinkedTxn:[link]})});
- const client={read:async()=>({[source]:{Id:'10',SyncToken:'0',TxnDate:'2026-09-30'}}),query:async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{BookCloseDate:'2026-09-30'}}]}})};
+ const client={read:async()=>({[source]:{Id:'10',SyncToken:'0',TxnDate:'2026-09-30'}}),query:async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{BookCloseDate:'2026-09-30'},SalesFormsPrefs:{AutoApplyCredit:false}}]}})};
  const evidence=await readWritePeriodEvidence(req,client,()=>now);assert.deepEqual(check(req,evidence,controls('2026-09-30')).affectedDates,['2026-10-15']);
+});
+
+
+test('invoice, credit memo and explicit credit application require a strict own false preference before admission',async()=>{
+ const {AUTOMATIC_CREDITS_CODE}=require('../src/modules/qbo-write-period');
+ for(const endpoint of ['invoice','creditmemo','payment']){
+  const req=request(endpoint,{TxnDate:'2026-10-15',...(endpoint==='payment'?{Line:[{Amount:1,LinkedTxn:[{TxnType:'CreditMemo',TxnId:'20'}]}]}:{})});
+  for(const sales of [undefined,null,[],{},'false',{AutoApplyCredit:true},{AutoApplyCredit:'false'},{AutoApplyCredit:0},{AutoApplyCredit:null},Object.create({AutoApplyCredit:false})]){
+   const f=fixture();f.client.read=async()=>({CreditMemo:{Id:'20',SyncToken:'0',TxnDate:'2026-10-10'}});f.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:sales}]}});
+   await assert.rejects(readWritePeriodEvidence(req,f.client,()=>now),error=>error.code===AUTOMATIC_CREDITS_CODE&&error.qboStage==='write_admission'&&error.outcomeUnknown===false);
+  }
+  for(const accounting of [[],Object.create({BookCloseDate:'2026-09-30'})]){
+   const f=fixture();f.client.read=async()=>({CreditMemo:{Id:'20',SyncToken:'0',TxnDate:'2026-10-10'}});f.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:accounting,SalesFormsPrefs:{AutoApplyCredit:false}}]}});await assert.rejects(readWritePeriodEvidence(req,f.client,()=>now));
+  }
+  const f=fixture();f.client.read=async()=>({CreditMemo:{Id:'20',SyncToken:'0',TxnDate:'2026-10-10'}});const evidence=await readWritePeriodEvidence(req,f.client,()=>now);assert.equal(evidence.version,2);assert.equal(evidence.autoApplyCredit,false);assert.ok(check(req,evidence));assert.equal(f.calls.length,1,'Reuse the one existing Preferences GET');
+ }
+});
+test('current credit proof cannot be downgraded, stripped, changed, moved or reused after expiry',async()=>{
+ const req=request('invoice',{TxnDate:'2026-10-15'}),evidence=await readWritePeriodEvidence(req,fixture().client,()=>now),rehash=row=>{delete row.evidenceHash;return{...row,evidenceHash:hash(row)};};
+ for(const change of [row=>{row.version=1;},row=>{delete row.autoApplyCredit;},row=>{row.autoApplyCredit=true;},row=>{row.autoApplyCredit=0;},row=>{row.scope.realmId='999';},row=>{row.requestHash=hash('different request');}]){
+  const changed=structuredClone(evidence);change(changed);assert.throws(()=>check(req,rehash(changed)));
+ }
+ const changed=structuredClone(evidence);changed.preferencesHash=hash('changed without matching evidence hash');assert.throws(()=>check(req,changed));assert.throws(()=>check(req,evidence,controls(),now+300001));
+ const untrusted=request('invoice',{TxnDate:'2026-10-15',autoApplyCredit:false,creditControl:false});await assert.rejects(readWritePeriodEvidence(untrusted,{query:async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:true}}]}})},()=>now));
+});
+test('unaffected creates and original-record updates retain the v1 period envelope without a credit flag',async()=>{
+ for(const req of [request('estimate',{TxnDate:'2026-10-15'}),request('salesreceipt',{TxnDate:'2026-10-15'}),request('invoice',{Id:'10',SyncToken:'0',TxnDate:'2026-10-15'})]){
+  const f=fixture({'invoice:10':{Id:'10',SyncToken:'0',TxnDate:'2026-10-05'}});f.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:true}}]}});const evidence=await readWritePeriodEvidence(req,f.client,()=>now);
+  assert.equal(evidence.version,1);assert.equal(Object.hasOwn(evidence,'autoApplyCredit'),false);assert.ok(check(req,evidence));
+ }
 });
