@@ -6,7 +6,7 @@ const { createPopulationReader } = require('./business-population-reader');
 const { createPopulationCreationValidator } = require('./business-population-receipt');
 const issues = require('./business-population-issues');
 const ID = /^[a-f0-9]{24}$/, KEY = /^[a-f0-9]{64}$/;
-function publicVerification(value) { if (!value) return null; const { runId, status, requestedAt, finishedAt, total, checked, errors, lastError } = value; return { runId, status, requestedAt, finishedAt, total, checked, errors, lastError }; }
+function publicVerification(value) { if (!value) return null; const { runId, status, requestedAt, finishedAt, total, checked, errors, lastError, code } = value; return { runId, status, requestedAt, finishedAt, total, checked, errors, lastError, code: code || null }; }
 function createPopulationVerification(deps) {
   const { models, bind, bindJob, read, transaction, fenceAccess, audit, now, publicJob, pageRows } = deps;
   const { Jobs, Records, Writers } = models, workers = new Map(); let closed = false;
@@ -19,7 +19,8 @@ function createPopulationVerification(deps) {
     return { scope: bound.scope, jobId: id, code: body.code, records: visible.map(row => issues.issueView(row, body.code)), next: hasMore ? String(last._id) : null };
   }
   async function start(user, id, body) {
-    if (!body || Object.keys(body).join(',') !== 'manifestHash' || !KEY.test(body.manifestHash || '')) throw denied('Use the exact prepared manifest.');
+    if (!body || !['manifestHash','code,manifestHash'].includes(Object.keys(body).sort().join(',')) || !KEY.test(body.manifestHash || '')) throw denied('Use the exact prepared manifest and optional issue group.');
+    const code = body.code === undefined ? null : body.code; if (code !== null) issues.assertIssueCode(code); else if (body.code !== undefined) throw denied('Choose an existing issue group.');
     const bound = await scopedJob(user, id, 'operations.execute'); if (bound.actorId !== bound.ownerId) throw denied('Only the owner can recheck relationships.');
     await transaction(async session => {
       await fenceAccess(bound, session); const job = await read(Jobs, { _id: id, ...bound.scope }, session), writer = await read(Writers, bound.scope, session);
@@ -27,12 +28,14 @@ function createPopulationVerification(deps) {
       if(competing)throw denied('Another company job is creating or verifying records. Wait for it to finish.');
       if (job.manifestHash !== body.manifestHash || hash(job.manifest) !== job.manifestHash || ['running','stopping'].includes(job.status) || job.leaseToken || job.batch || writer?.unresolved !== null) throw denied('Finish or stop creation and settle company writes before rechecking.');
       if (['queued','running'].includes(job.verification?.status)) return;
-      const candidates = await pageRows(Records, { ...issues.recordQuery(bound.scope, job), state: 'saved', $or: [{ coverageGaps: { $in: [...issues.CODES] } }, { 'relationshipCheck.outcome': 'error' }, { 'relationshipProof.matches': true }, { financialProof: null }] }, session, '_id txnDate logicalKey');
+      const selection = code === 'record-verification-failed' ? { $or: [{ 'relationshipCheck.outcome': 'error' }, { financialProof: null }] } : code ? { coverageGaps: { $in: [code] } } : { $or: [{ coverageGaps: { $in: [...issues.CODES] } }, { 'relationshipCheck.outcome': 'error' }, { 'relationshipProof.matches': true }, { financialProof: null }] };
+      const candidates = await pageRows(Records, { ...issues.recordQuery(bound.scope, job), state: 'saved', ...selection }, session, '_id txnDate logicalKey');
       const targets = candidates.sort((a,b)=>a.txnDate.localeCompare(b.txnDate)||a.logicalKey.localeCompare(b.logicalKey)).map(row => String(row._id)); if (targets.length > 40000 || targets.some(id => !KEY.test(id))) throw denied('The verification selection exceeds its bound.');
       const resume=['stopped','blocked'].includes(job.verification?.status)&&Number.isInteger(job.verification.cursor)&&job.verification.cursor<job.verification.total&&Array.isArray(job.verification.targets)&&job.verification.targets.length===job.verification.total&&job.verification.targets.every(id=>KEY.test(id));
-      const verification = resume?{...job.verification,status:'queued',leaseToken:null,leaseExpiresAt:null,lastError:null,finishedAt:null}:{ runId: randomUUID(), status: 'queued', requestedAt: new Date(now()).toISOString(), targets, total: targets.length, checked: 0, errors: 0, cursor: 0, leaseToken: null, leaseExpiresAt: null, lastError: null };
+      if (resume && code !== null && code !== (job.verification.code || null)) throw denied('Resume the saved recheck before selecting another group.');
+      const verification = resume?{...job.verification,status:'queued',leaseToken:null,leaseExpiresAt:null,lastError:null,finishedAt:null}:{ runId: randomUUID(), code, status: 'queued', requestedAt: new Date(now()).toISOString(), targets, total: targets.length, checked: 0, errors: 0, cursor: 0, leaseToken: null, leaseExpiresAt: null, lastError: null };
       const updated = await Jobs.findOneAndUpdate({ _id: id, ...bound.scope, revision: job.revision }, { $set: { verification }, $inc: { revision: 1 } }, { new: true, session }).lean(); if (!updated) throw denied('Population changed before recheck.');
-      await audit(bound, id, resume?'relationship-recheck-resumed':'relationship-recheck-requested', { runId: verification.runId, targetHash: hash(verification.targets), count: verification.total, cursor:verification.cursor, revision:job.revision, qboWrites: 0 }, session);
+      await audit(bound, id, resume?'relationship-recheck-resumed':'relationship-recheck-requested', { runId: verification.runId, code: verification.code || null, targetHash: hash(verification.targets), count: verification.total, cursor:verification.cursor, revision:job.revision, qboWrites: 0 }, session);
     }); kick(id); return { scope: bound.scope, job: await publicJob(await read(Jobs, { _id: id, ...bound.scope })) };
   }
   async function stop(user, id) {
@@ -84,8 +87,11 @@ function createPopulationVerification(deps) {
           for (const row of targets) {
             try {
               const value = await financial(row), source = JSON.parse(value.financialProof.sourceJson), linked = issues.isConversion(row) ? [row] : [...all.values()].filter(child => issues.isConversion(child) && child.step.dependencies.some(link => link.logicalKey === row.logicalKey));
-              const proofs = []; for (const child of linked) proofs.push(issues.relationshipProof(child, (await financial(child)).financialProof, now()));
-              const strict = proofs.length > 0 && proofs.every(proof => proof.matches), originalGaps = (row.coverageGaps || []).filter(code => code !== 'record-verification-failed'), coverageGaps = [...new Set([...value.financialProof.coverageGaps, ...(!strict ? originalGaps : []), ...(!strict&&(issues.isConversion(row)||(row.entity==='Estimate'&&linked.length))?['estimate-invoice-conversion-unverified']:[])])];
+              const proofs = [], childEvidence = []; for (const child of linked) { const evidence = (await financial(child)).financialProof; childEvidence.push(evidence); proofs.push(issues.relationshipProof(child, evidence, now())); }
+              const strict = proofs.length > 0 && proofs.every(proof => proof.matches);
+              const timeBilled = childEvidence.length > 0 && childEvidence.every(evidence => issues.hasBilledTime(evidence, row.entity === 'TimeActivity' ? row.qboId : null));
+              const originalGaps = (row.coverageGaps || []).filter(code => code !== 'record-verification-failed' && !(code === 'time-invoice-billing-unverified' && timeBilled));
+              const coverageGaps = [...new Set([...value.financialProof.coverageGaps, ...(!strict ? originalGaps : []), ...(!strict&&(issues.isConversion(row)||(row.entity==='Estimate'&&linked.length))?['estimate-invoice-conversion-unverified']:[])])];
               const check = { runId, checkedAt: new Date(now()).toISOString(), outcome: coverageGaps.length ? 'attention' : 'clear', snapshot: issues.snapshot(source), message: null };
               updates.push({ row, set: { financialProof: value.financialProof, coverageGaps, relationshipCheck: check, ...(issues.isConversion(row) ? { relationshipProof: proofs[0] } : {}) } });
             } catch (error) { const current=await reader.observed(row);const previous=issues.sourceOf(row);updates.push({ row, set: { relationshipCheck: { runId, checkedAt: new Date(now()).toISOString(), outcome: 'error', snapshot:issues.snapshot({compiled:row.compilation,observed:current,parents:[],children:[]}),previousObservationAt:previous?.observed?.observedAt || null, message: error.code === 'BUSINESS_READBACK_UNVERIFIED' ? error.message.slice(0,500) : 'The original receipt or current record could not be verified. Existing warnings are retained.' } } }); }

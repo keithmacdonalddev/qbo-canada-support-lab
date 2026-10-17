@@ -21,6 +21,18 @@ function snapshot(source) {
   const clean = (entity, record) => ({ entity, qboId: record?.Id || null, status: record?.TxnStatus || record?.BillableStatus || null, totalAmount:Number.isFinite(record?.TotalAmt)?record.TotalAmt:null, currency:record?.CurrencyRef?.value || null, lineAmounts:(record?.Line || []).filter(line=>line.DetailType!=='SubTotalLineDetail'&&Number.isFinite(line.Amount)).slice(0,20).map(line=>line.Amount), links: (record?.LinkedTxn || []).slice(0,20).map(link => ({ entity: link.TxnType, qboId: link.TxnId })) });
   return { ...clean(source.compiled?.entity, source.observed?.record), related: [...(source.parents || []).map(parent => clean(parent.entity, parent.record)), ...(source.children || []).map(child => clean(child.entity, child.observed?.record))].slice(0,20) };
 }
+// Only callers with freshly replayed financial/creation evidence may use this facet.
+// Estimate conversion is independent: time can be billed while its quote stays open.
+function hasBilledTime(financialProof, expectedTimeId = null) {
+  const source = sourceOf({ financialProof });
+  if (!source || financialProof.matchesFinancialIntent !== true || source.compiled?.entity !== 'Invoice') return false;
+  const bindings = (source.compiled.relationships || []).filter(link => link.entity === 'TimeActivity');
+  if (bindings.length !== 1) return false;
+  const binding = bindings[0], parents = (source.parents || []).filter(parent => parent.entity === 'TimeActivity' && parent.logicalKey === binding.logicalKey && parent.fingerprint === binding.fingerprint && parent.record?.Id === binding.qboId);
+  if (parents.length !== 1 || parents[0].record.BillableStatus !== 'HasBeenBilled' || (expectedTimeId !== null && binding.qboId !== expectedTimeId)) return false;
+  const invoice = source.observed?.record;
+  return invoice?.Id === source.receipt?.qboId && (invoice.LinkedTxn || []).filter(link => link.TxnType === 'TimeActivity' && link.TxnId === binding.qboId).length === 1;
+}
 function isConversion(row) { return row.entity === 'Invoice' && (row.step?.dependencies || row.compilation?.relationships || []).some(link => link.entity === 'Estimate'); }
 function strictConversion(financialProof, now) {
   if (!financialProof || financialProof.matchesFinancialIntent !== true || financialProof.coverageGaps?.length || typeof financialProof.sourceJson !== 'string' || hash(financialProof.sourceJson) !== financialProof.sourceHash) return false;
@@ -64,4 +76,4 @@ async function assertRelationshipAudit(models,scope,row,session,ownerId,actorId)
   if(String(audit?.userId)!==ownerId||String(audit?.actorUserId||audit?.userId)!==actorId||audit?.action!=='Business population relationship-evidence-observed'||audit.outcome!=='success'||state?.environment!==scope.environment||String(state.connectionId)!==String(scope.connectionId)||state.realmId!==scope.realmId||state.logicalKey!==row.logicalKey||state.qboId!==row.qboId||state.receiptHash!==proof.receiptHash||state.financialEvidenceHash!==proof.financialEvidenceHash||state.relationshipEvidenceHash!==proof.evidenceHash||state.matches!==true||state.observedAt!==proof.observedAt||state.validatedAt!==proof.validatedAt||state.qboWrites!==0)throw denied('The original relationship observation audit changed.');
 }
 function assertIssueCode(code) { if (!CODES.has(code)) throw denied('Choose an existing relationship issue.'); }
-module.exports = { DEFINITIONS, CODES, recordQuery, issueCodes, issueView, recordEvidence, snapshot, sourceOf, isConversion, strictConversion, relationshipProof, validRelationshipProof, assertRelationshipAudit, assertIssueCode };
+module.exports = { DEFINITIONS, CODES, recordQuery, issueCodes, issueView, recordEvidence, snapshot, sourceOf, hasBilledTime, isConversion, strictConversion, relationshipProof, validRelationshipProof, assertRelationshipAudit, assertIssueCode };

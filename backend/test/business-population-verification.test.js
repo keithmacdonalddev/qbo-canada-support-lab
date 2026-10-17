@@ -24,3 +24,81 @@ test('legacy original line-link contracts require their exact physical source li
 test('bulk creation origin uses the exact accepted batch item and native audits, never a name or prefix',async()=>{const h=await populated();try{const {readRecordOrigin}=require('../src/modules/record-origin'),receipt=h.data.Receipts.find(row=>row.kind==='business-population'),item=receipt.observed.items.find(row=>row.outcome==='saved'),entry=receipt.population.entries.find(row=>row.bId===item.bId),scope={userId:String(receipt.ownerId),realmId:receipt.realmId,environment:receipt.environment,entity:entry.entity,id:item.qboId};for(const mode of ['valid','request','audit','owner']){const row=structuredClone(receipt);row.audits=structuredClone(h.data.Audits);if(mode==='request')row.population.request.body='{}';if(mode==='audit')row.audits=row.audits.filter(audit=>String(audit._id)!==String(row.resultAuditId));if(mode==='owner')row.ownerId='0'.repeat(24);const db={collection:()=>({aggregate:pipeline=>({toArray:async()=>pipeline[0].$match.kind==='business-population'?[row]:[]})})},result=await readRecordOrigin({...scope,db});if(mode==='valid'){assert.equal(result.status,'recorded',JSON.stringify(result));assert.equal(result.sources[0].kind,'business_population');assert.equal(JSON.stringify(result).includes('population'),true);assert.equal(JSON.stringify(result).includes('requestHash'),false);}else{assert.equal(result.status,'incomplete',mode);assert.equal(result.sources.length,0,mode);}}}finally{await close(h);}});
 
 test('a definitely saved sibling retains origin when another item makes the cohort uncertain',async()=>{const h=await populated({omitBatchItem:true});try{const receipt=h.data.Receipts.find(row=>row.kind==='business-population');assert.equal(receipt.state,'unknown');const item=receipt.observed.items.find(value=>value.outcome==='saved');assert.ok(item);const entry=receipt.population.entries.find(value=>value.bId===item.bId),row={...structuredClone(receipt),audits:structuredClone(h.data.Audits)},scope={environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)};assert.equal(require('../src/modules/business-population-origin').populationOriginEvidence(row,scope,entry.entity,item.qboId).jobId,row.workflow.jobId);const match=require('../src/modules/record-origin').originPipelines({...scope,userId:String(row.ownerId),entity:entry.entity,id:item.qboId}).find(value=>value.key==='business_population').pipeline[0].$match;assert.ok(match.state.$in.includes('unknown'));assert.ok(h.data.Writers[0].unresolved);}finally{await close(h);}});
+
+
+test('fresh billed time clears its stale warning independently while the Estimate gap stays open',async()=>{
+  const h=await populated({leaveTimeBillable:true});
+  try {
+    const invoice=h.data.Records.find(row=>row.entity==='Invoice'&&row.coverageGaps?.includes('time-invoice-billing-unverified'));
+    const time=h.data.Records.find(row=>row.entity==='TimeActivity'&&invoice.step.dependencies.some(link=>link.logicalKey===row.logicalKey));
+    const quote=h.data.Records.find(row=>row.entity==='Estimate'&&invoice.step.dependencies.some(link=>link.logicalKey===row.logicalKey));
+    const posts=h.posts,receipts=hash(JSON.stringify(h.data.Receipts)),identities=h.data.Records.map(row=>[row.logicalKey,row.qboId]);
+    h.records.get('timeactivity:'+time.qboId).record.BillableStatus='HasBeenBilled';
+    const result=await recheck(h),savedInvoice=h.data.Records.find(row=>row.logicalKey===invoice.logicalKey),savedTime=h.data.Records.find(row=>row.logicalKey===time.logicalKey);
+    assert.equal(result.job.relationshipVerification.status,'completed');assert.equal(result.job.relationshipVerification.errors,0);
+    assert.deepEqual(savedTime.coverageGaps,[]);assert.equal(savedTime.relationshipCheck.outcome,'clear');
+    assert.deepEqual(savedInvoice.coverageGaps,['estimate-invoice-conversion-unverified']);assert.equal(savedInvoice.relationshipProof.matches,false);
+    assert.ok(h.data.Records.find(row=>row.logicalKey===quote.logicalKey).coverageGaps.includes('estimate-invoice-conversion-unverified'));
+    assert.equal(result.job.counts.coverageGaps,h.result.job.counts.coverageGaps-1);
+    assert.equal(h.posts,posts);assert.equal(hash(JSON.stringify(h.data.Receipts)),receipts);assert.deepEqual(h.data.Records.map(row=>[row.logicalKey,row.qboId]),identities);assert.equal(h.data.Calendars[0].verifiedThrough,null);
+  } finally { await close(h); }
+});
+
+test('billed status cannot clear a stale time warning when its exact Invoice link is absent',async()=>{
+  const h=await populated({leaveTimeBillable:true});
+  try {
+    const invoice=h.data.Records.find(row=>row.entity==='Invoice'&&row.coverageGaps?.includes('time-invoice-billing-unverified'));
+    const time=h.data.Records.find(row=>row.entity==='TimeActivity'&&invoice.step.dependencies.some(link=>link.logicalKey===row.logicalKey));
+    h.records.get('timeactivity:'+time.qboId).record.BillableStatus='HasBeenBilled';
+    const raw=h.records.get('invoice:'+invoice.qboId).record;raw.LinkedTxn=raw.LinkedTxn.filter(link=>link.TxnType!=='TimeActivity');
+    const result=await recheck(h);
+    for(const target of [invoice,time]){const saved=h.data.Records.find(row=>row.logicalKey===target.logicalKey);assert.ok(saved.coverageGaps.includes('time-invoice-billing-unverified'));assert.equal(saved.relationshipCheck.outcome,'error');}
+    assert.ok(result.job.relationshipVerification.errors>0);
+  } finally { await close(h); }
+});
+
+
+test('billed-time facet requires the exact source identity, actual Invoice link and provider billed state',()=>{
+  const {sample}=require('./helpers/business-readback-fixtures'),{verifyPopulationFinancialContent}=require('../src/modules/business-readback'),{hasBilledTime}=require('../src/modules/business-population-issues');
+  const value=sample('Invoice'),time=value.parents.find(parent=>parent.entity==='TimeActivity'),proof=()=>verifyPopulationFinancialContent({...value,children:[]});
+  assert.equal(hasBilledTime(proof(),time.record.Id),true);
+  assert.equal(hasBilledTime(proof(),'999999'),false);
+  // Financial validation may emit no time gap when the Estimate header is present.
+  time.record.BillableStatus='Billable';time.recordHash=hash(time.record);
+  const stillBillable=proof();assert.equal(stillBillable.coverageGaps.includes('time-invoice-billing-unverified'),false);assert.equal(hasBilledTime(stillBillable),false);
+  time.record.BillableStatus='HasBeenBilled';time.recordHash=hash(time.record);
+  const valid=proof();
+  for(const mutate of [source=>{source.observed.record.LinkedTxn=source.observed.record.LinkedTxn.filter(link=>link.TxnType!=='TimeActivity');},source=>{source.parents=source.parents.filter(parent=>parent.entity!=='TimeActivity');},source=>{source.parents.find(parent=>parent.entity==='TimeActivity').record.Id='999999';},source=>{source.compiled.relationships=source.compiled.relationships.filter(link=>link.entity!=='TimeActivity');}]){
+    const source=JSON.parse(valid.sourceJson);mutate(source);const changed={...valid,sourceJson:JSON.stringify(source)};changed.sourceHash=hash(changed.sourceJson);assert.equal(hasBilledTime(changed),false);
+  }
+  assert.equal(hasBilledTime({...valid,sourceHash:'0'.repeat(64)}),false);
+});
+
+
+test('group recheck selects only its saved warnings and leaves unrelated evidence untouched',async()=>{
+  const h=await populated({leaveTimeBillable:true});
+  try {
+    const code='time-invoice-billing-unverified',targets=h.data.Records.filter(row=>row.coverageGaps?.includes(code)),untouched=h.data.Records.filter(row=>!row.coverageGaps?.includes(code)).map(row=>[row.logicalKey,hash(row)]),posts=h.posts;
+    for(const time of h.data.Records.filter(row=>row.entity==='TimeActivity'))h.records.get('timeactivity:'+time.qboId).record.BillableStatus='HasBeenBilled';
+    await h.population.recheck(h.user,h.prepared.job.jobId,{manifestHash:h.prepared.job.manifestHash,code});await h.population.drain();
+    const result=await h.population.status(h.user),verification=result.job.relationshipVerification;
+    assert.equal(verification.status,'completed');assert.equal(verification.code,code);assert.equal(verification.total,targets.length);assert.equal(verification.checked,targets.length);assert.equal(verification.errors,0);
+    assert.deepEqual(h.data.Jobs[0].verification.targets.slice().sort(),targets.map(row=>row._id).sort());
+    assert.equal(result.job.issueGroups.find(group=>group.code===code).count,0);assert.ok(result.job.issueGroups.find(group=>group.code==='estimate-invoice-conversion-unverified').count>0);
+    for(const [key,digest]of untouched)assert.equal(hash(h.data.Records.find(row=>row.logicalKey===key)),digest);
+    assert.equal(h.posts,posts);assert.equal(h.data.Calendars[0].verifiedThrough,null);
+    assert.ok(h.data.Audits.some(row=>row.action==='Business population relationship-recheck-requested'&&row.afterState.code===code&&row.afterState.count===targets.length));
+    for(const body of [{manifestHash:h.prepared.job.manifestHash,code:'invented'},{manifestHash:h.prepared.job.manifestHash,code:null},{manifestHash:h.prepared.job.manifestHash,code,realmId:'other'}])await assert.rejects(h.population.recheck(h.user,h.prepared.job.jobId,body));
+  } finally { await close(h); }
+});
+
+test('a stopped group recheck resumes its retained group and never switches to another queue',async()=>{
+  const h=await populated({leaveTimeBillable:true});
+  try {
+    const code='time-invoice-billing-unverified';let stopped=false;h.onGet=async()=>{if(!stopped){stopped=true;await h.population.stopRecheck(h.user,h.prepared.job.jobId);}};
+    await h.population.recheck(h.user,h.prepared.job.jobId,{manifestHash:h.prepared.job.manifestHash,code});await h.population.drain();
+    const retained=structuredClone(h.data.Jobs[0].verification);assert.equal(retained.status,'stopped');
+    await assert.rejects(h.population.recheck(h.user,h.prepared.job.jobId,{manifestHash:h.prepared.job.manifestHash,code:'estimate-invoice-conversion-unverified'}));
+    h.onGet=null;const result=await recheck(h);assert.equal(result.job.relationshipVerification.status,'completed');assert.equal(result.job.relationshipVerification.runId,retained.runId);assert.equal(result.job.relationshipVerification.code,code);assert.deepEqual(h.data.Jobs[0].verification.targets,retained.targets);
+  } finally { await close(h); }
+});
