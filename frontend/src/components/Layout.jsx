@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
 import '../styles/sidebar.css'
 import {
@@ -138,6 +138,11 @@ export default function Layout({ children }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [collapsed, setCollapsed] = useState(readSidebarPreference)
+  const contentRef = useRef(null)
+
+  useLayoutEffect(() => {
+    contentRef.current?.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [pathname])
 
   useEffect(() => {
     try {
@@ -196,7 +201,7 @@ export default function Layout({ children }) {
 
   return (
     <Tooltip.Provider delay={350}>
-      <div className="flex min-h-screen bg-[var(--canvas)]">
+      <div className="fixed inset-0 flex overflow-clip bg-[var(--canvas)]">
         {connection?.isProduction && (
           <div aria-hidden="true" className="fixed inset-x-0 top-0 z-50 h-[3px] bg-[var(--production)]" />
         )}
@@ -204,7 +209,7 @@ export default function Layout({ children }) {
           id="desktop-sidebar"
           aria-label="Sidebar"
           data-collapsed={collapsed}
-          className="app-sidebar sticky top-0 hidden h-screen shrink-0 flex-col border-r border-[var(--line)] bg-[var(--canvas)] px-3 pb-3 pt-4 md:flex"
+          className="app-sidebar hidden h-screen max-h-full shrink-0 flex-col border-r border-[var(--line)] bg-[var(--canvas)] px-3 pb-3 pt-4 md:flex"
         >
           <SidebarHint label="Test Data Lab home" enabled={collapsed}>
             <Link to="/" aria-label="Test Data Lab home" className="sidebar-brand mb-3 flex min-h-8 items-center gap-2.5 px-1.5 no-underline">
@@ -234,7 +239,7 @@ export default function Layout({ children }) {
           {footer(collapsed)}
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] bg-[var(--canvas)] px-4 py-3 md:hidden">
             <span className="text-[14px] font-semibold text-[var(--ink)]">Test Data Lab</span>
             <details className="relative">
@@ -247,7 +252,7 @@ export default function Layout({ children }) {
           </div>
 
           {/* Scope strip: which company a change will land in, always visible. */}
-          <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--canvas)]">
+          <header className="sticky top-0 z-40 shrink-0 border-b border-[var(--line)] bg-[var(--canvas)]">
             <div className="flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-1 px-5 py-2 md:px-8">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="truncate text-[13.5px] font-medium text-[var(--ink)]" title={companyName}>{companyName}</span>
@@ -264,7 +269,13 @@ export default function Layout({ children }) {
             <ConnectionBar />
           </header>
 
-          <main className="min-w-0 flex-1 px-5 py-6 md:px-8 md:py-8">{children}</main>
+          {/* Bound page scrolling below the company strip; the navigation stays put. */}
+          <main
+            ref={contentRef}
+            tabIndex={0}
+            aria-label="Page content"
+            className="min-h-0 min-w-0 flex-1 overflow-auto [scrollbar-gutter:stable] [scroll-padding-block:1rem] px-5 py-6 md:px-8 md:py-8"
+          >{children}</main>
         </div>
       </div>
     </Tooltip.Provider>
