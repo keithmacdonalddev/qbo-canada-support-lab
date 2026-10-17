@@ -11,12 +11,12 @@ async function parallel(values, work, limit = 3) {
   await Promise.allSettled(Array.from({length:Math.min(limit,values.length)},async()=>{while(!failure&&next<values.length){const index=next++;try{results[index]=await work(values[index],index);}catch(error){failure ||= error;}}}));
   if(failure)throw failure;return results;
 }
-function createPopulationReader({ scope, jobId, client, records, readFence, masterCache = new Map(), validateCreation, now = () => Date.now(), signal }) {
+function createPopulationReader({ scope, jobId, client, records, readFence, masterCache = new Map(), validateCreation, now = () => Date.now(), signal, readQueue = require('./business-population-reads').createPopulationReadQueue() }) {
   const raw = new Map(), routes = new Map(), reports = new Map(), byKey = new Map(records.map(row=>[row.logicalKey,row])), children = new Map();
   const check = () => { if (signal?.aborted) throw denied('Population reads were stopped before dispatch.'); };
   const control = { signal: signal || new AbortController().signal, beforeAttempt: async()=>check(), onFailure:()=>{} };
   for (const row of records) if(row.state==='saved') for(const link of row.step.dependencies){const values=children.get(link.logicalKey)||[];values.push(row);children.set(link.logicalKey,values);}
-  const get = endpoint => {check();return client.apiCall('GET',endpoint,undefined,0,0,control);};
+  const get = endpoint => {check();return readQueue.run(()=>client.apiCall('GET',endpoint,undefined,0,0,control),signal);};
   async function queryMany(rows, force = false) {
     const groups = new Map();
     for (const row of rows) {
@@ -27,7 +27,7 @@ function createPopulationReader({ scope, jobId, client, records, readFence, mast
     const jobs=[];for(const [entity,values] of groups) {const entries=[...values.values()];for(let offset=0;offset<entries.length;offset+=100)jobs.push({entity,rows:entries.slice(offset,offset+100)});}
     await parallel(jobs,async job=>{
       check();const ids=job.rows.map(row=>row.qboId).sort(),query='SELECT * FROM '+job.entity+" WHERE Id IN ("+ids.map(id=>"'"+id+"'").join(',')+') MAXRESULTS 1000';
-      const body=await client.query(query,control),page=body?.QueryResponse,values=page?.[job.entity];
+      const body=await readQueue.run(()=>client.query(query,control),signal),page=body?.QueryResponse,values=page?.[job.entity];
       if(!page||Object.keys(page).some(key=>![job.entity,'startPosition','maxResults','totalCount'].includes(key))||!Array.isArray(values)||values.length!==ids.length||(page.totalCount!==undefined&&page.totalCount!==ids.length)||(page.maxResults!==undefined&&page.maxResults!==values.length))throw denied('The grouped full-record read is incomplete.');
       const seen=new Set(),observedAt=new Date(now()).toISOString();
       for(const record of values){if(!ids.includes(record?.Id)||seen.has(record.Id)||typeof record.SyncToken!=='string'||!/^(0|[1-9]\d{0,63})$/.test(record.SyncToken)||record.sparse===true||record.status==='Deleted'||Buffer.byteLength(canonical(record))>256000)throw denied('A grouped population record is changed, duplicate or incomplete.');seen.add(record.Id);const recordHash=hash(record);raw.set(job.entity+':'+record.Id,{scope,entity:job.entity,record,recordHash,observedAt,source:{version:1,kind:'qbo-full-entity-query',scope,entity:job.entity,id:record.Id,query,recordHash,responseHash:hash(body)}});}
@@ -50,7 +50,9 @@ function createPopulationReader({ scope, jobId, client, records, readFence, mast
     if(!masterFlights.has(key))masterFlights.set(key,loadMaster(entity,id,options).then(value=>{cohortMasters.set(key,value);return value;}));
     try{return await masterFlights.get(key);}catch(error){masterFlights.delete(key);throw error;}
   }
+  let primedFence=null;
   async function prime(rows) {
+    if(primedFence&&rows.every(row=>raw.has(row.entity+':'+row.qboId)&&(!['Invoice','Payment','BillPayment'].includes(row.entity)||raw.get(row.entity+':'+row.qboId).record[row.entity==='BillPayment'?'APAccountRef':'ARAccountRef']!==undefined||routes.has(row.entity+':'+row.qboId))))return primedFence;
     const before=await readFence();await queryMany(rows);
     const omitted=rows.filter(row=>['Invoice','Payment','BillPayment'].includes(row.entity)&&raw.get(row.entity+':'+row.qboId).record[row.entity==='BillPayment'?'APAccountRef':'ARAccountRef']===undefined&&!routes.has(row.entity+':'+row.qboId));
     await parallel(omitted,async row=>{
@@ -70,7 +72,7 @@ function createPopulationReader({ scope, jobId, client, records, readFence, mast
       const accountRouting=accountPostingEvidence({compiled:row.compilation,receipt:row.receipt,observed:first,accountBinding,accountObserved,report:source.report,reportObservedAt:source.observedAt,beforeFence:before,afterFence:after,now:now()});
       routes.set(key,accountRouting);
     });
-    return before;
+    primedFence=before;return before;
   }
   async function observed(row){await queryMany([row]);const value=raw.get(row.entity+':'+row.qboId);return {...value,...(routes.has(row.entity+':'+row.qboId)?{accountRouting:routes.get(row.entity+':'+row.qboId)}:{})};}
   async function financial(row) {

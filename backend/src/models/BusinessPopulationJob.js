@@ -18,6 +18,8 @@ const schema = new mongoose.Schema({
   batch: { type: mongoose.Schema.Types.Mixed, default: null },
   counts: { type: mongoose.Schema.Types.Mixed, default: null },
   createdThrough: { type: String, default: null }, lastError: { type: String, default: null },
+  retryAfter: { type: Date, default: null },
+  diagnostics: { type: mongoose.Schema.Types.Mixed, default: null },
   metrics: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, createdAt: -1 });

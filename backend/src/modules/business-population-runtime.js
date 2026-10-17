@@ -17,7 +17,7 @@ async function runPopulationJob(input) {
   const {Jobs,Records,Writers,Receipts}=models,jobId=String(input.job._id),bound={scope,ownerId,actorId,access};
   const read=(Model,query,session)=>Model.findOne(query).session(session).maxTimeMS(5000).lean();
   const keyQuery={...scope,authorityHash:input.job.authorityHash,txnDate:{$gte:input.job.fromDate,$lte:input.job.throughDate}};
-  let leaseToken=randomUUID(),client=null,started=now(),cohorts=0,lastBatchAt=0;const masterCache=new Map();
+  let leaseToken=randomUUID(),client=null,started=now(),cohorts=0,lastBatchAt=0;const masterCache=new Map(),readQueue=input.readQueue||require('./business-population-reads').createPopulationReadQueue();if(input.job.retryAfter)readQueue.delayUntil(Date.parse(input.job.retryAfter));else if(input.job.diagnostics?.message?.includes('HTTP 429'))readQueue.delayUntil((Number.isFinite(Date.parse(input.job.updatedAt))?Date.parse(input.job.updatedAt):Date.now())+65000);
   async function loadRows(query) {const result=[];let after=null;for(;;){const page=await Records.find({...query,...(after?{_id:{$gt:after}}:{})},null,{singleBatch:true,batchSize:101}).sort({_id:1}).limit(100).maxTimeMS(5000).lean();if(!page.length)return result;result.push(...page);if(result.length>4000)throw denied('A population observation window exceeds4000 records.');after=page.at(-1)._id;}}
   const delegationMatches=(writer,job)=>writer?.populationDelegation?.jobId===jobId&&writer.populationDelegation.manifestHash===job.manifestHash&&writer.populationDelegation.authorityHash===job.authorityHash&&String(writer.operationId||'')===String(job.originalOperationId||'');
   const approvalMatches=job=>Array.isArray(job?.manifest)&&hash(job.manifest)===job.manifestHash&&job?.approval?.version===1&&job.approval.manifestHash===job.manifestHash&&job.approval.authorityHash===job.authorityHash&&job.approval.ownerId===ownerId&&job.approval.actorId===actorId&&(scope.environment!=='production'||job.approval.productionConfirmed===true);
@@ -36,12 +36,12 @@ async function runPopulationJob(input) {
     return {scope,operationId:jobId,revision:writer.revision,unresolved:null,jobRevision:job.revision};
   }
   const validateCreation=require('./business-population-receipt').createPopulationCreationValidator({models,scope,now});
-  let batchForTransport=null;
+  let batchForTransport=null,activeReadControl=null;
   const transport={
     async receiptEvidence({workflow,request,session}){const job=await read(Jobs,{_id:jobId,...scope},session),batch=job?.batch;if(!batch||batch.hash!==workflow.batchHash||batch.request.requestHash!==request.requestHash)throw denied('The exact cohort request must be retained with its transport receipt.');return {version:1,jobId,batchHash:batch.hash,request:batch.request,entries:batch.entries.map(entry=>({bId:entry.bId,logicalKey:entry.logicalKey,entity:entry.entity,fingerprint:entry.fingerprint,intentHash:entry.intentHash,compilationHash:entry.compilation.compilationHash,requestHash:entry.compilation.request.requestHash}))};},
     async preflight({request,client:transportClient,coordination}){
       const job=await read(Jobs,{_id:jobId,...scope});const batch=job?.batch;if(!batch||batch.request.requestHash!==request.requestHash||job.leaseToken!==leaseToken)throw denied('The exact prepared population cohort is required.');
-      const memo=new Map();const memoClient={read:async(entity,id)=>{const key=entity+':'+id;if(!memo.has(key))memo.set(key,transportClient.read(entity,id));return memo.get(key);},query:async(query)=>{if(!memo.has(query))memo.set(query,transportClient.query(query));return memo.get(query);}};
+      const memo=new Map();const memoClient={read:async(entity,id)=>{const key=entity+':'+id;if(!memo.has(key))memo.set(key,readQueue.run(()=>transportClient.apiCall('GET',entity.toLowerCase()+'/'+id,undefined,0,0,activeReadControl),activeReadControl.signal));return memo.get(key);},query:async(query)=>{if(!memo.has(query))memo.set(query,readQueue.run(()=>transportClient.query(query,activeReadControl),activeReadControl.signal));return memo.get(query);}};
       const proofs=await parallel(batch.entries,entry=>readWritePeriodEvidence(entry.compilation.request,memoClient,now,coordination));
       return {version:1,kind:'population-period-evidence',coordination,scope,requestHash:request.requestHash,batchHash:batch.hash,proofs};
     },
@@ -102,7 +102,8 @@ async function runPopulationJob(input) {
       const month=earliest.txnDate.slice(0,7)+'-01',window=await windowRows(month,job),frontier=readyPopulationFrontier(window.all).filter(row=>row.txnDate>=month&&row.txnDate<=window.through);
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),FRESH);timer.unref?.();
       try {
-        const reader=createPopulationReader({scope,jobId,client,records:window.all,readFence,masterCache,validateCreation,now,signal:controller.signal});
+        const reader=createPopulationReader({scope,jobId,client,records:window.all,readFence,masterCache,validateCreation,now,signal:controller.signal,readQueue});
+        activeReadControl=reader.control;
         if(!window.current.some(row=>row.state==='pending')){
           if(window.current.some(row=>row.state!=='saved'))throw denied('The population month contains an unsettled item.');await reader.prime(window.all.filter(row=>row.state==='saved'));const proofs=await parallel(window.current,row=>reader.financial(row));await readFence();await rememberProofs(proofs);await Jobs.updateOne({_id:jobId,...scope,leaseToken,status:'running',stopRequested:false},{$set:{createdThrough:window.through,leaseExpiresAt:new Date(now()+600000)},$inc:{revision:1}});continue;
         }
@@ -111,7 +112,7 @@ async function runPopulationJob(input) {
         const fence=await reader.prime([...parents,...ancestors]),tag={operationId:jobId,writerRevision:fence.revision};
         const financialParents=new Map();for(const parent of parents)financialParents.set(parent.logicalKey,{...await reader.financial(parent),...tag});
         await rememberProofs([...financialParents.values()]);
-        let depositProof=null;if(frontier.some(row=>row.entity==='Deposit')){const first=await readPopulationDeposits(client),second=await readPopulationDeposits(client);if(first.hash!==second.hash)throw denied('Deposits changed during population availability checks.');depositProof=second;}
+        let depositProof=null;if(frontier.some(row=>row.entity==='Deposit')){const controlledDeposits={query:query=>readQueue.run(()=>client.query(query,reader.control),controller.signal)},first=await readPopulationDeposits(controlledDeposits),second=await readPopulationDeposits(controlledDeposits);if(first.hash!==second.hash)throw denied('Deposits changed during population availability checks.');depositProof=second;}
         const entries=await parallel(frontier,async row=>{
           const referenceEvidence=await parallel(row.step.references,async binding=>({...await reader.master(binding.entity,binding.id,{fresh:binding.entity==='Item'&&row.entity==='SalesReceipt'}),...tag}));
           for(const source of row.policy.taxSources||[]){const observed=await reader.master(source.entity,source.id);if(hash(source.record)!==source.recordHash||observed.recordHash!==source.recordHash)throw denied('The approved dated tax sources changed.');}
