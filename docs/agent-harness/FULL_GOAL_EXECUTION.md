@@ -2,6 +2,12 @@
 
 Updated 2026-10-17 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Live relationship recheck completed — 2026-10-17 21:52 UTC
+
+After the owner asked why the live workflow had not been run, the native Company → Recheck relationships action ran against Production company ending 2856. It completed all **2,147 selected records**, in 86 audited groups, with **zero read/content errors and zero accounting writes**. **Zero warnings cleared**: 2,147 records still have unresolved relationship coverage (2,075 Estimate flags and 125 time-billing flags, with overlap). All 10,359 core records remain saved, the 409 original accounting batch receipts remain, no verification lease remains, and the app renders “Recheck complete · 2,147 / 2,147”. The native completion audit explicitly records verifiedCalendarAdvanced:false. Private proof: app-relationship-recheck-live-completion-20261017.json under artifacts/goal-realization/.
+
+This is direct live proof of the recheck workflow, not repair success. The app's current workflow reviews/rechecks and retains documented limitations; it does not automatically repair the missing QBO relationships. No warning was dismissed, no limitation was saved, and no existing accounting record was edited or recreated. The relationship/data outcome remains incomplete; do not describe this run as issue resolution or replay the old unsuccessful Invoice repair.
+
 ## App relationship issue workflow delivered — 2026-10-17
 
 The owner requested the missing issue workflow be finished in the app. Company → Bulk business activity now shows grouped warnings, bounded paginated affected records, expected/observed status/links/amounts, exact canonical Records links and QuickBooks links, resolution guidance and owner documented limitations that remain unverified. Recheck relationships runs independently of chat as an owner-requested durable GET-only background worker with progress, Stop, retained-queue Resume, company-wide coordination, immutable manifest checks, original receipt validation and scoped audit evidence. It clears a conversion only with strict native link/state/economics/tax proof under the original whole-estimate or legacy physical-line contract. Errors preserve earlier warnings and retain a current sanitized snapshot. No accounting repair or recreation is introduced. See [workflow architecture](../architecture/business-population.md).
