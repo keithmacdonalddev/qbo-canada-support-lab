@@ -116,14 +116,21 @@ function createBusinessPopulationService(options = {}) {
     return true;
   }
   async function start(user,id,body) {
-    exact(body,['manifestHash','confirmProduction']);if(!ID.test(id||'')||!HASH.test(body.manifestHash||'')||typeof body.confirmProduction!=='boolean')throw denied('Use the exact prepared population manifest.');
+    exact(body,['manifestHash','confirmProduction',...(Object.hasOwn(body||{},'retryRejected')?['retryRejected']:[])]);if((body.retryRejected!==undefined&&typeof body.retryRejected!=='boolean')||!ID.test(id||'')||!HASH.test(body.manifestHash||'')||typeof body.confirmProduction!=='boolean')throw denied('Use the exact prepared population manifest.');
     const bound=await bind(user,'operations.execute');if(bound.actorId!==bound.ownerId)throw denied('Only the company owner can start population.');
     await transaction(async session=>{
       await fenceAccess(bound,session);const job=await read(Jobs,{_id:id,...bound.scope},session),writer=await read(models.Writers,bound.scope,session),policy=await read(models.Policies,bound.scope,session);
       if(!job||!Array.isArray(job.manifest)||hash(job.manifest)!==job.manifestHash||job.manifestHash!==body.manifestHash||String(job.ownerId)!==bound.ownerId||job.actorId.toString()!==bound.actorId||!policy||policy.state!=='active'||!writer||writer.unresolved!==null||(bound.scope.environment==='production'&&!body.confirmProduction))throw denied('Population approval or company coordination changed.');
       if(done(job.status))return;
       if((job.batch&&!await recoverableUnsent(job,writer,session)) || (job.leaseToken&&new Date(job.leaseExpiresAt).getTime()>now()))throw denied('Population is active or has an unsettled cohort.');
-      if(await read(Records,{...bound.scope,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate},state:{$in:['rejected','unknown','dispatched']}},session))throw denied('A rejected or uncertain population item needs its explicit recovery before restart.');
+      const unsettled=await pageRows(Records,{...bound.scope,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate},state:{$in:['rejected','unknown','dispatched']}},session);
+      if(unsettled.some(row=>row.state!=='rejected')||(unsettled.length&&!body.retryRejected))throw denied('A rejected or uncertain population item needs its explicit recovery before restart.');
+      if(unsettled.length){
+        const validateRejected=require('./business-population-receipt').createPopulationCreationValidator({models,scope:bound.scope,now,allowRejected:true}),retried=[];
+        for(const row of unsettled){const descriptor=job.manifest.find(entry=>entry.logicalKey===row.logicalKey);if(!descriptor||descriptor.intentHash!==row.intentHash||descriptor.fingerprint!==row.fingerprint||row.dispatch?.jobId!==id)throw denied('A rejected identity differs from this approved manifest.');const rejection=await validateRejected(row,{session}),history=[...(row.retryHistory||[]),{version:1,dispatch:row.dispatch,compilation:row.compilation,rejection,at:new Date(now()).toISOString(),actorId:bound.actorId}];
+          const updated=await Records.findOneAndUpdate({_id:row._id,...bound.scope,state:'rejected',revision:row.revision,qboId:{$exists:false},receipt:null},{$set:{state:'pending',dispatch:null,compilation:null,lastError:null,retryHistory:history},$inc:{revision:1}},{new:true,session}).lean();if(!updated)throw denied('The rejected identity changed before its audited retry.');retried.push({logicalKey:row.logicalKey,...rejection});}
+        await audit(bound,id,'definite-rejections-retried',{manifestHash:job.manifestHash,revision:job.revision,items:retried},session);
+      }
       const active=await assertPublishedBusiness({...models,scope:bound.scope,requireScheduleAcceptance:true,session,fence:true});
       if(active.authority.contentHash!==job.authorityHash||active.value.blueprintHash!==job.blueprintHash||active.calendar.stopRequested||active.calendar.pendingCommit||String(writer.operationId||'')!==String(job.originalOperationId||''))throw denied('Population business authority or calendar changed.');
       const delegated=writer.populationDelegation;

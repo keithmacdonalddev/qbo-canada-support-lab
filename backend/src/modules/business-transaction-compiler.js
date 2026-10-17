@@ -239,6 +239,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       if (details.destination !== 'operating_bank' || source.record.DepositToAccountRef?.value !== holding.Id || cents(source.record.UnappliedAmt) !== 0 || links(source.record).some(link => link.TxnType === 'Deposit')) fail('The payment is not an available fully applied undeposited receipt.');
       delete payload.CustomerRef; delete payload.TotalAmt;
       payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id);
+      payload.GlobalTaxCalculation = 'NotApplicable';
+      for(const line of payload.Line)for(const link of line.LinkedTxn)link.TxnLineId='0';
     }
   }
   assertAccountingOnlyRequest(step.entity, payload);

@@ -38,7 +38,7 @@ export function PopulationPanel({ realmId, environment, enabled, api = client })
       if (action === 'prepare') {
         if (!requestKey.current || requestKey.current.throughDate !== throughDate) requestKey.current = { throughDate, key: crypto.randomUUID() }
         response = await api.post('/business-population/prepare', { throughDate, requestKey: requestKey.current.key }, { timeout: 180000 })
-      } else if (action === 'start') response = await api.post('/business-population/' + job.jobId + '/start', { manifestHash: job.manifestHash, confirmProduction: environment !== 'production' || confirmed }, { timeout: 30000 })
+      } else if (action === 'start') response = await api.post('/business-population/' + job.jobId + '/start', { manifestHash: job.manifestHash, confirmProduction: environment !== 'production' || confirmed, ...(counts.rejected ? { retryRejected: true } : {}) }, { timeout: 30000 })
       else response = await api.post('/business-population/' + job.jobId + '/stop', {}, { timeout: 30000 })
       const value = scoped(response.data?.data)
       if (mounted.current) { setState(previous => ({ ...previous, ...value })); setConfirmed(false) }
@@ -46,7 +46,7 @@ export function PopulationPanel({ realmId, environment, enabled, api = client })
     finally { sending.current = false; if (mounted.current) { setBusy(''); setRevision(value => value + 1) } }
   }
   const remaining = counts ? counts.required - counts.saved : 0
-  const canStart = job && ['prepared', 'stopped', 'blocked'].includes(job.status) && (!job.batch || job.batch.unsentRecoverable === true) && counts?.unknown === 0 && counts?.rejected === 0
+  const canStart = job && ['prepared', 'stopped', 'blocked'].includes(job.status) && (!job.batch || job.batch.unsentRecoverable === true) && counts?.unknown === 0
   return <section aria-label="Bulk business activity" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
     <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3"><h2 className="text-[13px] font-semibold text-[var(--ink)]">Bulk business activity</h2><Button variant="ghost" size="sm" disabled={!enabled || !!busy} onClick={() => { setError(''); setRevision(value => value + 1) }}><RefreshCw className="size-3.5" />Refresh progress</Button></header>
     <div className="space-y-4 px-5 py-4 text-[13px] text-[var(--ink-2)]">
@@ -62,7 +62,7 @@ export function PopulationPanel({ realmId, environment, enabled, api = client })
           {job.lastError && <p role="alert" className="text-[var(--attention)]">{job.lastError}</p>}
           <p className="text-[12px] text-[var(--ink-3)]">Saved and content-checked records are creation evidence. Full relationship coverage, report verification and bank reconciliation remain separate.</p>
           {active && state.owner && <Button variant="outline" disabled={!!busy || job.stopRequested} onClick={() => act('stop')}>Stop after current batch</Button>}
-          {canStart && state.owner && <div className="space-y-3">{environment === 'production' && <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!!busy || !!error} className="mt-0.5" /><span>I authorize adding the remaining {remaining.toLocaleString()} scheduled records to Production company ending {String(realmId).slice(-4)}.</span></label>}<Button disabled={!!busy || !!error || (environment === 'production' && !confirmed)} onClick={() => act('start')}>{busy === 'start' ? 'Starting…' : job.approved ? 'Resume adding records' : 'Start adding records'}</Button></div>}
+          {canStart && state.owner && <div className="space-y-3">{counts.rejected > 0 && <p>Retry the {counts.rejected} records QBO definitively rejected. Saved records are retained. Original failed requests and faults remain in the audit history.</p>}{environment === 'production' && <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!!busy || !!error} className="mt-0.5" /><span>I authorize adding the remaining {remaining.toLocaleString()} scheduled records to Production company ending {String(realmId).slice(-4)}.</span></label>}<Button disabled={!!busy || !!error || (environment === 'production' && !confirmed)} onClick={() => act('start')}>{busy === 'start' ? 'Starting…' : counts.rejected ? 'Retry rejected records and continue' : job.approved ? 'Resume adding records' : 'Start adding records'}</Button></div>}
         </div>}
         {state?.owner && !active && !job?.batch && <div className="flex flex-wrap items-end gap-3 border-t border-[var(--line)] pt-4"><label className="space-y-1"><span className="block">Schedule through</span><input type="date" value={throughDate} max={today()} disabled={!!busy || !!error} onChange={event => setThroughDate(event.target.value)} className="rounded border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[var(--ink)]" /></label><Button variant="outline" disabled={!!busy || !!error || !throughDate} onClick={() => act('prepare')}>{busy === 'prepare' && <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />}{busy === 'prepare' ? 'Preparing schedule…' : 'Prepare business schedule'}</Button></div>}
       </>}
