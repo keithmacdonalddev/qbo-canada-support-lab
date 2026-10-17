@@ -2,6 +2,7 @@
 const { hash, canonical, date } = require('./business-calendar');
 const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
 const { SUPPORTED } = require('./business-transaction-compiler');
+const { verifyInvoiceReceivables } = require('./business-receivables-route');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function invalid(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_READBACK_UNVERIFIED' }); }
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]);
@@ -113,6 +114,10 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   }
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
+  if (compiled.entity === 'Invoice' && record.ARAccountRef === undefined && payload.ARAccountRef) {
+    if (verifyInvoiceReceivables({ observed, compiled, receipt, now }) !== payload.ARAccountRef.value) invalid('The invoice posted to a different receivables account.');
+    delete expectedHeader.ARAccountRef;
+  }
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
   for (const key of ['ClassRef', 'DepartmentRef', 'ProjectRef']) if (!payload[key] && record[key]?.value) mismatch('An unplanned transaction dimension is present.');
   const permittedTop = [...linkList(payload.LinkedTxn), ...childLinks], actualTop = linkList(record.LinkedTxn);
@@ -188,10 +193,10 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     }
     if (record.POStatus !== (fullyReceived ? 'Closed' : 'Open')) mismatch('The purchase order status differs from its verified consumption.');
   }
-  const oldest = [observed, ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
+  const oldest = [observed, ...(observed.accountRouting ? [observed.accountRouting] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
   return { version: 1, kind: 'business-content', compilationHash: compiled.compilationHash, scope, logicalKey: compiled.logicalKey, entity: compiled.entity, qboId: record.Id, fingerprint: compiled.intentHash, matchesIntent: issues.length === 0, issues,
-    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash,
-    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
+    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}),
+    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
 }
 // Content checks can be computed for a saved child before closing its parent graph.
 // They never mark a step verified. This avoids a circular dependency when an invoice

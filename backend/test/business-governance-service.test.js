@@ -76,3 +76,14 @@ test('changed starting revenue stops before any provider write and leaves an uns
  const h=fixture();await h.publish();const p=await savedPlan(h,'changed-opening-income-001','2026-10-06');h.records.set('invoice:99000',{entity:'Invoice',record:{Id:'99000',SyncToken:'0',TxnDate:'2026-10-02',Line:[{Amount:10}],TotalAmt:10,Balance:10}});
  await assert.rejects(h.runtime(p.operationId).execute(),/income changed after preparation/);assert.equal(h.posts,0);const review=await h.service.reviewRetirement(h.user,p.operationId,{planHash:p.planHash});await h.service.retire(h.user,p.operationId,{planHash:p.planHash,reviewHash:review.reviewHash,reason:'Starting income changed; no request from this operation was sent.'});assert.equal(h.data.Writers[0].operationId,null);
 });
+
+test('native operation verifies omitted Invoice AR from ledger and creates settlements once',async()=>{
+ const h=fixture({omitInvoiceAr:true});await h.publish();
+ const prepared=await h.service.prepare(h.user,{requestKey:'missing-ar-native-period-001',throughDate:'2026-10-15'});await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});
+ const runtime=h.runtime(prepared.operationId),result=await runtime.execute();
+ assert.equal(result.complete,true,JSON.stringify({result,run:h.data.Runs[0],steps:h.data.Steps.filter(row=>row.verification?.status!=='verified').slice(-3)}));
+ assert.equal(h.data.Calendars[0].verifiedThrough,'2026-10-15');
+ const invoices=h.data.Steps.filter(row=>row.entity==='Invoice');assert.ok(invoices.length>0);assert.ok(invoices.every(row=>row.verification.accountRouting?.accountId));
+ assert.ok(h.data.Steps.some(row=>row.entity==='Payment'&&row.state==='verified'));
+ const posts=h.posts;assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,posts);
+});

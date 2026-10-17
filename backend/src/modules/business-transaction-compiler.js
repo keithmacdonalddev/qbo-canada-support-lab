@@ -2,6 +2,7 @@
 const { hash, canonical, date } = require('./business-calendar');
 const { verifyBusinessReference, validateReferenceBinding } = require('./business-reference');
 const { businessDate } = require('./business-activity-preview');
+const { verifyInvoiceReceivables } = require('./business-receivables-route');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -70,6 +71,15 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (record.TxnDate > step.txnDate || (value.entity !== 'TimeActivity' && record.CurrencyRef?.value !== 'CAD')) fail('An originating transaction has an incompatible date or currency.');
     parentMap.set(dependency.logicalKey, value);
   }
+  const receivables = (value, expectedId) => {
+    if (value.record.ARAccountRef !== undefined) return value.record.ARAccountRef?.value;
+    if (value.entity !== 'Invoice') fail('Only invoices can use independent receivables ledger evidence.');
+    const accountId = verifyInvoiceReceivables({ observed: value, operationId: observationFence.operationId, writerRevision: observationFence.writerRevision, now }), proof = value.verification;
+    if (!proof || proof.version !== 1 || proof.kind !== 'business-readback' || proof.observedHash !== value.recordHash || proof.syncToken !== value.record.SyncToken || !fresh(proof.observedAt, now) || !HASH.test(proof.evidenceHash || '') || proof.compilationHash !== value.accountRouting.compilationHash) fail('The invoice route lacks current persisted verification.');
+    const savedAccount = verifyInvoiceReceivables({ observed: { ...value, accountRouting: proof.accountRouting }, now });
+    if (accountId !== expectedId || savedAccount !== accountId || proof.accountRouting.receiptHash !== value.accountRouting.receiptHash || proof.accountRouting.requestHash !== value.accountRouting.requestHash || proof.accountRouting.accountDefinitionHash !== value.accountRouting.accountDefinitionHash || value.accountRouting.logicalKey !== value.logicalKey || value.accountRouting.fingerprint !== value.fingerprint) fail('The invoice route differs from its original saved verification.');
+    return accountId;
+  };
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
@@ -119,7 +129,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (details.baseAmountCents !== details.lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The planned transaction subtotal changed.');
     if (step.entity === 'CreditMemo') {
       const source = parent('Invoice'), invoice = source.record, original = sourceItemLines(invoice, 'SalesItemLineDetail'), issued = payload.Line[0], originalLine = original[0], taxLines = invoice.TxnTaxDetail?.TaxLine || [], expectedTax = policy.readbackTax;
-      if (source.logicalKey !== lifecycle.credit.invoiceKey || invoice.TxnDate !== details.origin.occurrence || invoice.CustomerRef?.value !== payload.CustomerRef.value || invoice.ARAccountRef?.value !== payload.ARAccountRef.value || invoice.GlobalTaxCalculation !== 'TaxExcluded' || original.length !== 1 || payload.Line.length !== 1 || originalLine.SalesItemLineDetail?.ItemRef?.value !== issued.SalesItemLineDetail.ItemRef.value || originalLine.SalesItemLineDetail?.Qty !== 1 || originalLine.SalesItemLineDetail?.TaxCodeRef?.value !== issued.SalesItemLineDetail.TaxCodeRef.value || cents(originalLine.Amount) !== cents(originalLine.SalesItemLineDetail.UnitPrice) || cents(originalLine.Amount) !== cents(issued.Amount) * 10 || cents(invoice.Balance) !== cents(invoice.TotalAmt) || links(invoice).length) fail('The original care invoice changed or is no longer wholly unsettled.');
+      if (source.logicalKey !== lifecycle.credit.invoiceKey || invoice.TxnDate !== details.origin.occurrence || invoice.CustomerRef?.value !== payload.CustomerRef.value || receivables(source, payload.ARAccountRef.value) !== payload.ARAccountRef.value || invoice.GlobalTaxCalculation !== 'TaxExcluded' || original.length !== 1 || payload.Line.length !== 1 || originalLine.SalesItemLineDetail?.ItemRef?.value !== issued.SalesItemLineDetail.ItemRef.value || originalLine.SalesItemLineDetail?.Qty !== 1 || originalLine.SalesItemLineDetail?.TaxCodeRef?.value !== issued.SalesItemLineDetail.TaxCodeRef.value || cents(originalLine.Amount) !== cents(originalLine.SalesItemLineDetail.UnitPrice) || cents(originalLine.Amount) !== cents(issued.Amount) * 10 || cents(invoice.Balance) !== cents(invoice.TotalAmt) || links(invoice).length) fail('The original care invoice changed or is no longer wholly unsettled.');
       if (!expectedTax || !Array.isArray(taxLines) || taxLines.length !== expectedTax.lines?.length || taxLines.some(line => line.DetailType !== 'TaxLineDetail') || expectedTax.lines.some(line => taxLines.filter(originalTax => originalTax.TaxLineDetail?.TaxRateRef?.value === line.rateId && originalTax.TaxLineDetail?.TaxPercent === line.percent && originalTax.TaxLineDetail?.PercentBased === true).length !== 1)) fail('The original invoice and credit require the same exact tax-rate identities and percentages.');
       const relationship = relationships.find(row => row.logicalKey === source.logicalKey); relationship.sourceTxnDate = invoice.TxnDate;
     }
@@ -166,7 +176,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (!payload[party] || source.record[party]?.value !== payload[party].value) fail('Settlement party differs from the saved source.');
     if (['credit-application', 'credit-remainder'].includes(lifecycle?.mode)) {
       const credit = parent('CreditMemo'), cm = credit.record, credited = cents(cm.TotalAmt), ar = account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id;
-      if (step.entity !== 'Payment' || source.logicalKey !== lifecycle.credit.invoiceKey || credit.logicalKey !== lifecycle.credit.creditMemoKey || source.record.CustomerRef?.value !== payload.CustomerRef.value || cm.CustomerRef?.value !== payload.CustomerRef.value || cm.ARAccountRef?.value !== ar || source.record.ARAccountRef?.value !== ar || credited <= 0 || credited >= original) fail('The exact invoice and managed credit do not form this customer settlement.');
+      if (step.entity !== 'Payment' || source.logicalKey !== lifecycle.credit.invoiceKey || credit.logicalKey !== lifecycle.credit.creditMemoKey || source.record.CustomerRef?.value !== payload.CustomerRef.value || cm.CustomerRef?.value !== payload.CustomerRef.value || cm.ARAccountRef?.value !== ar || receivables(source, ar) !== ar || credited <= 0 || credited >= original) fail('The exact invoice and managed credit do not form this customer settlement.');
       if (lifecycle.mode === 'credit-application') {
         if (cents(source.record.Balance) !== original || cents(cm.RemainingCredit) !== credited || links(source.record).length || links(cm).length) fail('The managed invoice or credit has already been consumed.');
         amount = 0;
@@ -186,7 +196,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       } else {
         const prior = parent('Payment');
         const invoiceLinks = links(source.record).filter(link => ['Payment', 'CreditMemo'].includes(link.TxnType));
-        if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || prior.record.ARAccountRef?.value !== source.record.ARAccountRef?.value || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
+        if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || prior.record.ARAccountRef?.value !== receivables(source, account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
         amount = original - first;
       }
     } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
@@ -197,8 +207,9 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     }
     if (step.entity === 'Payment') {
       const destination = details.destination === 'undeposited_funds' ? account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds') : details.destination === 'operating_bank' ? account(details.bankMapping, 'Bank') : null;
-      if (!destination || source.record.ARAccountRef?.value !== account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) fail('Payment destination or receivables account is not verified.');
-      Object.assign(payload, { DepositToAccountRef: ref(destination.Id), ARAccountRef: ref(source.record.ARAccountRef.value), ProcessPayment: false });
+      const ar = account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id;
+      if (!destination || receivables(source, ar) !== ar) fail('Payment destination or receivables account is not verified.');
+      Object.assign(payload, { DepositToAccountRef: ref(destination.Id), ARAccountRef: ref(ar), ProcessPayment: false });
     } else if (step.entity === 'BillPayment') {
       if (details.fundingSource !== 'operating_bank' || source.record.APAccountRef?.value !== account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id) fail('Bill payment funding or payables account is not verified.');
       Object.assign(payload, { APAccountRef: ref(source.record.APAccountRef.value), PayType: 'Check', CheckPayment: { BankAccountRef: ref(account(details.bankMapping, 'Bank').Id), PrintStatus: 'NotSet' }, ProcessBillPayment: false });
@@ -212,8 +223,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     }
   }
   const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), payload);
-  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
-  const observedAt = [...referenceEvidence, ...parents, ...parents.filter(value => value.availability).map(value => value.availability), observationFence].map(value => value.observedAt).sort()[0];
+  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
+  const observedAt = [...referenceEvidence, ...parents, ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), observationFence].map(value => value.observedAt).sort()[0];
   const artifact = { version: 1, logicalKey: step.logicalKey, entity: step.entity, intentHash: hash(step), request, evidenceHash, relationships };
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };

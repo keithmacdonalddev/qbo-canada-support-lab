@@ -92,3 +92,39 @@ test('writer reads use transaction, current actor and the bound exact operation'
   assert.throws(() => runtime.graphSnapshot({ scope, intent: { operationId: 'e'.repeat(24), planHash } }));
   assert.throws(() => runtime.loadGraphReadback({ scope: { ...scope, realmId: '456' }, roots: [h.sample.compiled.logicalKey] }));
 });
+
+function omittedInvoiceHarness() {
+  const h = harness('Invoice'), route = require('./helpers/business-receivables-fixture').routingFixture();
+  delete h.sample.observed.record.ARAccountRef; h.sample.refresh();
+  Object.assign(h.row, { logicalKey: h.sample.compiled.logicalKey, qboId: h.sample.observed.record.Id, compilation: h.sample.compiled, receipt: h.sample.receipt });
+  h.row.dispatch.key = h.sample.receipt.dispatchKey;
+  h.Steps.findOne = filter => { assert.deepEqual(filter, { ...scope, entity: 'Invoice', qboId: '2000' }); const query = { select() { return query; }, maxTimeMS() { return query; }, lean: async () => clone(h.row) }; return query; };
+  h.deps.access.authorize = async (_scope, action) => { assert.deepEqual(_scope, scope); assert.ok(['operations.read', 'operations.preview'].includes(action)); return clone(h.actor); };
+  h.report = route.input.report; h.account = route.input.accountObserved.record;
+  h.client.oauthClient.makeApiCall = async options => {
+    h.calls.push(options); if (h.onCall) await h.onCall(options);
+    if (options.url.includes('/reports/')) return { status: 200, json: clone(h.report) };
+    if (options.url.includes('/account/')) return { status: 200, json: { Account: clone(h.account) } };
+    return { status: 200, json: { Invoice: clone(h.sample.observed.record) } };
+  };
+  return h;
+}
+test('runtime independently reads original AR account, exact ledger and unchanged invoice', async () => {
+  const h = omittedInvoiceHarness(), observed = await h.runtime().readRecord(scope, 'Invoice', '2000');
+  assert.equal(observed.record.ARAccountRef, undefined); assert.equal(observed.recordHash, hash(h.sample.observed.record));
+  assert.equal(observed.accountRouting.accountId, '601'); assert.equal(h.calls.length, 4);
+  assert.equal(h.calls[2].url, 'https://sandbox-quickbooks.api.intuit.com/v3/company/123/reports/GeneralLedger?start_date=2026-10-06&end_date=2026-10-06&account=601&accounting_method=Accrual');
+  assert.equal(h.calls[2].maxRetries, 1);
+});
+test('runtime refuses changed invoice, incomplete report, altered original dispatch or writer', async () => {
+  for (const change of [h => { h.onCall = options => { if (options.url.includes('/reports/')) h.sample.observed.record.SyncToken = '1'; }; }, h => { h.report.Rows.Row[0].Header.ColData[0].id = '999'; }, h => { h.row.dispatch.requestHash = hash('other'); }, h => { h.deps.writerFence.graphSnapshot = async () => ({ scope, operationId, revision: h.snapshots.length++ }); }]) {
+    const h = omittedInvoiceHarness(); change(h); await assert.rejects(h.runtime().readRecord(scope, 'Invoice', '2000'));
+  }
+});
+test('runtime cancellation rejects the awaiting ledger read and drains a late result safely', async () => {
+  const h = omittedInvoiceHarness(), controller = new AbortController(); let finish, began;
+  const started = new Promise(resolve => { began = resolve; });
+  h.onCall = options => options.url.includes('/reports/') ? new Promise(resolve => { finish = resolve; began(); }) : undefined;
+  const pending = h.runtime().readRecord(scope, 'Invoice', '2000', { signal: controller.signal });
+  await started; controller.abort(); await assert.rejects(pending, /cancelled/); finish();
+});

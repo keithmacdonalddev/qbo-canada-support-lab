@@ -4,7 +4,8 @@ const { scoped } = require('./qbo-write-contract');
 const { validateCompilation } = require('./business-readback');
 const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessGraphReader } = require('./business-graph-readback');
-const { createBusinessTransactionReader } = require('./business-reference');
+const { createBusinessTransactionReader, createBusinessReferenceReader } = require('./business-reference');
+const { invoiceReceivablesEvidence, endpointFor } = require('./business-receivables-route');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
@@ -38,7 +39,8 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   const checkScope = value => { if (!sameScope(value, scope)) fail('Verification cannot switch its bound company.'); };
   const checkSignal = signal => { if (signal?.aborted) fail('Business verification was cancelled.'); };
   const authority = async (value, action, options = {}) => { checkScope(value); checkSignal(options.signal); const actor = await authorize(scope, action, options); checkSignal(options.signal); return actor; };
-  const readRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now });
+  const rawRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now });
+  const references = createBusinessReferenceReader({ authorize: authority, resolveClient, now });
   const readFence = async (value, { signal } = {}) => {
     checkScope(value); checkSignal(signal); await assertReady();
     const actor = await authority(scope, 'operations.read', { signal });
@@ -48,6 +50,48 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
       const snapshot = await graphSnapshot({ scope, intent: { operationId, planHash }, session }); checkSignal(signal);
       return { ...snapshot, unresolved: null };
     }, { signal });
+  };
+  const readRecord = async (value, entity, qboId, { signal } = {}) => {
+    const observed = await rawRecord(value, entity, qboId, { signal });
+    if (entity !== 'Invoice' || observed.record.ARAccountRef !== undefined) return observed;
+    // Restrict compatibility to a retained managed save, never an arbitrary invoice.
+    const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
+    const compiled = row?.compilation;
+    if (!row || !['saved', 'verified'].includes(row.state) || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || row.entity !== entity || row.qboId !== qboId || compiled?.entity !== entity || compiled.logicalKey !== row.logicalKey || compiled.intentHash !== row.fingerprint || compiled.compilationHash !== row.dispatch?.compilationHash || compiled.request?.requestHash !== row.dispatch?.requestHash || row.receipt?.dispatchKey !== row.dispatch?.key || row.receipt?.requestHash !== row.dispatch?.requestHash || row.receipt?.qboId !== qboId) fail('The omitted invoice account requires its original saved compilation and receipt.');
+    validateCompilation(compiled);
+    await assertOwnerAttribution({ Receipts, Authorities, Audits }, scope, row);
+    const intent = await loadIntent(scope, String(row.operationId), row.logicalKey, { policyHead: row.dispatch.policyAmendmentHash || null }); checkSignal(signal);
+    if (!intent || intent.version !== 1 || !sameScope(intent.scope, scope) || intent.operationId !== String(row.operationId) || intent.planHash !== row.planHash || intent.logicalKey !== row.logicalKey || intent.entity !== entity || intent.fingerprint !== row.fingerprint || hash(intent.step) !== row.fingerprint || intent.policy?.status !== 'approved' || intent.policy.stepHash !== row.fingerprint || (row.dispatch.policyHash && row.dispatch.policyHash !== hash(intent.policy))) fail('The original approved invoice account policy changed.');
+    const bindings = intent.step.references.filter(binding => binding.entity === 'Account' && binding.key === 'accountsReceivable');
+    if (bindings.length !== 1) fail('The original invoice needs one approved receivables account.');
+    const beforeFence = await readFence(scope, { signal }), actor = await authority(scope, 'operations.read', { signal });
+    const accountObserved = await references(scope, 'Account', bindings[0].id, { signal }); checkSignal(signal);
+    const client = await resolveClient(scope, { signal }); checkSignal(signal);
+    const { QBOClient } = require('./qbo-client');
+    const expectedBase = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
+    const clientScope = () => { if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall || client.apiBase !== expectedBase || client.realmId !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.userId) !== actor.ownerId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active') fail('The receivables report client changed company.'); };
+    clientScope(); const reportObservedAt = new Date(now()).toISOString(), endpoint = endpointFor(observed.record, bindings[0].id);
+    const reportController = new AbortController(), cancelReport = () => reportController.abort();
+    if (signal?.aborted) cancelReport(); else signal?.addEventListener('abort', cancelReport, { once: true });
+    const reportTimer = setTimeout(cancelReport, 60000); reportTimer.unref?.();
+    let report;
+    try {
+      report = await new Promise((resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error('The receivables report read was cancelled or exceeded its one-minute budget.'), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }));
+        if (reportController.signal.aborted) { abort(); return; }
+        reportController.signal.addEventListener('abort', abort, { once: true });
+        const control = { signal: reportController.signal, beforeAttempt: async () => { checkSignal(signal); clientScope(); await authority(scope, 'operations.read', { signal: reportController.signal }); }, onFailure: () => {} };
+        Promise.resolve().then(() => client.apiCall('GET', endpoint, undefined, 0, 0, control)).then(resolve, reject).finally(() => reportController.signal.removeEventListener('abort', abort));
+      });
+    } finally { clearTimeout(reportTimer); signal?.removeEventListener('abort', cancelReport); reportController.abort(); }
+    checkSignal(signal); clientScope();
+    const after = await rawRecord(scope, entity, qboId, { signal });
+    if (after.recordHash !== observed.recordHash) fail('The invoice changed during receivables report verification.');
+    const afterFence = await readFence(scope, { signal }), current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);
+    if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The receivables reader changed.');
+    const receipt = { ...row.receipt, scope, entity, logicalKey: row.logicalKey };
+    const accountRouting = invoiceReceivablesEvidence({ compiled, receipt, observed, accountBinding: bindings[0], accountObserved, report, reportObservedAt, beforeFence, afterFence, now: now() });
+    return { ...observed, accountRouting };
   };
   const loadTaxPolicy = async (value, compiled, { signal } = {}) => {
     checkScope(value); checkSignal(signal); const request = validateCompilation(compiled); checkScope(request.scope);
