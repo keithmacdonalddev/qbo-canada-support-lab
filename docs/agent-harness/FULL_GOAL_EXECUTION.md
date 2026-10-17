@@ -1,6 +1,16 @@
 # Whole-goal execution and current handoff
 
-Updated 2026-10-17 UTC (2026-10-16 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
+Updated 2026-10-17 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
+
+## Current execution snapshot — 2026-10-17 05:08 UTC
+
+- The full goal remains active and incomplete. Target: Production company ending 2856, published draft v7, 71 verified master records. The exact three huge unwanted records were already cleaned.
+- September 2023 had 111 accepted records of the original 198-record plan before the active batch. Cursor remains 32; a batch claims the native worker lease and returns the incomplete run to blocked during cleanup. Read the live job for subsequent IDs. No managed month or calendar advancement is claimed. The original Estimate/Time/Invoice relationship remains deferred and unverified.
+- This continuation added 52 records: 49 financial records, two Time Activities and one Estimate. All passed native verification. Payment 697 and Bill Payment 714 now have exact ledger posting evidence; the latest payable fixes are committed and pushed in dcd610e.
+- Batch receipts and original source files are indexed in the private artifacts/goal-realization/work-value-ledger-20261017.json. All accepted IDs remain in native receipts; raw company data stays local.
+- Reports captured after 108 saved records: company-independent-inspect-a2de7eab-5344-4fa7-a091-a1750ced15d8-result-20261017.json, 16 GET and zero POST. September 2023 and 2026 year-to-date each have seven populated critical reports and four passed accounting comparisons. This does not assert bank reconciliation or a completed calendar.
+- Financial-only selection is exhausted. Remaining approved Quotes and Time Activities are independent work. Reviewed private driver company-independent-eligible-v4-20261017.cjs (SHA 6b40fae5b2297e7b7d277841ff8cb79b2e7819c03ad38c9abb6829024ea4d635) retains native permits/receipts and excludes Estimate-linked Invoices and their descendants. Its first batch saved and verified three records (24 GET / 3 POST), then stopped before further dispatch at the retained checkpoint margin with cleanup closed. Direct proof: company-independent-execute-5293ad44-0c1e-4b13-a199-8c901387e478-result-20261017.json.
+- Active job: independent-eligible-v4-next-execute, launched from the exact closed 20-record preview (10 Estimates / 10 Time Activities), startingSavedCount 111. Private launch record: independent-eligible-v4-next-execute-20261017-launch.json; intent: company-independent-eligible-next-execute-intent-20261017.json. Poll this same process/handle and its actual receipts; do not restart on a transient observation failure. Next delivery checkpoint: 05:21:05.526 UTC. After it closes, record actual new accepted IDs and continue the next exact eligible batch. Never recreate an accepted record or restart optional link work under another script.
 
 ## What the conversation establishes
 
