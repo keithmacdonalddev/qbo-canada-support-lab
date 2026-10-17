@@ -2500,8 +2500,7 @@
         "status": "supported",
         "endpoint": "CustomerBalanceDetail",
         "parameters": [
-          "start_date",
-          "end_date",
+          "report_date",
           "customer"
         ]
       },
@@ -2535,11 +2534,13 @@
       "uiNavigation": null,
       "coverageState": "unknown",
       "evidenceStatus": "documented",
-      "lastVerified": "2026-08-08",
+      "lastVerified": "2026-10-17",
       "sourceIds": [
         "intuit.reports"
       ],
-      "knownDiscrepancies": []
+      "knownDiscrepancies": [
+        "2026-10-17 read-only observation: start_date/end_date were ignored. The report_date parameter was echoed in Header.Option at both requested historical/current cutoffs; treat this report as an as-of balance scope."
+      ]
     },
     {
       "key": "report.ar-aging-detail",
@@ -2669,8 +2670,7 @@
         "status": "supported",
         "endpoint": "VendorBalanceDetail",
         "parameters": [
-          "start_date",
-          "end_date",
+          "report_date",
           "vendor"
         ]
       },
@@ -2704,11 +2704,13 @@
       "uiNavigation": null,
       "coverageState": "unknown",
       "evidenceStatus": "documented",
-      "lastVerified": "2026-08-08",
+      "lastVerified": "2026-10-17",
       "sourceIds": [
         "intuit.reports"
       ],
-      "knownDiscrepancies": []
+      "knownDiscrepancies": [
+        "2026-10-17 read-only observation: start_date/end_date were ignored. The report_date parameter was echoed in Header.Option at both requested historical/current cutoffs; treat this report as an as-of balance scope."
+      ]
     },
     {
       "key": "report.ap-aging-detail",
