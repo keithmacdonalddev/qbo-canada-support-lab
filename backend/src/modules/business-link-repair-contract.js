@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/;
-const PLAN = 'business-link-repair-plan', RECOVERY_PLAN = 'business-link-repair-recovery-plan', OUTCOME = 'business-link-repair-outcome', NO_EFFECT = 'business-link-repair-no-effect';
+const PLAN = 'business-link-repair-plan', RECOVERY_PLAN = 'business-link-repair-recovery-plan', OUTCOME = 'business-link-repair-outcome', NO_EFFECT = 'business-link-repair-no-effect', REVERSE_PLAN = 'business-estimate-link-repair-plan';
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_LINK_REPAIR_UNVERIFIED' }); }
 const equal = (a,b) => canonical(a) === canonical(b);
 const fresh = (stamp, now) => typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) && new Date(stamp).toISOString() === stamp && Date.parse(stamp) <= now && now - Date.parse(stamp) <= 300000;
@@ -19,15 +19,17 @@ function creationIdentity(step) {
 }
 function repairRequest(plan) {
   const invoice = plan.before.invoice.record;
+  if(plan.kind===REVERSE_PLAN)return freezeWriteRequest(plan.scope,'POST','estimate',{Id:plan.before.estimate.record.Id,SyncToken:plan.before.estimate.record.SyncToken,sparse:true,LinkedTxn:[{TxnId:invoice.Id,TxnType:'Invoice'}]});
   return freezeWriteRequest(plan.scope, 'POST', 'invoice', { Id: invoice.Id, SyncToken: invoice.SyncToken, sparse: true, LinkedTxn: plan.links });
 }
 function assertPlan(p, now, requireFresh = false) {
-  if (!p || p.version !== 1 || ![PLAN,RECOVERY_PLAN].includes(p.kind) || !ID.test(p.ownerId || '') || !ID.test(p.operationId || '') || !HASH.test(p.planHash || '') || !HASH.test(p.logicalKey || '') || !HASH.test(p.publishedAuthorityHash || '') || !fresh(p.reviewedAt, requireFresh ? now : Date.parse(p.reviewedAt)) || typeof p.reason !== 'string' || p.reason.length < 30 || p.reason.length > 2000 || !Array.isArray(p.identities) || p.identities.length < 3 || p.identities.length > 500 || new Set(p.identities.map(x=>x.logicalKey)).size !== p.identities.length || !p.state || !p.before || !Array.isArray(p.links) || p.links.length !== 2) fail('An exact reviewed owned-link repair plan is required.');
+  if (!p || p.version !== 1 || ![PLAN,RECOVERY_PLAN,REVERSE_PLAN].includes(p.kind) || !ID.test(p.ownerId || '') || !ID.test(p.operationId || '') || !HASH.test(p.planHash || '') || !HASH.test(p.logicalKey || '') || !HASH.test(p.publishedAuthorityHash || '') || !fresh(p.reviewedAt, requireFresh ? now : Date.parse(p.reviewedAt)) || typeof p.reason !== 'string' || p.reason.length < 30 || p.reason.length > 2000 || !Array.isArray(p.identities) || p.identities.length < 3 || p.identities.length > 500 || new Set(p.identities.map(x=>x.logicalKey)).size !== p.identities.length || !p.state || !p.before || !Array.isArray(p.links) || p.links.length !== 2) fail('An exact reviewed owned-link repair plan is required.');
   if(p.kind===RECOVERY_PLAN){
     if(p.recovery?.version!==1||!HASH.test(p.recovery.originalAuthorityHash||'')||typeof p.recovery.originalPlanJson!=='string'||Buffer.byteLength(p.recovery.originalPlanJson)>8000000)fail('An exact original malformed source is required for recovery.');
     const original=JSON.parse(p.recovery.originalPlanJson);if(original.kind!==PLAN||hash(original)!==p.recovery.originalAuthorityHash)fail('The recovered source differs from the original audited plan hash.');
     assertPlan(original,Date.parse(original.reviewedAt));
   }
+  if(p.kind===REVERSE_PLAN&&(!p.reverse||p.reverse.version!==1||!HASH.test(p.reverse.unsuccessfulOutcomeHash||'')))fail('A separately verified unsuccessful original repair is required before exact reverse-link review.');
   const scope = scoped(p.scope); if (!equal(scope,p.scope)) fail('The repair scope changed.');
   for (const identity of p.identities) if (!HASH.test(identity.logicalKey || '') || !QID.test(identity.qboId || '') || !['fingerprint','compilationHash','compilation','dispatch','receipt'].every(k=>HASH.test(identity[k] || ''))) fail('Original accepted creation evidence is incomplete.');
   const step=p.originalStep, request=require('./business-readback').validateCompilation(step?.compilation), original=JSON.parse(request.body);
@@ -40,7 +42,8 @@ function assertPlan(p, now, requireFresh = false) {
   }
   const stamp=requireFresh?now:Date.parse(p.reviewedAt), invoice=observation(p.before.invoice,scope,'Invoice',step.qboId,stamp), source=observation(p.before.estimate,scope,'Estimate',estimate[0].qboId,stamp), work=observation(p.before.time,scope,'TimeActivity',time[0].qboId,stamp), customer=observation(p.before.customer,scope,'Customer',invoice.CustomerRef?.value,stamp);
   if(!equal(invoice.LinkedTxn,[{TxnId:time[0].qboId,TxnType:'TimeActivity'}]) || source.LinkedTxn!==undefined || !['Pending','Accepted'].includes(source.TxnStatus) || work.BillableStatus!=='HasBeenBilled' || work.LinkedTxn!==undefined || customer.Active!==true || !equal(invoice.CustomerRef,source.CustomerRef) || work.CustomerRef?.value!==invoice.CustomerRef?.value || invoice.CurrencyRef?.value!=='CAD' || original.CustomerRef?.value!==customer.Id || invoice.TxnDate!==original.TxnDate || invoice.Balance!==invoice.TotalAmt || invoice.HomeBalance!==invoice.HomeTotalAmt || invoice.Line?.some(x=>x.LinkedTxn!==undefined)) fail('The exact unconverted owned service chain changed before repair.');
-  const requestAfter=repairRequest(p); if(requestAfter.operation!=='update' || requestAfter.targetId!==invoice.Id) fail('The repair must update the same saved invoice.');
+  if(p.kind===REVERSE_PLAN&&!equal(p.reverse.targetIdentity,p.identities.find(x=>x.entity==='Estimate'&&x.qboId===source.Id)))fail('The distinct Estimate target must retain its exact original creation identity.');
+  const requestAfter=repairRequest(p); if(requestAfter.operation!=='update' || requestAfter.targetId!==(p.kind===REVERSE_PLAN?source.Id:invoice.Id)) fail('The repair must update the same saved invoice.');
   return p;
 }
 function withoutChanges(record,entity) {
@@ -64,18 +67,17 @@ function assertRepairReadback(plan,after,now=Date.now()) {
   for(const [key,entity]of Object.entries({invoice:'Invoice',estimate:'Estimate',time:'TimeActivity',customer:'Customer'})) observation(after[key],scope,entity,before[key].record.Id,now);
   const invoice=after.invoice.record,estimate=after.estimate.record;
   assertChangedMetadata(before.invoice.record,invoice,'Invoice'); assertChangedMetadata(before.estimate.record,estimate,'Estimate');
-  if(invoice.SyncToken===before.invoice.record.SyncToken || !equal(headerLinks(invoice.LinkedTxn),headerLinks(plan.links)) || !equal(headerLinks(estimate.LinkedTxn),[{TxnId:invoice.Id,TxnType:'Invoice'}]) || estimate.TxnStatus!=='Closed') fail('The full Estimate conversion and both original header links must actually exist.');
+  if((plan.kind===REVERSE_PLAN?BigInt(estimate.SyncToken)!==BigInt(before.estimate.record.SyncToken)+1n:invoice.SyncToken===before.invoice.record.SyncToken) || !equal(headerLinks(invoice.LinkedTxn),headerLinks(plan.links)) || !equal(headerLinks(estimate.LinkedTxn),[{TxnId:invoice.Id,TxnType:'Invoice'}]) || estimate.TxnStatus!=='Closed') fail('The full Estimate conversion and both original header links must actually exist.');
   if(!equal(before.time.record,after.time.record) || !equal(before.customer.record,after.customer.record)) fail('The repair changed its time or customer record.');
   return {version:1,kind:'owned-link-repair-record-invariants',scope,logicalKey:plan.logicalKey,beforeHash:hash(before),afterHash:hash(after),unchangedAccounting:true,actualHeaderLinks:true,actualEstimateBacklink:true};
 }
 function assertNoEffectReadback(plan,after,receipt,now=Date.now()) {
-  assertPlan(plan,now);const before=plan.before,scope=plan.scope;
+  assertPlan(plan,now);const before=plan.before,scope=plan.scope,target=plan.kind===REVERSE_PLAN?'estimate':'invoice';
   for(const [key,entity]of Object.entries({invoice:'Invoice',estimate:'Estimate',time:'TimeActivity',customer:'Customer'}))observation(after[key],scope,entity,before[key].record.Id,now);
-  const invoice=after.invoice.record;assertChangedMetadata(before.invoice.record,invoice,'Invoice');
-  const metadataBefore={...before.invoice.record.MetaData},metadataAfter={...invoice.MetaData};delete metadataBefore.LastUpdatedTime;delete metadataAfter.LastUpdatedTime;
-  if(!equal(metadataBefore,metadataAfter))fail('Only the observed invoice update timestamp may change in unsuccessful settlement.');
-  if(BigInt(invoice.SyncToken)!==BigInt(before.invoice.record.SyncToken)+1n||receipt?.observed?.syncToken!==invoice.SyncToken||!equal(invoice.LinkedTxn,before.invoice.record.LinkedTxn))fail('The saved unsuccessful update must preserve the exact original links and single accepted version.');
-  for(const key of ['estimate','time','customer'])if(!equal(before[key].record,after[key].record))fail('The unsuccessful update changed its original source or customer record.');
+  const old=before[target].record,actual=after[target].record,strip=record=>{const value=structuredClone(record);delete value.SyncToken;if(value.MetaData)delete value.MetaData.LastUpdatedTime;return value;};
+  assertChangedMetadata(old,actual,target==='invoice'?'Invoice':'Estimate');
+  if(!equal(strip(old),strip(actual))||BigInt(actual.SyncToken)!==BigInt(old.SyncToken)+1n||receipt?.observed?.syncToken!==actual.SyncToken)fail('The saved unsuccessful update must preserve every original field and link outside its single accepted version and update timestamp.');
+  for(const key of ['invoice','estimate','time','customer'].filter(key=>key!==target))if(!equal(before[key].record,after[key].record))fail('The unsuccessful update changed another original record.');
   return {version:1,kind:'owned-link-repair-no-effect-invariants',scope,logicalKey:plan.logicalKey,beforeHash:hash(before),afterHash:hash(after),unchangedAccounting:true,linkVerified:false,originalMissingLinkPreserved:true};
 }
 function assertReadFence(value) {
@@ -84,4 +86,4 @@ function assertReadFence(value) {
   if(!q || q.version!==1 || q.kind!=='known-saved-link-repair' || !HASH.test(q.authorityHash || '') || !HASH.test(q.receiptId || '') || !HASH.test(q.receiptEvidenceHash || '') || !HASH.test(q.requestHash || '') || !HASH.test(q.dispatchKey || '') || !QID.test(q.qboId || '') || q.operationId!==value.operationId || u?.kind!=='business-link-repair' || u.authorityHash!==q.authorityHash || u.key!==q.dispatchKey || u.requestHash!==q.requestHash || u.transportConsumed?.receiptId!==q.receiptId || u.responseReceiptId!==q.receiptId) fail('Only the exact known-saved repair may be inspected while its barrier is held.');
   return value;
 }
-module.exports={PLAN,RECOVERY_PLAN,OUTCOME,NO_EFFECT,assertNoEffectReadback,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};
+module.exports={PLAN,RECOVERY_PLAN,REVERSE_PLAN,OUTCOME,NO_EFFECT,assertNoEffectReadback,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};

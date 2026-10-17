@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { assertRun, assertRunApproval } = require('./business-period-store');
 const { businessTransportEvidence, assertBusinessTransportAudits } = require('./business-dispatch-receipt');
-const { PLAN, RECOVERY_PLAN, OUTCOME, NO_EFFECT, assertNoEffectReadback, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
+const { PLAN, RECOVERY_PLAN, REVERSE_PLAN, OUTCOME, NO_EFFECT, assertNoEffectReadback, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
 const ACTION = 'Owned business Invoice link repair approved', VERIFIED = 'Owned business Invoice link repair verified', NO_EFFECT_ACTION = 'Owned business Invoice link repair saved without effect';
 const read=(Model,filter,session)=>Model.findOne(filter).session(session).maxTimeMS(3000).lean();
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -85,21 +85,17 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   }
   return steps;
  }
- async function loadPlan(scope,authorityHash,session){
-  const authority=await read(Authorities,{...scope,contentHash:authorityHash},session),p=authority?.payload;
-  if(!authority||authority.contractVersion!==1||String(authority._id)!==hash({scope,kind:p?.kind,logicalKey:p?.logicalKey}).slice(0,24)||hash(p)!==authorityHash||!same(authority.actorId,p?.ownerId))fail('The exact immutable repair authority is unavailable.');assertPlan(p,now());
-  await require('./business-link-repair-recovery').assertRecoverySource({models,scope,plan:p,session,clock:now()});
-  const audit=await read(Audits,{_id:authority.auditId,userId:p.ownerId,realmId:scope.realmId,action:ACTION,actionType:'manual',outcome:'success'},session);
-  if(!audit||!equal(audit.afterState,approvalState(p,authorityHash)))fail('The exact repair approval audit is unavailable.');
-  return {authority,p};
- }
+ async function loadPlan(scope,authorityHash,session){return loadRepairPlan({models,scope,authorityHash,session,clock:now()});}
  async function approve(p){
   assertPlan(p,now(),true);assertReportSources(p,p.reports,p.reports,now(),true);if(Buffer.byteLength(canonical(p))>8000000)fail('Repair authority exceeds its bounded evidence budget.');
   const authorityHash=hash(p),auditId=hash({authorityHash,event:'approved'}).slice(0,24);
   return transaction(async session=>{
    const current=await state(p.scope,p.operationId,session,null,true);if(current.actor.ownerId!==p.ownerId||!equal(stateSignature(current.run,current.calendar,current.writer),p.state)||current.run.authorityHash!==p.publishedAuthorityHash||!equal(p.period,{fromDate:current.run.fromDate,throughDate:current.run.throughDate})||p.currentDate!==require('./business-activity-preview').businessDate(new Date(now())))fail('The reviewed company operation changed.');await assertCreations(p,session);
    // One plan per original creation, even after a rejection. No retry authority is inferred.
-   if(p.kind===PLAN){if(await read(Authorities,{...p.scope,'payload.kind':{$in:[PLAN,RECOVERY_PLAN]},'payload.logicalKey':p.logicalKey},session))fail('This original Invoice already has a retained repair plan. Inspect it without another update.');}
+   if(p.kind===REVERSE_PLAN){
+    await assertReverseSource({models,p,session,clock:now()});
+    if(await read(Authorities,{...p.scope,'payload.kind':REVERSE_PLAN,'payload.logicalKey':p.logicalKey},session))fail('This original chain already has its one distinct Estimate correction authority.');
+   }else if(p.kind===PLAN){if(await read(Authorities,{...p.scope,'payload.kind':{$in:[PLAN,RECOVERY_PLAN,REVERSE_PLAN]},'payload.logicalKey':p.logicalKey},session))fail('This original Invoice already has a retained repair plan. Inspect it without another update.');}
    else {
     await require('./business-link-repair-recovery').assertRecoverySource({models,scope:p.scope,plan:p,session,clock:now()});
     if(await read(Authorities,{...p.scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':p.logicalKey},session)||await read(Receipts,{...p.scope,kind:'business-link-repair',logicalKey:p.logicalKey},session))fail('This original target already has recovery authority or transport evidence.');
@@ -120,11 +116,11 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   const run=await Runs.findOneAndUpdate({_id:s.run._id,...scope,status:'blocked',writerRevision:s.run.writerRevision,evidenceRevision:s.run.evidenceRevision,executionRevision:s.run.executionRevision,leaseToken:null,'executionRequest.pending':false},{$inc:{writerRevision:1,evidenceRevision:1},$set:{verificationCandidateHash:null}},{new:true,session}).lean();
   const calendar=await Calendars.findOneAndUpdate({_id:s.calendar._id,...scope,writerRevision:s.calendar.writerRevision,currentOperationId:p.operationId,stopRequested:false,pendingCommit:null},{$inc:{writerRevision:1}},{new:true,session}).lean();
   if(!run||!calendar)fail('The blocked operation changed while admitting repair.');
-  return {kind:'business-link-repair',authorityHash:workflow.authorityHash,operationId:p.operationId,logicalKey:p.logicalKey,key:dispatchKey,requestHash:request.requestHash,actorId,entity:'invoice',transportConsumed:{receiptId,consumedAt:new Date(now()).toISOString()}};
+  return {kind:'business-link-repair',authorityHash:workflow.authorityHash,operationId:p.operationId,logicalKey:p.logicalKey,key:dispatchKey,requestHash:request.requestHash,actorId,entity:request.entity,transportConsumed:{receiptId,consumedAt:new Date(now()).toISOString()}};
  }
  async function settle({stored,observed,session}){
   const {p}=await loadPlan({environment:stored.environment,realmId:stored.realmId,connectionId:String(stored.connectionId)},stored.workflow?.authorityHash,session);
-  if(stored.kind!=='business-link-repair'||stored.operation!=='update'||stored.requestHash!==repairRequest(p).requestHash||!['saved','unknown','rejected'].includes(observed.outcome)||(observed.outcome==='saved'&&observed.qboId!==p.originalStep.qboId))fail('The repair result does not match its single admitted target.');
+  if(stored.kind!=='business-link-repair'||stored.operation!=='update'||stored.requestHash!==repairRequest(p).requestHash||!['saved','unknown','rejected'].includes(observed.outcome)||(observed.outcome==='saved'&&observed.qboId!==repairRequest(p).targetId))fail('The repair result does not match its single admitted target.');
  }
  async function saved(scope,authorityHash,session){
   const {p}=await loadPlan(scope,authorityHash,session),s=await state(scope,p.operationId,session,authorityHash),key=dispatchKeyFor(authorityHash),receiptId=hash({scope,dispatchKey:key}),row=await read(Receipts,{_id:receiptId,...scope},session);
@@ -141,7 +137,7 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   return transaction(async session=>{
    const s=await saved(scope,authorityHash,session),p=s.p,invariants=assertNoEffectReadback(p,after,s.row,now()),financial=assertReportSources(p,p.reports,reports,now(),false,parentLedgers);await assertCreations(p,session);
    if(await read(Authorities,{...scope,'payload.planAuthorityHash':authorityHash,'payload.kind':{$in:[OUTCOME,NO_EFFECT]}},session))fail('The saved repair already has a retained settlement.');
-   const payload={version:1,kind:NO_EFFECT,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),linkVerified:false,originalOperationBlocked:true,invariants,after,reports,parentLedgers,financial},contentHash=hash(payload),auditId=hash({contentHash,event:'no-effect'}).slice(0,24);
+   const payload={version:1,kind:NO_EFFECT,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),...(p.kind===REVERSE_PLAN?{repairTarget:p.reverse.targetIdentity}:{}),linkVerified:false,originalOperationBlocked:true,invariants,after,reports,parentLedgers,financial},contentHash=hash(payload),auditId=hash({contentHash,event:'no-effect'}).slice(0,24);
    if(Buffer.byteLength(canonical(payload))>8000000)fail('Unsuccessful repair settlement exceeds its retained budget.');
    await Authorities.create([{_id:hash({scope,kind:NO_EFFECT,planAuthorityHash:authorityHash}).slice(0,24),contractVersion:1,...scope,contentHash,payload,actorId:p.ownerId,auditId}],{session});
    await Audits.create([{_id:auditId,userId:p.ownerId,realmId:scope.realmId,action:NO_EFFECT_ACTION,actionType:'manual',outcome:'partial',afterState:noEffectAuditState(payload,contentHash)}],{session});
@@ -157,12 +153,13 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   for(const key of [prepared.p.logicalKey,...prepared.p.originalStep.compilation.relationships.map(x=>x.logicalKey)]){const row=prepared.rows.find(x=>x.logicalKey===key),policy=await loadTaxPolicy(scope,row.compilation);policyHashes[key]=hash(policy);}
   return transaction(async session=>{
    const s=await saved(scope,authorityHash,session),p=s.p,invariants=assertRepairReadback(p,after,now()),financial=assertReportSources(p,p.reports,reports,now(),false,parentLedgers);const originalRows=await assertCreations(p,session);
+   if(after[p.kind===REVERSE_PLAN?'estimate':'invoice'].record.SyncToken!==s.row.observed.syncToken)fail('The independent target version differs from its exact saved repair response.');
    const snapshot=await graphSnapshot({scope,intent:{operationId:p.operationId,planHash:p.planHash},authorityHash,session}),expectedFence={scope,operationId:p.operationId,revision:snapshot.revision,unresolved:snapshot.unresolved,quarantinedRepair:snapshot.quarantinedRepair};
    const graphSteps=assertRepairGraph(p,after,graph,expectedFence,originalRows,now(),policyHashes);
    // Retain the complete graph as bounded JSON text so nested ledger/report
    // sources do not exceed the published blueprint canonical depth contract.
    const graphSourceJson=JSON.stringify(graph),graphSourceHash=hash(graphSourceJson),graphSummary={version:graph.version,scope:graph.scope,roots:graph.roots,complete:graph.complete,recordCount:graph.recordCount,observedAt:graph.observedAt,writerFence:graph.writerFence,evidenceHash:graph.evidenceHash,records:graph.records.map(({proof,...row})=>({...row,proof:{kind:proof.kind,matchesIntent:proof.matchesIntent,observedHash:proof.observedHash,compilationHash:proof.compilationHash,evidenceHash:proof.evidenceHash,syncToken:proof.syncToken,observedAt:proof.observedAt}}))};
-   const payload={version:1,kind:OUTCOME,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),invariants,after,reports,parentLedgers,financial,graphSteps,policyHashes,graph:graphSummary,graphSourceJson,graphSourceHash},contentHash=hash(payload),auditId=hash({contentHash,event:'verified'}).slice(0,24);
+   const payload={version:1,kind:OUTCOME,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),...(p.kind===REVERSE_PLAN?{repairTarget:p.reverse.targetIdentity}:{}),invariants,after,reports,parentLedgers,financial,graphSteps,policyHashes,graph:graphSummary,graphSourceJson,graphSourceHash},contentHash=hash(payload),auditId=hash({contentHash,event:'verified'}).slice(0,24);
    if(Buffer.byteLength(canonical(payload))>8000000)fail('Repair verification exceeds its retained evidence budget.');
    await Authorities.create([{_id:hash({scope,kind:OUTCOME,planAuthorityHash:authorityHash}).slice(0,24),contractVersion:1,...scope,contentHash,payload,actorId:p.ownerId,auditId}],{session});
    await Audits.create([{_id:auditId,userId:p.ownerId,realmId:scope.realmId,action:VERIFIED,actionType:'manual',outcome:'success',afterState:{authorityHash:contentHash,planAuthorityHash:authorityHash,receiptId:s.row._id,operationId:p.operationId,logicalKey:p.logicalKey,allAccountDeltaCents:0,graphEvidenceHash:graph.evidenceHash}}],{session});
@@ -175,16 +172,46 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
 }
 async function assertSavedRepairReceipt(models,scope,p,authorityHash,row,session){
  const {Audits}=models,dispatchKey=dispatchKeyFor(authorityHash),receiptId=hash({scope,dispatchKey}),request=repairRequest(p),observed=row?.observed;
- if(!row||row.contractVersion!==1||row._id!==receiptId||row.kind!=='business-link-repair'||row.operation!=='update'||row.entity!=='invoice'||!equal({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)},scope)||!same(row.ownerId,p.ownerId)||!same(row.actorId,p.ownerId)||row.workflow?.version!==1||row.workflow.kind!=='business-link-repair'||row.workflow.authorityHash!==authorityHash||row.dispatchKey!==dispatchKey||row.requestHash!==request.requestHash||row.state!=='saved'||observed?.outcome!=='saved'||observed.operation!=='update'||observed.entity!=='invoice'||observed.qboId!==p.originalStep.qboId||! /^[a-f0-9]{64}$/.test(observed.responseHash||'')||observed.httpStatus<200||observed.httpStatus>299)fail('An exact known-saved dedicated repair receipt is required.');
- const start=hash({receiptId,event:'started'}).slice(0,24),result=hash({receiptId,event:'response',observed}).slice(0,24),params={environment:scope.environment,connectionId:scope.connectionId,dispatchKey,requestHash:row.requestHash,entity:'invoice',operation:'update'};
+ if(!row||row.contractVersion!==1||row._id!==receiptId||row.kind!=='business-link-repair'||row.operation!=='update'||row.entity!==request.entity||!equal({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)},scope)||!same(row.ownerId,p.ownerId)||!same(row.actorId,p.ownerId)||row.workflow?.version!==1||row.workflow.kind!=='business-link-repair'||row.workflow.authorityHash!==authorityHash||row.dispatchKey!==dispatchKey||row.requestHash!==request.requestHash||row.state!=='saved'||observed?.outcome!=='saved'||observed.operation!=='update'||observed.entity!==request.entity||observed.qboId!==request.targetId||! /^[a-f0-9]{64}$/.test(observed.responseHash||'')||observed.httpStatus<200||observed.httpStatus>299)fail('An exact known-saved dedicated repair receipt is required.');
+ const start=hash({receiptId,event:'started'}).slice(0,24),result=hash({receiptId,event:'response',observed}).slice(0,24),params={environment:scope.environment,connectionId:scope.connectionId,dispatchKey,requestHash:row.requestHash,entity:request.entity,operation:'update'};
  if(!same(row.startAuditId,start)||!same(row.resultAuditId,result))fail('The repair transport audit identity changed.');
  for(const expected of [{id:start,action:'QuickBooks write dispatch recorded',outcome:'partial',afterState:{state:'possibly-sent',receiptId}},{id:result,action:'QuickBooks write response recorded',outcome:'success',afterState:{state:'saved',receiptId,...observed}}]){const a=await read(Audits,{_id:expected.id},session);if(!a||!same(a.userId,p.ownerId)||!same(a.actorUserId||a.userId,p.ownerId)||a.realmId!==scope.realmId||a.action!==expected.action||a.actionType!=='manual'||a.outcome!==expected.outcome||!equal(a.inputParams,params)||!equal(a.afterState,expected.afterState))fail('The exact repair dispatch and result audits are required.');}
  return row;
 }
 
+async function loadRepairPlan({models,scope,authorityHash,session,clock=Date.now()}){
+ const {Authorities,Audits}=models;
+  const authority=await read(Authorities,{...scope,contentHash:authorityHash},session),p=authority?.payload;
+  if(!authority||authority.contractVersion!==1||String(authority._id)!==hash({scope,kind:p?.kind,logicalKey:p?.logicalKey}).slice(0,24)||hash(p)!==authorityHash||!same(authority.actorId,p?.ownerId))fail('The exact immutable repair authority is unavailable.');assertPlan(p,clock);
+  await require('./business-link-repair-recovery').assertRecoverySource({models,scope,plan:p,session,clock:clock});
+  await assertReverseSource({models,p,session,clock});
+  const audit=await read(Audits,{_id:authority.auditId,userId:p.ownerId,realmId:scope.realmId,action:ACTION,actionType:'manual',outcome:'success'},session);
+  if(!audit||!equal(audit.afterState,approvalState(p,authorityHash)))fail('The exact repair approval audit is unavailable.');
+  return {authority,p};
+ }
+
+async function assertReverseSource({models,p,session,clock=Date.now()}){
+ const {Authorities,Receipts}=models;
+  if(p.kind!==REVERSE_PLAN)return;
+  const outcome=await read(Authorities,{...p.scope,contentHash:p.reverse.unsuccessfulOutcomeHash,'payload.kind':NO_EFFECT},session),priorHash=outcome?.payload?.planAuthorityHash;
+  if(!outcome||outcome.payload.kind!==NO_EFFECT)fail('The exact unsuccessful original Invoice repair outcome is required.');
+  const priorRow=await read(Authorities,{...p.scope,contentHash:priorHash},session);
+  if(priorRow?.payload?.kind===REVERSE_PLAN)fail('Reverse correction authority cannot chain another admitted experiment.');
+  const prior=await loadRepairPlan({models,scope:p.scope,authorityHash:priorHash,session,clock});
+  if(prior.p.kind===REVERSE_PLAN)fail('An Estimate update cannot authorize another reverse-link attempt.');
+  const row=await read(Receipts,{_id:hash({scope:p.scope,dispatchKey:dispatchKeyFor(priorHash)}),...p.scope},session);await assertSavedRepairReceipt(models,p.scope,prior.p,priorHash,row,session);
+  await assertNoEffectOutcome({models,scope:p.scope,p:prior.p,authority:prior.authority,row,outcome,session});
+  const o=outcome.payload;
+  if(p.ownerId!==prior.p.ownerId||p.operationId!==prior.p.operationId||p.planHash!==prior.p.planHash||p.logicalKey!==prior.p.logicalKey||p.publishedAuthorityHash!==prior.p.publishedAuthorityHash||!equal(p.identities,prior.p.identities)||!equal(p.originalStep,prior.p.originalStep)||!equal(p.links,prior.p.links)||!['invoice','estimate','time','customer'].every(k=>p.before[k].recordHash===o.after[k].recordHash&&equal(p.before[k].record,o.after[k].record)))fail('The reverse-link scope expands the exact original unsuccessful owned chain.');
+  const expected=structuredClone(prior.p.state);expected.run.writerRevision++;expected.run.evidenceRevision++;expected.calendar.writerRevision++;expected.writer.revision+=3;
+  if(!equal(p.state,expected))fail('The original blocked operation changed after unsuccessful settlement.');
+  const reportsPlan={...prior.p,reviewedAt:o.verifiedAt,parentLedgers:o.parentLedgers};assertReportSources(reportsPlan,o.reports,p.reports,Date.parse(p.reviewedAt),false,p.parentLedgers);
+ }
+
 function noEffectAuditState(o,contentHash){return {authorityHash:contentHash,planAuthorityHash:o.planAuthorityHash,receiptId:o.receiptId,operationId:o.operationId,logicalKey:o.logicalKey,allAccountDeltaCents:0,linkVerified:false,originalOperationBlocked:true};}
 async function assertNoEffectOutcome({models,scope,p,authority,row,outcome,session}){
  const o=outcome.payload;
+ if(p.kind===REVERSE_PLAN&&!equal(o.repairTarget,p.reverse.targetIdentity))fail('The actual Estimate target creation provenance changed.');
  if(outcome.contractVersion!==1||String(outcome._id)!==hash({scope,kind:NO_EFFECT,planAuthorityHash:authority.contentHash}).slice(0,24)||hash(o)!==outcome.contentHash||!equal(o.scope,scope)||o.version!==1||o.kind!==NO_EFFECT||o.ownerId!==p.ownerId||o.operationId!==p.operationId||o.planAuthorityHash!==authority.contentHash||o.receiptId!==row._id||o.compilationHash!==p.originalStep.compilation.compilationHash||o.creationReceiptHash!==p.originalStep.receipt.evidenceHash||o.logicalKey!==p.logicalKey||o.qboId!==p.originalStep.qboId||o.linkVerified!==false||o.originalOperationBlocked!==true||!same(outcome.actorId,p.ownerId))fail('The explicit unsuccessful settlement changed.');
  const audit=await read(models.Audits,{_id:outcome.auditId,userId:p.ownerId,realmId:scope.realmId,action:NO_EFFECT_ACTION,actionType:'manual',outcome:'partial'},session);
  if(!audit||!equal(audit.afterState,noEffectAuditState(o,outcome.contentHash))||!equal(o.invariants,assertNoEffectReadback(p,o.after,row,Date.parse(o.verifiedAt)))||!equal(o.financial,assertReportSources(p,p.reports,o.reports,Date.parse(o.verifiedAt),false,o.parentLedgers)))fail('The unsuccessful settlement proof or audit is unavailable.');
@@ -194,13 +221,14 @@ async function assertNoEffectOutcome({models,scope,p,authority,row,outcome,sessi
 // verified outcome. Neither path authorizes another write.
 async function loadOwnedLinkLineage({models,scope,step,session}){
  const {Authorities,Receipts,Audits,Writers}=models;
- const recoveryId=hash({scope,kind:RECOVERY_PLAN,logicalKey:step.logicalKey}).slice(0,24);
- if(await read(Authorities,{...scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':step.logicalKey,_id:{$ne:recoveryId}},session))fail('Several recovery authorities claim this original target.');
- const recoveryAuthority=await read(Authorities,{_id:recoveryId,...scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':step.logicalKey},session);
- const authority=recoveryAuthority||await read(Authorities,{_id:hash({scope,kind:PLAN,logicalKey:step.logicalKey}).slice(0,24),...scope,'payload.kind':PLAN,'payload.logicalKey':step.logicalKey},session);
+ const reverseId=hash({scope,kind:REVERSE_PLAN,logicalKey:step.logicalKey}).slice(0,24),recoveryId=hash({scope,kind:RECOVERY_PLAN,logicalKey:step.logicalKey}).slice(0,24);
+ for(const [kind,id]of [[REVERSE_PLAN,reverseId],[RECOVERY_PLAN,recoveryId]])if(await read(Authorities,{...scope,'payload.kind':kind,'payload.logicalKey':step.logicalKey,_id:{$ne:id}},session))fail(kind===RECOVERY_PLAN?'Several recovery authorities claim this original target.':'Several reverse correction authorities claim this original target.');
+ const reverseAuthority=await read(Authorities,{_id:reverseId,...scope,'payload.kind':REVERSE_PLAN,'payload.logicalKey':step.logicalKey},session),recoveryAuthority=await read(Authorities,{_id:recoveryId,...scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':step.logicalKey},session);
+ const authority=reverseAuthority||recoveryAuthority||await read(Authorities,{_id:hash({scope,kind:PLAN,logicalKey:step.logicalKey}).slice(0,24),...scope,'payload.kind':PLAN,'payload.logicalKey':step.logicalKey},session);
  if(!authority)return null;
  const p=authority.payload;assertPlan(p,Date.now());
  await require('./business-link-repair-recovery').assertRecoverySource({models,scope,plan:p,session});
+ await assertReverseSource({models,p,session});
  if(hash(p)!==authority.contentHash||!same(authority.actorId,p.ownerId)||p.originalStep.compilation.compilationHash!==step.compilation.compilationHash||p.originalStep.receipt.evidenceHash!==step.receipt.evidenceHash||p.originalStep.qboId!==step.qboId)fail('The exact legacy line-repair authority changed.');
  const approval=await read(Audits,{_id:authority.auditId,userId:p.ownerId,realmId:scope.realmId,action:ACTION,actionType:'manual',outcome:'success'},session);
  if(!approval||!equal(approval.afterState,approvalState(p,authority.contentHash)))fail('The repair approval audit is required for compatibility.');
@@ -212,6 +240,8 @@ async function loadOwnedLinkLineage({models,scope,step,session}){
  let outcomeHash=null;
  if(outcome){
   const o=outcome.payload;
+  if(p.kind===REVERSE_PLAN&&!equal(o.repairTarget,p.reverse.targetIdentity))fail('The successful Estimate correction target provenance changed.');
+  if(o.after?.[p.kind===REVERSE_PLAN?'estimate':'invoice']?.record?.SyncToken!==row.observed.syncToken)fail('The verified target version differs from its native saved repair response.');
   if(hash(o)!==outcome.contentHash||o.receiptId!==row._id||o.compilationHash!==step.compilation.compilationHash||o.creationReceiptHash!==step.receipt.evidenceHash||o.logicalKey!==step.logicalKey||o.qboId!==step.qboId||hash(o.graphSourceJson)!==o.graphSourceHash||JSON.parse(o.graphSourceJson).evidenceHash!==o.graph?.evidenceHash||!same(outcome.actorId,p.ownerId))fail('The verified repair lineage changed.');
   const audit=await read(Audits,{_id:outcome.auditId,userId:p.ownerId,realmId:scope.realmId,action:VERIFIED,actionType:'manual',outcome:'success'},session);
   if(!audit||!equal(audit.afterState,{authorityHash:outcome.contentHash,planAuthorityHash:authority.contentHash,receiptId:row._id,operationId:p.operationId,logicalKey:p.logicalKey,allAccountDeltaCents:0,graphEvidenceHash:o.graph?.evidenceHash}))fail('The final repair verification audit is unavailable.');
