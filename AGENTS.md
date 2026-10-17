@@ -42,6 +42,19 @@ For the owner’s full product/company request, follow [the execution contract a
 
 Check the actual goal-control state before promising automatic continuation and after a resume instruction. If it remains paused despite the owner’s continue instruction, keep authorized work moving in the current turn, report the unavailable resume control once, and do not claim the automatic task is active. These instructions do not grant new QBO, database, provider or service authority.
 
+## Work value and stop-loss guardrails
+
+Owner direction, 2026-10-17: make explicit value decisions; do not spend disproportionate time or tokens on an isolated issue while the requested outcome stalls.
+
+- Before investigating an issue, record the user outcome it advances, the smallest direct proof, whether it is essential or optional, its start time and the next delivery milestone. Reuse an existing solution before building another mechanism.
+- Optional issues have a stop-loss of five elapsed minutes or two failed approaches, whichever comes first. Count the whole issue across script versions, model/reviewer changes, turns and context resets. Neither a new explanation nor another test run resets it.
+- At that limit, stop the optional investigation, record its actual impact and defer it. Continue the highest-value independent authorized work. Do not ask the owner to approve another optional detour by default.
+- Every fifteen minutes of active work, compare actual user outcomes with the last checkpoint: saved usable company records, completed business periods, meaningful report coverage or a working user flow. Tests, reviews, commits and supporting code alone do not count as dataset delivery. If delivery has stalled, change the approach or take an independent branch before continuing investigation.
+- An essential blocker gets a fifteen-minute investigation checkpoint. Beyond that, document the concrete dependency and choose the smallest safe alternative; do not silently expand into a new framework. Required real-data safety, preservation of accepted writes and truthful evidence remain mandatory. Close out an in-flight action safely before moving on, without treating cleanup as permission for further optional repair.
+- Keep a timestamped work-value ledger with issue identity, elapsed time, failed approaches, observed delivery and the continue/defer decision. Carry its current state in the full-goal handoff. Check it before the next investigation, implementation or live execution batch.
+- Use focused verification and the required independent reviews. Do not broaden checks or repeat unchanged checks without a new failure, material change or unresolved risk. Do not commission specialist work on a deferred optional issue.
+- Report value-checkpoint decisions plainly. Distinguish instructions and manually checked deadlines from mechanically enforced hooks. Do not claim an automatic timer, token cap, cost cap or billing visibility unless the actual mechanism is installed and directly verified. These instructions currently establish agent stop-loss behavior and an audit trail, not a universal tool-blocking hook.
+
 ## Current UI Target
 
 The owner uses this app on desktop. Prioritize desktop UI and rendered desktop verification. Do not spend time on mobile or 390px viewport checks unless the owner explicitly requests them. Responsive improvements may be made when useful, but they do not create a mobile testing requirement for current work. This project-specific direction overrides the generic responsive check in `AGENT_WORKFLOW.md`.
