@@ -1,5 +1,14 @@
 # Codex Project Memory
 
+## Original September operation continuation (2026-10-17T02:53:11.319Z)
+
+The full-company goal remains active and unmet; current work follows docs/agent-harness/FULL_GOAL_EXECUTION.md. Earlier three-record/ordinal-two and unintegrated AR claims below are superseded by the dated direct evidence in that handoff.
+
+- The same 198-record September plan now retains 33 accepted create IDs, 30 verified records and one three-record saved chain at ordinal32. Native v5 recovered the sole definite SalesReceipt2010 refusal and accepted six more records; no unknown outcome exists. Original SDK/token work drained and the database closed. Direct private proof: company-fourth-period-inspection-result-20261017.json and the v5 company-period result. Never replay accepted creates or repeat the completed v5 rejection recovery.
+- Strict AR ledger evidence, graph paging, graph-derived omitted PO zero and accounting-only transaction schemas are integrated and pushed through22d4483. Actual PO-to-Bill conversion succeeds. The current issue is an actual missing Estimate link/backlink on a same-build field-service Invoice; time is already billed.
+- A dedicated exact owned Invoice link repair is under focused verification and independent review. No repair update has been sent yet. It retains the original operation and all creation receipts, uses one sparse metadata-only update, and holds the known-saved repair barrier through exact whole-record, all-account and native graph checks. The full dataset, any completed managed month, historical report acceptance and bank reconciliation are still unclaimed.
+
+
 ## Current full-company execution (2026-10-17T02:01:42.127Z)
 
 This dated update supersedes the pending-decision and paused-goal claims in the earlier snapshots below. Follow docs/agent-harness/FULL_GOAL_EXECUTION.md for the complete outcome and next action.

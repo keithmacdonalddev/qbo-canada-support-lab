@@ -32,7 +32,7 @@ function taxExpectation(policy, compiled) {
 // Internal composition only: no routes, startup, storage preparation or activation.
 // All models/adapters come from server code; the bound scope and operation cannot
 // be overridden by a tool/request payload passed to the returned graph reader.
-function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, Receipts, Authorities, Audits, transaction, assertReady, access, writerFence, plans, now = () => Date.now() }) {
+function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, Receipts, Authorities, Audits, Writers, transaction, assertReady, access, writerFence, plans, retainSources = false, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || !Steps || [transaction, assertReady, access?.authorize, access?.resolveClient, writerFence?.graphSnapshot, plans?.loadIntent, now].some(value => typeof value !== 'function')) throw new TypeError('Verification needs an exact operation and concrete runtime adapters');
   const { authorize, resolveClient } = access, { graphSnapshot } = writerFence, { loadIntent } = plans;
@@ -48,10 +48,10 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
       checkSignal(signal); const current = await authority(scope, 'operations.read', { session, signal });
       if (current?.actorId !== actor?.actorId || current?.ownerId !== actor?.ownerId) fail('The graph reader changed.');
       const snapshot = await graphSnapshot({ scope, intent: { operationId, planHash }, session }); checkSignal(signal);
-      return { ...snapshot, unresolved: null };
+      return { ...snapshot, unresolved: snapshot.unresolved ?? null };
     }, { signal });
   };
-  const readRecord = async (value, entity, qboId, { signal } = {}) => {
+  const accountRead = async (value, entity, qboId, { signal } = {}) => {
     const observed = await rawRecord(value, entity, qboId, { signal });
     if (entity !== 'Invoice' || observed.record.ARAccountRef !== undefined) return observed;
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
@@ -93,6 +93,22 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     const accountRouting = invoiceReceivablesEvidence({ compiled, receipt, observed, accountBinding: bindings[0], accountObserved, report, reportObservedAt, beforeFence, afterFence, now: now() });
     return { ...observed, accountRouting };
   };
+  const readRecord = async (value, entity, qboId, { signal } = {}) => {
+    const observed = await accountRead(value, entity, qboId, { signal });
+    if (entity !== 'Invoice' || observed.record.Line?.some(line => line.LinkedTxn !== undefined)) return observed;
+    const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
+    const payload = row?.compilation?.request?.body && JSON.parse(row.compilation.request.body);
+    if (!payload?.Line?.some(line => line.LinkedTxn?.some(link => link.TxnType === 'Estimate')) || observed.record.Line?.some(line => line.LinkedTxn !== undefined)) return observed;
+    const lineage = await require('./business-link-repair').loadOwnedLinkLineage({ models: { Authorities, Receipts, Audits, Writers }, scope, step: row }); checkSignal(signal);
+    if (!lineage) return observed;
+    const before = await readFence(scope, { signal }), source = row.compilation.relationships.find(link => link.entity === 'Estimate'), time = row.compilation.relationships.find(link => link.entity === 'TimeActivity');
+    const estimateObserved = await rawRecord(scope, 'Estimate', source.qboId, { signal }), timeObserved = await rawRecord(scope, 'TimeActivity', time.qboId, { signal });
+    const after = await rawRecord(scope, 'Invoice', qboId, { signal }), afterFence = await readFence(scope, { signal });
+    if (after.recordHash !== observed.recordHash || hash(before) !== hash(afterFence)) fail('The invoice or company changed during full-conversion verification.');
+    const receipt = { ...row.receipt, scope, entity, logicalKey: row.logicalKey };
+    const estimateConversion = require('./business-estimate-conversion').createEstimateConversionProof({ compiled: row.compilation, receipt, observed, estimateObserved, timeObserved, lineage, now: now() });
+    return { ...observed, estimateConversion };
+  };
   const loadTaxPolicy = async (value, compiled, { signal } = {}) => {
     checkScope(value); checkSignal(signal); const request = validateCompilation(compiled); checkScope(request.scope);
     const actor = await authority(scope, 'operations.read', { signal });
@@ -112,7 +128,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (current?.actorId !== actor?.actorId || current?.ownerId !== actor?.ownerId) fail('The graph reader changed.');
     return expectation ? { ...expectation, status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
   };
-  const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, loadTaxPolicy, now });
+  const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, loadTaxPolicy, retainSources, now });
   const loadGraphReadback = input => { checkScope(input?.scope); return reader(input); };
   const boundSnapshot = input => {
     checkScope(input?.scope);

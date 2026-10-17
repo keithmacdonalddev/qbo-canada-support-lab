@@ -11,7 +11,7 @@ const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, transaction, assertReady, assertBusinessAuthority, masterTransport, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId });
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
@@ -47,7 +47,8 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
   async function begin({ request, permit, ownerId, actorId, workflow, periodEvidence }) {
     const scope = scoped(request.scope);
     workflow = workflow ? normalizeWorkflow(workflow) : null;
-    const master = workflow?.kind === 'master-preparation';
+    const master = workflow?.kind === 'master-preparation', linkRepair = workflow?.kind === 'business-link-repair';
+    if (linkRepair && (permit || typeof linkRepairTransport?.admit !== 'function' || typeof linkRepairTransport?.settle !== 'function')) throw denied('Owned Invoice repairs require their dedicated reviewed runtime.');
     if (master && (permit || typeof masterTransport?.admit !== 'function' || typeof masterTransport?.settle !== 'function')) throw denied('Master creates require their dedicated reviewed runtime.');
     if (!ID.test(ownerId || '') || !ID.test(actorId || '')) throw denied('The actual write actor and company owner are required.');
     const initial = await policyState(scope);
@@ -55,9 +56,9 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     if (initial.policy.state !== 'active') throw denied('Company writes are paused while business write coordination is being prepared. Nothing was sent to QuickBooks; finish or resume that setup, then try again.');
     if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
     await assertReady();
-    const dispatchKey = permit?.dispatchKey || (master ? hash({ version: 1, masterRunId: workflow.runId, ordinal: workflow.ordinal, attempt: workflow.attempt }) : hash({ scope, requestHash: request.requestHash, nonce: nonce() }));
+    const dispatchKey = permit?.dispatchKey || (linkRepair ? require('./business-link-repair').dispatchKeyFor(workflow.authorityHash) : master ? hash({ version: 1, masterRunId: workflow.runId, ordinal: workflow.ordinal, attempt: workflow.attempt }) : hash({ scope, requestHash: request.requestHash, nonce: nonce() }));
     const receiptId = hash({ scope, dispatchKey }), startAuditId = hash({ receiptId, event: 'started' }).slice(0, 24);
-    const ticket = { coordinated: true, scope, receiptId, dispatchKey, requestHash: request.requestHash, kind: permit ? 'business' : master ? 'master-preparation' : 'legacy', ownerId, actorId, entity: request.entity, operation: request.operation };
+    const ticket = { coordinated: true, scope, receiptId, dispatchKey, requestHash: request.requestHash, kind: permit ? 'business' : master ? 'master-preparation' : linkRepair ? 'business-link-repair' : 'legacy', ownerId, actorId, entity: request.entity, operation: request.operation };
     return transaction(async session => {
       const state = await policyState(scope, session);
       if (!state || state.policy.state !== 'active') throw denied('Company write preparation or scope changed.');
@@ -77,7 +78,9 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       if (!fence || fence.policyRevision !== policy.revision || fence.writerRevision !== writer.revision || fence.controlHash !== policy.periodControl?.contentHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
       const periodProof = assertWritePeriod(request, periodEvidence, policy.periodControl, now(), ownerId);
       let unresolved;
-      if (master) {
+      if (linkRepair) {
+        unresolved = await linkRepairTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, periodProof, startAuditId, session });
+      } else if (master) {
         unresolved = await masterTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, startAuditId, session });
       } else if (permit) {
         if (!same(permit.scope?.connectionId, scope.connectionId) || permit.scope?.realmId !== scope.realmId || permit.scope?.environment !== scope.environment || permit.requestHash !== request.requestHash || !same(writer.operationId, permit.operationId) || writer.unresolved?.key !== dispatchKey || writer.unresolved?.logicalKey !== permit.logicalKey || writer.unresolved?.requestHash !== request.requestHash || writer.unresolved?.actorId !== actorId || writer.unresolved?.transportConsumed || request.operation !== 'create') throw denied('This permission does not match the exact unsent business request.');
@@ -137,6 +140,10 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const terminalHash = terminal ? hash(terminal) : null, terminalAuditId = terminal ? hash({ terminalHash }).slice(0, 24) : null;
       const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
       if (!saved) throw denied('The response receipt changed while saving.', true);
+      if (stored.kind === 'business-link-repair') {
+        if (typeof linkRepairTransport?.settle !== 'function') throw denied('Owned repair settlement requires its dedicated runtime.', true);
+        await linkRepairTransport.settle({ stored, observed, resultAuditId, observedAt, session });
+      }
       if (stored.kind === 'master-preparation') {
         if (typeof masterTransport?.settle !== 'function') throw denied('Master result settlement requires its dedicated runtime.', true);
         await masterTransport.settle({ stored, observed, resultAuditId, observedAt, session });

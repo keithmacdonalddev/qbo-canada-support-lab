@@ -83,11 +83,12 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
 }
 // This reader owns no defaults and performs no writes. Its model snapshot loads both
 // directions so omitting a known saved child cannot turn a used source into unused.
-function createBusinessGraphReader({ Steps, transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, now = () => Date.now() }) {
+function createBusinessGraphReader({ Steps, transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
   if (!Steps || [transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, now].some(value => typeof value !== 'function')) throw new TypeError('Graph reading needs explicit company-scoped adapters');
   function checkedFence(value, scope) {
-    if (!value || !sameScope(value.scope, scope) || !Number.isSafeInteger(value.revision) || value.revision < 0 || value.unresolved !== null || !ID.test(value.operationId || '')) fail('The company writer has an unresolved or unavailable state.');
-    return { scope, revision: value.revision, operationId: value.operationId };
+    if (!value || !sameScope(value.scope, scope) || !Number.isSafeInteger(value.revision) || value.revision < 0 || !ID.test(value.operationId || '')) fail('The company writer has an unresolved or unavailable state.');
+    require('./business-link-repair-contract').assertReadFence(value);
+    return { scope, revision: value.revision, operationId: value.operationId, ...(value.quarantinedRepair ? { unresolved: value.unresolved, quarantinedRepair: value.quarantinedRepair } : {}) };
   }
   return async ({ scope, roots, signal, mode = 'read', expectedWriterFence = null }) => {
     scope = scoped(scope); roots = rootKeys(roots);
@@ -188,7 +189,7 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
       const after = checkedFence(await read(() => readFence(scope, { signal: controller.signal })), scope); check();
       if (currentActor?.actorId !== actor.actorId || canonical(fence) !== canonical(after)) fail('Company activity changed while related records were being read.');
       const result = reconcileBusinessGraph({ scope, roots, entries, now: now() }); check();
-      return { ...result, writerFence: fence, evidenceHash: hash({ graph: result.evidenceHash, writerFence: fence }), durationMs: now() - started };
+      return { ...result, ...(retainSources ? { sourcesJson: JSON.stringify(entries), sourcesHash: hash(JSON.stringify(entries)) } : {}), writerFence: fence, evidenceHash: hash({ graph: result.evidenceHash, writerFence: fence }), durationMs: now() - started };
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
 }

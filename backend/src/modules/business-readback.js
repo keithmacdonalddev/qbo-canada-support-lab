@@ -115,6 +115,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     }
     childLinks.push({ TxnId: child.record.Id, TxnType: child.entity });
   }
+  const estimateConversion = observed.estimateConversion ? require('./business-estimate-conversion').verifyEstimateConversion({ compiled, receipt, observed, parents, now }) : null;
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
   if (compiled.entity === 'Invoice' && record.ARAccountRef === undefined && payload.ARAccountRef) {
@@ -133,7 +134,11 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (subtotals.length > 1 || subtotals.some(line => record.Line.at(-1) !== line || cents(line.Amount) !== beforeTax || !['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo'].includes(compiled.entity))) mismatch('Unexpected subtotal lines were saved.');
     const used = new Set();
     if (actualLines.length !== expectedLines.length) mismatch('The saved financial line count differs.');
-    for (const expected of expectedLines) {
+    for (const originalExpected of expectedLines) {
+      const expected = estimateConversion ? { ...originalExpected } : originalExpected;
+      // This separate proof reports a whole-Estimate header conversion. It does
+      // not insert a provider line link or alter the original compiled request.
+      if (estimateConversion) delete expected.LinkedTxn;
       const index = actualLines.findIndex((actual, index) => !used.has(index) && subset(expected, actual));
       if (index < 0) { mismatch('Saved line amounts, quantities, tax codes or source links differ.'); continue; }
       used.add(index); const actual = actualLines[index], detail = actual[actual.DetailType];
@@ -200,10 +205,10 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (record.POStatus !== (fullyReceived ? 'Closed' : 'Open')) mismatch('The purchase order status differs from its verified consumption.');
   }
   const purchaseOrderConsumption = compiled.entity === 'PurchaseOrder' && issues.length === 0 && record.Line.some(line => line.Received === undefined) ? createUnreceivedProof({ compiled, receipt, observed, descendants }) : null;
-  const oldest = [observed, ...(observed.accountRouting ? [observed.accountRouting] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
+  const oldest = [observed, ...(observed.accountRouting ? [observed.accountRouting] : []), ...(estimateConversion ? [estimateConversion] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
   return { version: 1, kind: 'business-content', compilationHash: compiled.compilationHash, scope, logicalKey: compiled.logicalKey, entity: compiled.entity, qboId: record.Id, fingerprint: compiled.intentHash, matchesIntent: issues.length === 0, issues,
-    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
-    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
+    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(estimateConversion ? { estimateConversion } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
+    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), ...(estimateConversion ? { estimateConversionHash: estimateConversion.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
 }
 // Content checks can be computed for a saved child before closing its parent graph.
 // They never mark a step verified. This avoids a circular dependency when an invoice
