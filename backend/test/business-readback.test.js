@@ -52,6 +52,7 @@ test('invoice and bill balances must equal total less exact known settlement app
 test('PO API consumed quantity and state must match exact bill line applications', () => {
   const po = sample('PurchaseOrder'), bill = sample('Bill', f => bindParent(f, 0, po));
   bill.observed.record.Id = '3000'; bill.receipt.qboId = '3000'; bill.refresh(); po.descendants = [descendant(bill)]; po.observed.record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Bill' }]; po.observed.record.Line[0].Received = 12; po.observed.record.POStatus = 'Closed'; po.refresh(); assert.equal(po.check().matchesIntent, true);
+  delete po.observed.record.Line[0].Received; po.refresh(); assert.equal(po.check().matchesIntent, false); po.observed.record.Line[0].Received = 12;
   po.observed.record.Line[0].Id = '9'; po.observed.record.Line[0].Received = 0; po.observed.record.POStatus = 'Open'; po.refresh(); assert.throws(po.check, /missing or ambiguous/);
   po.observed.record.Line[0].Id = '1'; po.observed.record.POStatus = 'Closed';
   po.observed.record.Line[0].Received = 5; po.refresh(); assert.equal(po.check().matchesIntent, false);
@@ -71,4 +72,11 @@ test('root proof cannot extend the freshness of related content or completed par
   time.observed.record.BillableStatus = 'HasBeenBilled'; time.observed.record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Invoice' }]; time.refresh();
   const child = descendant(invoice); child.verification.observedAt = '2026-10-06T11:55:01.000Z'; time.descendants = [child];
   assert.equal(time.check().observedAt, child.verification.observedAt);
+});
+
+test('omitted PO Received is graph-derived zero only for an open completely unlinked order', () => {
+ const po = sample('PurchaseOrder'); delete po.observed.record.Line[0].Received; po.refresh();
+ assert.equal(po.check().matchesIntent, true); assert.equal(po.observed.record.Line[0].Received, undefined);
+ for (const value of [null, '0', -1, 1]) { po.observed.record.Line[0].Received = value; po.refresh(); assert.equal(po.check().matchesIntent, false); }
+ delete po.observed.record.Line[0].Received; po.observed.record.POStatus = 'Closed'; po.refresh(); assert.equal(po.check().matchesIntent, false);
 });

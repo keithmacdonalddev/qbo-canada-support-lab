@@ -78,7 +78,7 @@ test('changed starting revenue stops before any provider write and leaves an uns
 });
 
 test('native operation verifies omitted Invoice AR from ledger and creates settlements once',async()=>{
- const h=fixture({omitInvoiceAr:true});await h.publish();
+ const h=fixture({omitInvoiceAr:true,omitUnreceivedPoQuantity:true});await h.publish();
  const prepared=await h.service.prepare(h.user,{requestKey:'missing-ar-native-period-001',throughDate:'2026-10-15'});await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});
  const runtime=h.runtime(prepared.operationId),result=await runtime.execute();
  assert.equal(result.complete,true,JSON.stringify({result,run:h.data.Runs[0],steps:h.data.Steps.filter(row=>row.verification?.status!=='verified').slice(-3)}));

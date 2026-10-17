@@ -3,6 +3,7 @@ const { hash, canonical, date } = require('./business-calendar');
 const { verifyBusinessReference, validateReferenceBinding } = require('./business-reference');
 const { businessDate } = require('./business-activity-preview');
 const { verifyInvoiceReceivables } = require('./business-receivables-route');
+const { verifyUnreceivedProof } = require('./business-purchase-order-consumption');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -146,7 +147,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
         const wanted = line[line.DetailType], found = sourceLines.filter(value => value[detailType]?.ItemRef?.value === wanted.ItemRef.value && value[detailType]?.Qty === wanted.Qty && cents(value[detailType]?.UnitPrice) === cents(wanted.UnitPrice) && cents(value.Amount) === cents(line.Amount) && (value[detailType]?.TaxCodeRef?.value === wanted.TaxCodeRef.value || require('./business-dated-tax').permitsDatedConversion(step, policy, source, value[detailType]?.TaxCodeRef?.value, wanted.TaxCodeRef.value)));
         if (found.length !== 1 || used.has(found[0].Id)) fail('The originating line cannot be matched unambiguously.');
         const sourceLine = found[0]; id(sourceLine.Id); used.add(sourceLine.Id);
-        if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
+        if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0 && !(sourceLine.Received === undefined && verifyUnreceivedProof(source, now))) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
         line.LinkedTxn = [relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
       });
       if (step.entity === 'Invoice') {
@@ -223,8 +224,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     }
   }
   const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), payload);
-  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
-  const observedAt = [...referenceEvidence, ...parents, ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), observationFence].map(value => value.observedAt).sort()[0];
+  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.verification?.purchaseOrderConsumption ? { purchaseOrderConsumptionHash: value.verification.purchaseOrderConsumption.evidenceHash, purchaseOrderVerificationHash: value.verification.evidenceHash } : {}), ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
+  const observedAt = [...referenceEvidence, ...parents, ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), ...parents.filter(value => value.verification?.purchaseOrderConsumption).map(value => value.verification), observationFence].map(value => value.observedAt).sort()[0];
   const artifact = { version: 1, logicalKey: step.logicalKey, entity: step.entity, intentHash: hash(step), request, evidenceHash, relationships };
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };

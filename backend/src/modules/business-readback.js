@@ -3,6 +3,7 @@ const { hash, canonical, date } = require('./business-calendar');
 const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
 const { SUPPORTED } = require('./business-transaction-compiler');
 const { verifyInvoiceReceivables } = require('./business-receivables-route');
+const { createUnreceivedProof } = require('./business-purchase-order-consumption');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function invalid(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_READBACK_UNVERIFIED' }); }
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]);
@@ -188,15 +189,19 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
         }
       }
       const quantity = line.ItemBasedExpenseLineDetail?.Qty;
-      if (typeof line.Received !== 'number' || !Number.isFinite(line.Received) || Math.abs(line.Received - consumed) > 0.0000001 || consumed > quantity) mismatch('The purchase order API consumed quantity differs from its saved bill lines.');
+      // QBO can omit Received when no quantity has been consumed. This is a
+      // graph-derived zero, never a fabricated API field or a partial receipt.
+      const omittedUnreceived = line.Received === undefined && consumed === 0 && descendants.length === 0 && record.POStatus === 'Open' && linkList(record.LinkedTxn).length === 0 && record.Line.every(value => linkList(value.LinkedTxn).length === 0);
+      if ((!omittedUnreceived && (typeof line.Received !== 'number' || !Number.isFinite(line.Received) || Math.abs(line.Received - consumed) > 0.0000001)) || consumed > quantity) mismatch('The purchase order consumed quantity is unavailable or differs from its saved bill lines.');
       if (consumed !== quantity) fullyReceived = false;
     }
     if (record.POStatus !== (fullyReceived ? 'Closed' : 'Open')) mismatch('The purchase order status differs from its verified consumption.');
   }
+  const purchaseOrderConsumption = compiled.entity === 'PurchaseOrder' && issues.length === 0 && record.Line.some(line => line.Received === undefined) ? createUnreceivedProof({ compiled, receipt, observed, descendants }) : null;
   const oldest = [observed, ...(observed.accountRouting ? [observed.accountRouting] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
   return { version: 1, kind: 'business-content', compilationHash: compiled.compilationHash, scope, logicalKey: compiled.logicalKey, entity: compiled.entity, qboId: record.Id, fingerprint: compiled.intentHash, matchesIntent: issues.length === 0, issues,
-    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}),
-    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
+    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
+    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
 }
 // Content checks can be computed for a saved child before closing its parent graph.
 // They never mark a step verified. This avoids a circular dependency when an invoice

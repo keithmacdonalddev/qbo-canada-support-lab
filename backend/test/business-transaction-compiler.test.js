@@ -42,7 +42,7 @@ test('already-deposited or unapplied receipts cannot be deposited again', () => 
   for (const change of [f => { f.parents[0].record.LinkedTxn = [{ TxnType: 'Deposit', TxnId: '8' }]; }, f => { f.parents[0].record.UnappliedAmt = 1; }]) { const f = fixture('Deposit'); change(f); f.refresh(); assert.throws(f.compile, /undeposited/); }
 });
 test('bill conversion requires actual unconsumed PO line evidence', () => {
-  for (const change of [f => { delete f.parents[0].record.Line[0].Received; }, f => { f.parents[0].record.Line[0].Received = 1; }, f => { f.parents[0].record.Line[0].ItemBasedExpenseLineDetail.Qty = 6; }, f => { f.parents[0].record.POStatus = 'Closed'; }, f => { f.parents[0].record.LinkedTxn = [{ TxnType: 'Bill', TxnId: '9' }]; }]) { const f = fixture('Bill'); change(f); f.refresh(); assert.throws(f.compile); }
+  for (const change of [f => { f.parents[0].record.Line[0].Received = null; }, f => { f.parents[0].record.Line[0].Received = 1; }, f => { f.parents[0].record.Line[0].ItemBasedExpenseLineDetail.Qty = 6; }, f => { f.parents[0].record.POStatus = 'Closed'; }, f => { f.parents[0].record.LinkedTxn = [{ TxnType: 'Bill', TxnId: '9' }]; }]) { const f = fixture('Bill'); change(f); f.refresh(); assert.throws(f.compile); }
 });
 test('time and invoiced hours must match their saved sources', () => {
   const invoice = fixture(); invoice.parents[1].record.Hours = 7; invoice.refresh(); assert.throws(invoice.compile, /hours/);
@@ -113,4 +113,15 @@ test('same or newer version cannot conceal changed master definitions or a remov
   for (const change of [f => { f.referenceEvidence.find(value => value.entity === 'Item' && value.record.Id === '101').record.IncomeAccountRef.value = '999'; }, f => { f.referenceEvidence.find(value => value.entity === 'Customer').record.IsProject = true; }, f => { delete f.step.references[0].definition; f.approve(); }]) {
     const f = fixture('SalesReceipt'); change(f); f.refresh(); assert.throws(f.compile, /definition/);
   }
+});
+
+test('fresh verified open unlinked PO accepts omitted zero Received without editing raw source', () => {
+ const { sample, bindParent } = require('./helpers/business-readback-fixtures');
+ const po = sample('PurchaseOrder'); delete po.observed.record.Line[0].Received; po.refresh();
+ const f = fixture('Bill'); bindParent(f,0,po); f.parents[0] = {...f.parents[0],...po.observed,verification:po.check()}; f.refresh(); f.approve();
+ const compiled = f.compile(); assert.equal(JSON.parse(compiled.request.body).Line[0].ItemBasedExpenseLineDetail.Qty, 12);
+ assert.equal(f.parents[0].record.Line[0].Received, undefined);
+ const retained = structuredClone(f.parents[0]); delete f.parents[0].verification; assert.throws(f.compile);
+ f.parents[0] = structuredClone(retained); f.parents[0].verification.purchaseOrderConsumption.fingerprint = 'f'.repeat(64); assert.throws(f.compile);
+ f.parents[0] = structuredClone(retained); f.parents[0].record.Line[0].LinkedTxn = [{ TxnId: '9', TxnType: 'Bill' }]; f.refresh(); assert.throws(f.compile);
 });
