@@ -1,5 +1,15 @@
 # Codex Project Memory
 
+## Verified supplier completion (2026-10-17T00:07:12.537Z)
+
+- Production company ending 2856 now has six additional Vendor records: three overhead suppliers and three stock suppliers. All six have original accepted receipts and independent exact-ID readback, and their IDs are linked in saved draft v5. Total new verified masters across these runs is 66. No historical business period has been delivered.
+- The prior 60 bindings and original preparation records/receipts are unchanged; fresh setup/master reads validated the selected records, but this result is not a new field-by-field audit of every prior QBO record. The supplier preparation is closed and the company writer released. Private proof: artifacts/goal-realization/company-suppliers-execute-result-20261016.json; six POST attempts, 50 GET attempts, token cleanup and database disconnect completed.
+- Supplier-only planning is implemented and pushed as 39ecb74 on main/origin/main. Focused non-live verification passed 82 tests, 206-file backend syntax, driver syntax and diff checks; separate implementation and safety reviews covered source and live driver. No persistent service was started or restarted.
+- Read-only cleanup evidence is refreshed against two matching 783-record scans (19 tracked types), the unchanged exact three before-images/dependencies, and nine financial report scopes. The report continuation reused the dated inventory and completed at 60 cumulative GET attempts, zero accounting writes, with token/database cleanup. Source: artifacts/goal-realization/company-repair-refresh-completion-result-20261016.json. This is a non-atomic planning observation, not approval to remove records.
+- A regenerated exact cleanup plan/runner now uses the 783-record evidence, preserves the 66 new masters and draft v5, and passed 12 isolated SDK/recovery scenarios including nested Balance Sheet reports. Separate implementation and safety reviews found no remaining issue. The refreshed approval file is absent; no cleanup ran. The owner protection fact already exists and must not be asked again. The two currently pending decisions are exact old-record disposition plus artificial-payment/external-workflow facts, and FIFO/zero new-item opening stock/recoverable-purchase-HST assumptions.
+- Continue the full company outcome after its prerequisites are resolved. The five Inventory Items and managed transaction history remain uncreated. Never replay either closed master preparation.
+
+
 ## Execution correction (2026-10-16)
 
 The whole conversation was audited against original records and direct company receipts. Follow docs/agent-harness/FULL_GOAL_EXECUTION.md for the complete outcome, existing authority, branch-specific blockers and concrete next step. A report/code/setup milestone is not completion, and the owner’s status questions do not replace the full goal. Ordinary new company work was wrongly held behind the cleanup/stock questions.
