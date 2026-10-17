@@ -185,8 +185,15 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
   }
   async function loadEntries(scope, operationId, offset, limit, session) {
     const { run, plan } = await read(scope, operationId, session);
-    const rows = await Intents.find({ ...scope, planId: plan._id, planHash: plan.planHash, ordinal: { $gte: offset, $lt: offset + limit } }).sort({ ordinal: 1 }).limit(limit).session(session).lean();
-    const wanted = plan.manifest.records.slice(offset, offset + limit);
+    const wanted = plan.manifest.records.slice(offset, offset + limit), rows = [];
+    // Single server batches avoid getMore's incompatible inherited transaction
+    // timeout in the installed driver. A truncated batch is never complete proof.
+    for (let start = offset; start < offset + limit; start += 100) {
+      const end = Math.min(start + 100, offset + limit);
+      const page = await Intents.find({ ...scope, planId: plan._id, planHash: plan.planHash, ordinal: { $gte: start, $lt: end } }, null, { singleBatch: true, batchSize: 101 }).sort({ ordinal: 1 }).limit(101).session(session).maxTimeMS(3000).lean();
+      if (page.length !== wanted.slice(start - offset, end - offset).length) fail('Saved operation activities are missing or the bounded batch is incomplete');
+      rows.push(...page);
+    }
     if (rows.length !== wanted.length) fail('Saved operation activities are missing');
     rows.forEach((row, index) => {
       const descriptor = validateEntry(row, scope, plan.manifest.fromDate, plan.manifest.throughDate);
@@ -288,7 +295,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
         for (const key of keys) if (!found.has(key)) missing.add(key);
         for (const [operationId, steps] of groups) {
           const saved = plans.get(operationId), keys = steps.map(row => row.logicalKey);
-          const intents = await call(() => Intents.find({ ...scope, planId: saved.plan._id, planHash: saved.plan.planHash, logicalKey: { $in: keys } })
+          const intents = await call(() => Intents.find({ ...scope, planId: saved.plan._id, planHash: saved.plan.planHash, logicalKey: { $in: keys } }, null, { singleBatch: true, batchSize: 101 })
             .limit(keys.length + 1).session(session).maxTimeMS(3000).lean()); check();
           const byKey = new Map(intents.map(row => [row.logicalKey, row]));
           if (intents.length !== keys.length || byKey.size !== keys.length) fail('Original saved activity intents are missing or ambiguous');

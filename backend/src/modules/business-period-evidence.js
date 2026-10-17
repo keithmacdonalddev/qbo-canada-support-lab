@@ -38,9 +38,9 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
     const fence = await writerFence.graphSnapshot({ scope, intent: { operationId, planHash: run.planHash }, session });
     if (!records) return { run, manifest, fence };
     const found = new Map();
-    for (let offset = 0; offset < manifest.records.length; offset += 200) {
-      const keys = manifest.records.slice(offset, offset + 200).map(row => row.logicalKey);
-      const rows = await Steps.find({ ...scope, logicalKey: { $in: keys } }).select('operationId planHash logicalKey entity fingerprint state qboId receipt dispatch compilation verification lastAuditId revision dependencies').limit(201).session(session).maxTimeMS(3000).lean();
+    for (let offset = 0; offset < manifest.records.length; offset += 100) {
+      const keys = manifest.records.slice(offset, offset + 100).map(row => row.logicalKey);
+      const rows = await Steps.find({ ...scope, logicalKey: { $in: keys } }, null, { singleBatch: true, batchSize: 101 }).select('operationId planHash logicalKey entity fingerprint state qboId receipt dispatch compilation verification lastAuditId revision dependencies').limit(101).session(session).maxTimeMS(3000).lean();
       if (rows.length !== keys.length) fail('Managed period records are missing or duplicated.');
       for (const row of rows) { if (found.has(row.logicalKey) || !keys.includes(row.logicalKey)) fail('Period records are duplicated or unrelated.'); found.set(row.logicalKey, row); }
     }
@@ -143,7 +143,7 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
       return null;
     }
     const keys = manifest.records.filter(row => row.kind === 'create').map(row => row.logicalKey), rows = [];
-    for (let offset = 0; offset < keys.length; offset += 200) rows.push(...await Steps.find({ ...scope, logicalKey: { $in: keys.slice(offset, offset + 200) } }).select('operationId planHash logicalKey entity fingerprint state qboId receipt dispatch compilation dependencies').limit(201).session(session).maxTimeMS(3000).lean());
+    for (let offset = 0; offset < keys.length; offset += 100) rows.push(...await Steps.find({ ...scope, logicalKey: { $in: keys.slice(offset, offset + 100) } }, null, { singleBatch: true, batchSize: 101 }).select('operationId planHash logicalKey entity fingerprint state qboId receipt dispatch compilation dependencies').limit(101).session(session).maxTimeMS(3000).lean());
     if (rows.length !== keys.length || new Set(rows.map(row => row.logicalKey)).size !== keys.length || rows.some(row => proof.records.filter(record => record.logicalKey === row.logicalKey && record.entity === row.entity && record.qboId === row.qboId && record.fingerprint === row.fingerprint).length !== 1)) fail('Original accepted financial record identities changed.');
     const basis = await loadMovementBasis(movementModels, scope, run, manifest, rows, session);
     if (canonical(basis) !== canonical(proof.financialBasis)) fail('Retained financial basis differs from its original dispatches.');
@@ -157,7 +157,8 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
       return null;
     }
     const keys = manifest.records.filter(row => row.kind === 'create').map(row => row.logicalKey), rows = [];
-    for (let offset = 0; offset < keys.length; offset += 200) rows.push(...await Steps.find({ ...scope, logicalKey: { $in: keys.slice(offset, offset + 200) } }).limit(201).session(session).maxTimeMS(3000).lean());
+    for (let offset = 0; offset < keys.length; offset += 100) rows.push(...await Steps.find({ ...scope, logicalKey: { $in: keys.slice(offset, offset + 100) } }, null, { singleBatch: true, batchSize: 101 }).limit(101).session(session).maxTimeMS(3000).lean());
+    if (rows.length !== keys.length || new Set(rows.map(row => row.logicalKey)).size !== keys.length) fail('The complete original stock record set is required.');
     const basis = await require('./business-stock-evidence').loadStockBasis(movementModels, scope, run, manifest, rows, session);
     const purchases = await require('./business-stock-evidence').loadPurchaseOrigins(movementModels, manifest.stockCostExpectation.opening, session);
     if (canonical(basis) !== canonical(proof.stockBasis) || canonical(purchases) !== canonical(manifest.stockCostExpectation.purchaseOrigins)) fail('Stock cost differs from its original accepted dispatches.');

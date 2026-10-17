@@ -41,3 +41,11 @@ Missing local receipts remain unknown; saved verification requires fresh QBO rea
 
 
 Original history now retains its originating business key so [candidate assembly](business-operation-candidate.md) can reject cross-business ancestry while preserving original step and policy content. The assembler can feed the existing candidate validator and Plan/Intent persistence; it does not replace the still-required production activation/policy fence.
+
+## Complete reads under transaction deadlines — 2026-10-17 UTC
+
+The first live 198-record month exposed an installed MongoDB 6.20 driver interaction: a transaction-level client deadline was added as `maxTimeMS` to a non-tailable `getMore`, which the server rejects. [MongoDB documents that restriction](https://www.mongodb.com/docs/v8.0/reference/command/getmore/). Approval stopped before any accounting write; the original immutable plan remains the continuation target.
+
+Intent loading now reads ordinal ranges of at most 100 using the supported `singleBatch` option, with a sentinel row and exact expected count for every range. The complete requested range is still inspected, including unexpected rows beyond the manifest. Missing, duplicated, changed or byte-truncated batches cannot approve a partial plan. Financial, period and carried-stock reads use 100-key single batches and retain their original complete-set and source checks. History ownership reads that permit genuinely missing roots keep normal cursor semantics, avoiding any interpretation of a truncated batch as absent history.
+
+The existing 15-second snapshot/majority transaction deadline and three-second query limits remain intact. There is no global driver patch, client-wide timeout change, dependency upgrade or fallback outside a transaction. A bounded read-only check against the actual saved 198 intents returned every unique record using ten find commands and no getMore, then completed the read-only transaction and disconnected; no QBO request or database data write occurred. Private protocol evidence is company-cursor-diagnostic-batched-result-20261017.json under artifacts/goal-realization/. This proves the read boundary, not a completed business month.

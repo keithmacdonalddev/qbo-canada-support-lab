@@ -21,12 +21,12 @@ function matches(row, filter) { return row && Object.entries(filter).every(([key
 function harness(value = candidate()) {
   const h = { plans: new Map(), intents: new Map(), runs: new Map(), audits: new Map(), steps: new Map(), current: value, allowed: true, clock: now, candidateLoads: 0, fences: 0 };
   function model(key) {
-    const query = (filter, many) => { let sort, limit = Infinity, session; const q = {
+    const query = (filter, many, options) => { let sort, limit = Infinity, session; const q = {
       select() { return q; }, maxTimeMS(value) { assert.equal(value, 3000); return q; }, session(value) { session = value; return q; }, sort(value) { sort = value; return q; }, limit(value) { limit = value; return q; },
-      async lean() { assert.ok(session); let rows = [...h[key].values()].filter(row => matches(row, filter)); if (sort) rows.sort((a, b) => a.ordinal - b.ordinal); rows = rows.slice(0, limit); return clone(many ? rows : rows[0] || null); },
+      async lean() { assert.ok(session); let rows = [...h[key].values()].filter(row => matches(row, filter)); if (sort) rows.sort((a, b) => a.ordinal - b.ordinal); rows = rows.slice(0, limit); if (many && key === 'intents') { (h.intentBatches ||= []).push({ filter: clone(filter), options: clone(options), limit, session }); if (h.truncateIntentBatch && options?.singleBatch && rows.length > 1) rows.pop(); } return clone(many ? rows : rows[0] || null); },
     }; return q; };
     const create = async (rows, options) => { assert.ok(options.session); if (h.failInsert === key) throw new Error('storage unavailable'); for (const row of rows) { if (h[key].has(row._id)) throw new Error('duplicate key'); h[key].set(row._id, clone(row)); } return rows; };
-    return { findOne: filter => query(filter, false), find: filter => query(filter, true), create, insertMany: create,
+    return { findOne: filter => query(filter, false), find: (filter, _projection, options) => query(filter, true, options), create, insertMany: create,
       findOneAndUpdate(filter, change, options) { return { lean: async () => { assert.ok(options.session); const row = [...h[key].values()].find(row => matches(row, filter)); if (!row) return null; Object.assign(row, clone(change.$set)); return clone(row); } }; } };
   }
   let queue = Promise.resolve();
@@ -274,4 +274,36 @@ test('Production plan approval requires literal confirmation and retains exact c
  const value=candidate(),productionScope={...scope,environment:'production'};value.scope=productionScope;for(const entry of value.entries){entry.policy.scope=productionScope;entry.policy.stepHash=hash(entry.step);}const h=harness(value),saved=await h.store.prepare(productionScope,{requestKey:'production-consent-0001',candidateHash:hash(value)});
  for(const confirmProduction of [undefined,false,'true',1])await assert.rejects(h.store.approve(productionScope,saved.operationId,saved.planHash,{confirmProduction}),/Production/);
  assert.equal(h.runs.get(saved.operationId).status,'previewed');assert.equal(h.fences,0);await h.store.approve(productionScope,saved.operationId,saved.planHash,{confirmProduction:true});assert.deepEqual(h.runs.get(saved.operationId).approval.productionConsent,{confirmed:true,...productionScope,actorId,planHash:saved.planHash});
+});
+
+function largeCandidate() {
+  const value = candidate();
+  value.entries = Array.from({ length: 198 }, (_, index) => {
+    const f = fixture('Estimate'); f.step.logicalKey = hash('bounded intent ' + index); f.approve();
+    return { kind: 'create', step: f.step, policy: f.policy };
+  });
+  return value;
+}
+test('approval reads all 198 immutable intents in complete single server batches within one transaction', async () => {
+  const h = harness(largeCandidate()), saved = await h.prepare();
+  await h.store.approve(scope, saved.operationId, saved.planHash);
+  assert.equal(h.runs.get(saved.operationId).status, 'approved');
+  assert.equal(h.intents.size, 198);
+  const batches = h.intentBatches;
+  assert.ok(batches.length > 2); assert.ok(batches.every(row => row.options?.singleBatch === true && row.options.batchSize === 101 && row.limit === 101 && row.filter.ordinal.$lt - row.filter.ordinal.$gte <= 100));
+  assert.equal(new Set(batches.map(row => row.session)).size, 1);
+  const pages = await Promise.all([0, 100].map(offset => h.store.page(scope, saved.operationId, offset, 100)));
+  assert.equal(pages.reduce((count, page) => count + page.entries.length, 0), 198);
+  assert.equal(new Set(pages.flatMap(page => page.entries.map(row => row.step.logicalKey))).size, 198);
+});
+test('a byte-truncated single batch cannot approve a partial immutable intent set', async () => {
+  const h = harness(largeCandidate()), saved = await h.prepare(); h.truncateIntentBatch = true;
+  await assert.rejects(h.store.approve(scope, saved.operationId, saved.planHash), /bounded batch is incomplete/);
+  assert.equal(h.runs.get(saved.operationId).status, 'previewed'); assert.equal(h.fences, 0); assert.equal(h.audits.size, 1);
+});
+test('an extra durable intent outside the manifest is still rejected by bounded approval reads', async () => {
+  const h = harness(largeCandidate()), saved = await h.prepare(), extra = clone([...h.intents.values()][0]);
+  extra._id = 'f'.repeat(24); extra.ordinal = 250; h.intents.set(extra._id, extra);
+  await assert.rejects(h.store.approve(scope, saved.operationId, saved.planHash), /activities are missing/);
+  assert.equal(h.runs.get(saved.operationId).status, 'previewed'); assert.equal(h.fences, 0);
 });

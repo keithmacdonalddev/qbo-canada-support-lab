@@ -193,7 +193,7 @@ function compareFinancialMovements(expectation, basis, observation) {
 async function loadMovementBasis(models, scope, run, manifest, stepRows, session) {
   validateFinancialExpectation(manifest.financialExpectation, scope, { fromDate: run.fromDate, throughDate: run.throughDate });
   const descriptors = manifest.records.filter(row => row.kind === 'create'), keys = descriptors.map(row => row.logicalKey), rows = [];
-  for (let offset = 0; offset < keys.length; offset += 200) rows.push(...await models.Intents.find({ ...scope, planId: run.planId, planHash: run.planHash, logicalKey: { $in: keys.slice(offset, offset + 200) } }).limit(201).session(session).maxTimeMS(3000).lean());
+  for (let offset = 0; offset < keys.length; offset += 100) rows.push(...await models.Intents.find({ ...scope, planId: run.planId, planHash: run.planHash, logicalKey: { $in: keys.slice(offset, offset + 100) } }, null, { singleBatch: true, batchSize: 101 }).limit(101).session(session).maxTimeMS(3000).lean());
   if (rows.length !== keys.length || new Set(rows.map(row => row.logicalKey)).size !== keys.length) fail('The complete original create intent set is required.');
   const original = new Map(rows.map(row => [row.logicalKey, row])), cache = new Map(), basis = [];
   for (const expected of descriptors) {
