@@ -23,6 +23,17 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/continuation.cjs\" prompt",
+            "commandWindows": "\"C:/Program Files/nodejs/node.exe\" \"C:/Projects/qbo/scripts/agent-harness/continuation.cjs\" prompt",
+            "timeout": 5,
+            "statusMessage": "Retaining active work"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -36,6 +47,32 @@
           }
         ],
         "matcher": "Bash|PowerShell|exec_command|Read|mcp__.*__read_file"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/continuation.cjs\" stop",
+            "commandWindows": "\"C:/Program Files/nodejs/node.exe\" \"C:/Projects/qbo/scripts/agent-harness/continuation.cjs\" stop",
+            "timeout": 5,
+            "statusMessage": "Checking unfinished work"
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/scripts/agent-harness/continuation.cjs\" interrupt",
+            "commandWindows": "\"C:/Program Files/nodejs/node.exe\" \"C:/Projects/qbo/scripts/agent-harness/continuation.cjs\" interrupt",
+            "timeout": 5,
+            "statusMessage": "Pausing continuation"
+          }
+        ]
       }
     ]
   }

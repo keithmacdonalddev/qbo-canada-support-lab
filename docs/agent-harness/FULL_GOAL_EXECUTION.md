@@ -2,6 +2,14 @@
 
 Updated 2026-10-17 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Premature-stop guard implemented — 2026-10-17
+
+After repeated owner corrections about unfinished-work handoffs, the project now configures a separate Codex Stop/Interrupt/UserPromptSubmit continuation guard. An explicitly armed task with pending outcomes and existing-authorized ready work forces continuation. It retains the original outcome, settled decisions, direct-evidence hashes and absolute bounded window; tests, commits, status reports, known limitations and apologies do not clear a pending outcome. Ordinary unarmed questions do not create tasks; explicit cancellation and replacement direction take priority, including under lock contention and Resume/new-Interrupt races. Missing authority, no ready independent work, user limits and bounded retry exhaustion never become completion claims or permission grants.
+
+The exact current session contract is armed with the original pending app outcome and settled decisions. A Luna-run direct Stop-handler check against it returned decision:block for the same unfinished-status handoff; the bounded counter was consumed and retained. Private proof: artifacts/agent-continuation-evidence/real-contract-stop-20261017.json. This is direct handler proof, not observation of native client activation.
+
+Actual proof: 77/77 guard/shared-workflow tests, static harness wiring verification and diff check passed under the Luna runner; independent implementation and safety reviews found no remaining findings. Only project-local development files changed; no QBO/database/provider/service operation or personal trust-setting change occurred. New Windows hook commands invoke Node directly. Configuration and script checks are complete; native trusted hook activation and actual automatic continuation in this client are **not yet observed**. Follow [the operating instructions](CONTINUATION_GUARD.md) and normal client hook review; do not bypass trust or call the overall company/app request completed. The guard stores no raw prompts or transcripts and is not a semantic-completion or tamper-proof security oracle.
+
 ## Stale time warnings corrected and live group workflow completed — 2026-10-17 22:58 UTC
 
 The owner rejected the prior implementation-only stopping point. Direct retained native evidence exposed an app defect: the recheck retained old time-billing flags whenever the separate Estimate conversion was still incomplete, even though every flagged time entry now reported HasBeenBilled. The app now evaluates that facet independently using fresh exact Invoice/TimeActivity links, original native creation evidence and current financial validation. Missing links, changed identities/content or failed reads retain the warning; Estimate conversion and the strict creation gate remain unchanged.

@@ -2,7 +2,7 @@
 
 ## Current operational setup
 
-Both clients have the same three optional core roles and shared SessionStart, UserPromptSubmit and PreToolUse handlers. Coding work is committed and pushed by default by the main agent or implementation worker, with read-only reviewers excluded. See [OPERATIONAL_CONTRACT.md](OPERATIONAL_CONTRACT.md) for the closeout rules and hook-reinforcement limits. Project safeguards below remain in force.
+Both clients have the same three optional core roles and shared SessionStart, UserPromptSubmit and PreToolUse handlers. Codex additionally has the project-local [bounded continuation guard](CONTINUATION_GUARD.md) configured for Stop, Interrupt and task-context retention; native trust/activation must be verified separately. Coding work is committed and pushed by default by the main agent or implementation worker, with read-only reviewers excluded. See [OPERATIONAL_CONTRACT.md](OPERATIONAL_CONTRACT.md) for the closeout rules and hook-reinforcement limits. Project safeguards below remain in force.
 
 
 Inspected: 2026-10-09. This is the project-specific companion to [the shared workflow](../../AGENT_WORKFLOW.md) and [the harness map](../../AGENT_HARNESS.md). Current source and configuration must be checked before treating a dated inventory as live behavior.

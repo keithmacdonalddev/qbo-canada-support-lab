@@ -42,6 +42,10 @@ Codex wiring lives in `.codex/hooks.json`; project configuration enables hooks. 
 
 Hook paths resolve from the checkout, including when a session starts in a subdirectory. No personal account settings, model pins, approval modes, trust records or application services are changed by this setup.
 
+## Project-local Codex continuation control
+
+This checkout additionally configures the [bounded continuation guard](CONTINUATION_GUARD.md) for Codex Stop, Interrupt and task-context retention. It is separate from the shared command helper above and changes no Claude or sibling-project setup. It reads/writes only bounded ignored per-session contracts and allowlisted evidence hashes, never transcripts, providers or application services. Explicit pauses use generation-specific atomic markers so Stop/Resume cannot lose a newer interruption. Windows handlers use direct Node commands without a PowerShell/cmd wrapper. The 77 focused guard/workflow checks and static wiring checks pass; native trusted activation remains unverified until actually observed in the client. Existing safety, outcome review, trust and spending boundaries remain in force.
+
 ## Verification and activation
 
 Run `node --test scripts/agent-harness/workflow.test.cjs` for synthetic guard behavior. The tests never execute the dangerous sample commands. Run `node scripts/agent-harness/verify.cjs` for repository wiring, policy, role and reminder checks. App builds are not required for these harness changes.

@@ -19,6 +19,12 @@ for(const event of ['SessionStart','UserPromptSubmit','PreToolUse']){
  check(cx.hooks[event]?.some(g=>g.hooks.some(h=>h.command?.includes('workflow.cjs'))),'Codex event '+event);
  check(cl.hooks[event]?.some(g=>g.hooks.some(h=>h.command==='node'&&h.args?.some(a=>a.includes('workflow.cjs')))),'Claude event '+event);
 }
+for(const event of ['Stop','Interrupt','UserPromptSubmit']){
+ const handlers=cx.hooks[event]?.flatMap(group=>group.hooks).filter(handler=>handler.command?.includes('continuation.cjs'))||[];
+ check(handlers.length===1,'Exactly one Codex continuation handler '+event);
+ check(handlers[0].commandWindows?.startsWith('"C:/Program Files/nodejs/node.exe"')&&!/powershell|cmd[.]exe/i.test(handlers[0].commandWindows),'Direct Node Windows continuation '+event);
+}
+check(fs.existsSync(path.join(root,'scripts/agent-harness/continuation.test.cjs')),'Continuation regression coverage present');
 check(read('AGENT_WORKFLOW.md').includes('coding requests authorize committing and pushing'),'Git policy');
 check(read('CLAUDE.md').includes('@AGENT_WORKFLOW.md'),'Claude import');
 check(read('AGENTS.md').includes('AGENT_WORKFLOW.md'),'Codex route');
