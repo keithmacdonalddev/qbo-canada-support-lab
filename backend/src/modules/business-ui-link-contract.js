@@ -59,4 +59,9 @@ function assertUiUnchanged(p,after,now=Date.now(),notBefore){
  if(!['invoice','estimate','time','customer'].every(key=>equal(p.before[key].record,after[key].record)))fail('The browser action cannot be classified unchanged from its exact native records.');
  return{version:1,kind:'owned-ui-link-records-unchanged',scope:p.scope,logicalKey:p.logicalKey,beforeHash:hash(p.before),afterHash:hash(after),linkVerified:false,originalOperationBlocked:true,actorProvenance:PROVENANCE};
 }
-module.exports={PLAN,ATTEMPT,OBSERVATION,OUTCOME,PROVENANCE,PROCEDURE,fail,equal,assertUiPlan,uiPeriodGuardRequest,assertUiReadback,assertUiUnchanged};
+function assertUiFinancialTiming(reports,parentLedgers,notBefore){
+ const boundary=Date.parse(notBefore),valid=t=>typeof t==='string'&&Number.isFinite(Date.parse(t))&&new Date(Date.parse(t)).toISOString()===t&&Date.parse(t)>=boundary;
+ if(!Number.isFinite(boundary)||!Array.isArray(reports)||reports.length!==2||reports.some(r=>!valid(r.startedAt)||!valid(r.observedAt)||Date.parse(r.observedAt)<Date.parse(r.startedAt))||!Array.isArray(parentLedgers)||parentLedgers.some(r=>!valid(r.observedAt)))fail('Every after financial observation must start after the retained post-Save native observation boundary');
+ return true;
+}
+module.exports={assertUiFinancialTiming,PLAN,ATTEMPT,OBSERVATION,OUTCOME,PROVENANCE,PROCEDURE,fail,equal,assertUiPlan,uiPeriodGuardRequest,assertUiReadback,assertUiUnchanged};

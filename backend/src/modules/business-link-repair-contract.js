@@ -83,6 +83,8 @@ function assertNoEffectReadback(plan,after,receipt,now=Date.now()) {
 function assertReadFence(value) {
   if(value?.unresolved===null && value.quarantinedRepair===undefined) return value;
   const q=value?.quarantinedRepair,u=value?.unresolved;
+  if(q?.kind==='known-observed-ui-link-correction'){if(q.version!==1||!HASH.test(q.authorityHash||'')||!HASH.test(q.actionId||'')||!HASH.test(q.actionEvidenceHash||'')||!QID.test(q.qboId||'')||q.operationId!==value.operationId||u?.kind!=='business-ui-link-correction'||u.authorityHash!==q.authorityHash||u.actionId!==q.actionId||u.lastEventHash!==q.actionEvidenceHash||q.receiptId!==undefined||q.receiptEvidenceHash!==undefined)fail('Only the exact known-observed browser conversion may be inspected under its UI barrier.');return value;}
+
   if(!q || q.version!==1 || q.kind!=='known-saved-link-repair' || !HASH.test(q.authorityHash || '') || !HASH.test(q.receiptId || '') || !HASH.test(q.receiptEvidenceHash || '') || !HASH.test(q.requestHash || '') || !HASH.test(q.dispatchKey || '') || !QID.test(q.qboId || '') || q.operationId!==value.operationId || u?.kind!=='business-link-repair' || u.authorityHash!==q.authorityHash || u.key!==q.dispatchKey || u.requestHash!==q.requestHash || u.transportConsumed?.receiptId!==q.receiptId || u.responseReceiptId!==q.receiptId) fail('Only the exact known-saved repair may be inspected while its barrier is held.');
   return value;
 }

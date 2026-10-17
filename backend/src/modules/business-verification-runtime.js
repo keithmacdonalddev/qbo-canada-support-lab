@@ -99,7 +99,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const payload = row?.compilation?.request?.body && JSON.parse(row.compilation.request.body);
     if (!payload?.Line?.some(line => line.LinkedTxn?.some(link => link.TxnType === 'Estimate')) || observed.record.Line?.some(line => line.LinkedTxn !== undefined)) return observed;
-    const lineage = await require('./business-link-repair').loadOwnedLinkLineage({ models: { Authorities, Receipts, Audits, Writers }, scope, step: row }); checkSignal(signal);
+    const lineage = await require('./business-link-repair').loadOwnedLinkLineage({ models: { Authorities, Receipts, Audits, Writers }, scope, step: row }) || await require('./business-ui-link-lineage').loadOwnedUiLinkLineage({models:{Authorities,Audits,Writers},scope,step:row}); checkSignal(signal);
     if (!lineage) return observed;
     const before = await readFence(scope, { signal }), source = row.compilation.relationships.find(link => link.entity === 'Estimate'), time = row.compilation.relationships.find(link => link.entity === 'TimeActivity');
     const estimateObserved = await rawRecord(scope, 'Estimate', source.qboId, { signal }), timeObserved = await rawRecord(scope, 'TimeActivity', time.qboId, { signal });
