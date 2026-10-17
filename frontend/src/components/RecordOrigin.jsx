@@ -5,6 +5,7 @@ import { dateTime } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 
 const labels = {
+  business_population:'Bulk business activity',
   support_case: 'Support case', assistant: 'Assistant plan', generation: 'Historical generation',
   master_preparation: 'Prepared business record', master_owner_attribution: 'Prepared record identified by owner', business_operation: 'Business operation', business_owner_attribution: 'Business record identified by owner', legacy_generation: 'Historical generation', seed: 'Master-data setup', issue_pack: 'Issue pack',
 }

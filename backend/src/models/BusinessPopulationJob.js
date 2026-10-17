@@ -21,6 +21,8 @@ const schema = new mongoose.Schema({
   retryAfter: { type: Date, default: null },
   diagnostics: { type: mongoose.Schema.Types.Mixed, default: null },
   metrics: { type: mongoose.Schema.Types.Mixed, default: null },
+  verification: { type: mongoose.Schema.Types.Mixed, default: null },
+  relationshipPolicyVersion: { type: Number, default: 0, immutable: true },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, createdAt: -1 });
 module.exports = mongoose.model('BusinessPopulationJob', schema);

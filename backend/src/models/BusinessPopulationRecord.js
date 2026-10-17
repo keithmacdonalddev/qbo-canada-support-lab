@@ -13,6 +13,9 @@ const schema = new mongoose.Schema({
   qboId: { type: String }, receipt: { type: mongoose.Schema.Types.Mixed, default: null },
   compilation: { type: mongoose.Schema.Types.Mixed, default: null },
   financialProof: { type: mongoose.Schema.Types.Mixed, default: null }, coverageGaps: { type: [String], default: [] },
+  relationshipCheck: { type: mongoose.Schema.Types.Mixed, default: null },
+  relationshipProof: { type: mongoose.Schema.Types.Mixed, default: null },
+  issueDecisions: { type: mongoose.Schema.Types.Mixed, default: null },
   retryHistory: { type: [mongoose.Schema.Types.Mixed], default: [], validate: values => values.length <= 2 },
   dispatch: { type: mongoose.Schema.Types.Mixed, default: null }, lastError: { type: String, default: null }, revision: { type: Number, default: 0 },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });

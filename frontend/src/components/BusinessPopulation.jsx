@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw } from 'lucide-react'
 import client from '../api/client'
 import { Button } from './ui/button'
+import BusinessPopulationIssues from './BusinessPopulationIssues'
 const labels = { prepared: 'Ready to add', running: 'Adding records', stopping: 'Stopping after this batch', stopped: 'Stopped', blocked: 'Needs attention', populated: 'Records added', 'populated-with-gaps': 'Records added · relationship gaps remain' }
 const today = () => { const value = new Date(); return [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-') }
 export default function BusinessPopulation(props) { return <PopulationPanel key={[props.realmId, props.environment, props.enabled].join(':')} {...props} /> }
@@ -64,6 +65,7 @@ export function PopulationPanel({ realmId, environment, enabled, api = client })
           {active && state.owner && <Button variant="outline" disabled={!!busy || job.stopRequested} onClick={() => act('stop')}>Stop after current batch</Button>}
           {canStart && state.owner && <div className="space-y-3">{counts.rejected > 0 && <p>Retry the {counts.rejected} records QBO definitively rejected. Saved records are retained. Original failed requests and faults remain in the audit history.</p>}{environment === 'production' && <label className="flex items-start gap-2"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={!!busy || !!error} className="mt-0.5" /><span>I authorize adding the remaining {remaining.toLocaleString()} scheduled records to Production company ending {String(realmId).slice(-4)}.</span></label>}<Button disabled={!!busy || !!error || (environment === 'production' && !confirmed)} onClick={() => act('start')}>{busy === 'start' ? 'Starting…' : counts.rejected ? 'Retry rejected records and continue' : job.approved ? 'Resume adding records' : 'Start adding records'}</Button></div>}
         </div>}
+        {job && <BusinessPopulationIssues key={job.jobId} job={job} owner={state.owner} api={api} scope={state.scope} onRefresh={() => setRevision(value => value + 1)} />}
         {state?.owner && !active && !job?.batch && <div className="flex flex-wrap items-end gap-3 border-t border-[var(--line)] pt-4"><label className="space-y-1"><span className="block">Schedule through</span><input type="date" value={throughDate} max={today()} disabled={!!busy || !!error} onChange={event => setThroughDate(event.target.value)} className="rounded border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-[var(--ink)]" /></label><Button variant="outline" disabled={!!busy || !!error || !throughDate} onClick={() => act('prepare')}>{busy === 'prepare' && <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />}{busy === 'prepare' ? 'Preparing schedule…' : 'Prepare business schedule'}</Button></div>}
       </>}
     </div>

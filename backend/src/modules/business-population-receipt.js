@@ -44,4 +44,4 @@ function createPopulationCreationValidator({models,scope,now=()=>Date.now(),allo
     const receipt=populationItemReceipt(scope,stored,item,{...entry,compilation:row.compilation});if(canonical(receipt)!==canonical(row.receipt))throw denied('The population item receipt bytes changed.');return hash({receiptId:id,bId:entry.bId,compilationHash:entry.compilationHash,receiptHash:hash(receipt)});
   };
 }
-module.exports={populationItemReceipt,createPopulationCreationValidator};
+module.exports={populationItemReceipt,createPopulationCreationValidator,assertPopulationAudits};

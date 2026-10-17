@@ -58,6 +58,15 @@ function originPipelines({ userId, realmId, environment, entity, id }) {
         { $limit: 3 }, { $project: { _id: 1, userId: 1, actorUserId: 1, realmId: 1, action: 1, actionType: 1, outcome: 1, inputParams: 1, afterState: 1 } },
       ], as: 'audits' } },
     ] },
+    { key: 'business_population', collection: 'qbowritereceipts', pipeline: [
+      { $match: { ownerId: userId, realmId, environment, kind: 'business-population', operation: 'create', state: {$in:['saved','unknown']}, entity: 'batch', 'observed.items': { $elemMatch: { entity: entity.toLowerCase(), qboId:id, outcome:'saved' } } } },
+      { $sort: { sentAt: -1, _id: -1 } }, { $limit: LIMIT + 1 },
+      { $project: { workflow:1,population:1,_id: 1, contractVersion: 1, ownerId: 1, actorId: 1, realmId: 1, environment: 1, connectionId: 1, operationId: 1, logicalKey: 1, dispatchKey: 1, requestHash: 1, entity: 1, kind: 1, operation: 1, state: 1, observed: 1, sentAt: 1, observedAt: 1, startAuditId: 1, resultAuditId: 1 } },
+      { $lookup: { from: 'auditlogs', let: { start: '$startAuditId', result: '$resultAuditId' }, pipeline: [
+        { $match: { userId, realmId, $expr: { $in: ['$_id', ['$$start', '$$result']] } } },
+        { $limit: 3 }, { $project: { _id: 1, userId: 1, actorUserId: 1, realmId: 1, action: 1, actionType: 1, outcome: 1, inputParams: 1, afterState: 1 } },
+      ], as: 'audits' } },
+    ] },
     ...(MASTER_ENTITIES.has(entity) ? [{ key: 'master_preparation', collection: 'masterpreparationruns', pipeline: masterOriginPipeline({ userId, realmId, environment, entity, id }, LIMIT + 1) }] : []),
   ];
 }
@@ -87,6 +96,9 @@ async function readRecordOrigin({ db, attributionModels, userId, realmId, enviro
         } catch { incompleteSources.push(kind); }
         continue;
       }
+      if(kind==='business_population'){
+        try{if(String(row.ownerId)!==String(userId)||row.realmId!==realmId||row.environment!==environment)throw new Error('Bulk origin scope changed');const scope={realmId,environment,connectionId:String(row.connectionId)},evidence=require('./business-population-origin').populationOriginEvidence(row,scope,entity,id),createdAt=validDate(row.observedAt),sentAt=validDate(row.sentAt);if(!createdAt||!sentAt||createdAt<sentAt)throw new Error('Bulk origin timing is incomplete');sources.push({kind,sourceId:row._id,operationId:evidence.jobId,connectionId:scope.connectionId,caseId:null,scope:'recorded_environment',createdAt});}catch{incompleteSources.push(kind);}continue;
+      }
       if (kind === 'business_operation') {
         try {
           if (!row || String(row.ownerId) !== String(userId) || row.realmId !== realmId || row.environment !== environment || row.kind !== 'business' || row.operation !== 'create' || row.state !== 'saved' || row.entity !== entity.toLowerCase() || row.observed?.qboId !== id) throw new Error('Mismatched origin');
@@ -109,6 +121,7 @@ async function readRecordOrigin({ db, attributionModels, userId, realmId, enviro
         ...(kind === 'assistant' && Number.isSafeInteger(row.step) && row.step > 0 ? { step: row.step } : {}) });
     }
   }
+  if(sources.filter(source=>['business_operation','business_population'].includes(source.kind)).length>1)incompleteSources.push('business_population');
   if (sources.filter(source => source.kind === 'business_operation').length > 1) incompleteSources.push('business_operation');
   const masters = sources.filter(source => ['master_preparation', 'master_owner_attribution'].includes(source.kind));
   if (masters.length > 1 || (masters.length && sources.length > masters.length)) incompleteSources.push('master_preparation');

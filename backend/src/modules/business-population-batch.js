@@ -49,12 +49,13 @@ function classifyPopulationResponse(batch, response, intuitTid = '') {
   if (malformed) return { ...base, outcome: 'unknown', responseHash, items: items.map(item => ({ ...item, outcome: 'unknown' })) };
   return { ...base, outcome: items.every(item => ['saved','rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };
 }
-function readyPopulationFrontier(records, limit = MAX_BATCH) {
+function readyPopulationFrontier(records, limit = MAX_BATCH, allowRecord = () => true) {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_BATCH) throw new TypeError('Use a bounded population frontier.');
   const byKey = new Map(records.map(record => [record.logicalKey, record])), selected = [], parents = new Set(), stockItems = new Set();
   if (byKey.size !== records.length) throw denied('The population ledger contains duplicate identities.');
   for (const record of [...records].sort((a,b) => a.txnDate.localeCompare(b.txnDate) || a.logicalKey.localeCompare(b.logicalKey))) {
     if (record.state !== 'pending' || record.step.dependencies.some(link => byKey.get(link.logicalKey)?.state !== 'saved' || parents.has(link.logicalKey))) continue;
+    if (!allowRecord(record)) continue;
     const stock = ['Bill','SalesReceipt'].includes(record.entity) ? record.step.references.filter(ref => ref.entity === 'Item').map(ref => ref.id) : [];
     if (stock.some(id => stockItems.has(id))) continue;
     selected.push(record); record.step.dependencies.forEach(link => parents.add(link.logicalKey)); stock.forEach(id => stockItems.add(id));

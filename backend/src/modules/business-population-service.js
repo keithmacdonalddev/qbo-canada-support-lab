@@ -10,6 +10,8 @@ const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessOperationPlanStore } = require('./business-operation-plan-store');
 const { preparePopulationPlan } = require('./business-population-plan');
 const { validateCompilation } = require('./business-readback');
+const populationIssues = require('./business-population-issues');
+const { createPopulationVerification, publicVerification } = require('./business-population-verification');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 const done = status => ['populated','populated-with-gaps'].includes(status);
 const recordId = (scope,key) => hash({scope,logicalKey:key});
@@ -26,6 +28,7 @@ function createBusinessPopulationService(options = {}) {
   async function pageRows(Model,query,session,projection=null){const result=[];let after=null,bytes=0;for(;;){let cursor=Model.find({...query,...(after?{_id:{$gt:after}}:{})},null,{singleBatch:true,batchSize:101}).sort({_id:1}).limit(100).session(session).maxTimeMS(5000);if(projection)cursor=cursor.select(projection);const page=await cursor.lean();if(!page.length)return result;bytes+=Buffer.byteLength(JSON.stringify(page));result.push(...page);if(result.length>40000||bytes>128000000)throw denied('Population preparation exceeds its bounded record budget.');after=page.at(-1)._id;}}
   const creationIdentity=row=>({logicalKey:row.logicalKey,entity:row.entity,qboId:row.qboId,fingerprint:row.fingerprint,compilationHash:row.compilation.compilationHash,receiptHash:hash(row.receipt),dispatchHash:hash(row.dispatch)});
   const jobs=new Map();let interval=null,closed=false,scanPromise=null;
+  const verification = createPopulationVerification({models,bind,bindJob,read,transaction,fenceAccess,audit,now,publicJob,pageRows,counts,createReadQueue:options.createReadQueue});
   async function bind(user,action='operations.read') {
     const value=await resolve(user),scope=scoped({environment:value.environment,realmId:value.connection?.realmId,connectionId:value.connection?.connectionId}),ownerId=String(user.id),actorId=String(user.actorId || user.id),access=accessFor({ownerId,actorId});
     await assertReady();await access.authorize(scope,action);
@@ -46,16 +49,18 @@ function createBusinessPopulationService(options = {}) {
   }
   async function audit(bound,jobId,phase,data,session) {
     const id=hash({jobId,phase,data}).slice(0,24);
+    if(phase==='relationship-evidence-observed'){const existing=await read(models.Audits,{_id:id,realmId:bound.scope.realmId},session);if(existing){if(String(existing.userId)!==bound.ownerId||String(existing.actorUserId||existing.userId)!==bound.actorId||existing.action!=='Business population '+phase||existing.actionType!=='manual'||existing.outcome!=='success'||canonical(existing.afterState)!==canonical({...bound.scope,jobId,...data}))throw denied('The original relationship observation audit changed.');return id;}}
     await models.Audits.create([{_id:id,userId:bound.ownerId,actorUserId:bound.actorId!==bound.ownerId?bound.actorId:undefined,realmId:bound.scope.realmId,action:'Business population '+phase,actionType:'manual',outcome:'success',afterState:{...bound.scope,jobId,...data}}],{session});return id;
   }
   async function counts(job) {
-    const rows=await Records.aggregate([{$match:{environment:job.environment,realmId:job.realmId,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate}}},{$group:{_id:null,total:{$sum:1},saved:{$sum:{$cond:[{$eq:['$state','saved']},1,0]}},pending:{$sum:{$cond:[{$eq:['$state','pending']},1,0]}},rejected:{$sum:{$cond:[{$eq:['$state','rejected']},1,0]}},unknown:{$sum:{$cond:[{$in:['$state',['unknown','dispatched']]},1,0]}},contentChecked:{$sum:{$cond:[{$ne:[{$ifNull:['$financialProof',null]},null]},1,0]}},coverageGaps:{$sum:{$cond:[{$gt:[{$size:{$ifNull:['$coverageGaps',[]]}},0]},1,0]}}}}]).option({maxTimeMS:5000});
-    const summary={required:job.manifest.length,total:0,saved:0,pending:0,rejected:0,unknown:0,contentChecked:0,coverageGaps:0,...(rows[0] || {})};delete summary._id;return summary;
+    const rows=await Records.aggregate([{$match:{environment:job.environment,realmId:job.realmId,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate}}},{$group:{_id:null,total:{$sum:1},saved:{$sum:{$cond:[{$eq:['$state','saved']},1,0]}},pending:{$sum:{$cond:[{$eq:['$state','pending']},1,0]}},rejected:{$sum:{$cond:[{$eq:['$state','rejected']},1,0]}},unknown:{$sum:{$cond:[{$in:['$state',['unknown','dispatched']]},1,0]}},contentChecked:{$sum:{$cond:[{$ne:[{$ifNull:['$financialProof',null]},null]},1,0]}},coverageGaps:{$sum:{$cond:[{$gt:[{$size:{$ifNull:['$coverageGaps',[]]}},0]},1,0]}},estimateGaps:{$sum:{$cond:[{$in:['estimate-invoice-conversion-unverified',{$ifNull:['$coverageGaps',[]]}]},1,0]}},timeGaps:{$sum:{$cond:[{$in:['time-invoice-billing-unverified',{$ifNull:['$coverageGaps',[]]}]},1,0]}},verificationErrors:{$sum:{$cond:[{$or:[{$eq:['$relationshipCheck.outcome','error']},{$and:[{$eq:['$state','saved']},{$eq:[{$ifNull:['$financialProof',null]},null]}]}]},1,0]}}}}]).option({maxTimeMS:5000});
+    const summary={required:job.manifest.length,total:0,saved:0,pending:0,rejected:0,unknown:0,contentChecked:0,coverageGaps:0,estimateGaps:0,timeGaps:0,verificationErrors:0,...(rows[0] || {})};delete summary._id;return summary;
   }
   async function publicJob(job) {
     if(!job)return null;
     const writer=job.batch?.state==='prepared'?await read(models.Writers,{environment:job.environment,realmId:job.realmId,connectionId:job.connectionId}):null;const unsentRecoverable=writer?await recoverableUnsent(job,writer):false;
-    return {jobId:String(job._id),scope:{environment:job.environment,realmId:job.realmId,connectionId:String(job.connectionId)},manifestHash:job.manifestHash,status:job.status,fromDate:job.fromDate,throughDate:job.throughDate,createdThrough:job.createdThrough,imported:job.importedCount,counts:await counts(job),stopRequested:job.stopRequested,lastError:job.lastError,metrics:job.metrics,approved:Boolean(job.approval),batch:job.batch?{size:job.batch.entries.length,state:job.batch.state || 'prepared',unsentRecoverable}:null,verification:'Creation/content progress only; full relationship, report and reconciliation verification is separate.'};
+    const summary=await counts(job);
+    return {issueGroups:populationIssues.DEFINITIONS.map((definition,index)=>({...definition,count:[summary.estimateGaps,summary.timeGaps,summary.verificationErrors][index] || 0})),relationshipVerification:publicVerification(job.verification),relationshipPolicyVersion:job.relationshipPolicyVersion || 0,jobId:String(job._id),scope:{environment:job.environment,realmId:job.realmId,connectionId:String(job.connectionId)},manifestHash:job.manifestHash,status:job.status,fromDate:job.fromDate,throughDate:job.throughDate,createdThrough:job.createdThrough,imported:job.importedCount,counts:summary,stopRequested:job.stopRequested,lastError:job.lastError,metrics:job.metrics,approved:Boolean(job.approval),batch:job.batch?{size:job.batch.entries.length,state:job.batch.state || 'prepared',unsentRecoverable}:null,verification:'Creation/content progress only; full relationship, report and reconciliation verification is separate.'};
   }
   async function status(user) {
     const bound=await bind(user),job=await Jobs.findOne(bound.scope).sort({createdAt:-1}).maxTimeMS(5000).lean();
@@ -82,6 +87,7 @@ function createBusinessPopulationService(options = {}) {
   async function prepare(user,body) {
     exact(body,['throughDate','requestKey']);date(body.throughDate);if(!/^[a-zA-Z0-9_-]{16,100}$/.test(body.requestKey||''))throw denied('Use a retained population request identifier.');
     const bound=await bind(user,'operations.preview');if(bound.ownerId!==bound.actorId)throw denied('Only the company owner can prepare population.');
+    if(await read(Jobs,{...bound.scope,'verification.status':{$in:['queued','running']}}))throw denied('Finish the company relationship recheck before preparing more records.');
     const active=await assertPublishedBusiness({...models,scope:bound.scope,requireScheduleAcceptance:true,verifyBaseline:true});
     const jobId=hash({scope:bound.scope,authorityHash:active.authority.contentHash,throughDate:body.throughDate,purpose:'business-population-v1'}).slice(0,24),existing=await read(Jobs,{_id:jobId,...bound.scope});if(existing)return {scope:bound.scope,job:await publicJob(existing),reused:true};
     const writer=await read(models.Writers,bound.scope),calendar=active.calendar;
@@ -101,9 +107,10 @@ function createBusinessPopulationService(options = {}) {
     if(hash(manifest)!==plan.manifestHash)throw denied('The population ledger differs from the immutable published manifest.');
     await transaction(async session=>{
       await fenceAccess(bound,session,'operations.preview');
+      if(await read(Jobs,{...bound.scope,'verification.status':{$in:['queued','running']}},session))throw denied('Finish the company relationship recheck before preparing more records.');
       const latest=await read(models.Writers,bound.scope,session);if(latest.revision!==writer.revision || latest.unresolved!==null)throw denied('Company activity changed during population preparation.');
       const current=await assertPublishedBusiness({...models,scope:bound.scope,requireScheduleAcceptance:true,session,fence:true});if(current.authority.contentHash!==active.authority.contentHash)throw denied('The published business changed during population preparation.');
-      const job={_id:jobId,version:1,...bound.scope,ownerId:bound.ownerId,actorId:bound.actorId,authorityHash:active.authority.contentHash,blueprintHash:active.value.blueprintHash,originalOperationId:writer.operationId || null,fromDate:plan.fromDate,throughDate:plan.throughDate,manifest:plan.manifest,manifestHash:plan.manifestHash,importedHash:hash(origins.identities),importedCount:origins.identities.length,status:'prepared',revision:0};
+      const job={_id:jobId,version:1,...bound.scope,ownerId:bound.ownerId,actorId:bound.actorId,authorityHash:active.authority.contentHash,blueprintHash:active.value.blueprintHash,originalOperationId:writer.operationId || null,fromDate:plan.fromDate,throughDate:plan.throughDate,manifest:plan.manifest,manifestHash:plan.manifestHash,importedHash:hash(origins.identities),importedCount:origins.identities.length,relationshipPolicyVersion:1,status:'prepared',revision:0};
       await Jobs.create([job],{session});await audit(bound,jobId,'prepared',{manifestHash:plan.manifestHash,records:plan.records.length,imported:origins.identities.length,qboWrites:0},session);
     });
     return {scope:bound.scope,job:await publicJob(await read(Jobs,{_id:jobId,...bound.scope})),reused:false};
@@ -121,6 +128,8 @@ function createBusinessPopulationService(options = {}) {
     await transaction(async session=>{
       await fenceAccess(bound,session);const job=await read(Jobs,{_id:id,...bound.scope},session),writer=await read(models.Writers,bound.scope,session),policy=await read(models.Policies,bound.scope,session);
       if(!job||!Array.isArray(job.manifest)||hash(job.manifest)!==job.manifestHash||job.manifestHash!==body.manifestHash||String(job.ownerId)!==bound.ownerId||job.actorId.toString()!==bound.actorId||!policy||policy.state!=='active'||!writer||writer.unresolved!==null||(bound.scope.environment==='production'&&!body.confirmProduction))throw denied('Population approval or company coordination changed.');
+      if(await read(Jobs,{...bound.scope,_id:{$ne:id},'verification.status':{$in:['queued','running']}},session))throw denied('Finish the other company relationship recheck before adding records.');
+      if(['queued','running'].includes(job.verification?.status))throw denied('Stop the relationship recheck before adding records.');
       if(done(job.status))return;
       if((job.batch&&!await recoverableUnsent(job,writer,session)) || (job.leaseToken&&new Date(job.leaseExpiresAt).getTime()>now()))throw denied('Population is active or has an unsettled cohort.');
       const unsettled=await pageRows(Records,{...bound.scope,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate},state:{$in:['rejected','unknown','dispatched']}},session);
@@ -158,10 +167,10 @@ function createBusinessPopulationService(options = {}) {
       if(error.status===429&&error.outcomeUnknown!==true){const job=await read(Jobs,{_id:id}),writer=job?await read(models.Writers,{environment:job.environment,realmId:job.realmId,connectionId:job.connectionId}):null;if(job&&['running','stopping'].includes(job.status)&&!job.batch&&!job.leaseToken&&writer?.unresolved===null){await Jobs.updateOne({_id:id,revision:job.revision,batch:null,leaseToken:null},{$set:{status:job.stopRequested?'stopped':'running',retryAfter:new Date(now()+65000),lastError:'Waiting for the QuickBooks rate limit. Saved records are retained.'},$inc:{revision:1}});return;}}
       await Jobs.updateOne({_id:id,status:{$in:['running','stopping']}},{$set:{status:'blocked',diagnostics:{type:error.name,stage:error.qboStage||null,message:require('./log-diagnostic').redactLogSecrets(error.message).slice(0,1000),stack:require('./log-diagnostic').redactLogSecrets(error.stack).split('\n').slice(0,5).join('\n')},lastError:error.qboStage==='write_receipt'?'A cohort has an uncertain QBO outcome. Its saved identities are retained; do not replay it.':(error.qboStage==='write_admission'||error.code&&/^BUSINESS_/.test(error.code))?error.message:'Population stopped at a safety check. Saved records and dispatch evidence are retained.'}});}catch{/* Preserve durable dispatch barriers if storage is unavailable. */}}).finally(()=>jobs.delete(id));jobs.set(id,work);
   }
-  async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{await assertReady();const rows=await Jobs.find({status:{$in:['running','stopping']}}).select('_id').sort({_id:1}).limit(20).maxTimeMS(5000).lean();for(const row of rows)kick(String(row._id));})().catch(()=>{}).finally(()=>{scanPromise=null;});return scanPromise;}
+  async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{await assertReady();const rows=await Jobs.find({status:{$in:['running','stopping']}}).select('_id').sort({_id:1}).limit(20).maxTimeMS(5000).lean();for(const row of rows)kick(String(row._id));await verification.scan();})().catch(()=>{}).finally(()=>{scanPromise=null;});return scanPromise;}
   function startWorker(){if(interval||closed)return;interval=setInterval(()=>void scan(),10000);interval.unref?.();void scan();}
-  function close(){closed=true;if(interval)clearInterval(interval);interval=null;}
-  return {status,prepare,start,stop,startWorker,close,scan,drain:async()=>Promise.allSettled([...jobs.values()])};
+  function close(){closed=true;verification.close();if(interval)clearInterval(interval);interval=null;}
+  return {status,prepare,start,stop,startWorker,close,scan,issues:verification.list,recheck:verification.start,stopRecheck:verification.stop,documentLimitation:verification.limitation,drain:async()=>Promise.allSettled([...jobs.values(),verification.drain()])};
 }
 let singleton;function getBusinessPopulationService(){return singleton ||= createBusinessPopulationService();}
 module.exports={createBusinessPopulationService,getBusinessPopulationService,recordId};

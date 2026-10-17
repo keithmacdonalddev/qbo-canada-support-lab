@@ -11,13 +11,14 @@ const {buildPopulationBatch,classifyPopulationResponse,readyPopulationFrontier}=
 const {createPopulationReader,parallel}=require('./business-population-reader');
 const {readPopulationDeposits}=require('./business-population-proof');
 const {monthEnd}=require('./business-population-plan');
+const populationIssues=require('./business-population-issues');
 const FRESH=180000;
 async function runPopulationJob(input) {
   const {scope,ownerId,actorId,access,models,transaction,assertReady,now,audit,fenceAccess,counts}=input;
   const {Jobs,Records,Writers,Receipts}=models,jobId=String(input.job._id),bound={scope,ownerId,actorId,access};
   const read=(Model,query,session)=>Model.findOne(query).session(session).maxTimeMS(5000).lean();
   const keyQuery={...scope,authorityHash:input.job.authorityHash,txnDate:{$gte:input.job.fromDate,$lte:input.job.throughDate}};
-  let leaseToken=randomUUID(),client=null,started=now(),cohorts=0,lastBatchAt=0;const masterCache=new Map(),readQueue=input.readQueue||require('./business-population-reads').createPopulationReadQueue();if(input.job.retryAfter)readQueue.delayUntil(Date.parse(input.job.retryAfter));else if(input.job.diagnostics?.message?.includes('HTTP 429'))readQueue.delayUntil((Number.isFinite(Date.parse(input.job.updatedAt))?Date.parse(input.job.updatedAt):Date.now())+65000);
+  let leaseToken=randomUUID(),client=null,started=now(),cohorts=0,lastBatchAt=0,searchFrom=null;const masterCache=new Map(),readQueue=input.readQueue||require('./business-population-reads').createPopulationReadQueue();if(input.job.retryAfter)readQueue.delayUntil(Date.parse(input.job.retryAfter));else if(input.job.diagnostics?.message?.includes('HTTP 429'))readQueue.delayUntil((Number.isFinite(Date.parse(input.job.updatedAt))?Date.parse(input.job.updatedAt):Date.now())+65000);
   async function loadRows(query) {const result=[];let after=null;for(;;){const page=await Records.find({...query,...(after?{_id:{$gt:after}}:{})},null,{singleBatch:true,batchSize:101}).sort({_id:1}).limit(100).maxTimeMS(5000).lean();if(!page.length)return result;result.push(...page);if(result.length>4000)throw denied('A population observation window exceeds4000 records.');after=page.at(-1)._id;}}
   const delegationMatches=(writer,job)=>writer?.populationDelegation?.jobId===jobId&&writer.populationDelegation.manifestHash===job.manifestHash&&writer.populationDelegation.authorityHash===job.authorityHash&&String(writer.operationId||'')===String(job.originalOperationId||'');
   const approvalMatches=job=>Array.isArray(job?.manifest)&&hash(job.manifest)===job.manifestHash&&job?.approval?.version===1&&job.approval.manifestHash===job.manifestHash&&job.approval.authorityHash===job.authorityHash&&job.approval.ownerId===ownerId&&job.approval.actorId===actorId&&(scope.environment!=='production'||job.approval.productionConfirmed===true);
@@ -61,6 +62,14 @@ async function runPopulationJob(input) {
         for(const parent of row.step.dependencies){const saved=await read(Records,{...scope,logicalKey:parent.logicalKey,state:'saved'},session);if(!saved||saved.fingerprint!==parent.fingerprint||!saved.receipt||saved.receipt.qboId!==saved.qboId)throw denied('A population dependency is no longer saved.');const evidenceHash=await validateCreation(saved,{session}),observed=JSON.parse(entry.inputsJson).parents.find(value=>value.logicalKey===parent.logicalKey);if(observed?.creationEvidenceHash!==evidenceHash)throw denied('The original parent creation receipt changed before admission.');}
         const inputs=JSON.parse(entry.inputsJson);if(Object.keys(inputs).sort().join(',')!=='observationFence,parents,referenceEvidence')throw denied('Population compilation inputs contain unexpected fields.');
         const compiled=compileBusinessTransaction({...inputs,scope,step:row.step,policy:row.policy,now:now()});if(compiled.compilationHash!==entry.compilation.compilationHash||compiled.request.requestHash!==entry.compilation.request.requestHash||hash(entry.inputsJson)!==entry.inputsHash||JSON.parse(entry.inputsJson).observationFence.writerRevision!==writer.revision)throw denied('Fresh population compilation or writer evidence changed.');
+        if(job.relationshipPolicyVersion===1 && populationIssues.isConversion(row)){
+          const pattern={...scope,authorityHash:job.authorityHash,entity:'Invoice','step.dependencies.entity':'Estimate'},batchKeys=batch.entries.map(value=>value.logicalKey);
+          const unresolved=await read(Records,{...pattern,logicalKey:{$nin:batchKeys},state:{$in:['saved','dispatched','unknown']},'relationshipProof.matches':{$ne:true}},session);
+          if(unresolved)throw denied('Estimate-to-invoice creation is paused until its existing relationship issue is verified. Independent activity can continue.');
+          const prior=await read(Records,{...pattern,state:'saved','relationshipProof.matches':true},session);
+          if(prior){await populationIssues.assertRelationshipAudit(models,scope,prior,session,ownerId,actorId);await validateCreation(prior,{session});}
+          else if(batch.entries.filter(value=>populationIssues.isConversion(value)).length>1)throw denied('Verify one complete estimate-to-invoice trial before repeating this pattern.');
+        }
         if(row.entity==='Invoice'){for(const quote of row.step.dependencies.filter(link=>['Estimate','TimeActivity'].includes(link.entity))){const consumed=await read(Records,{...scope,entity:'Invoice',logicalKey:{$ne:row.logicalKey},state:{$in:['saved','dispatched','unknown']},'step.dependencies.logicalKey':quote.logicalKey},session);if(consumed)throw denied('This originating record is already reserved by another Invoice.');}}
         admittedRows.push({...row,compilation:entry.compilation,inputsJson:entry.inputsJson,inputsHash:entry.inputsHash});
         const updated=await Records.findOneAndUpdate({_id:row._id,...scope,state:'pending',revision:row.revision},{$set:{state:'dispatched',compilation:entry.compilation,dispatch:{version:1,jobId,batchHash:batch.hash,bId:entry.bId,receiptId,dispatchKey,requestHash:entry.compilation.request.requestHash}},$inc:{revision:1}},{new:true,session}).lean();if(!updated)throw denied('A population item changed during admission.');
@@ -90,7 +99,13 @@ async function runPopulationJob(input) {
     const childRows=await loadRows({...keyQuery,state:'saved','step.dependencies.logicalKey':{$in:[...all.keys()]}});for(const row of childRows)all.set(row.logicalKey,row);
     return {current,all:[...all.values()],through};
   }
-  async function rememberProofs(values){for(let offset=0;offset<values.length;offset+=25)await Records.bulkWrite(values.slice(offset,offset+25).map(value=>({updateOne:{filter:{...scope,logicalKey:value.logicalKey,state:'saved',qboId:value.qboId,fingerprint:value.fingerprint},update:{$set:{financialProof:value.financialProof,coverageGaps:value.financialProof.coverageGaps}}}})),{ordered:true});}
+  async function rememberProofs(values){for(let offset=0;offset<values.length;offset+=25)await transaction(async session=>{
+    await fenceAccess(bound,session);const current=await read(Jobs,{_id:jobId,...scope},session),writer=await read(Writers,scope,session);if(current?.leaseToken!==leaseToken||!delegationMatches(writer,current)||writer.unresolved!==null)throw denied('The population writer changed before retaining financial evidence.');
+    for(const value of values.slice(offset,offset+25)){const source=JSON.parse(value.financialProof.sourceJson),row={...value,step:value.originalStep,policy:value.originalPolicy,receipt:source.receipt,intentHash:hash({step:value.originalStep,policy:value.originalPolicy})};let proof=null;
+      if(populationIssues.isConversion(row)){proof=populationIssues.relationshipProof(row,value.financialProof,now());proof.auditId=await audit(bound,jobId,'relationship-evidence-observed',{logicalKey:row.logicalKey,qboId:row.qboId,receiptHash:proof.receiptHash,financialEvidenceHash:proof.financialEvidenceHash,relationshipEvidenceHash:proof.evidenceHash,matches:proof.matches,observedAt:proof.observedAt,validatedAt:proof.validatedAt,qboWrites:0},session);}
+      await Records.updateOne({...scope,logicalKey:value.logicalKey,state:'saved',qboId:value.qboId,fingerprint:value.fingerprint},{$set:{financialProof:value.financialProof,coverageGaps:[...new Set([...value.financialProof.coverageGaps,...(proof&&!proof.matches?['estimate-invoice-conversion-unverified']:[])])],...(proof?{relationshipProof:proof}:{})}},{session});
+    }
+  });}
   try {
     client=await access.resolveClient(scope);const {QBOClient}=require('./qbo-client');if(!(client instanceof QBOClient)||client.apiCall!==QBOClient.prototype.apiCall||String(client.connection.userId)!==ownerId)throw denied('Population requires the original scoped QBO transport.');client.writeGate=gate;
     while(now()-started<600000){
@@ -99,15 +114,34 @@ async function runPopulationJob(input) {
       const earliest=await Records.findOne({...keyQuery,$or:[{state:{$in:['pending','rejected','unknown','dispatched']}},{state:'saved',financialProof:null}]}).sort({txnDate:1,logicalKey:1}).maxTimeMS(5000).lean();
       if(!earliest){const summary=await counts(job);if(summary.total!==job.manifest.length||summary.saved!==summary.required||summary.unknown||summary.rejected)throw denied('Population completion does not match its exact settled manifest.');await transaction(async session=>{await fenceAccess(bound,session);const current=await read(Jobs,{_id:jobId,...scope},session),writer=await read(Writers,scope,session);if(current.leaseToken!==leaseToken||writer.unresolved!==null||!delegationMatches(writer,current))throw denied('Population completion ownership changed.');const state=summary.coverageGaps?'populated-with-gaps':'populated';await Jobs.updateOne({_id:jobId,...scope,leaseToken,revision:current.revision},{$set:{status:state,leaseToken:null,leaseExpiresAt:null,createdThrough:job.throughDate,counts:summary,lastError:null},$inc:{revision:1}},{session});await audit(bound,jobId,'creation-completed',{manifestHash:job.manifestHash,counts:summary,verifiedCalendarAdvanced:false},session);});leaseToken=null;break;}
       if(['rejected','unknown','dispatched'].includes(earliest.state))throw denied('A failed or uncertain population item requires recovery.');
-      const month=earliest.txnDate.slice(0,7)+'-01',window=await windowRows(month,job),frontier=readyPopulationFrontier(window.all).filter(row=>row.txnDate>=month&&row.txnDate<=window.through);
+      const earliestMonth=earliest.txnDate.slice(0,7)+'-01',month=searchFrom&&searchFrom>earliestMonth?searchFrom:earliestMonth,window=await windowRows(month,job);
+      let trialRows=[],patternBlocked=false,patternPassed=false;
+      const pattern={...scope,authorityHash:job.authorityHash,entity:'Invoice','step.dependencies.entity':'Estimate',state:'saved'};
+      if(job.relationshipPolicyVersion===1){
+        patternBlocked=Boolean(await read(Records,{...pattern,'relationshipProof.matches':false}));
+        const prior=await read(Records,{...pattern,'relationshipProof.matches':true});patternPassed=Boolean(prior&&populationIssues.validRelationshipProof(prior));
+        if(!patternBlocked){trialRows=await Records.find({...pattern,relationshipProof:null}).sort({txnDate:1,logicalKey:1}).limit(30).maxTimeMS(5000).lean();
+          const retained=new Map(window.all.map(row=>[row.logicalKey,row]));for(const row of trialRows)retained.set(row.logicalKey,row);
+          const parents=await loadRows({...scope,logicalKey:{$in:[...new Set(trialRows.flatMap(row=>row.step.dependencies.map(link=>link.logicalKey)))]}});for(const row of parents)retained.set(row.logicalKey,row);
+          if(trialRows.length){const children=await loadRows({...scope,state:'saved','step.dependencies.logicalKey':{$in:trialRows.map(row=>row.logicalKey)}});for(const row of children)retained.set(row.logicalKey,row);}window.all=[...retained.values()];
+        }
+      }
       const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),FRESH);timer.unref?.();
       try {
         const reader=createPopulationReader({scope,jobId,client,records:window.all,readFence,masterCache,validateCreation,now,signal:controller.signal,readQueue});
         activeReadControl=reader.control;
-        if(!window.current.some(row=>row.state==='pending')){
-          if(window.current.some(row=>row.state!=='saved'))throw denied('The population month contains an unsettled item.');await reader.prime(window.all.filter(row=>row.state==='saved'));const proofs=await parallel(window.current,row=>reader.financial(row));await readFence();await rememberProofs(proofs);await Jobs.updateOne({_id:jobId,...scope,leaseToken,status:'running',stopRequested:false},{$set:{createdThrough:window.through,leaseExpiresAt:new Date(now()+600000)},$inc:{revision:1}});continue;
+        if(trialRows.length){
+          await reader.prime(window.all.filter(row=>row.state==='saved'));
+          for(const row of trialRows){try{const value=await reader.financial(row),proof=populationIssues.relationshipProof(row,value.financialProof,now());await rememberProofs([value]);patternBlocked ||= !proof.matches;patternPassed ||= proof.matches;}catch(error){const observed=await reader.observed(row);await Records.updateOne({_id:row._id,...scope,state:'saved'},{$set:{relationshipCheck:{runId:'creation-trial',checkedAt:new Date(now()).toISOString(),outcome:'error',snapshot:populationIssues.snapshot({compiled:row.compilation,observed,parents:[],children:[]}),message:'The accepted trial could not be verified. Recheck its original saved record before creating another conversion.'}}});throw error;}}
+
+          patternBlocked ||= Boolean(await read(Records,{...pattern,relationshipProof:null}));
         }
-        if(!frontier.length)throw denied('No independent pending records are ready; source identities need recovery.');
+        let firstTrial=0;
+        const frontier=readyPopulationFrontier(window.all,30,row=>row.txnDate>=month&&row.txnDate<=window.through&&(job.relationshipPolicyVersion!==1||!populationIssues.isConversion(row)||(!patternBlocked&&(patternPassed||firstTrial++===0))));
+        if(!window.current.some(row=>row.state==='pending')){
+          if(window.current.some(row=>row.state!=='saved'))throw denied('The population month contains an unsettled item.');await reader.prime(window.all.filter(row=>row.state==='saved'));const proofs=await parallel(window.current,row=>reader.financial(row));await readFence();await rememberProofs(proofs);if(month!==earliestMonth){const next=await Records.findOne({...keyQuery,state:'pending',txnDate:{$gt:window.through}}).sort({txnDate:1}).maxTimeMS(5000).lean();if(!next)throw denied('Estimate-to-invoice creation remains paused. All independent scheduled activity is saved; review Relationship issues before continuing.');searchFrom=next.txnDate.slice(0,7)+'-01';continue;}await Jobs.updateOne({_id:jobId,...scope,leaseToken,status:'running',stopRequested:false},{$set:{createdThrough:window.through,leaseExpiresAt:new Date(now()+600000)},$inc:{revision:1}});continue;
+        }
+        if(!frontier.length){if(patternBlocked){const next=await Records.findOne({...keyQuery,state:'pending',txnDate:{$gt:window.through}}).sort({txnDate:1}).maxTimeMS(5000).lean();if(next){searchFrom=next.txnDate.slice(0,7)+'-01';continue;}}throw denied(patternBlocked?'Estimate-to-invoice creation is paused because its trial relationship is incomplete. All independent scheduled activity is saved; review Relationship issues and recheck before continuing.':'No independent pending records are ready; source identities need recovery.');}
         const parentKeys=new Set(frontier.flatMap(row=>row.step.dependencies.map(link=>link.logicalKey))),parents=window.all.filter(row=>parentKeys.has(row.logicalKey)),ancestors=window.all.filter(row=>parents.some(parent=>parent.step.dependencies.some(link=>link.logicalKey===row.logicalKey)));
         const fence=await reader.prime([...parents,...ancestors]),tag={operationId:jobId,writerRevision:fence.revision};
         const financialParents=new Map();for(const parent of parents)financialParents.set(parent.logicalKey,{...await reader.financial(parent),...tag});
