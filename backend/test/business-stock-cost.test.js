@@ -102,3 +102,10 @@ test('a carried or new purchase cannot claim the same original logical line unde
   state.items[0].lots.push(other); state.items[0].lots.sort((a,b) => a.lotKey.localeCompare(b.lotKey));
   assert.throws(() => validateStockState(rehash(state)), /repeated/);
 });
+
+test('documented FIFO inference remains explicitly labelled rather than becoming an owner observation',()=>{
+ const policy={version:1,method:'FIFO',methodEvidence:{kind:'documented-inference',reference:'Official FIFO default guidance plus retained company inventory creation evidence; setting not directly observed',observedOn:'2026-10-16'},purchaseTax:{treatment:'fully-recoverable',evidenceReference:'Delegated fictional-business purchase HST assumption, not a filed tax fact',confirmedOn:'2026-10-16'}};
+ const observed=validateStockCostPolicy(policy);assert.deepEqual(observed,policy);assert.equal(observed.methodEvidence.kind,'documented-inference');
+ assert.throws(()=>validateStockCostPolicy({...policy,method:'MAC'}),/FIFO/);assert.throws(()=>validateStockCostPolicy({...policy,purchaseTax:{...policy.purchaseTax,treatment:'unconfirmed'}}),/fully recoverable/);
+ assert.throws(()=>validateStockCostPolicy({...policy,methodEvidence:{...policy.methodEvidence,reference:''}}),/source reference/);
+});

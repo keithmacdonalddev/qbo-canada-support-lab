@@ -2,9 +2,9 @@
 
 The business can require its stock purchases, remaining stock and cost of sales to agree before its calendar advances. This is an optional requirement on a newly published business. It adds evidence to existing purchases and sales; it creates no new accounting operation or collection.
 
-## What the owner confirms
+## Recorded method and tax basis
 
-The saved business retains an explicit observation that its company uses FIFO (oldest purchases are consumed first), the evidence reference and observation date. A separate reference/date confirms that purchase tax is fully recoverable and adds no product cost. Publication shows those terms and binds them to the owner's exact review. Removing or changing the draft clears that review and consent.
+The saved business retains FIFO (oldest purchases are consumed first) with either an owner observation or an explicitly labelled documented inference, its source reference and evidence date. An inference remains an inference in the draft and publication screen; it is never relabelled an owner observation. A separate reference/date records the basis for choosing fully recoverable purchase tax, which adds no product cost. Delegated fictional-business choices must be identified as such rather than as facts about filed returns. Publication shows the recorded basis and binds it to the exact review. Removing or changing the draft clears that review and consent. Period comparisons retain the policy hash and report their reliance on method/tax policy evidence; passing amounts do not certify a directly observed company setting.
 
 Unknown or moving-average methods, capitalized/nonrecoverable purchase tax, fractional stock, ambiguous unequal-cost transactions on the same day, negative stock, adjustments and returns remain unavailable. Neither company country nor a missing preference field proves FIFO.
 

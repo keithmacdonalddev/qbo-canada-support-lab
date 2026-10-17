@@ -20,10 +20,10 @@ function day(value) { try { date(value); } catch { fail('Stock cost needs a vali
 function reference(value) { if (typeof value !== 'string' || value.trim().length < 5 || value.length > 500 || /[\u0000-\u001f]/.test(value)) fail('Retain a readable source reference for the observed stock-cost policy.'); return value.trim(); }
 function validateStockCostPolicy(value) {
   exact(value, ['version', 'method', 'methodEvidence', 'purchaseTax'], 'Stock-cost policy');
-  if (value.version !== 1 || value.method !== 'FIFO') fail('FIFO cost proof requires an explicitly observed FIFO company; unknown or moving-average methods are unavailable.');
+  if (value.version !== 1 || value.method !== 'FIFO') fail('FIFO cost proof requires an explicitly observed FIFO method or documented inference; unknown or moving-average methods are unavailable.');
   exact(value.methodEvidence, ['kind', 'reference', 'observedOn'], 'Costing-method evidence');
   exact(value.purchaseTax, ['treatment', 'evidenceReference', 'confirmedOn'], 'Purchase-tax cost treatment');
-  if (value.methodEvidence.kind !== 'owner-observation' || value.purchaseTax.treatment !== 'fully-recoverable') fail('This proof requires a retained owner observation and supported fully recoverable purchase-tax treatment.');
+  if (!['owner-observation', 'documented-inference'].includes(value.methodEvidence.kind) || value.purchaseTax.treatment !== 'fully-recoverable') fail('This proof requires a retained owner observation or documented inference and supported fully recoverable purchase-tax treatment.');
   day(value.methodEvidence.observedOn); day(value.purchaseTax.confirmedOn);
   reference(value.methodEvidence.reference); reference(value.purchaseTax.evidenceReference);
   return JSON.parse(canonical(value));
