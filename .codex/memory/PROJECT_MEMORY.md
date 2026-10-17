@@ -1,5 +1,11 @@
 # Codex Project Memory
 
+## Direct filed-return conflict and native stop (2026-10-17T05:40:56Z)
+
+Direct authenticated QBO UI inspection of Production company ending 2856 lists GST/HST periods including July–September 2023 under Filed. The matching dated GST/HST Summary Report was opened read-only; this does not prove CRA submission. This contradicts the older normalized filedReturns:false fact, whose actual owner reply remains preserved privately. All further backdated writes are held pending owner classification of the filing records. Do not reuse the old no-filed-return assertion. No filing, unfiling, payment or preference action was taken.
+
+The existing audited Stop control was applied to the September operation. Private direct proof company-filing-conflict-stop-native-observation-20261017.json confirms status stopped, calendar stopRequested true, no lease/pending execution/unresolved writer, and all154 accepted creation identities unchanged (148 verified / six saved-unverified). The full goal remains active, unfinished; read-only evidence work continues. Current source and evidence are in docs/agent-harness/FULL_GOAL_EXECUTION.md and the private work-value ledger. The original optional relationship repair and failed new-create hypothesis remain stopped; never replay Invoice671 or792.
+
 ## Verified unsuccessful settlement (2026-10-17T03:24:19.667Z)
 
 Actual zero-write unsuccessful settlement completed: company-owned-link-unsuccessful-5aab3465-b6b4-464c-b21c-852852dff7a8-result-20261017.json.26 GET/0 POST;113 cumulative repair GET of200 (87 remain), one update already consumed. Exact unchanged records and zero direct-account deltas across130 accounts in both original month and current year verified; parent rollups remain unasserted. The saved repair receipt is retained, original run/step remain blocked/unverified, only its repair pointer released, SDK/token/database cleanup complete. Native Preferences shows AllowEstimates:true and UsingProgressInvoicing:true; this is observed configuration, not proof of the omission cause. Code checkpoint317bcb5 is pushed on main/origin/main after42 focused tests,214-file syntax and independentreviews. Fullcompany outcome remains unmet.
