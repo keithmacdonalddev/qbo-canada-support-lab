@@ -43,13 +43,15 @@ function invoiceReceivablesEvidence(input) {
   const total = record.TotalAmt * 100;
   if (typeof record.TotalAmt !== 'number' || !Number.isSafeInteger(Math.round(total)) || total <= 0 || Math.abs(total - Math.round(total)) > 0.00001 || matches.length !== 1 || matches[0] !== Math.round(total)) fail('The exact invoice gross posting is missing, duplicated or different.');
   const source = { compiled, receipt, accountBinding, accountObserved, report, reportObservedAt, beforeFence, afterFence };
-  const proof = { version: 1, kind: 'invoice-receivables-ledger', scope, entity: 'Invoice', logicalKey: compiled.logicalKey, fingerprint: compiled.intentHash, qboId: record.Id, syncToken: record.SyncToken, recordHash: observed.recordHash, compilationHash: compiled.compilationHash, requestHash: request.requestHash, receiptHash: receipt.evidenceHash, accountId: account.Id, accountDefinitionHash: accountBinding.definition.hash, operationId: beforeFence.operationId, writerRevision: beforeFence.revision, endpoint: endpointFor(record, account.Id), observedAt: [observed.observedAt, accountObserved.observedAt, reportObservedAt].sort()[0], source };
+  const proof = { version: 1, kind: 'invoice-receivables-ledger', scope, entity: 'Invoice', logicalKey: compiled.logicalKey, fingerprint: compiled.intentHash, qboId: record.Id, syncToken: record.SyncToken, recordHash: observed.recordHash, compilationHash: compiled.compilationHash, requestHash: request.requestHash, receiptHash: receipt.evidenceHash, accountId: account.Id, accountDefinitionHash: accountBinding.definition.hash, operationId: beforeFence.operationId, writerRevision: beforeFence.revision, endpoint: endpointFor(record, account.Id), invoiceObservedAt: observed.observedAt, observedAt: [observed.observedAt, accountObserved.observedAt, reportObservedAt].sort()[0], source };
   return { ...proof, evidenceHash: hash(proof) };
 }
 function verifyInvoiceReceivables({ observed, compiled, receipt, operationId, writerRevision, now = Date.now() }) {
   const evidence = observed?.accountRouting;
   if (!evidence || evidence.kind !== 'invoice-receivables-ledger' || evidence.version !== 1 || !HASH.test(evidence.evidenceHash || '')) fail('Independent receivables posting evidence is required.');
-  const regenerated = invoiceReceivablesEvidence({ ...evidence.source, observed, now });
+  // Replay the retained Invoice observation time, while validating the later raw read.
+  if (!fresh(observed.observedAt, now) || !fresh(evidence.invoiceObservedAt, now) || Date.parse(evidence.invoiceObservedAt) > Date.parse(observed.observedAt)) fail('The original and current invoice observation times are stale or out of order.');
+  const regenerated = invoiceReceivablesEvidence({ ...evidence.source, observed: { ...observed, observedAt: evidence.invoiceObservedAt }, now });
   if (canonical(regenerated) !== canonical(evidence) || (compiled && (evidence.compilationHash !== compiled.compilationHash || evidence.requestHash !== compiled.request.requestHash || evidence.fingerprint !== compiled.intentHash)) || (receipt && (evidence.receiptHash !== receipt.evidenceHash || evidence.source.receipt.dispatchKey !== receipt.dispatchKey)) || (operationId !== undefined && evidence.operationId !== operationId) || (writerRevision !== undefined && evidence.writerRevision !== writerRevision)) fail('The receivables posting proof changed or belongs to a different invoice or writer.');
   return evidence.accountId;
 }

@@ -48,3 +48,23 @@ test('a returned target does not excuse a report truncation warning or malformed
     assert.throws(() => invoiceReceivablesEvidence(input));
   }
 });
+
+test('payment replays the original routing observation after a later unchanged invoice read', () => {
+  const { value, input } = routingFixture();
+  value.observed.observedAt = new Date(now - 1000).toISOString();
+  value.observed.accountRouting = invoiceReceivablesEvidence(input);
+  const retained = clone(value.check()), f = fixture('Payment'); bindParent(f, 0, value);
+  value.observed.observedAt = new Date(now).toISOString();
+  value.observed.accountRouting = invoiceReceivablesEvidence(input);
+  f.parents[0] = { ...f.parents[0], ...clone(value.observed), verification: retained }; f.refresh(); f.approve();
+  assert.equal(JSON.parse(f.compile().request.body).ARAccountRef.value, '601');
+  const original = clone(f.parents[0]);
+  for (const change of [
+    p => { p.verification.accountRouting.invoiceObservedAt = new Date(now - 300001).toISOString(); },
+    p => { p.verification.accountRouting.invoiceObservedAt = new Date(now + 1).toISOString(); },
+    p => { p.verification.accountRouting.invoiceObservedAt = p.observedAt; },
+    p => { p.record.SyncToken = '1'; p.syncToken = '1'; p.recordHash = hash(p.record); },
+    p => { p.observedAt = new Date(now - 300001).toISOString(); },
+    p => { p.observedAt = new Date(now - 2000).toISOString(); },
+  ]) { f.parents[0] = clone(original); change(f.parents[0]); assert.throws(() => f.compile()); }
+});
