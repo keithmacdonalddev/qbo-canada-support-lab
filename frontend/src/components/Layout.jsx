@@ -1,6 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Tooltip } from '@base-ui/react/tooltip'
+import { ScrollArea } from '@base-ui/react/scroll-area'
 import '../styles/sidebar.css'
 import {
   WandSparkles, Building2, FileText, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Bot, Layers, Archive,
@@ -270,12 +271,25 @@ export default function Layout({ children }) {
           </header>
 
           {/* Bound page scrolling below the company strip; the navigation stays put. */}
-          <main
-            ref={contentRef}
-            tabIndex={0}
-            aria-label="Page content"
-            className="min-h-0 min-w-0 flex-1 overflow-auto [scrollbar-gutter:stable] [scroll-padding-block:1rem] px-5 py-6 md:px-8 md:py-8"
-          >{children}</main>
+          <ScrollArea.Root className="relative min-h-0 min-w-0 flex-1 overflow-clip">
+            <ScrollArea.Viewport
+              render={<main />}
+              role="main"
+              ref={contentRef}
+              tabIndex={0}
+              aria-label="Page content"
+              className="h-full w-full [scroll-padding-block:1rem]"
+            >
+              <ScrollArea.Content style={{ minWidth: 0 }} className="px-5 py-6 md:px-8 md:py-8">{children}</ScrollArea.Content>
+            </ScrollArea.Viewport>
+            <ScrollArea.Scrollbar orientation="vertical" aria-label="Page scrollbar" className="z-20 w-3.5 border-l border-[var(--line)] bg-[var(--surface-muted)] px-[3px] py-[3px]">
+              <ScrollArea.Thumb className="w-full rounded-full bg-[var(--ink-3)] hover:bg-[var(--ink-2)]" />
+            </ScrollArea.Scrollbar>
+            <ScrollArea.Scrollbar orientation="horizontal" aria-label="Horizontal page scrollbar" className="z-20 h-3.5 border-t border-[var(--line)] bg-[var(--surface-muted)] px-[3px] py-[3px]">
+              <ScrollArea.Thumb className="h-full rounded-full bg-[var(--ink-3)] hover:bg-[var(--ink-2)]" />
+            </ScrollArea.Scrollbar>
+            <ScrollArea.Corner className="bg-[var(--surface-muted)]" />
+          </ScrollArea.Root>
         </div>
       </div>
     </Tooltip.Provider>
