@@ -24,7 +24,8 @@ function sourceItemLines(record, detailType) {
   if (others.length > 1 || others.some(line => line.DetailType !== 'SubTotalLineDetail' || cents(line.Amount) !== subtotal || record.Line.at(-1) !== line)) fail('The source contains unsupported monetary or other line shapes.');
   return items;
 }
-function links(record) { return [...(record.LinkedTxn || []), ...(record.Line || []).flatMap(line => line.LinkedTxn || [])]; }
+function canonicalTxnType(type) { return type === 'BillPaymentCheck' ? 'BillPayment' : type; }
+function links(record) { return [...(record.LinkedTxn || []), ...(record.Line || []).flatMap(line => line.LinkedTxn || [])].map(link => ({ ...link, TxnType: canonicalTxnType(link.TxnType) })); }
 // Pure compiler only. All inputs must come from server-owned approved intent and
 // fresh verified company evidence. A compiled request grants no write authority.
 function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], observationFence, now = Date.now() }) {
@@ -232,4 +233,4 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
 }
-module.exports = { compileBusinessTransaction, SUPPORTED };
+module.exports = { compileBusinessTransaction, SUPPORTED, canonicalTxnType };

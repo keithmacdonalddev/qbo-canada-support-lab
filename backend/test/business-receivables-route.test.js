@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const { hash, canonical } = require('../src/modules/business-calendar');
-const { receivablesEvidence, verifyReceivables, invoiceReceivablesEvidence, verifyInvoiceReceivables } = require('../src/modules/business-receivables-route');
+const { accountPostingEvidence, verifyAccountPosting, receivablesEvidence, verifyReceivables, invoiceReceivablesEvidence, verifyInvoiceReceivables } = require('../src/modules/business-receivables-route');
 const { routingFixture } = require('./helpers/business-receivables-fixture');
 const { fixture, clone, now } = require('./helpers/business-transaction-fixtures');
 const { bindParent } = require('./helpers/business-readback-fixtures');
@@ -81,4 +81,19 @@ test('omitted Payment AR requires its exact negative receivables posting and ori
   ]) { const f = routingFixture('Payment'); change(f.input); assert.throws(() => receivablesEvidence(f.input)); }
   assert.throws(() => invoiceReceivablesEvidence(input));
   assert.throws(() => verifyInvoiceReceivables({ observed: value.observed, now }));
+});
+
+test('omitted cheque BillPayment AP requires its exact negative payable posting', () => {
+  const { value, input } = routingFixture('BillPayment');
+  assert.equal(verifyAccountPosting({ observed: value.observed, compiled: value.compiled, receipt: value.receipt, now }), input.accountBinding.id);
+  assert.equal(value.check().matchesIntent, true);
+  for (const change of [
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[2].value = i.observed.record.TotalAmt.toFixed(2); },
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[1].value = 'Payment'; },
+    i => { i.accountBinding.key = 'accountsReceivable'; },
+    i => { i.receipt.entity = 'Payment'; },
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[1].id = '999'; },
+  ]) { const f = routingFixture('BillPayment'); change(f.input); assert.throws(() => accountPostingEvidence(f.input)); }
+  assert.throws(() => receivablesEvidence(input));
+  assert.throws(() => verifyReceivables({ observed: value.observed, now }));
 });

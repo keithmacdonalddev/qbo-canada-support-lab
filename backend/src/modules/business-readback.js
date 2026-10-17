@@ -1,8 +1,8 @@
 'use strict';
 const { hash, canonical, date } = require('./business-calendar');
 const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
-const { SUPPORTED } = require('./business-transaction-compiler');
-const { verifyReceivables } = require('./business-receivables-route');
+const { SUPPORTED, canonicalTxnType } = require('./business-transaction-compiler');
+const { verifyAccountPosting } = require('./business-receivables-route');
 const { createUnreceivedProof } = require('./business-purchase-order-consumption');
 const { accountingOnlyObservation } = require('./business-accounting-only');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -34,8 +34,8 @@ function linkList(value) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 1000) invalid('Saved transaction links are malformed.');
   return value.map(link => {
-    if (!link || typeof link.TxnId !== 'string' || !QBO_ID.test(link.TxnId) || !SUPPORTED.has(link.TxnType) || (link.TxnLineId !== undefined && (typeof link.TxnLineId !== 'string' || !QBO_ID.test(link.TxnLineId)))) invalid('A saved transaction link is invalid.');
-    return { TxnId: link.TxnId, TxnType: link.TxnType, ...(link.TxnLineId && link.TxnLineId !== '0' ? { TxnLineId: link.TxnLineId } : {}) };
+    if (!link || typeof link.TxnId !== 'string' || !QBO_ID.test(link.TxnId) || !SUPPORTED.has(canonicalTxnType(link.TxnType)) || (link.TxnLineId !== undefined && (typeof link.TxnLineId !== 'string' || !QBO_ID.test(link.TxnLineId)))) invalid('A saved transaction link is invalid.');
+    return { TxnId: link.TxnId, TxnType: canonicalTxnType(link.TxnType), ...(link.TxnLineId && link.TxnLineId !== '0' ? { TxnLineId: link.TxnLineId } : {}) };
   });
 }
 function exactLinks(expected, actual) {
@@ -118,9 +118,10 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   const estimateConversion = observed.estimateConversion ? require('./business-estimate-conversion').verifyEstimateConversion({ compiled, receipt, observed, parents, now }) : null;
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
-  if (['Invoice', 'Payment'].includes(compiled.entity) && record.ARAccountRef === undefined && payload.ARAccountRef) {
-    if (verifyReceivables({ observed, compiled, receipt, now }) !== payload.ARAccountRef.value) invalid('The invoice posted to a different receivables account.');
-    delete expectedHeader.ARAccountRef;
+  const postingAccount = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
+  if (['Invoice', 'Payment', 'BillPayment'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {
+    if (verifyAccountPosting({ observed, compiled, receipt, now }) !== payload[postingAccount].value) invalid('The transaction posted to a different approved account.');
+    delete expectedHeader[postingAccount];
   }
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
   for (const key of ['ClassRef', 'DepartmentRef', 'ProjectRef']) if (!payload[key] && record[key]?.value) mismatch('An unplanned transaction dimension is present.');

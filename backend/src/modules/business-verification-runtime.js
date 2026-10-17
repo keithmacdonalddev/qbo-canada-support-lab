@@ -5,7 +5,7 @@ const { validateCompilation } = require('./business-readback');
 const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessGraphReader } = require('./business-graph-readback');
 const { createBusinessTransactionReader, createBusinessReferenceReader } = require('./business-reference');
-const { receivablesEvidence, endpointFor } = require('./business-receivables-route');
+const { accountPostingEvidence, endpointFor } = require('./business-receivables-route');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
@@ -53,7 +53,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   };
   const accountRead = async (value, entity, qboId, { signal } = {}) => {
     const observed = await rawRecord(value, entity, qboId, { signal });
-    if (!['Invoice', 'Payment'].includes(entity) || observed.record.ARAccountRef !== undefined) return observed;
+    if (!['Invoice', 'Payment', 'BillPayment'].includes(entity) || observed.record[entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef'] !== undefined) return observed;
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const compiled = row?.compilation;
@@ -62,7 +62,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     await assertOwnerAttribution({ Receipts, Authorities, Audits }, scope, row);
     const intent = await loadIntent(scope, String(row.operationId), row.logicalKey, { policyHead: row.dispatch.policyAmendmentHash || null }); checkSignal(signal);
     if (!intent || intent.version !== 1 || !sameScope(intent.scope, scope) || intent.operationId !== String(row.operationId) || intent.planHash !== row.planHash || intent.logicalKey !== row.logicalKey || intent.entity !== entity || intent.fingerprint !== row.fingerprint || hash(intent.step) !== row.fingerprint || intent.policy?.status !== 'approved' || intent.policy.stepHash !== row.fingerprint || (row.dispatch.policyHash && row.dispatch.policyHash !== hash(intent.policy))) fail('The original approved invoice account policy changed.');
-    const bindings = intent.step.references.filter(binding => binding.entity === 'Account' && binding.key === 'accountsReceivable');
+    const bindings = intent.step.references.filter(binding => binding.entity === 'Account' && binding.key === (entity === 'BillPayment' ? 'accountsPayable' : 'accountsReceivable'));
     if (bindings.length !== 1) fail('The original invoice needs one approved receivables account.');
     const beforeFence = await readFence(scope, { signal }), actor = await authority(scope, 'operations.read', { signal });
     const accountObserved = await references(scope, 'Account', bindings[0].id, { signal }); checkSignal(signal);
@@ -90,7 +90,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     const afterFence = await readFence(scope, { signal }), current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);
     if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The receivables reader changed.');
     const receipt = { ...row.receipt, scope, entity, logicalKey: row.logicalKey };
-    const accountRouting = receivablesEvidence({ compiled, receipt, observed, accountBinding: bindings[0], accountObserved, report, reportObservedAt, beforeFence, afterFence, now: now() });
+    const accountRouting = accountPostingEvidence({ compiled, receipt, observed, accountBinding: bindings[0], accountObserved, report, reportObservedAt, beforeFence, afterFence, now: now() });
     return { ...observed, accountRouting };
   };
   const readRecord = async (value, entity, qboId, { signal } = {}) => {

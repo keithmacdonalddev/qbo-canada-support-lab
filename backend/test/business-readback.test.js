@@ -92,3 +92,14 @@ test('returned processing flags must be absent or exactly false', () => {
   const value=sample(entity);value.observed.record[key]=flag;value.refresh();assert.equal(value.check().matchesIntent,false);
  }
 });
+
+test('native BillPaymentCheck links close the exact managed cheque payment without rewriting raw records', () => {
+  const bill = sample('Bill'), payment = sample('BillPayment', f => bindParent(f, 0, bill));
+  payment.observed.record.Id = '3000'; payment.receipt.qboId = '3000'; payment.refresh();
+  bill.descendants = [descendant(payment)]; bill.observed.record.LinkedTxn.push({ TxnId: '3000', TxnType: 'BillPaymentCheck' });
+  bill.observed.record.Balance = 0; bill.refresh();
+  const original = JSON.stringify(bill.observed.record);
+  assert.equal(bill.check().matchesIntent, true); assert.equal(JSON.stringify(bill.observed.record), original);
+  bill.observed.record.LinkedTxn.at(-1).TxnType = 'BillPaymentCreditCard'; bill.refresh();
+  assert.throws(bill.check, /link is invalid/);
+});
