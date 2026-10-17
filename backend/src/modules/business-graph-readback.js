@@ -125,20 +125,31 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
             if (!expanded.has(key)) pending.push(key); for (const link of normalized.dependencies) if (!expanded.has(link.logicalKey)) pending.push(link.logicalKey);
           };
           const scan = async (filter, accept) => {
-            check();
-            const cursor = Steps.find(filter).select('contractVersion realmId environment connectionId operationId planHash logicalKey fingerprint entity dependencies state revision qboId compilation dispatch receipt').session(session).limit(MAX_RECORDS + 1).maxTimeMS(10000).lean().cursor({ batchSize: 1 });
-            let closed = null;
-            const close = () => { if (!closed) closed = Promise.resolve().then(() => cursor.close()); return closed; };
-            const cancelCursor = () => { close().catch(() => {}); };
-            controller.signal.addEventListener('abort', cancelCursor, { once: true });
-            try {
-              let count = 0;
-              for (;;) { const row = await read(() => cursor.next()); check(); if (!row) break; if (++count > MAX_RECORDS) fail('The related-record graph exceeds its supported budget.'); accept(row); }
-            } finally {
-              controller.signal.removeEventListener('abort', cancelCursor);
-              let cleanupTimer;
-              try { await Promise.race([close(), new Promise((_, reject) => { cleanupTimer = setTimeout(() => reject(new Error('Graph cursor cleanup timed out.')), 5000); cleanupTimer.unref?.(); })]); }
-              finally { clearTimeout(cleanupTimer); }
+            // A short single batch may be byte-limited. Only an empty keyset
+            // page proves this snapshot scan is complete; getMore is never used.
+            let count = 0, lastKey = null;
+            for (;;) {
+              check();
+              const pageFilter = lastKey === null ? filter : { ...filter, logicalKey: { ...filter.logicalKey, $gt: lastKey } };
+              const cursor = Steps.find(pageFilter, null, { singleBatch: true, batchSize: 100 }).select('contractVersion realmId environment connectionId operationId planHash logicalKey fingerprint entity dependencies state revision qboId compilation dispatch receipt').sort({ logicalKey: 1 }).session(session).limit(Math.min(100, MAX_RECORDS + 1 - count)).maxTimeMS(10000).lean().cursor({ batchSize: 100 });
+              let closed = null, pageCount = 0;
+              const close = () => { if (!closed) closed = Promise.resolve().then(() => cursor.close()); return closed; };
+              const cancelCursor = () => { close().catch(() => {}); };
+              controller.signal.addEventListener('abort', cancelCursor, { once: true });
+              try {
+                for (;;) {
+                  const row = await read(() => cursor.next()); check(); if (!row) break;
+                  if (++count > MAX_RECORDS) fail('The related-record graph exceeds its supported budget.');
+                  if (!HASH.test(row.logicalKey || '') || (lastKey !== null && row.logicalKey <= lastKey)) fail('The related-record snapshot page is duplicated or out of order.');
+                  lastKey = row.logicalKey; pageCount++; accept(row);
+                }
+              } finally {
+                controller.signal.removeEventListener('abort', cancelCursor);
+                let cleanupTimer;
+                try { await Promise.race([close(), new Promise((_, reject) => { cleanupTimer = setTimeout(() => reject(new Error('Graph cursor cleanup timed out.')), 5000); cleanupTimer.unref?.(); })]); }
+                finally { clearTimeout(cleanupTimer); }
+              }
+              if (pageCount === 0) break;
             }
           };
           const directKeys = new Set();

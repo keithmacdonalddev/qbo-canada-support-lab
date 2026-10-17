@@ -36,11 +36,12 @@ function graph(kind = 'sales') {
 }
 function harness(value = graph()) {
   const h = { value, clock: now, actor: { actorId: 'owner' }, writer: { scope, revision: 12, operationId: 'b'.repeat(24), unresolved: null }, reads: [], queryCount: 0, opened: 0, closed: 0, retained: [], active: 0, maxActive: 0 };
-  h.models = { find(filter) {
+  h.models = { find(filter, _projection, findOptions) {
     h.queryCount++; let session, maximum = Infinity;
-    const query = { select() { return query; }, session(v) { session = v; return query; }, limit(v) { maximum = v; return query; }, maxTimeMS(v) { assert.equal(v, 10000); return query; }, lean() { return query; }, cursor(options) {
-      assert.ok(session); assert.equal(options.batchSize, 1); h.opened++;
-      const rows = value.entries.map(e => e.step).filter(row => row.environment === filter.environment && row.realmId === filter.realmId && (!filter.logicalKey || filter.logicalKey.$in.includes(row.logicalKey)) && (!filter['dependencies.logicalKey'] || row.dependencies.some(link => filter['dependencies.logicalKey'].$in.includes(link.logicalKey))) && (!filter.state || filter.state.$in.includes(row.state))).slice(0, maximum);
+    const query = { select() { return query; }, sort(value) { assert.deepEqual(value, { logicalKey: 1 }); return query; }, session(v) { session = v; return query; }, limit(v) { maximum = v; return query; }, maxTimeMS(v) { assert.equal(v, 10000); return query; }, lean() { return query; }, cursor(options) {
+      assert.ok(session); assert.equal(options.batchSize, 100); assert.equal(findOptions?.singleBatch, true); assert.equal(findOptions.batchSize, 100); h.opened++;
+      const rows = value.entries.map(e => e.step).filter(row => row.environment === filter.environment && row.realmId === filter.realmId && (!filter.logicalKey || ((!filter.logicalKey.$in || filter.logicalKey.$in.includes(row.logicalKey)) && (!filter.logicalKey.$gt || row.logicalKey > filter.logicalKey.$gt))) && (!filter['dependencies.logicalKey'] || row.dependencies.some(link => filter['dependencies.logicalKey'].$in.includes(link.logicalKey))) && (!filter.state || filter.state.$in.includes(row.state))).sort((a,b) => a.logicalKey.localeCompare(b.logicalKey)).slice(0, Math.min(maximum, h.bytePageLimit || 100));
+      (h.pages ||= []).push({ rows: rows.length, maximum, filter: clone(filter) });
       let i = 0, closed = false;
       return { next: async () => { if (h.onNext) await h.onNext(); return closed ? null : clone(rows[i++] || null); }, close: async () => { if (!closed) { closed = true; h.closed++; } } };
     } }; return query;
@@ -138,4 +139,33 @@ for (const kind of ['sales', 'purchase']) test('concrete verification runtime re
   delete h.value.entries[0].intent.policy.readbackTax;
   const incomplete = await runtime.loadGraphReadback({ scope, roots: h.value.roots });
   assert.equal(incomplete.complete, false); assert.ok(incomplete.failures.some(value => value.issues.some(issue => /tax/.test(issue)))); assert.equal(h.opened, h.closed);
+});
+
+test('a byte-short graph page still discovers every later child before completion', async () => {
+  const h = harness(); h.bytePageLimit = 1;
+  const result = await h.reader();
+  assert.equal(result.complete, true); assert.equal(result.recordCount, 5);
+  assert.equal(h.reads.length, 5); assert.equal(h.opened, h.closed);
+  assert.ok(h.pages.some(page => page.rows === 0));
+});
+function wideGraph(children) {
+  const estimate = saved('Estimate', '7000'), entries = [entry(estimate)];
+  for (let index = 0; index < children; index++) entries.push(entry(saved('TimeActivity', String(7100 + index), f => { f.step.logicalKey = hash('paged time ' + index); bindParent(f, 0, estimate); })));
+  return { scope, roots: [estimate.compiled.logicalKey], entries, now };
+}
+test('graph preparation keeps more than 100 related children across complete single-batch pages', async () => {
+  const h = harness(wideGraph(101));
+  const result = await createBusinessGraphReader(h.dependencies)({ scope, roots: h.value.roots, mode: 'prepare' });
+  assert.equal(result.prepared, true); assert.equal(result.recordCount, 102);
+  assert.equal(new Set(result.records.map(row => row.logicalKey)).size, 102);
+  assert.equal(h.reads.length, 0); assert.equal(h.opened, h.closed);
+  assert.ok(h.pages.some(page => page.rows === 100)); assert.ok(h.pages.some(page => page.rows === 0));
+});
+test('single-batch graph scans retain the original 1000-record boundary', async () => {
+  const h = harness(wideGraph(999));
+  const accepted = await createBusinessGraphReader(h.dependencies)({ scope, roots: h.value.roots, mode: 'prepare' });
+  assert.equal(accepted.recordCount, 1000); assert.equal(h.opened, h.closed);
+  const tooLarge = harness(wideGraph(1000));
+  await assert.rejects(createBusinessGraphReader(tooLarge.dependencies)({ scope, roots: tooLarge.value.roots, mode: 'prepare' }), /budget/);
+  assert.equal(tooLarge.reads.length, 0); assert.equal(tooLarge.opened, tooLarge.closed);
 });
