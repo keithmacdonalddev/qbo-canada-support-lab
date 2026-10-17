@@ -4,6 +4,7 @@ const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
 const { SUPPORTED } = require('./business-transaction-compiler');
 const { verifyInvoiceReceivables } = require('./business-receivables-route');
 const { createUnreceivedProof } = require('./business-purchase-order-consumption');
+const { accountingOnlyObservation } = require('./business-accounting-only');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function invalid(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_READBACK_UNVERIFIED' }); }
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]);
@@ -87,6 +88,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.requestHash !== request.requestHash || typeof receipt.qboId !== 'string' || !QBO_ID.test(receipt.qboId) || !HASH.test(receipt.dispatchKey || '') || !HASH.test(receipt.evidenceHash || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(receipt.source)) invalid('The exact saved creation receipt is required.');
   const record = checkedObservation(observed, scope, compiled.entity, receipt.qboId, now), payload = JSON.parse(request.body), issues = [];
   const mismatch = message => { if (!issues.includes(message)) issues.push(message); };
+  if (!accountingOnlyObservation(compiled.entity, record)) mismatch('Unplanned payment processing or instrument information is present.');
   if (!Array.isArray(parents) || parents.length !== compiled.relationships.length || !Array.isArray(descendants) || descendants.length > 1000) invalid('Complete relationship observations are required.');
   const relationships = compiled.relationships.map(expected => {
     const found = parents.filter(value => value.logicalKey === expected.logicalKey);

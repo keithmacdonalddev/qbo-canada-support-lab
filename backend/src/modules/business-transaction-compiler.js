@@ -4,6 +4,7 @@ const { verifyBusinessReference, validateReferenceBinding } = require('./busines
 const { businessDate } = require('./business-activity-preview');
 const { verifyInvoiceReceivables } = require('./business-receivables-route');
 const { verifyUnreceivedProof } = require('./business-purchase-order-consumption');
+const { assertAccountingOnlyRequest } = require('./business-accounting-only');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -111,7 +112,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     payload.GlobalTaxCalculation = 'TaxExcluded';
     if (!sales) payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
     if (['Invoice', 'CreditMemo'].includes(step.entity)) payload.ARAccountRef = ref(account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id);
-    if (step.entity === 'SalesReceipt') { payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id); payload.ProcessPayment = false; }
+    if (step.entity === 'SalesReceipt') payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id);
     const lineKeys = new Set(), stockRequired = new Map();
     payload.Line = details.lines.map(line => {
       if (!line.key || lineKeys.has(line.key) || typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > 1000000 || !Number.isSafeInteger(line.unitPriceCents) || line.unitPriceCents <= 0) fail('A planned item line has invalid quantity, rate or identity.');
@@ -213,7 +214,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       Object.assign(payload, { DepositToAccountRef: ref(destination.Id), ARAccountRef: ref(ar), ProcessPayment: false });
     } else if (step.entity === 'BillPayment') {
       if (details.fundingSource !== 'operating_bank' || source.record.APAccountRef?.value !== account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id) fail('Bill payment funding or payables account is not verified.');
-      Object.assign(payload, { APAccountRef: ref(source.record.APAccountRef.value), PayType: 'Check', CheckPayment: { BankAccountRef: ref(account(details.bankMapping, 'Bank').Id), PrintStatus: 'NotSet' }, ProcessBillPayment: false });
+      Object.assign(payload, { APAccountRef: ref(source.record.APAccountRef.value), PayType: 'Check', CheckPayment: { BankAccountRef: ref(account(details.bankMapping, 'Bank').Id), PrintStatus: 'NotSet' } });
     } else {
       const available = source.availability;
       if (!available || !sameScope(available.scope, scope) || !fresh(available.observedAt, now) || available.kind !== 'undeposited_payment' || available.status !== 'available' || available.recordHash !== source.recordHash || !HASH.test(available.evidenceHash || '') || !currentObservation(available)) fail('Deposit requires current explicit undeposited availability evidence.');
@@ -223,6 +224,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id);
     }
   }
+  assertAccountingOnlyRequest(step.entity, payload);
   const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), payload);
   const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.verification?.purchaseOrderConsumption ? { purchaseOrderConsumptionHash: value.verification.purchaseOrderConsumption.evidenceHash, purchaseOrderVerificationHash: value.verification.evidenceHash } : {}), ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
   const observedAt = [...referenceEvidence, ...parents, ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), ...parents.filter(value => value.verification?.purchaseOrderConsumption).map(value => value.verification), observationFence].map(value => value.observedAt).sort()[0];

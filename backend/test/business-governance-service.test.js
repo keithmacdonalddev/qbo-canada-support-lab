@@ -87,3 +87,15 @@ test('native operation verifies omitted Invoice AR from ledger and creates settl
  assert.ok(h.data.Steps.some(row=>row.entity==='Payment'&&row.state==='verified'));
  const posts=h.posts;assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,posts);
 });
+
+test('retained stock-sale validation refusal retries once through native review without replaying saved records',async()=>{
+ const h=fixture({omitInvoiceAr:true,omitUnreceivedPoQuantity:true});await h.publish();const prepared=await h.service.prepare(h.user,{requestKey:'unsupported-salesreceipt-recovery-001',throughDate:'2026-10-15'});await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});
+ h.rejectFirstSalesReceipt=true;const runtime=h.runtime(prepared.operationId);assert.equal((await runtime.execute()).complete,false);
+ const step=structuredClone(h.data.Steps.find(row=>row.state==='rejected'));assert.equal(step.entity,'SalesReceipt');assert.deepEqual(step.rejection.faultCodes,['2010']);
+ const kept=h.data.Steps.filter(row=>row.state==='verified').map(row=>({logicalKey:row.logicalKey,qboId:row.qboId,dispatchKey:row.dispatch.key}));assert.ok(kept.length>0);
+ const body={planHash:prepared.planHash,logicalKey:step.logicalKey},review=await h.service.reviewRejected(h.user,prepared.operationId,body);await h.service.retryRejected(h.user,prepared.operationId,{...body,reviewHash:review.reviewHash,reason:'Corrected unsupported processing property; only a new accounting record is permitted.'});
+ const completed=await runtime.execute();assert.equal(completed.complete,true,JSON.stringify(completed));
+ for(const old of kept){const current=h.data.Steps.find(row=>row.logicalKey===old.logicalKey);assert.equal(current.qboId,old.qboId);assert.equal(current.dispatch.key,old.dispatchKey);}
+ assert.equal(h.data.Receipts.find(row=>row._id===step.rejection.receiptId).state,'rejected');const replacement=h.data.Steps.find(row=>row.logicalKey===step.logicalKey);assert.notEqual(replacement.dispatch.key,step.dispatch.key);assert.equal(replacement.retryGeneration,1);
+ const posts=h.posts;assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,posts);
+});

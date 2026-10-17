@@ -80,3 +80,15 @@ test('omitted PO Received is graph-derived zero only for an open completely unli
  for (const value of [null, '0', -1, 1]) { po.observed.record.Line[0].Received = value; po.refresh(); assert.equal(po.check().matchesIntent, false); }
  delete po.observed.record.Line[0].Received; po.observed.record.POStatus = 'Closed'; po.refresh(); assert.equal(po.check().matchesIntent, false);
 });
+
+test('accounting-only readback rejects affirmative processing and unexpected card instruments', () => {
+ for(const entity of ['SalesReceipt','Payment','BillPayment'])for(const change of [r=>{r.ProcessPayment=true;},r=>{r.ProcessBillPayment=true;},r=>{r.CreditCardPayment={};},r=>{r.PaymentType='CreditCard';}]) {
+  const value=sample(entity);change(value.observed.record);value.refresh();assert.equal(value.check().matchesIntent,false);
+ }
+});
+
+test('returned processing flags must be absent or exactly false', () => {
+ for(const entity of ['SalesReceipt','Payment','BillPayment'])for(const key of ['ProcessPayment','ProcessBillPayment'])for(const flag of [null,1,0,'true','false',{}]) {
+  const value=sample(entity);value.observed.record[key]=flag;value.refresh();assert.equal(value.check().matchesIntent,false);
+ }
+});

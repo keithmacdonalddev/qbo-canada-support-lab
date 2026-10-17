@@ -12,7 +12,7 @@ for (const entity of ['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit
   if (entity === 'Bill') { assert.equal(payload.LinkedTxn[0].TxnId, '1002'); assert.equal(payload.Line[0].LinkedTxn[0].TxnLineId, '1'); }
   if (entity === 'TimeActivity') { assert.equal(payload.ItemRef.value, '100'); assert.equal(payload.Hours, 2); assert.equal(payload.Minutes, 0); assert.equal(payload.LinkedTxn, undefined); }
   if (entity === 'Payment') { assert.equal(payload.TotalAmt, 282.5); assert.equal(payload.ProcessPayment, false); assert.equal(payload.DepositToAccountRef.value, '603'); }
-  if (entity === 'BillPayment') { assert.equal(payload.TotalAmt, 277.98); assert.equal(payload.ProcessBillPayment, false); assert.equal(payload.CheckPayment.BankAccountRef.value, '600'); }
+  if (entity === 'BillPayment') { assert.equal(payload.TotalAmt, 277.98); assert.equal(payload.ProcessBillPayment, undefined); assert.equal(payload.CheckPayment.BankAccountRef.value, '600'); }
   if (entity === 'Deposit') { assert.equal(payload.CustomerRef, undefined); assert.equal(payload.Line[0].Amount, 282.5); assert.equal(payload.Line[0].LinkedTxn[0].TxnType, 'Payment'); assert.equal(payload.Line[0].DepositLineDetail, undefined); }
 });
 test('approval binds company, locale, economics, references and exact content', () => {
@@ -124,4 +124,15 @@ test('fresh verified open unlinked PO accepts omitted zero Received without edit
  const retained = structuredClone(f.parents[0]); delete f.parents[0].verification; assert.throws(f.compile);
  f.parents[0] = structuredClone(retained); f.parents[0].verification.purchaseOrderConsumption.fingerprint = 'f'.repeat(64); assert.throws(f.compile);
  f.parents[0] = structuredClone(retained); f.parents[0].record.Line[0].LinkedTxn = [{ TxnId: '9', TxnType: 'Bill' }]; f.refresh(); assert.throws(f.compile);
+});
+
+test('sales receipts and check bill payments use supported accounting shapes without processing inputs', () => {
+ const { assertAccountingOnlyRequest } = require('../src/modules/business-accounting-only');
+ for (const entity of ['SalesReceipt','BillPayment','Payment']) {
+  const payload = JSON.parse(fixture(entity).compile().request.body); assertAccountingOnlyRequest(entity,payload);
+  if(entity==='SalesReceipt')assert.equal(payload.ProcessPayment,undefined);
+  for(const key of ['CreditCardPayment','CreditChargeInfo','CreditChargeResponse'])assert.throws(()=>assertAccountingOnlyRequest(entity,{...payload,[key]:{}}));
+  assert.throws(()=>assertAccountingOnlyRequest(entity,{...payload,ProcessPayment:true}));
+  assert.throws(()=>assertAccountingOnlyRequest(entity,{...payload,ProcessBillPayment:true}));
+ }
 });
