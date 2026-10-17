@@ -11,7 +11,7 @@ async function readPopulationDeposits(client) {
   const records = [], ids = new Set(), payments = new Set(); let bytes = 0;
   for (let start = 1; start <= 10001; start += 1000) {
     const body = await client.query('SELECT * FROM Deposit ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000'), page = body?.QueryResponse, rows = page?.Deposit || [];
-    if (!page || !Array.isArray(rows) || rows.length > 1000 || (rows.length && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== rows.length)) throw denied('Deposit availability pagination is incomplete.');
+    if (!page || !Array.isArray(rows) || rows.length > 1000 || (rows.length && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== rows.length) || (page.totalCount !== undefined && page.totalCount !== rows.length)) throw denied('Deposit availability pagination is incomplete.');
     for (const record of rows) {
       bytes += Buffer.byteLength(canonical(record));
       if (!/^\d{1,30}$/.test(record?.Id || '') || typeof record.SyncToken !== 'string' || record.sparse === true || ids.has(record.Id) || records.length >= 10000 || bytes > 32000000 || !Array.isArray(record.Line) || !record.Line.length) throw denied('Deposit availability is incomplete or exceeds its bound.');
@@ -23,7 +23,7 @@ async function readPopulationDeposits(client) {
       }
       records.push({ id: record.Id, hash: hash(record) });
     }
-    if (rows.length < 1000) { if (page.totalCount !== undefined && page.totalCount !== records.length) throw denied('Deposit availability count differs.'); return { hash: hash(records), payments }; }
+    if (rows.length < 1000) return { hash: hash(records), payments };
   }
   throw denied('Deposit availability exceeds its bounded scan.');
 }
