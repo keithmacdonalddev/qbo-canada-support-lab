@@ -1,5 +1,18 @@
 # Codex Project Memory
 
+## Current full-company execution (2026-10-17T02:01:42.127Z)
+
+This dated update supersedes the pending-decision and paused-goal claims in the earlier snapshots below. Follow docs/agent-harness/FULL_GOAL_EXECUTION.md for the complete outcome and next action.
+
+- The latest owner direction explicitly says to complete the whole intent and all company data without waiting for more answers. The present thread's full-company goal was created and observed active. Ordinary scoped company work continues; factual attestations must still reflect actual owner replies or observed evidence.
+- Exact unwanted-record cleanup is verified: Payment 509 and Invoice 415 voided, unused CreditMemo 412 deleted, no accepted write replayed. All-account effects and unrelated-inventory preservation passed; company-opening-repair-completion-result-20261017.json is the direct private proof. External payment workflow history remains not independently attested.
+- All 71 new setup records now exist with original receipts/readbacks: the earlier 60, six suppliers and five zero-stock Inventory Items. Draft v7 binds all 64 required master roles. FIFO remains labelled documented inference; recoverable purchase HST is an agent-selected fictional-business choice, not an invented owner observation. Direct proof: company-stock-setup-v3-execute-result-20261017.json.
+- Clean opening evidence was captured and native publication accepted at opening 2023-09-01: company-publication-result-20261017.json, 196 GET and zero QBO writes, no opening blockers, token/SDK/database cleanup complete. Desktop shows publication and seven scoped opening reports/four passed comparisons. Saved observation labels no longer falsely claim universal non-acceptance.
+- The original September 2023 plan contains 198 creates and must be reused. A database cursor compatibility fix is pushed as fc04c9d; 68 focused tests, a fresh retained-stock test and actual read-only 198-intent/no-getMore evidence passed, with deadlines intact.
+- Three actual business creates are accepted and have saved native receipts. Estimate and operating Bill are verified. The care Invoice is saved but unverified; its raw QBO response omits ARAccountRef, which official SDK documentation labels for Desktop. Exact same-day CAD Accrual GeneralLedger evidence identifies this Invoice ID under the selected receivables account with matching gross debit, between two unchanged Invoice reads. Private proof: company-first-invoice-routing-result-20261017.json. This evidence is not yet integrated into the native readback/payment compiler.
+- Current run is blocked at ordinal two with no unknown request outcome. Do not recreate any of the three IDs. Complete a strict separate account-routing evidence contract and deadline-safe graph pagination, review/test, then resume the same operation. No complete managed month, report acceptance across history, bank reconciliation or full dataset outcome is claimed.
+
+
 ## Verified supplier completion (2026-10-17T00:07:12.537Z)
 
 - Production company ending 2856 now has six additional Vendor records: three overhead suppliers and three stock suppliers. All six have original accepted receipts and independent exact-ID readback, and their IDs are linked in saved draft v5. Total new verified masters across these runs is 66. No historical business period has been delivered.
