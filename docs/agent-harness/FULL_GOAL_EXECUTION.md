@@ -2,6 +2,14 @@
 
 Updated 2026-10-17 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Read-only evidence milestone — 2026-10-17 05:51 UTC
+
+- Standalone managed-stock comparison passed: five item quantities match, inventory asset CAD 2,526.00 and cost of goods CAD 6,714.00 match the retained purchase layers. Private result company-independent-inspect-ef91ea1f-b32a-46bf-8d7f-345c1d341ed6-result-20261017.json: 14 GET / zero POST; SDK, token, database and child cleanup closed. Original plan and accepted identities preserved; native operation remains stopped. This does not complete September or certify physical counts or company costing settings.
+- Native Inventory Status CSV retained as company-inventory-status-qbo-ui-20261017.csv with observation metadata. All five managed quantities match (36, 12, 18, 18, 18); its export has no cutoff date, so it is current observed quantity evidence, not historical as-of proof.
+- Native September 2023 Journal CSV retained as company-september2023-journal-qbo-ui-20261017.csv with observation metadata. Exported debit and credit totals both CAD 82,360.15. Existing entries 372 (tax-filing reversal) and 395 (filed sales tax), dated September 30, reinforce the pending filed-period classification. The journal includes unmanaged activity and is not bank reconciliation or government-submission proof.
+- Native Reconciliation Reports history for managed CAD operating bank 123, All Dates, lists no reports; direct evidence company-managed-bank-reconciliation-history-20261017.json. No reconciliation started or completed. This does not certify other accounts or cleared transaction statuses.
+- Backdated writes remain held pending the existing factual question. No old Invoice repair or additional speculative create was attempted. The full goal remains incomplete; next delivery checkpoint is 06:06:05.526 UTC.
+
 ## Current execution snapshot — 2026-10-17 05:41 UTC
 
 - The full goal remains active and incomplete. Target: Production company ending 2856, published draft v7, 71 verified masters. The exact three huge unwanted records were already cleaned.
