@@ -269,17 +269,18 @@ function verifyPopulationFinancialContent({ compiled, receipt, observed, parents
   const missingEstimate = compiled.entity === 'Invoice' && compiled.relationships.length === 2 && estimate && time && linkList(payload.LinkedTxn).some(link => link.TxnType === 'Estimate') && !linkList(record.LinkedTxn).some(link => link.TxnType === 'Estimate');
   if (missingEstimate) {
     const quote = estimate.record, work = time.record, line = payload.Line?.[0], detail = line?.SalesItemLineDetail;
-    if (payload.Line?.length !== 1 || !['Pending','Accepted'].includes(quote.TxnStatus) || linkList(quote.LinkedTxn).length || work.BillableStatus !== 'HasBeenBilled' || work.CustomerRef?.value !== payload.CustomerRef?.value || quote.CustomerRef?.value !== payload.CustomerRef?.value || work.ItemRef?.value !== detail?.ItemRef?.value || work.Hours + work.Minutes / 60 !== detail?.Qty || linkList(record.LinkedTxn).filter(link => link.TxnType === 'TimeActivity' && link.TxnId === work.Id).length !== 1) invalid('The missing Estimate origin is outside the explicitly supported coverage gap.');
+    if (payload.Line?.length !== 1 || !['Pending','Accepted'].includes(quote.TxnStatus) || linkList(quote.LinkedTxn).length || !['Billable','HasBeenBilled'].includes(work.BillableStatus) || work.CustomerRef?.value !== payload.CustomerRef?.value || quote.CustomerRef?.value !== payload.CustomerRef?.value || work.ItemRef?.value !== detail?.ItemRef?.value || work.Hours + work.Minutes / 60 !== detail?.Qty || linkList(record.LinkedTxn).filter(link => link.TxnType === 'TimeActivity' && link.TxnId === work.Id).length !== 1) invalid('The missing Estimate origin is outside the explicitly supported coverage gap.');
     const quoteLines = quote.Line?.filter(value => value.DetailType === 'SalesItemLineDetail');
     if (quoteLines?.length !== 1 || quoteLines[0].SalesItemLineDetail?.ItemRef?.value !== detail.ItemRef.value || quoteLines[0].SalesItemLineDetail.Qty !== detail.Qty || cents(quoteLines[0].SalesItemLineDetail.UnitPrice) !== cents(detail.UnitPrice) || cents(quoteLines[0].Amount) !== cents(line.Amount)) invalid('The unconverted Estimate economics differ.');
     gaps.push('estimate-invoice-conversion-unverified');
+    if(work.BillableStatus==='Billable')gaps.push('time-invoice-billing-unverified');
   }
   const header = { ...payload }; delete header.Line; delete header.LinkedTxn;
   if (compiled.entity === 'Estimate' && hasChild('Invoice')) {
     if (record.TxnStatus === 'Closed') header.TxnStatus = 'Closed';
     else if (['Pending','Accepted'].includes(record.TxnStatus) && !linkList(record.LinkedTxn).length) { header.TxnStatus = record.TxnStatus; gaps.push('estimate-invoice-conversion-unverified'); }
   }
-  if (compiled.entity === 'TimeActivity' && hasChild('Invoice')) header.BillableStatus = 'HasBeenBilled';
+  if (compiled.entity === 'TimeActivity' && hasChild('Invoice')) {if(record.BillableStatus==='Billable'){header.BillableStatus='Billable';gaps.push('time-invoice-billing-unverified');}else header.BillableStatus='HasBeenBilled';}
   if (compiled.entity === 'PurchaseOrder' && hasChild('Bill')) header.POStatus = 'Closed';
   const accountKey = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
   if (['Invoice','Payment','BillPayment'].includes(compiled.entity) && record[accountKey] === undefined && header[accountKey]) {
