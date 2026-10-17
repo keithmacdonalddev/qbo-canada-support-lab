@@ -2,8 +2,8 @@
 const { hash, canonical } = require('./business-calendar');
 const { assertRun, assertRunApproval } = require('./business-period-store');
 const { businessTransportEvidence, assertBusinessTransportAudits } = require('./business-dispatch-receipt');
-const { PLAN, RECOVERY_PLAN, OUTCOME, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
-const ACTION = 'Owned business Invoice link repair approved', VERIFIED = 'Owned business Invoice link repair verified';
+const { PLAN, RECOVERY_PLAN, OUTCOME, NO_EFFECT, assertNoEffectReadback, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
+const ACTION = 'Owned business Invoice link repair approved', VERIFIED = 'Owned business Invoice link repair verified', NO_EFFECT_ACTION = 'Owned business Invoice link repair saved without effect';
 const read=(Model,filter,session)=>Model.findOne(filter).session(session).maxTimeMS(3000).lean();
 const plain=value=>JSON.parse(JSON.stringify(value));
 const same=(a,b)=>String(a)===String(b);
@@ -137,6 +137,19 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   const s=await saved(scope,authorityHash,session);if(intent.operationId!==s.p.operationId||intent.planHash!==s.p.planHash)fail('The quarantined graph operation changed.');
   return {scope,operationId:s.p.operationId,revision:s.writer.revision,unresolved:plain(s.writer.unresolved),quarantinedRepair:{version:1,kind:'known-saved-link-repair',authorityHash,receiptId:s.row._id,requestHash:s.row.requestHash,dispatchKey:s.row.dispatchKey,qboId:s.row.observed.qboId,receiptEvidenceHash:hash({requestHash:s.row.requestHash,observed:s.row.observed,startAuditId:String(s.row.startAuditId),resultAuditId:String(s.row.resultAuditId)}),operationId:s.p.operationId}};
  }
+ async function finalizeNoEffect({scope,authorityHash,after,reports,parentLedgers=[]}){
+  return transaction(async session=>{
+   const s=await saved(scope,authorityHash,session),p=s.p,invariants=assertNoEffectReadback(p,after,s.row,now()),financial=assertReportSources(p,p.reports,reports,now(),false,parentLedgers);await assertCreations(p,session);
+   if(await read(Authorities,{...scope,'payload.planAuthorityHash':authorityHash,'payload.kind':{$in:[OUTCOME,NO_EFFECT]}},session))fail('The saved repair already has a retained settlement.');
+   const payload={version:1,kind:NO_EFFECT,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),linkVerified:false,originalOperationBlocked:true,invariants,after,reports,parentLedgers,financial},contentHash=hash(payload),auditId=hash({contentHash,event:'no-effect'}).slice(0,24);
+   if(Buffer.byteLength(canonical(payload))>8000000)fail('Unsuccessful repair settlement exceeds its retained budget.');
+   await Authorities.create([{_id:hash({scope,kind:NO_EFFECT,planAuthorityHash:authorityHash}).slice(0,24),contractVersion:1,...scope,contentHash,payload,actorId:p.ownerId,auditId}],{session});
+   await Audits.create([{_id:auditId,userId:p.ownerId,realmId:scope.realmId,action:NO_EFFECT_ACTION,actionType:'manual',outcome:'partial',afterState:noEffectAuditState(payload,contentHash)}],{session});
+   const released=await Writers.findOneAndUpdate({_id:s.writer._id,...scope,revision:s.writer.revision,operationId:p.operationId,planHash:p.planHash,'unresolved.key':s.row.dispatchKey,'unresolved.responseReceiptId':s.row._id},{$set:{unresolved:null},$inc:{revision:1}},{new:true,session}).lean();
+   if(!released)fail('The exact saved repair pointer changed before unsuccessful settlement.');
+   return {status:'saved-without-effect',authorityHash:contentHash,planAuthorityHash:authorityHash,receiptId:s.row._id,operationId:p.operationId,logicalKey:p.logicalKey,linkVerified:false,originalOperationBlocked:true,financial};
+  });
+ }
  async function finalize({scope,authorityHash,after,reports,graph,parentLedgers=[]}){
   // Immutable policy reads occur before the retryable settlement transaction.
   const prepared=await transaction(async session=>{const value=await saved(scope,authorityHash,session);return {p:value.p,rows:await assertCreations(value.p,session)};});
@@ -158,7 +171,7 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
    return {status:'verified',authorityHash:contentHash,planAuthorityHash:authorityHash,receiptId:s.row._id,operationId:p.operationId,logicalKey:p.logicalKey,financial,graphEvidenceHash:graph.evidenceHash,originalOperationPreserved:true};
   });
  }
- return {approve,admit,settle,graphSnapshot,finalize,loadPlan,saved,state};
+ return {approve,admit,settle,graphSnapshot,finalize,finalizeNoEffect,loadPlan,saved,state};
 }
 async function assertSavedRepairReceipt(models,scope,p,authorityHash,row,session){
  const {Audits}=models,dispatchKey=dispatchKeyFor(authorityHash),receiptId=hash({scope,dispatchKey}),request=repairRequest(p),observed=row?.observed;
@@ -169,6 +182,13 @@ async function assertSavedRepairReceipt(models,scope,p,authorityHash,row,session
  return row;
 }
 
+function noEffectAuditState(o,contentHash){return {authorityHash:contentHash,planAuthorityHash:o.planAuthorityHash,receiptId:o.receiptId,operationId:o.operationId,logicalKey:o.logicalKey,allAccountDeltaCents:0,linkVerified:false,originalOperationBlocked:true};}
+async function assertNoEffectOutcome({models,scope,p,authority,row,outcome,session}){
+ const o=outcome.payload;
+ if(outcome.contractVersion!==1||String(outcome._id)!==hash({scope,kind:NO_EFFECT,planAuthorityHash:authority.contentHash}).slice(0,24)||hash(o)!==outcome.contentHash||!equal(o.scope,scope)||o.version!==1||o.kind!==NO_EFFECT||o.ownerId!==p.ownerId||o.operationId!==p.operationId||o.planAuthorityHash!==authority.contentHash||o.receiptId!==row._id||o.compilationHash!==p.originalStep.compilation.compilationHash||o.creationReceiptHash!==p.originalStep.receipt.evidenceHash||o.logicalKey!==p.logicalKey||o.qboId!==p.originalStep.qboId||o.linkVerified!==false||o.originalOperationBlocked!==true||!same(outcome.actorId,p.ownerId))fail('The explicit unsuccessful settlement changed.');
+ const audit=await read(models.Audits,{_id:outcome.auditId,userId:p.ownerId,realmId:scope.realmId,action:NO_EFFECT_ACTION,actionType:'manual',outcome:'partial'},session);
+ if(!audit||!equal(audit.afterState,noEffectAuditState(o,outcome.contentHash))||!equal(o.invariants,assertNoEffectReadback(p,o.after,row,Date.parse(o.verifiedAt)))||!equal(o.financial,assertReportSources(p,p.reports,o.reports,Date.parse(o.verifiedAt),false,o.parentLedgers)))fail('The unsuccessful settlement proof or audit is unavailable.');
+}
 // A read-only lookup. A known saved repair may provide provisional representation
 // evidence only under its exact held barrier; later reads require the append-only
 // verified outcome. Neither path authorizes another write.
@@ -186,7 +206,9 @@ async function loadOwnedLinkLineage({models,scope,step,session}){
  if(!approval||!equal(approval.afterState,approvalState(p,authority.contentHash)))fail('The repair approval audit is required for compatibility.');
  const row=await read(Receipts,{_id:hash({scope,dispatchKey:dispatchKeyFor(authority.contentHash)}),...scope},session);
  await assertSavedRepairReceipt(models,scope,p,authority.contentHash,row,session);
+ const noEffect=await read(Authorities,{...scope,'payload.kind':NO_EFFECT,'payload.planAuthorityHash':authority.contentHash},session);
  const outcome=await read(Authorities,{...scope,'payload.kind':OUTCOME,'payload.planAuthorityHash':authority.contentHash},session);
+ if(noEffect){if(outcome)fail('Conflicting repair settlements are not admissible.');await assertNoEffectOutcome({models,scope,p,authority,row,outcome:noEffect,session});return null;}
  let outcomeHash=null;
  if(outcome){
   const o=outcome.payload;

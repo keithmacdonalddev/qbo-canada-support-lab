@@ -1,5 +1,12 @@
 # Codex Agent Handoff
 
+## Actual sparse-update result (2026-10-17T03:21:36.643Z)
+
+The reviewed v3 continuation sent exactly one update and retained its native saved receipt. QuickBooks advanced the owned Invoice version from 0 to 1 and changed its modification timestamp, but still omitted the Estimate header link; the Estimate remains exactly Pending and unlinked, and time/customer records are unchanged. This is a saved unsuccessful link repair, not an unsent/rejected transport or a verified conversion. Never resend this update. Direct private proof: company-owned-link-repair-d84d9049-e19e-497e-86f9-7b41128b994a-result-20261017.json, 33 GET/1 POST, drained SDK/token work and closed database. Cumulative repair reads are87 of200, leaving113; the one-update allowance is consumed.
+
+A zero-write continuation may retain an explicit unsuccessful settlement only after exact fresh record and all-account/omitted-parent zero-delta evidence. It preserves the saved receipt, all33 creation identities, blocked original run and unchanged calendar; only the exact repair transport pointer is released. Its lineage returns no conversion compatibility proof. Future create representation and the original missing Estimate relationship remain unresolved; passing this settlement cannot advance September or count as relationship coverage.
+
+
 ## Exact unadmitted authority serialization recovery (2026-10-17T03:17:30.443Z)
 
 The second owned-link attempt stopped before QBO dispatch: 29 GET, zero POST, no mandatory repair receipt and no unresolved writer pointer. Native database inspection proves the serializer removed seven empty objects from the immutable approval payload (two subtotal details and five empty report Rows), so the stored payload fails its original audited content hash. The old document remains unchanged and inadmissible. Direct private proofs are company-owned-link-repair-fc51af60-4392-4337-8109-b76508e2574a-result-20261017.json and company-owned-link-admission-inspection-result-20261017.json.

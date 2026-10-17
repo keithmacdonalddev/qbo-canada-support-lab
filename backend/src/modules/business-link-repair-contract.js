@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/;
-const PLAN = 'business-link-repair-plan', RECOVERY_PLAN = 'business-link-repair-recovery-plan', OUTCOME = 'business-link-repair-outcome';
+const PLAN = 'business-link-repair-plan', RECOVERY_PLAN = 'business-link-repair-recovery-plan', OUTCOME = 'business-link-repair-outcome', NO_EFFECT = 'business-link-repair-no-effect';
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_LINK_REPAIR_UNVERIFIED' }); }
 const equal = (a,b) => canonical(a) === canonical(b);
 const fresh = (stamp, now) => typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) && new Date(stamp).toISOString() === stamp && Date.parse(stamp) <= now && now - Date.parse(stamp) <= 300000;
@@ -68,10 +68,20 @@ function assertRepairReadback(plan,after,now=Date.now()) {
   if(!equal(before.time.record,after.time.record) || !equal(before.customer.record,after.customer.record)) fail('The repair changed its time or customer record.');
   return {version:1,kind:'owned-link-repair-record-invariants',scope,logicalKey:plan.logicalKey,beforeHash:hash(before),afterHash:hash(after),unchangedAccounting:true,actualHeaderLinks:true,actualEstimateBacklink:true};
 }
+function assertNoEffectReadback(plan,after,receipt,now=Date.now()) {
+  assertPlan(plan,now);const before=plan.before,scope=plan.scope;
+  for(const [key,entity]of Object.entries({invoice:'Invoice',estimate:'Estimate',time:'TimeActivity',customer:'Customer'}))observation(after[key],scope,entity,before[key].record.Id,now);
+  const invoice=after.invoice.record;assertChangedMetadata(before.invoice.record,invoice,'Invoice');
+  const metadataBefore={...before.invoice.record.MetaData},metadataAfter={...invoice.MetaData};delete metadataBefore.LastUpdatedTime;delete metadataAfter.LastUpdatedTime;
+  if(!equal(metadataBefore,metadataAfter))fail('Only the observed invoice update timestamp may change in unsuccessful settlement.');
+  if(BigInt(invoice.SyncToken)!==BigInt(before.invoice.record.SyncToken)+1n||receipt?.observed?.syncToken!==invoice.SyncToken||!equal(invoice.LinkedTxn,before.invoice.record.LinkedTxn))fail('The saved unsuccessful update must preserve the exact original links and single accepted version.');
+  for(const key of ['estimate','time','customer'])if(!equal(before[key].record,after[key].record))fail('The unsuccessful update changed its original source or customer record.');
+  return {version:1,kind:'owned-link-repair-no-effect-invariants',scope,logicalKey:plan.logicalKey,beforeHash:hash(before),afterHash:hash(after),unchangedAccounting:true,linkVerified:false,originalMissingLinkPreserved:true};
+}
 function assertReadFence(value) {
   if(value?.unresolved===null && value.quarantinedRepair===undefined) return value;
   const q=value?.quarantinedRepair,u=value?.unresolved;
   if(!q || q.version!==1 || q.kind!=='known-saved-link-repair' || !HASH.test(q.authorityHash || '') || !HASH.test(q.receiptId || '') || !HASH.test(q.receiptEvidenceHash || '') || !HASH.test(q.requestHash || '') || !HASH.test(q.dispatchKey || '') || !QID.test(q.qboId || '') || q.operationId!==value.operationId || u?.kind!=='business-link-repair' || u.authorityHash!==q.authorityHash || u.key!==q.dispatchKey || u.requestHash!==q.requestHash || u.transportConsumed?.receiptId!==q.receiptId || u.responseReceiptId!==q.receiptId) fail('Only the exact known-saved repair may be inspected while its barrier is held.');
   return value;
 }
-module.exports={PLAN,RECOVERY_PLAN,OUTCOME,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};
+module.exports={PLAN,RECOVERY_PLAN,OUTCOME,NO_EFFECT,assertNoEffectReadback,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};
