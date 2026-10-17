@@ -160,3 +160,27 @@ test('closing preference projection distinguishes explicit absence from malforme
     const observed = await readDraftSetup(qbo, scope); assert.equal(observed.observations.closingDateVerified, verified); assert.equal(observed.observations.closedThrough, closed);
   }
 });
+
+test('supplier-only preparation leaves stock deferred while preserving global prerequisites', () => {
+  const f = fixture({activityTemplateVersion:2}); f.input.recordScope = 'suppliers';
+  f.setup.observations.inventoryTracking = false; f.setup.observations.closingDateVerified = false;
+  f.input.inventoryStartDate = '2026-10-16';
+  const plan = prepareMasterPlan(f); assertMasterPlan(plan);
+  assert.equal(plan.runnable,true); assert.equal(plan.entries.length,6);
+  assert.deepEqual(plan.entries.map(row=>row.ordinal),[0,1,2,3,4,5]);
+  assert.ok(plan.entries.every(row=>row.entity==='Vendor' && row.dependencies.length===0));
+  assert.ok(plan.entries.every(row=>compileMasterEntry(plan,row.ordinal).entity==='Vendor'));
+  for (const mutate of [g=>{g.masters.completeness.Item=false;},g=>{g.masters.observedAt='2020-01-01T00:00:00.000Z';},g=>{g.view.draft.mappings.accountsPayable=null;}]) {
+    const g=structuredClone(f); mutate(g); assert.equal(prepareMasterPlan(g).runnable,false);
+  }
+  const duplicate=structuredClone(f); duplicate.masters.options.Customer.push({id:'999',name:plan.entries[0].name});
+  assert.equal(prepareMasterPlan(duplicate).runnable,false);
+});
+test('supplier selection is exact and hash-bound; legacy plans retain their original shape', () => {
+  const f=fixture({activityTemplateVersion:2}), legacy=prepareMasterPlan(f); assert.equal(Object.hasOwn(legacy,'recordScope'),false); assertMasterPlan(legacy);
+  f.input.recordScope='suppliers'; const selected=prepareMasterPlan(f); assertMasterPlan(selected);
+  for(const value of [null,undefined,'all','items',{},['suppliers']]) assert.throws(()=>prepareMasterPlan({...f,input:{...f.input,recordScope:value}}));
+  for(const mutate of [p=>{delete p.recordScope;},p=>{p.recordScope='all';},p=>{p.recordScope=null;},p=>{p.entries.pop();p.proposedQboCreates--;},p=>{p.entries[0]=structuredClone(legacy.entries[0]);},p=>{p.entries[0].ordinal=1;}]) {
+    const plan=structuredClone(selected); mutate(plan); const {planHash,...body}=plan; plan.planHash=hash(body); assert.throws(()=>assertMasterPlan(plan));
+  }
+});

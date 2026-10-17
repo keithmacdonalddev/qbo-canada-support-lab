@@ -18,7 +18,7 @@ const ACCOUNTS = Object.freeze({
 });
 const fresh = (stamp, now) => typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) && new Date(Date.parse(stamp)).toISOString() === stamp && Date.parse(stamp) <= now && now - Date.parse(stamp) <= 300000;
 function validateMasterPreparationInput(input) {
-  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).sort().join(',') !== 'baseHash,connectionId,inventoryStartDate') throw problem('Review the saved business and an explicit inventory starting date; no record overrides are accepted.');
+  if (!input || Object.getPrototypeOf(input) !== Object.prototype || Object.keys(input).filter(key => key !== 'recordScope').sort().join(',') !== 'baseHash,connectionId,inventoryStartDate' || (Object.hasOwn(input, 'recordScope') && input.recordScope !== 'suppliers')) throw problem('Review the saved business and an explicit inventory starting date; no record overrides are accepted.');
   if (!/^[a-f0-9]{24}$/.test(input.connectionId || '') || !HASH.test(input.baseHash || '')) throw problem('Save and reload the current business draft before preparing records.');
   try { date(input.inventoryStartDate); } catch { throw problem('Choose an explicit inventory starting date.'); }
   return { ...input };
@@ -84,6 +84,7 @@ function prepareMasterPlan({ view, input, setup, masters, country, periodControl
       for (const [reference, mapping] of Object.entries(requirement.accountMappings || {})) if (!draft.mappings[mapping] || record[0]?.accountRefs?.[reference] !== draft.mappings[mapping]) block(requirement.key, 'Choose a verified existing account mapping for the selected product before preparing records.');
     } else entries.push({ ordinal: entries.length, target: 'master', key: requirement.key, entity: requirement.entity, name: nameFor(draft.business, labelFor(requirement.key)), ...(requirement.itemType ? { itemType: requirement.itemType } : {}), dependencies: Object.values(requirement.accountMappings || {}).filter(key => !draft.mappings[key]) });
   }
+  if (input.recordScope === 'suppliers') entries.splice(0, entries.length, ...entries.filter(row => row.entity === 'Vendor').map((row, ordinal) => ({ ...row, ordinal })));
   const inventoryNeeded = entries.some(row => row.entity === 'Item' && row.itemType === 'Inventory');
   if (inventoryNeeded) {
     if (setup.observations.closingDateVerified !== true) block('inventoryStartDate', 'QuickBooks accounting and closing preferences must be explicitly readable before any master create.');
@@ -111,7 +112,7 @@ function prepareMasterPlan({ view, input, setup, masters, country, periodControl
     names.set(key, true);
   }
   const taxDefaults = datedTax ? Object.fromEntries(['salesTax', 'purchaseTax'].map(key => [key, require('./business-dated-tax').datedTaxChoice(datedTax, key, today).id])) : null;
-  const plan = { version: 1, ...(taxDefaults ? { taxDefaults } : {}), scope, ownerId, source: { id: draft.id, version: draft.version, contentHash: draft.contentHash, business: draft.business, mappings: draft.mappings, masterBindings: draft.masterBindings || {} },
+  const plan = { version: 1, ...(input.recordScope ? { recordScope: input.recordScope } : {}), ...(taxDefaults ? { taxDefaults } : {}), scope, ownerId, source: { id: draft.id, version: draft.version, contentHash: draft.contentHash, business: draft.business, mappings: draft.mappings, masterBindings: draft.masterBindings || {} },
     inventoryStartDate: input.inventoryStartDate, salesTaxable: setup.options.taxCodes.find(row => row.id === draft.mappings.salesTax)?.taxable !== false, entries, inventoryBefore, observedAt: new Date(now).toISOString(), evidence: { setupHash: setup.sourceHash, mastersHash: masters.sourceHash, countryHash: country?.recordHash || null, periodControlHash: periodControl?.contentHash || null }, blockers,
     runnable: blockers.length === 0 && entries.length > 0, proposedQboCreates: entries.length, qboWrites: 0, openingQuantity: 0, openingBalances: false, edits: 0 };
   if (Buffer.byteLength(canonical(plan)) > 2000000) throw problem('Master preparation exceeds its retained evidence budget.', 409);
@@ -122,7 +123,8 @@ function assertMasterPlan(plan) {
   const { planHash, ...content } = plan || {};
   if (content.version !== 1 || !HASH.test(planHash || '') || hash(content) !== planHash || content.runnable !== true || !Array.isArray(content.blockers) || content.blockers.length || !Array.isArray(content.entries) || !content.entries.length || content.entries.length > 100 || content.proposedQboCreates !== content.entries.length || content.qboWrites !== 0 || content.edits !== 0 || content.openingBalances !== false || content.openingQuantity !== 0 || typeof content.salesTaxable !== 'boolean' || !/^[a-f0-9]{24}$/.test(content.ownerId || '')) invalid();
   if (canonical(scoped(plan.scope)) !== canonical(plan.scope) || Buffer.byteLength(canonical(plan)) > 2000000) invalid();
-  if (Object.keys(content).filter(key => key !== 'taxDefaults').sort().join(',') !== 'blockers,edits,entries,evidence,inventoryBefore,inventoryStartDate,observedAt,openingBalances,openingQuantity,ownerId,proposedQboCreates,qboWrites,runnable,salesTaxable,scope,source,version') invalid();
+  if (Object.keys(content).filter(key => !['taxDefaults', 'recordScope'].includes(key)).sort().join(',') !== 'blockers,edits,entries,evidence,inventoryBefore,inventoryStartDate,observedAt,openingBalances,openingQuantity,ownerId,proposedQboCreates,qboWrites,runnable,salesTaxable,scope,source,version') invalid();
+  if (Object.hasOwn(plan, 'recordScope') && plan.recordScope !== 'suppliers') invalid();
   const source = plan.source;
   if (!source || Object.keys(source).sort().join(',') !== 'business,contentHash,id,mappings,masterBindings,version' || !/^[a-f0-9]{24}$/.test(source.id || '') || !HASH.test(source.contentHash || '') || !Number.isSafeInteger(source.version) || source.version < 1 || !Number.isFinite(Date.parse(plan.observedAt)) || new Date(Date.parse(plan.observedAt)).toISOString() !== plan.observedAt) invalid();
   const input = validateDraftInput({ requestKey: '00000000-0000-0000-0000-000000000000', connectionId: plan.scope.connectionId, baseHash: source.contentHash, business: source.business, mappings: source.mappings, masterBindings: source.masterBindings });
@@ -145,7 +147,8 @@ function assertMasterPlan(plan) {
     if (source.masterBindings[requirement.key]) continue;
     expected.push({ ordinal: expected.length, target: 'master', key: requirement.key, entity: requirement.entity, name: nameFor(source.business, labelFor(requirement.key)), ...(requirement.itemType ? { itemType: requirement.itemType } : {}), dependencies: Object.values(requirement.accountMappings || {}).filter(key => !source.mappings[key]) });
   }
-  if (canonical(expected) !== canonical(plan.entries)) invalid();
+  const selected = plan.recordScope === 'suppliers' ? expected.filter(row => row.entity === 'Vendor').map((row, ordinal) => ({ ...row, ordinal })) : expected;
+  if (canonical(selected) !== canonical(plan.entries)) invalid();
   return plan;
 }
 function compileMasterEntry(plan, ordinal, verified = {}) {

@@ -60,11 +60,11 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
     if (plan.ownerId !== ownerId || canonical(plan.scope) !== canonical(scope)) throw denied('The master proposal belongs to another owner or company.');
     return transaction(async session => {
       await authorize('operations.preview', session); const { policy } = await coordination(session, true); await touchPolicy(policy, session);
-      const requestHash = hash({ source: plan.source, inventoryStartDate: plan.inventoryStartDate }), id = hash({ masterPreparation: scope, ownerId, requestKey }).slice(0, 24);
+      const requestHash = hash({ source: plan.source, inventoryStartDate: plan.inventoryStartDate, ...(plan.recordScope ? { recordScope: plan.recordScope } : {}) }), id = hash({ masterPreparation: scope, ownerId, requestKey }).slice(0, 24);
       const prior = await read(MasterRuns, { _id: id, ...scope, ownerId }, session);
       if (prior) { if (prior.requestHash !== requestHash) throw denied('This proposal identifier was already used for different business choices.'); return { existing: true, run: assertMasterRun(prior, scope, ownerId) }; }
       const existing = await read(MasterRuns, { ...company, claim: 'open' }, session);
-      if (existing) return { existing: true, run: assertMasterRun(existing, scope, ownerId) };
+      if (existing) { if (existing.plan.recordScope !== plan.recordScope) throw denied('The open preparation covers different records. Inspect and settle it first.'); return { existing: true, run: assertMasterRun(existing, scope, ownerId) }; }
       assertFreshPlan(plan);
       const retained = await read(MasterRuns, { ...company, records: { $elemMatch: { qboId: { $type: 'string' }, $or: plan.entries.map(entry => ({ key: entry.key, entity: entry.entity })) } } }, session);
       if (retained) throw denied('Previously prepared IDs exist for unassigned roles. Select those exact IDs or resolve their retained disposition before creating another set.');

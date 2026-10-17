@@ -86,3 +86,26 @@ test('history pages retain exact IDs and cannot inject another company or cursor
  const first=await h.service.history(h.user,{before:null}),second=await h.service.history(h.user,{before:first.next});assert.equal(first.entries.length,20);assert.equal(second.entries.length,5);assert.equal(new Set([...first.entries,...second.entries].map(row=>row.id)).size,25);assert.equal(second.next,null);
  await assert.rejects(h.service.history(h.user,{before:null,realmId:'999'}),{status:400});await assert.rejects(h.service.history(h.user,{before:{}}),{status:400});
 });
+
+test('supplier-only owner flow creates and applies six vendors without altering existing masters or filling stock',async t=>{
+ const h=fixture(t,{lifecycleVersion:2}), {hash}=require('../src/modules/business-calendar');
+ const version=h.data.Versions[0]; version.definition.masterBindings={'field-client-001':'901'}; version.contentHash=hash(version.definition); h.body.baseHash=version.contentHash; h.body.recordScope='suppliers';
+ h.remote.Customer.push({Id:'901',DisplayName:'Existing field customer',Active:true,CurrencyRef:{value:'CAD'},SyncToken:'3'});
+ const original=clone(version), customer=clone(h.remote.Customer), items=clone(h.remote.Item), accounts=clone(h.remote.Account);
+ await h.proposal(); assert.equal(h.run().plan.recordScope,'suppliers'); assert.equal(h.run().records.length,6); await h.approval();
+ const id=String(h.run()._id), body=executionBody(h); await h.service.execute(h.user,id,body); await h.service.idle();
+ const completed=(await h.service.inspect(h.user,id)).run; assert.equal(completed.state,'complete'); assert.equal(completed.counts.verifiedRecords,6); assert.equal(completed.admittedRequests,6); assert.equal(h.remote.Vendor.length,6);
+ assert.ok(completed.records.every(row=>row.entity==='Vendor'&&row.provenance==='request-correlated-master-readback'));
+ const ordinals=completed.records.map(row=>row.ordinal), review=(await h.service.applyReview(h.user,id,{ordinals})).review;
+ const apply={ordinals,reviewHash:review.reviewHash,requestKey:'30000000-0000-0000-0000-000000000001'}, saved=await h.service.apply(h.user,id,apply);
+ assert.equal(saved.draft.masterBindings['field-client-001'],'901'); assert.equal(Object.keys(saved.draft.masterBindings).length,7); assert.ok(!Object.keys(saved.draft.masterBindings).some(key=>key.startsWith('workshop-stock')));
+ assert.deepEqual(h.data.Versions[0],original); assert.deepEqual(h.remote.Customer,customer); assert.deepEqual(h.remote.Item,items); assert.deepEqual(h.remote.Account,accounts);
+ await h.service.execute(h.user,id,body); await h.service.idle(); await h.service.apply(h.user,id,apply); await h.proposal(); assert.equal(h.sent.length,6);
+ const {recordScope,...full}=h.body; await assert.rejects(h.service.prepare(h.user,full),/different saved choices/);
+});
+test('proposal reuse refuses a different record scope before returning an open run',async t=>{
+ const h=fixture(t,{lifecycleVersion:2}); await h.proposal();
+ await assert.rejects(h.service.prepare(h.user,{...h.body,recordScope:'suppliers'}),/different saved choices/);
+ await assert.rejects(h.service.prepare(h.user,{...h.body,recordScope:'suppliers',requestKey:'30000000-0000-0000-0000-000000000002'}),/different records/);
+ assert.equal(h.sent.length,0);assert.equal(h.data.MasterRuns.length,1);
+});

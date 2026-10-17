@@ -71,3 +71,11 @@ test('a first proposal or approval cannot present an old or future observation a
   const { planHash, ...content } = plan; content.observedAt = new Date(h.clock + 1).toISOString();
   await assert.rejects(h.store.approve(String(h.run()._id), h.run().planHash, true, { ...content, planHash: hash(content) }), /Refresh/); assert.equal(h.sent.length, 0);
 });
+
+test('transactional proposal reuse cannot substitute full and supplier-only scopes',async()=>{
+ const h=scenario({activityTemplateVersion:2}), full=prepareMasterPlan(h.source), supplier=prepareMasterPlan({...h.source,input:{...h.source.input,recordScope:'suppliers'}}), key='40000000-0000-0000-0000-000000000001';
+ await h.store.propose(full,key);
+ await assert.rejects(h.store.propose(supplier,key),/different business choices/);
+ await assert.rejects(h.store.propose(supplier,'40000000-0000-0000-0000-000000000002'),/different records/);
+ assert.equal(h.data.MasterRuns.length,1);assert.equal(h.sent.length,0);
+});

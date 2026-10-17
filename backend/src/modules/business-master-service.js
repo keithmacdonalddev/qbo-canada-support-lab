@@ -77,14 +77,14 @@ function createMasterService(dependencies = {}) {
   async function storagePreview(user) { const bound = await bind(user, 'operations.recover', true); const result = await (dependencies.previewSetup || setup.previewSetup)(connection.db, { ...bound.scope, ownerId: bound.ownerId }, bound.scope.environment, 'master-preparation'); await bound.access.authorize(bound.scope, 'operations.read'); return { ...bound.scope, preview: result }; }
   async function storageApply(user, body) { planInput(body); const bound = await bind(user, 'operations.recover', true); const result = await (dependencies.applySetup || setup.applySetup)(connection.db, connection.getClient(), { ...bound.scope, ownerId: bound.ownerId }, bound.scope.environment, body.planHash, 'master-preparation'); await bound.access.authorize(bound.scope, 'operations.read'); return { ...bound.scope, result }; }
   async function prepare(user, body) {
-    exact(body, ['connectionId','baseHash','inventoryStartDate','requestKey']); if (!UUID.test(body.requestKey || '')) fail('Keep an exact proposal request identifier for safe retries.', 400);
-    const input = validateMasterPreparationInput({ connectionId: body.connectionId, baseHash: body.baseHash, inventoryStartDate: body.inventoryStartDate });
+    exact(body, ['connectionId','baseHash','inventoryStartDate','requestKey', ...(Object.hasOwn(body || {}, 'recordScope') ? ['recordScope'] : [])]); if (!UUID.test(body.requestKey || '')) fail('Keep an exact proposal request identifier for safe retries.', 400);
+    const input = validateMasterPreparationInput({ connectionId: body.connectionId, baseHash: body.baseHash, inventoryStartDate: body.inventoryStartDate, ...(Object.hasOwn(body, 'recordScope') ? { recordScope: body.recordScope } : {}) });
     const bound = await bind(user, 'operations.preview', true); await bound.runtime.assertReady();
     if (input.connectionId !== bound.scope.connectionId) fail('The current company connection changed. Reload the saved business.');
     const prior = await read({ _id: hash({ masterPreparation: bound.scope, ownerId: bound.ownerId, requestKey: body.requestKey.toLowerCase() }).slice(0,24), ...bound.scope, ownerId: bound.ownerId });
-    if (prior) { if (prior.sourceDraftHash !== input.baseHash || prior.plan.inventoryStartDate !== input.inventoryStartDate) fail('This proposal identifier already belongs to different saved choices.'); return reply(bound, prior, { existing: true }); }
+    if (prior) { if (prior.sourceDraftHash !== input.baseHash || prior.plan.inventoryStartDate !== input.inventoryStartDate || prior.plan.recordScope !== input.recordScope) fail('This proposal identifier already belongs to different saved choices.'); return reply(bound, prior, { existing: true }); }
     const open = await read({ environment: bound.scope.environment, realmId: bound.scope.realmId, claim: 'open' });
-    if (open) { if (String(open.ownerId) !== bound.ownerId || String(open.connectionId) !== bound.scope.connectionId) fail('Recover the earlier company preparation before proposing another role set.'); return reply(bound, open, { existing: true }); }
+    if (open) { if (String(open.ownerId) !== bound.ownerId || String(open.connectionId) !== bound.scope.connectionId) fail('Recover the earlier company preparation before proposing another role set.'); if (open.plan.recordScope !== input.recordScope) fail('The open preparation covers different records. Inspect and settle it before preparing another role set.'); return reply(bound, open, { existing: true }); }
     const plan = await bound.runtime.prepare(input);
     if (!plan.runnable) { await bound.access.authorize(bound.scope, 'operations.read'); return { ...bound.scope, run: null, preview: masterProposalView(plan) }; }
     const result = await bound.runtime.store.propose(plan, body.requestKey); return reply(bound, result.run, { existing: result.existing });
@@ -92,7 +92,7 @@ function createMasterService(dependencies = {}) {
   async function approve(user, id, body) {
     runId(id); exact(body, ['planHash','productionConfirmed']); if (!HASH.test(body.planHash || '') || typeof body.productionConfirmed !== 'boolean') fail('Review the exact plan and confirm its target environment.', 400);
     const bound = await bind(user, 'operations.execute', true), run = await load(bound,id);
-    const currentPlan = run.approval ? undefined : await bound.runtime.prepare({ connectionId: bound.scope.connectionId, baseHash: run.sourceDraftHash, inventoryStartDate: run.plan.inventoryStartDate });
+    const currentPlan = run.approval ? undefined : await bound.runtime.prepare({ connectionId: bound.scope.connectionId, baseHash: run.sourceDraftHash, inventoryStartDate: run.plan.inventoryStartDate, ...(run.plan.recordScope ? { recordScope: run.plan.recordScope } : {}) });
     return reply(bound, await bound.runtime.store.approve(id, body.planHash, body.productionConfirmed, currentPlan));
   }
   async function start(user, id, body, recover = false) {
