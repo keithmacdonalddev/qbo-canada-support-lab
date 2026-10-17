@@ -23,17 +23,18 @@ async function acceptedSteps(Steps,scope,operationId,session) {
  }
  return all;
 }
-function assertReportSources(plan,before,after,now,admission=false) {
+const sourceFreshClock=(a,b,plan,now,admission)=>a===b&&!admission?Date.parse(plan.reviewedAt):now;
+function assertReportSources(plan,before,after,now,admission=false,afterParentLedgers=plan.parentLedgers||[]) {
  if(!Array.isArray(before)||!Array.isArray(after)||before.length!==2||after.length!==2)fail('Both original month-end and current-date all-account observations are required.');
- const {unpackReport}=require('./business-report-source'),{balances}=require('./business-financial-movements'),{evaluateReportSources}=require('./book-evidence');
+ const {evaluateReportSources}=require('./book-evidence'),{accountCoverage}=require('./business-link-repair-balances');
  const results=[];
  for(let i=0;i<2;i++){
   const b=before[i],a=after[i];
   for(const source of [b,a]){const {sourceHash,evaluation,...raw}=source||{};if(source?.version!==3||hash(raw)!==sourceHash||!equal(source.scope,plan.scope)||!fresh(source.observedAt,source===b&&!admission?Date.parse(plan.reviewedAt):now)||evaluateReportSources(source).status!=='checks-passed')fail('Complete fresh scoped critical report sources are required.');}
   if(!equal(b.period,a.period)||b.period.fromDate!==(i===0?plan.period.fromDate:plan.currentDate.slice(0,4)+'-01-01')||b.period.throughDate!==(i===0?plan.period.throughDate:plan.currentDate)||!equal(b.accounts,a.accounts))fail('Repair report scopes or complete account definitions changed.');
-  const selected=b.accounts.map(x=>({key:x.Id,id:x.Id})),opening=balances(unpackReport('TrialBalance',b.reports.TrialBalance,3),b.accounts,selected,b.period),closing=balances(unpackReport('TrialBalance',a.reports.TrialBalance,3),a.accounts,selected,a.period);
-  if(!equal(opening,closing))fail('An account balance changed during the link-only repair.');
-  results.push({period:b.period,beforeSourceHash:b.sourceHash,afterSourceHash:a.sourceHash,accountCount:selected.length,allAccountDeltaCents:0});
+  const opening=accountCoverage(b,plan.parentLedgers||[],plan.currentDate,admission?now:Date.parse(plan.reviewedAt)),closing=accountCoverage(a,afterParentLedgers,plan.currentDate,sourceFreshClock(a,b,plan,now,admission));
+  if(!equal(opening.directBalances,closing.directBalances)||!equal(opening.basis,closing.basis))fail('An account balance or reported/omitted coverage changed during the link-only repair.');
+  results.push({period:b.period,beforeSourceHash:b.sourceHash,afterSourceHash:a.sourceHash,accountCount:b.accounts.length,allAccountDeltaCents:0,accountBasis:opening.basis,omittedParentDirectPostings:{before:opening.omittedParents,after:closing.omittedParents},parentRollupBalancesAsserted:false});
  }
  return results;
 }
@@ -131,19 +132,19 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   const s=await saved(scope,authorityHash,session);if(intent.operationId!==s.p.operationId||intent.planHash!==s.p.planHash)fail('The quarantined graph operation changed.');
   return {scope,operationId:s.p.operationId,revision:s.writer.revision,unresolved:plain(s.writer.unresolved),quarantinedRepair:{version:1,kind:'known-saved-link-repair',authorityHash,receiptId:s.row._id,requestHash:s.row.requestHash,dispatchKey:s.row.dispatchKey,qboId:s.row.observed.qboId,receiptEvidenceHash:hash({requestHash:s.row.requestHash,observed:s.row.observed,startAuditId:String(s.row.startAuditId),resultAuditId:String(s.row.resultAuditId)}),operationId:s.p.operationId}};
  }
- async function finalize({scope,authorityHash,after,reports,graph}){
+ async function finalize({scope,authorityHash,after,reports,graph,parentLedgers=[]}){
   // Immutable policy reads occur before the retryable settlement transaction.
   const prepared=await transaction(async session=>{const value=await saved(scope,authorityHash,session);return {p:value.p,rows:await assertCreations(value.p,session)};});
   const policyHashes={};
   for(const key of [prepared.p.logicalKey,...prepared.p.originalStep.compilation.relationships.map(x=>x.logicalKey)]){const row=prepared.rows.find(x=>x.logicalKey===key),policy=await loadTaxPolicy(scope,row.compilation);policyHashes[key]=hash(policy);}
   return transaction(async session=>{
-   const s=await saved(scope,authorityHash,session),p=s.p,invariants=assertRepairReadback(p,after,now()),financial=assertReportSources(p,p.reports,reports,now());const originalRows=await assertCreations(p,session);
+   const s=await saved(scope,authorityHash,session),p=s.p,invariants=assertRepairReadback(p,after,now()),financial=assertReportSources(p,p.reports,reports,now(),false,parentLedgers);const originalRows=await assertCreations(p,session);
    const snapshot=await graphSnapshot({scope,intent:{operationId:p.operationId,planHash:p.planHash},authorityHash,session}),expectedFence={scope,operationId:p.operationId,revision:snapshot.revision,unresolved:snapshot.unresolved,quarantinedRepair:snapshot.quarantinedRepair};
    const graphSteps=assertRepairGraph(p,after,graph,expectedFence,originalRows,now(),policyHashes);
    // Retain the complete graph as bounded JSON text so nested ledger/report
    // sources do not exceed the published blueprint canonical depth contract.
    const graphSourceJson=JSON.stringify(graph),graphSourceHash=hash(graphSourceJson),graphSummary={version:graph.version,scope:graph.scope,roots:graph.roots,complete:graph.complete,recordCount:graph.recordCount,observedAt:graph.observedAt,writerFence:graph.writerFence,evidenceHash:graph.evidenceHash,records:graph.records.map(({proof,...row})=>({...row,proof:{kind:proof.kind,matchesIntent:proof.matchesIntent,observedHash:proof.observedHash,compilationHash:proof.compilationHash,evidenceHash:proof.evidenceHash,syncToken:proof.syncToken,observedAt:proof.observedAt}}))};
-   const payload={version:1,kind:OUTCOME,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),invariants,after,reports,financial,graphSteps,policyHashes,graph:graphSummary,graphSourceJson,graphSourceHash},contentHash=hash(payload),auditId=hash({contentHash,event:'verified'}).slice(0,24);
+   const payload={version:1,kind:OUTCOME,scope,ownerId:p.ownerId,operationId:p.operationId,logicalKey:p.logicalKey,qboId:p.originalStep.qboId,compilationHash:p.originalStep.compilation.compilationHash,creationReceiptHash:p.originalStep.receipt.evidenceHash,planAuthorityHash:authorityHash,receiptId:s.row._id,verifiedAt:new Date(now()).toISOString(),invariants,after,reports,parentLedgers,financial,graphSteps,policyHashes,graph:graphSummary,graphSourceJson,graphSourceHash},contentHash=hash(payload),auditId=hash({contentHash,event:'verified'}).slice(0,24);
    if(Buffer.byteLength(canonical(payload))>8000000)fail('Repair verification exceeds its retained evidence budget.');
    await Authorities.create([{_id:hash({scope,kind:OUTCOME,planAuthorityHash:authorityHash}).slice(0,24),contractVersion:1,...scope,contentHash,payload,actorId:p.ownerId,auditId}],{session});
    await Audits.create([{_id:auditId,userId:p.ownerId,realmId:scope.realmId,action:VERIFIED,actionType:'manual',outcome:'success',afterState:{authorityHash:contentHash,planAuthorityHash:authorityHash,receiptId:s.row._id,operationId:p.operationId,logicalKey:p.logicalKey,allAccountDeltaCents:0,graphEvidenceHash:graph.evidenceHash}}],{session});
@@ -183,7 +184,7 @@ async function loadOwnedLinkLineage({models,scope,step,session}){
   if(hash(o)!==outcome.contentHash||o.receiptId!==row._id||o.compilationHash!==step.compilation.compilationHash||o.creationReceiptHash!==step.receipt.evidenceHash||o.logicalKey!==step.logicalKey||o.qboId!==step.qboId||hash(o.graphSourceJson)!==o.graphSourceHash||JSON.parse(o.graphSourceJson).evidenceHash!==o.graph?.evidenceHash||!same(outcome.actorId,p.ownerId))fail('The verified repair lineage changed.');
   const audit=await read(Audits,{_id:outcome.auditId,userId:p.ownerId,realmId:scope.realmId,action:VERIFIED,actionType:'manual',outcome:'success'},session);
   if(!audit||!equal(audit.afterState,{authorityHash:outcome.contentHash,planAuthorityHash:authority.contentHash,receiptId:row._id,operationId:p.operationId,logicalKey:p.logicalKey,allAccountDeltaCents:0,graphEvidenceHash:o.graph?.evidenceHash}))fail('The final repair verification audit is unavailable.');
-  assertRepairGraph(p,o.after,JSON.parse(o.graphSourceJson),o.graph.writerFence,o.graphSteps,Date.parse(o.verifiedAt),o.policyHashes);assertRepairReadback(p,o.after,Date.parse(o.verifiedAt));assertReportSources(p,p.reports,o.reports,Date.parse(o.verifiedAt));outcomeHash=outcome.contentHash;
+  assertRepairGraph(p,o.after,JSON.parse(o.graphSourceJson),o.graph.writerFence,o.graphSteps,Date.parse(o.verifiedAt),o.policyHashes);assertRepairReadback(p,o.after,Date.parse(o.verifiedAt));assertReportSources(p,p.reports,o.reports,Date.parse(o.verifiedAt),false,o.parentLedgers);outcomeHash=outcome.contentHash;
  } else {
   const writer=await read(Writers,{...scope},session),u=writer?.unresolved;
   if(!same(writer?.operationId,p.operationId)||writer?.planHash!==p.planHash||u?.kind!=='business-link-repair'||u.authorityHash!==authority.contentHash||u.key!==row.dispatchKey||u.requestHash!==row.requestHash||u.responseReceiptId!==row._id||u.transportConsumed?.receiptId!==row._id)fail('Provisional compatibility requires the exact held known-saved repair barrier.');

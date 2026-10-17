@@ -21,7 +21,7 @@ The three records are read through the original scoped QBO client. Missing Invoi
 Before clearing only the repair pointer, settlement independently verifies:
 
 - Whole-record equality outside exact header-link, Estimate status, version and named causal metadata allowances. Creation metadata, all accounting fields, dates, parties, notes and line identities remain exact. The time and customer records remain unchanged.
-- Complete original-month and current-year critical report sources, complete account definitions and zero change in every account balance.
+- Complete original-month and current-year critical report sources and unchanged complete account definitions. Every reported account and leaf is checked by the unchanged native balance validator. An omitted parent requires its own exact filtered CAD Accrual GeneralLedger, explicit NoReportData:true and structurally empty Rows over the retained 1900-01-01 through current-date query. Its basis is zero direct postings, with children covered separately; no parent rollup balance is invented. Both sides must preserve this exact per-account coverage and establish zero direct-account change.
 - The native graph envelope, exact original identities/revisions and complete parent closure. Native content and relationship proofs are regenerated from retained raw graph observations, original compilations, creation receipts and independently loaded approved tax policies.
 - Unchanged accepted creation identities, original request/compilation/receipt hashes, operation cursor and company ownership.
 
