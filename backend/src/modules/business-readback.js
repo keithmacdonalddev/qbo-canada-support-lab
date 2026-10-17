@@ -2,7 +2,7 @@
 const { hash, canonical, date } = require('./business-calendar');
 const { freezeWriteRequest, scoped } = require('./qbo-write-contract');
 const { SUPPORTED } = require('./business-transaction-compiler');
-const { verifyInvoiceReceivables } = require('./business-receivables-route');
+const { verifyReceivables } = require('./business-receivables-route');
 const { createUnreceivedProof } = require('./business-purchase-order-consumption');
 const { accountingOnlyObservation } = require('./business-accounting-only');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -118,8 +118,8 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   const estimateConversion = observed.estimateConversion ? require('./business-estimate-conversion').verifyEstimateConversion({ compiled, receipt, observed, parents, now }) : null;
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
-  if (compiled.entity === 'Invoice' && record.ARAccountRef === undefined && payload.ARAccountRef) {
-    if (verifyInvoiceReceivables({ observed, compiled, receipt, now }) !== payload.ARAccountRef.value) invalid('The invoice posted to a different receivables account.');
+  if (['Invoice', 'Payment'].includes(compiled.entity) && record.ARAccountRef === undefined && payload.ARAccountRef) {
+    if (verifyReceivables({ observed, compiled, receipt, now }) !== payload.ARAccountRef.value) invalid('The invoice posted to a different receivables account.');
     delete expectedHeader.ARAccountRef;
   }
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');

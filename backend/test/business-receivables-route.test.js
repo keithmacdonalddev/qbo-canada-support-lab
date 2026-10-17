@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const { hash, canonical } = require('../src/modules/business-calendar');
-const { invoiceReceivablesEvidence, verifyInvoiceReceivables } = require('../src/modules/business-receivables-route');
+const { receivablesEvidence, verifyReceivables, invoiceReceivablesEvidence, verifyInvoiceReceivables } = require('../src/modules/business-receivables-route');
 const { routingFixture } = require('./helpers/business-receivables-fixture');
 const { fixture, clone, now } = require('./helpers/business-transaction-fixtures');
 const { bindParent } = require('./helpers/business-readback-fixtures');
@@ -60,11 +60,25 @@ test('payment replays the original routing observation after a later unchanged i
   assert.equal(JSON.parse(f.compile().request.body).ARAccountRef.value, '601');
   const original = clone(f.parents[0]);
   for (const change of [
-    p => { p.verification.accountRouting.invoiceObservedAt = new Date(now - 300001).toISOString(); },
-    p => { p.verification.accountRouting.invoiceObservedAt = new Date(now + 1).toISOString(); },
-    p => { p.verification.accountRouting.invoiceObservedAt = p.observedAt; },
+    p => { p.verification.accountRouting.recordObservedAt = new Date(now - 300001).toISOString(); },
+    p => { p.verification.accountRouting.recordObservedAt = new Date(now + 1).toISOString(); },
+    p => { p.verification.accountRouting.recordObservedAt = p.observedAt; },
     p => { p.record.SyncToken = '1'; p.syncToken = '1'; p.recordHash = hash(p.record); },
     p => { p.observedAt = new Date(now - 300001).toISOString(); },
     p => { p.observedAt = new Date(now - 2000).toISOString(); },
   ]) { f.parents[0] = clone(original); change(f.parents[0]); assert.throws(() => f.compile()); }
+});
+
+test('omitted Payment AR requires its exact negative receivables posting and original saved receipt', () => {
+  const { value, input } = routingFixture('Payment');
+  assert.equal(verifyReceivables({ observed: value.observed, compiled: value.compiled, receipt: value.receipt, now }), '601');
+  assert.equal(value.check().matchesIntent, true);
+  for (const change of [
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[2].value = i.observed.record.TotalAmt.toFixed(2); },
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[1].value = 'Invoice'; },
+    i => { i.receipt.entity = 'Invoice'; },
+    i => { i.report.Rows.Row[0].Rows.Row[0].ColData[1].id = '999'; },
+  ]) { const f = routingFixture('Payment'); change(f.input); assert.throws(() => receivablesEvidence(f.input)); }
+  assert.throws(() => invoiceReceivablesEvidence(input));
+  assert.throws(() => verifyInvoiceReceivables({ observed: value.observed, now }));
 });
