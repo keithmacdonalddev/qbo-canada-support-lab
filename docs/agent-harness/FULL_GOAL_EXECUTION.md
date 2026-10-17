@@ -2,6 +2,10 @@
 
 Updated 2026-10-17 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Current owner direction and bulk workflow — 2026-10-17 16:34 UTC
+
+The owner renewed creation-only authority after the filing conflict, then explicitly requested a repeatable efficient app workflow and its execution. This supersedes the historical blanket hold below for the authorized new scheduled creates; it does not assert no filed returns or authorize edits to old records, filings, preferences or reconciliation. Production company ending2856 has177 exact saved core identities toward10,359 scheduled through2026-10-17. The new native Company → Bulk business activity preparation has retained that exact manifest and177 saved identities, with zero rejected/uncertain rows. No new QBO creates from this workflow are yet claimed. See [bulk workflow](../architecture/business-population.md). Keep the original operation, receipts, verified calendar and known Estimate conversion gap intact. The full goal remains incomplete.
+
 ## Native company evidence — 2026-10-17 06:00 UTC
 
 - Managed operating bank 123 has 35 register postings (13 SalesReceipts, 14 Payments, eight BillPayments), CAD 18,646.10 deposits less CAD 5,963.90 payments, ending CAD 12,682.20. All Dates Reconciled and Cleared filters each return zero entries. Native register totals match the 35 bank lines in the retained September Journal. Private proof: company-managed-bank-register-ui-observation-20261017.json. No transaction status was changed; this is book evidence, not an independent bank statement or completed reconciliation.

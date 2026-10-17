@@ -11,6 +11,7 @@ function createBusinessOperationRecovery({models,transaction,now,bind,fence}){
   if(!ID.test(operationId||'')||!HASH.test(input.planHash||'')||!['resume','retry-rejected'].includes(mode))fail('Choose the exact saved operation and recovery.');
   const {scope}=bound,run=await read(models.Runs,{_id:operationId,...scope,planHash:input.planHash},session);assertRun(run,scope);assertRunApproval(run);
   const current=await assertPublishedBusiness({...models,scope,manifest:run,session,fence:Boolean(session)}),calendar=current.calendar,writer=await read(models.Writers,{environment:scope.environment,realmId:scope.realmId},session);
+  if(writer?.populationDelegation)fail('The original operation is held by its bulk population job.');
   if(!writer||String(writer.connectionId)!==scope.connectionId||String(writer.operationId)!==operationId||writer.planHash!==run.planHash||writer.unresolved!==null||String(calendar.currentOperationId)!==operationId||calendar.pendingCommit)fail('Settle the uncertain company request before reviewing recovery.');
   if(run.leaseToken&&(!Number.isFinite(new Date(run.leaseExpiresAt).getTime())||new Date(run.leaseExpiresAt).getTime()>now()))fail('An active worker must finish before recovery can be reviewed.');
   if(mode==='resume'&&run.executionRequest?.pending&&run.executionRequest.mode==='stop')fail('The saved stop request is still being recorded. Refresh after it settles before reviewing resume.');

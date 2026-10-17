@@ -239,4 +239,99 @@ function createBusinessReadbackAdapter({ loadCompilation, readRecord, loadParent
     return verifyBusinessReadback({ compiled, receipt, observed, parents, descendants, taxPolicy, now: now() });
   };
 }
-module.exports = { validateCompilation, verifyBusinessContent, verifyBusinessReadback, createBusinessReadbackAdapter };
+
+// This facet proves accounting content only. It never grants full-graph verification
+// or advances a business calendar. The runtime loads every receipt and child itself.
+function verifyPopulationFinancialContent({ compiled, receipt, observed, parents = [], children = [], taxPolicy = null, now = Date.now() }) {
+  const request = validateCompilation(compiled), scope = request.scope;
+  if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.requestHash !== request.requestHash || !HASH.test(receipt.dispatchKey || '') || !HASH.test(receipt.evidenceHash || '') || !['create-response','request-correlated-readback','owner-attributed-readback'].includes(receipt.source)) invalid('Exact creation evidence is required for population content.');
+  const record = checkedObservation(observed, scope, compiled.entity, receipt.qboId, now), payload = JSON.parse(request.body), gaps = [];
+  if ([record.ProcessPayment,record.ProcessBillPayment].some(value=>value===true||String(value).toLowerCase()==='true') || !accountingOnlyObservation(compiled.entity, record) || record.sparse === true || record.status === 'Deleted') invalid('Population requires a complete accounting-only record.');
+  if (!Array.isArray(children) || children.length > 1000 || !Array.isArray(parents) || parents.length !== compiled.relationships.length) invalid('Population neighbors are incomplete.');
+  for (const parent of compiled.relationships) {
+    const found = parents.filter(value => value.logicalKey === parent.logicalKey && value.entity === parent.entity && value.fingerprint === parent.fingerprint);
+    if (found.length !== 1) invalid('An original population source is missing.');
+    checkedObservation(found[0], scope, parent.entity, parent.qboId, now);
+  }
+  const childLinks = children.map(child => {
+    if (!HASH.test(child.logicalKey || '') || !HASH.test(child.receiptHash || '') || !QBO_ID.test(child.qboId || '') || !SUPPORTED.has(child.entity) || !Array.isArray(child.relationships) || !child.relationships.some(link => link.logicalKey === compiled.logicalKey && link.qboId === record.Id && link.fingerprint === compiled.intentHash)) invalid('A population child lacks its original source reservation.');
+    if (['Invoice','Bill','PurchaseOrder'].includes(compiled.entity)) {
+      const childRequest=validateCompilation(child.compilation),childRecord=checkedObservation(child.observed,scope,child.entity,child.qboId,now),childPayload=JSON.parse(childRequest.body),childHeader={...childPayload};delete childHeader.Line;delete childHeader.LinkedTxn;
+      if(child.receipt?.evidenceHash!==child.receiptHash||child.receipt.qboId!==child.qboId||child.receipt.logicalKey!==child.logicalKey||child.receipt.requestHash!==childRequest.requestHash||!sameScope(child.receipt.scope,scope)||!accountingOnlyObservation(child.entity,childRecord))invalid('A financial child lost its exact creation/content evidence.');
+      const postingKey=child.entity==='BillPayment'?'APAccountRef':'ARAccountRef';if(['Payment','BillPayment'].includes(child.entity)&&childHeader[postingKey]&&childRecord[postingKey]===undefined){if(verifyAccountPosting({observed:child.observed,compiled:child.compilation,receipt:child.receipt,now})!==childHeader[postingKey].value)invalid('A settlement posting account changed.');delete childHeader[postingKey];}
+      const lines=(childRecord.Line||[]).filter(line=>line.DetailType!=='SubTotalLineDetail'),used=new Set();if(!subset(childHeader,childRecord)||lines.length!==(childPayload.Line||[]).length)invalid('A saved child amount or header differs.');for(const expected of childPayload.Line||[]){const index=lines.findIndex((line,i)=>!used.has(i)&&subset(expected,line));if(index<0)invalid('A saved child amount, quantity or source allocation differs.');used.add(index);}
+      if(canonical(child.settlementLines)!==canonical(childRecord.Line||[]))invalid('A settlement source differs from its fresh raw observation.');
+    }
+    return compiled.entity==='Bill'&&child.entity==='SalesReceipt'?null:{ TxnId: child.qboId, TxnType: child.entity };
+  }).filter(Boolean);
+  const hasChild = entity => children.some(child => child.entity === entity);
+  const estimate = parents.find(parent => parent.entity === 'Estimate'), time = parents.find(parent => parent.entity === 'TimeActivity');
+  const missingEstimate = compiled.entity === 'Invoice' && compiled.relationships.length === 2 && estimate && time && linkList(payload.LinkedTxn).some(link => link.TxnType === 'Estimate') && !linkList(record.LinkedTxn).some(link => link.TxnType === 'Estimate');
+  if (missingEstimate) {
+    const quote = estimate.record, work = time.record, line = payload.Line?.[0], detail = line?.SalesItemLineDetail;
+    if (payload.Line?.length !== 1 || !['Pending','Accepted'].includes(quote.TxnStatus) || linkList(quote.LinkedTxn).length || work.BillableStatus !== 'HasBeenBilled' || work.CustomerRef?.value !== payload.CustomerRef?.value || quote.CustomerRef?.value !== payload.CustomerRef?.value || work.ItemRef?.value !== detail?.ItemRef?.value || work.Hours + work.Minutes / 60 !== detail?.Qty || linkList(record.LinkedTxn).filter(link => link.TxnType === 'TimeActivity' && link.TxnId === work.Id).length !== 1) invalid('The missing Estimate origin is outside the explicitly supported coverage gap.');
+    const quoteLines = quote.Line?.filter(value => value.DetailType === 'SalesItemLineDetail');
+    if (quoteLines?.length !== 1 || quoteLines[0].SalesItemLineDetail?.ItemRef?.value !== detail.ItemRef.value || quoteLines[0].SalesItemLineDetail.Qty !== detail.Qty || cents(quoteLines[0].SalesItemLineDetail.UnitPrice) !== cents(detail.UnitPrice) || cents(quoteLines[0].Amount) !== cents(line.Amount)) invalid('The unconverted Estimate economics differ.');
+    gaps.push('estimate-invoice-conversion-unverified');
+  }
+  const header = { ...payload }; delete header.Line; delete header.LinkedTxn;
+  if (compiled.entity === 'Estimate' && hasChild('Invoice')) {
+    if (record.TxnStatus === 'Closed') header.TxnStatus = 'Closed';
+    else if (['Pending','Accepted'].includes(record.TxnStatus) && !linkList(record.LinkedTxn).length) { header.TxnStatus = record.TxnStatus; gaps.push('estimate-invoice-conversion-unverified'); }
+  }
+  if (compiled.entity === 'TimeActivity' && hasChild('Invoice')) header.BillableStatus = 'HasBeenBilled';
+  if (compiled.entity === 'PurchaseOrder' && hasChild('Bill')) header.POStatus = 'Closed';
+  const accountKey = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
+  if (['Invoice','Payment','BillPayment'].includes(compiled.entity) && record[accountKey] === undefined && header[accountKey]) {
+    if (verifyAccountPosting({ observed, compiled, receipt, now }) !== header[accountKey].value) invalid('The actual posting account differs.');
+    delete header[accountKey];
+  }
+  if (!subset(header, record)) invalid('Population financial header fields differ.');
+  for (const key of ['ClassRef','DepartmentRef','ProjectRef']) if (!payload[key] && record[key]?.value) invalid('An unplanned dimension is present.');
+  const expectedLinks = linkList(payload.LinkedTxn), actualLinks = linkList(record.LinkedTxn), permitted = [...expectedLinks, ...childLinks];
+  for (const expected of expectedLinks) if (!(missingEstimate && expected.TxnType === 'Estimate') && !actualLinks.some(link => canonical(link) === canonical(expected))) invalid('A required population source link is missing.');
+  for (const actual of actualLinks) if (!permitted.some(link => canonical(link) === canonical(actual))) invalid('An unrelated transaction consumes this population record.');
+  if (payload.Line) {
+    if (!Array.isArray(record.Line) || record.Line.length > 101) invalid('Population financial lines are unavailable.');
+    const actual = record.Line.filter(line => line.DetailType !== 'SubTotalLineDetail'), totals = record.Line.filter(line => line.DetailType === 'SubTotalLineDetail'), used = new Set();
+    const subtotal = payload.Line.reduce((sum,line) => sum + cents(line.Amount), 0);
+    if (actual.length !== payload.Line.length || totals.length > 1 || totals.some(line => line !== record.Line.at(-1) || cents(line.Amount) !== subtotal)) invalid('Population financial line counts or subtotals differ.');
+    for (const wanted of payload.Line) {
+      const expected = { ...wanted };
+      if (missingEstimate && expected.LinkedTxn?.every(link => link.TxnType === 'Estimate')) delete expected.LinkedTxn;
+      const index = actual.findIndex((line,i) => !used.has(i) && subset(expected,line));
+      if (index < 0) invalid('Population amounts, quantities, rates, tax codes or line links differ.');
+      used.add(index); const line = actual[index], detail = line[line.DetailType];
+      for (const key of ['ClassRef','ProjectRef']) if (!expected[key] && line[key]?.value) invalid('An unplanned financial line dimension is present.');
+      if (detail) for (const key of ['CustomerRef','ClassRef','ProjectRef','AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) invalid('An unplanned financial line relationship is present.');
+      if (!expected.LinkedTxn && linkList(line.LinkedTxn).length) invalid('An unplanned source line link is present.');
+    }
+    if (['Estimate','Invoice','SalesReceipt','PurchaseOrder','Bill'].includes(compiled.entity) && (!taxMatches(taxPolicy,compiled,record) || cents(record.TotalAmt) !== subtotal + cents(record.TxnTaxDetail?.TotalTax))) invalid('Population tax or gross amount differs from the approved dated policy.');
+    if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== subtotal) invalid('Deposit total differs.');
+    if (compiled.entity === 'Payment' && cents(record.UnappliedAmt) !== 0) invalid('A population payment is not fully applied.');
+  } else if (Array.isArray(record.Line) && record.Line.length) invalid('Unexpected financial lines exist.');
+  if (record.ExchangeRate !== undefined && record.ExchangeRate !== 1) invalid('The population record has an unexpected exchange rate.');
+  if (['Invoice','Bill'].includes(compiled.entity)) {
+    const childType=compiled.entity==='Invoice'?'Payment':'BillPayment';let applied=0;
+    for(const child of children){if(compiled.entity==='Bill'&&child.entity==='SalesReceipt')continue;if(child.entity!==childType)invalid('An unsupported settlement consumes this population balance.');for(const line of child.settlementLines || []){const links=linkList(line.LinkedTxn);if(links.some(link=>link.TxnType===compiled.entity&&link.TxnId===record.Id)){if(links.length!==1)invalid('The settlement application is ambiguous.');applied+=cents(line.Amount);}}}
+    if(cents(record.Balance)!==cents(record.TotalAmt)-applied)invalid('The population balance differs from its exact saved applications.');
+  }
+  if(compiled.entity==='PurchaseOrder'){
+    const seen=new Set();for(const line of record.Line){if(seen.has(line.Id)||!QBO_ID.test(line.Id||''))invalid('Purchase-order line identity is ambiguous.');seen.add(line.Id);let received=0;for(const child of children){if(child.entity!=='Bill')invalid('An unsupported record consumes this purchase order.');for(const issued of child.settlementLines||[]){if(linkList(issued.LinkedTxn).some(link=>link.TxnType==='PurchaseOrder'&&link.TxnId===record.Id&&link.TxnLineId===line.Id))received+=issued.ItemBasedExpenseLineDetail?.Qty || 0;}}
+      if(line.Received===undefined?received!==0||children.length!==0||record.POStatus!=='Open':line.Received!==received)invalid('The purchase-order received quantity is not proved.');
+    }
+  }
+  const source = { compiled, receipt, observed, parents, children, taxPolicy };
+  const proof = { version: 1, kind: 'population-financial-content', scope, logicalKey: compiled.logicalKey, entity: compiled.entity, fingerprint: compiled.intentHash, qboId: record.Id, syncToken: record.SyncToken, observedHash: observed.recordHash, compilationHash: compiled.compilationHash, observedAt: observed.observedAt, matchesFinancialIntent: true, coverageGaps: gaps, sourceJson: JSON.stringify(source), sourceHash: hash(JSON.stringify(source)) };
+  return { ...proof, evidenceHash: hash(proof) };
+}
+function verifyPopulationFinancialParent(value, now = Date.now()) {
+  const proof = value?.financialProof;
+  if (value?.state !== 'financially-verified' || proof?.kind !== 'population-financial-content' || proof.matchesFinancialIntent !== true || !fresh(proof.observedAt,now) || proof.observedHash !== value.recordHash || proof.qboId !== value.qboId || proof.syncToken !== value.syncToken || proof.fingerprint !== value.fingerprint || !sameScope(proof.scope,value.scope)) invalid('A fresh exact population financial-parent proof is required.');
+  if(typeof proof.sourceJson!=='string'||Buffer.byteLength(proof.sourceJson)>8000000||hash(proof.sourceJson)!==proof.sourceHash)invalid('The retained population source bytes changed.');
+  const replayed = verifyPopulationFinancialContent({ ...JSON.parse(proof.sourceJson), now });
+  if (canonical(replayed) !== canonical(proof) || hash(value.record) !== proof.observedHash) invalid('The population financial-parent evidence changed.');
+  return proof;
+}
+
+module.exports = { validateCompilation, verifyBusinessContent, verifyBusinessReadback, createBusinessReadbackAdapter, verifyPopulationFinancialContent, verifyPopulationFinancialParent };

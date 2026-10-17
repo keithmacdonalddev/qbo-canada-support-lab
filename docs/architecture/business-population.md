@@ -1,0 +1,13 @@
+# Bulk business activity
+
+Company → Bulk business activity prepares the published continuing business schedule through an elapsed date, then runs it as a durable background job. Preparation imports exact saved native identities and preserves their original creation receipts; it does not create QBO records. The owner confirms the prepared remaining count and Production company before Start. Stop drains an admitted batch; Resume retains saved identities.
+
+The worker uses dependency frontiers of at most30 independent creates per QBO batch. Shared originating records and stock mutations for the same product run in separate cohorts. It groups full reads by entity/ID, coalesces master reads and briefly caches static definitions. Batches start at least two seconds apart, below Intuit's40batch/minute ceiling. The limit and30-operation guidance are documented in [Intuit's batch sample](https://github.com/IntuitDeveloper/SampleApp-Batch-Java/blob/main/docs/building-smarter-batch.md).
+
+A CompanyWriter delegation fences normal writers and the original idle run without resetting its cursor. Every batch is reconstructed from approved immutable intents inside native write admission, with current company authority, protected-period checks and original parent receipts. Native dispatch/result audits retain exact request bytes and per-item response correlation. Unknown outcomes hold the writer; they are never automatically replayed. Known accepted siblings retain their IDs. A prepared, proved never-sent cohort can be resumed.
+
+Creation/content checking is distinct from full relationship verification. The known omitted Estimate→Invoice conversion remains an explicit coverage gap. Exact money, quantities, tax, posting accounts, actual settlements and source consumption are checked independently. This workflow never advances the verified business calendar, certifies reports or claims bank reconciliation. Version1 supports the core nine-entity continuing schedule; credits and other lifecycle cases retain separate workflows.
+
+Implementation: business-population-service/runtime/plan/reader/batch/receipt/proof modules, BusinessPopulationJob/Record models, authenticated /api/business-population routes and the Company panel. New collections/indexes are prepared only by explicit Prepare, with no startup migration. The server scanner resumes running/stopping jobs after lease expiry.
+
+Focused evidence covers all nine financial record types, grouped/coalesced reads, exact wire/manifest integrity, native batch settlement, lost acknowledgements, duplicate/missing response identities and Stop/Resume. Live results belong in the current execution handoff; fixture success alone is not live completion.

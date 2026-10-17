@@ -11,7 +11,7 @@ const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId });
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
@@ -47,18 +47,20 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
   async function begin({ request, permit, ownerId, actorId, workflow, periodEvidence }) {
     const scope = scoped(request.scope);
     workflow = workflow ? normalizeWorkflow(workflow) : null;
-    const master = workflow?.kind === 'master-preparation', linkRepair = workflow?.kind === 'business-link-repair';
+    const master = workflow?.kind === 'master-preparation', linkRepair = workflow?.kind === 'business-link-repair', population = workflow?.kind === 'business-population';
+    if (population && (permit || request.entity !== 'batch' || ['admit','settle','classify','preflight','assertPeriod','receiptEvidence'].some(key => typeof populationTransport?.[key] !== 'function'))) throw denied('Population requires its exact reviewed batch runtime.');
     if (linkRepair && (permit || typeof linkRepairTransport?.admit !== 'function' || typeof linkRepairTransport?.settle !== 'function')) throw denied('Owned Invoice repairs require their dedicated reviewed runtime.');
     if (master && (permit || typeof masterTransport?.admit !== 'function' || typeof masterTransport?.settle !== 'function')) throw denied('Master creates require their dedicated reviewed runtime.');
     if (!ID.test(ownerId || '') || !ID.test(actorId || '')) throw denied('The actual write actor and company owner are required.');
     const initial = await policyState(scope);
     if (!initial) throw denied('Company writes require explicit business storage and write-coordination setup on the Company page. Nothing was sent.');
     if (initial.policy.state !== 'active') throw denied('Company writes are paused while business write coordination is being prepared. Nothing was sent to QuickBooks; finish or resume that setup, then try again.');
-    if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
+    if (request.entity === 'batch' && !population) throw denied('Coordinated batch writes require the native population runtime.');
+    if (initial.writer.populationDelegation && !population) throw denied('The company writer is delegated to its population job.');
     await assertReady();
-    const dispatchKey = permit?.dispatchKey || (linkRepair ? require('./business-link-repair').dispatchKeyFor(workflow.authorityHash) : master ? hash({ version: 1, masterRunId: workflow.runId, ordinal: workflow.ordinal, attempt: workflow.attempt }) : hash({ scope, requestHash: request.requestHash, nonce: nonce() }));
+    const dispatchKey = population ? hash({ version: 1, populationJobId: workflow.jobId, batchHash: workflow.batchHash }) : permit?.dispatchKey || (linkRepair ? require('./business-link-repair').dispatchKeyFor(workflow.authorityHash) : master ? hash({ version: 1, masterRunId: workflow.runId, ordinal: workflow.ordinal, attempt: workflow.attempt }) : hash({ scope, requestHash: request.requestHash, nonce: nonce() }));
     const receiptId = hash({ scope, dispatchKey }), startAuditId = hash({ receiptId, event: 'started' }).slice(0, 24);
-    const ticket = { coordinated: true, scope, receiptId, dispatchKey, requestHash: request.requestHash, kind: permit ? 'business' : master ? 'master-preparation' : linkRepair ? 'business-link-repair' : 'legacy', ownerId, actorId, entity: request.entity, operation: request.operation };
+    const ticket = { coordinated: true, scope, receiptId, dispatchKey, requestHash: request.requestHash, kind: population ? 'business-population' : permit ? 'business' : master ? 'master-preparation' : linkRepair ? 'business-link-repair' : 'legacy', ownerId, actorId, entity: request.entity, operation: request.operation };
     return transaction(async session => {
       const state = await policyState(scope, session);
       if (!state || state.policy.state !== 'active') throw denied('Company write preparation or scope changed.');
@@ -74,11 +76,14 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         if (!authorized) throw denied('Business execution permission changed before dispatch.');
       }
       const { writer, policy } = state;
+      if (writer.populationDelegation && !population) throw denied('The company writer is delegated to its population job.');
       const fence = periodEvidence?.coordination;
       if (!fence || fence.policyRevision !== policy.revision || fence.writerRevision !== writer.revision || fence.controlHash !== policy.periodControl?.contentHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
-      const periodProof = assertWritePeriod(request, periodEvidence, policy.periodControl, now(), ownerId);
+      const periodProof = population ? populationTransport.assertPeriod({ request, evidence: periodEvidence, controls: policy.periodControl, ownerId, clock: now() }) : assertWritePeriod(request, periodEvidence, policy.periodControl, now(), ownerId);
       let unresolved;
-      if (linkRepair) {
+      if (population) {
+        unresolved = await populationTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, periodProof, startAuditId, session });
+      } else if (linkRepair) {
         unresolved = await linkRepairTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, periodProof, startAuditId, session });
       } else if (master) {
         unresolved = await masterTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, startAuditId, session });
@@ -112,13 +117,13 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const policyTouched = await Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
       const writerTouched = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId: writer.operationId, planHash: writer.planHash }, { $set: { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!policyTouched || !writerTouched) throw denied('Company write admission changed.');
-      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : master ? { operationId: workflow.runId } : {}), dispatchKey, requestHash: request.requestHash, periodProof, entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
+      await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : master ? { operationId: workflow.runId } : population ? { operationId: workflow.jobId } : {}), dispatchKey, requestHash: request.requestHash, periodProof, ...(population ? { population: await populationTransport.receiptEvidence({ workflow, request, session }) } : {}), entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
       await audit(startAuditId, { ...ticket, scope }, 'started', { state: 'possibly-sent', receiptId }, session);
       return ticket;
     });
   }
   async function complete(ticket, request, response, intuitTid) {
-    return finish(ticket, request, classifyWriteResponse(request, response, intuitTid), 'http-response');
+    return finish(ticket, request, ticket?.kind === 'business-population' ? await populationTransport.classify({ ticket, request, response, intuitTid }) : classifyWriteResponse(request, response, intuitTid), 'http-response');
   }
   async function failTransport(ticket, request, facts = {}) {
     const status = Number.isInteger(facts.httpStatus) && facts.httpStatus >= 100 && facts.httpStatus <= 599 ? facts.httpStatus : null;
@@ -140,6 +145,10 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const terminalHash = terminal ? hash(terminal) : null, terminalAuditId = terminal ? hash({ terminalHash }).slice(0, 24) : null;
       const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
       if (!saved) throw denied('The response receipt changed while saving.', true);
+      if (stored.kind === 'business-population') {
+        if (typeof populationTransport?.settle !== 'function') throw denied('Population settlement requires its native runtime.', true);
+        await populationTransport.settle({ stored, observed, resultAuditId, observedAt, session });
+      }
       if (stored.kind === 'business-link-repair') {
         if (typeof linkRepairTransport?.settle !== 'function') throw denied('Owned repair settlement requires its dedicated runtime.', true);
         await linkRepairTransport.settle({ stored, observed, resultAuditId, observedAt, session });
@@ -159,7 +168,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         const touched = await Calendars.findOneAndUpdate({ _id: calendar._id, ...ticket.scope, currentOperationId: run._id, writerRevision: calendar.writerRevision }, { $inc: { writerRevision: 1 } }, { new: true, session }).lean();
         if (!rejected || !stopped || !touched) throw denied('Rejected dispatch changed during settlement.', true);
       }
-      const unresolved = (stored.kind === 'legacy' && ['saved', 'rejected'].includes(observed.outcome)) || observed.outcome === 'rejected' ? null : { ...writer.unresolved, responseReceiptId: ticket.receiptId };
+      const unresolved = (['legacy', 'business-population'].includes(stored.kind) && ['saved', 'rejected'].includes(observed.outcome)) || observed.outcome === 'rejected' ? null : { ...writer.unresolved, responseReceiptId: ticket.receiptId };
       const updated = await Writers.findOneAndUpdate({ _id: writer._id, ...ticket.scope, revision: writer.revision, 'unresolved.key': ticket.dispatchKey }, { $set: { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!updated) throw denied('The company request changed while saving its response.', true);
       await audit(resultAuditId, ticket, observed.outcome, { state: observed.outcome, receiptId: ticket.receiptId, ...observed }, session);
@@ -223,12 +232,12 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     });
   }
   async function preflight({ request, client }) {
-    if (request.entity === 'batch') throw denied('Coordinated batch writes need per-item recovery and are not enabled.');
+    if (request.entity === 'batch' && !populationTransport) throw denied('Coordinated batch writes need the native population runtime.');
     const state = await policyState(scoped(request.scope));
     if (!state || state.policy.state !== 'active' || !state.policy.periodControl) throw denied('Complete explicit write coordination setup and record protected-period choices on the Company page before writing.');
     try {
       const coordination = { policyRevision: state.policy.revision, writerRevision: state.writer.revision, controlHash: state.policy.periodControl.contentHash };
-      const evidence = await readWritePeriodEvidence(request, client, now, coordination);
+      const evidence = request.entity === 'batch' ? await populationTransport.preflight({ request, client, coordination }) : await readWritePeriodEvidence(request, client, now, coordination);
       const current = await policyState(scoped(request.scope));
       if (!current || current.policy.state !== 'active' || current.policy.revision !== coordination.policyRevision || current.writer.revision !== coordination.writerRevision || current.policy.periodControl?.contentHash !== coordination.controlHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
       return evidence;

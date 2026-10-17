@@ -21,6 +21,7 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
   function owned(value) {
     const { run, calendar, writer } = value;
     assertRunApproval(run);
+    if (writer?.populationDelegation) fail('The original operation is held by its bulk population job.');
     if (!calendar || calendar.contractVersion !== 1 || !same(calendar.currentOperationId, run._id) || calendar.businessKey !== run.businessKey || !same(calendar.blueprintId, run.blueprintId) || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.status !== 'verified' || calendar.baseline.evidenceHash !== run.baselineHash || calendar.verifiedThrough !== run.expectedCursor || calendar.revision !== run.expectedRevision || calendar.pendingCommit !== null || !writer || writer.contractVersion !== 1 || !same(writer.operationId, run._id) || writer.planHash !== run.planHash || !revision(writer.revision)) fail('The operation no longer owns the exact company calendar and writer.');
   }
   function handle(value, leaseToken) {

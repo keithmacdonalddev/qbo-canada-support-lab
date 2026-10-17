@@ -47,7 +47,7 @@ function createApp(options = {}) {
   app.use([
     '/api/company', '/api/seed', '/api/audit', '/api/generate', '/api/checkpoint', '/api/explore',
     '/api/coverage', '/api/issuepacks', '/api/ai', '/api/context', '/api/capabilities', '/api/reports',
-    '/api/blueprints', '/api/volume-profiles', '/api/business-operations',
+    '/api/blueprints', '/api/volume-profiles', '/api/business-operations', '/api/business-population',
   ], companyScope)
   app.get('/api/qbo/status', companyScope)
 
@@ -60,6 +60,7 @@ function createApp(options = {}) {
   app.use('/api/checkpoint', require('./routes/checkpoint'))
   app.use('/api/explore', require('./routes/explore'))
   app.use('/api/coverage', require('./routes/coverage'))
+  app.use('/api/business-population', options.businessPopulationRouter || require('./routes/business-population').createBusinessPopulationRouter())
   app.use('/api/business-operations', options.businessOperationsRouter || require('./routes/business-operations').createBusinessOperationsRouter())
   app.use('/api/issuepacks', require('./routes/issuepacks'))
   // Codex CLI runs call this app's AI tools here (per-run token, no JWT).

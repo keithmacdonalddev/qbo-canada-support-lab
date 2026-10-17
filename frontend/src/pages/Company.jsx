@@ -8,6 +8,7 @@ import BusinessMaintenance from '../components/BusinessMaintenance'
 import BusinessSetup from '../components/BusinessSetup'
 import BusinessPlan from '../components/BusinessPlan'
 import BusinessOperations from '../components/BusinessOperations'
+import BusinessPopulation from '../components/BusinessPopulation'
 import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { buttonVariants } from '@/components/ui/button'
@@ -179,6 +180,8 @@ function CompanyContent({ connection }) {
         <BusinessPlan key={`plan:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
         <BusinessMaintenance realmId={status?.realmId} environment={connection?.environment} enabled={ready} refreshVersion={readVersion} onState={setBusinessState} onChanged={() => setSetupVersion(v => v + 1)} />
+
+        <BusinessPopulation realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
         <BusinessOperations key={`operations:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 

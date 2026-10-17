@@ -296,7 +296,7 @@ class QBOClient {
         method,
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       };
-      if (control) opts.maxRetries = 1; // One admission is one SDK accounting request.
+      if (control || writeRequest) opts.maxRetries = 1; // One admitted accounting write is one SDK attempt; ambiguous writes are never replayed.
       if (writeRequest) opts.body = writeRequest.body;
       else if (body) opts.body = JSON.stringify(body);
       if (writeGate) {

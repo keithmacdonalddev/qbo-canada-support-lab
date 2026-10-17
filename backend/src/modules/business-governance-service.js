@@ -75,7 +75,7 @@ function createBusinessGovernanceService(dependencies = {}) {
   async function coordination(bound, session) {
     const { scope, ownerId } = bound, company = { environment: scope.environment, realmId: scope.realmId };
     const policy = await read(models.Policies, company, session), writer = await read(models.Writers, company, session);
-    if (!policy || !writer || String(policy.connectionId) !== scope.connectionId || String(writer.connectionId) !== scope.connectionId || !['preparing', 'active'].includes(policy.state) || writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) fail('Prepare company write coordination and settle current work first.');
+    if (!policy || !writer || writer.populationDelegation || String(policy.connectionId) !== scope.connectionId || String(writer.connectionId) !== scope.connectionId || !['preparing', 'active'].includes(policy.state) || writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) fail('Prepare company write coordination and settle current work first.');
     assertPeriodControl(policy.periodControl, scope, ownerId);
     return { policy, writer };
   }

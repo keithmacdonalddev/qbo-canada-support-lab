@@ -4,6 +4,10 @@ const { denied } = require('./qbo-write-contract');
 const storage = new AsyncLocalStorage();
 const ID = /^[a-f0-9]{24}$/i;
 function normalizeWorkflow(value) {
+  if (value?.version === 1 && value.kind === 'business-population') {
+    if (!ID.test(value.jobId || '') || !/^[a-f0-9]{64}$/.test(value.batchHash || '') || !/^[a-zA-Z0-9-]{16,100}$/.test(value.leaseToken || '') || Object.keys(value).sort().join(',') !== 'batchHash,jobId,kind,leaseToken,version') throw denied('Population writes require the exact saved job, cohort and worker.');
+    return Object.freeze({version:1,kind:'business-population',jobId:value.jobId,batchHash:value.batchHash,leaseToken:value.leaseToken});
+  }
   if (value?.version === 1 && value.kind === 'business-link-repair') {
     if (!/^[a-f0-9]{64}$/.test(value.authorityHash || '') || Object.keys(value).some(key => !['version','kind','authorityHash'].includes(key))) throw denied('An exact immutable owned-link repair authority is required.');
     return Object.freeze({ version: 1, kind: 'business-link-repair', authorityHash: value.authorityHash });

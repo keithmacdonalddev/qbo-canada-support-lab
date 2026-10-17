@@ -69,7 +69,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     const found = parents.filter(value => value.logicalKey === dependency.logicalKey);
     if (found.length !== 1) fail('An originating transaction is missing or duplicated.');
     const value = found[0], record = value.record;
-    if (!currentObservation(value) || !sameScope(value.scope, scope) || value.state !== 'verified' || value.entity !== dependency.entity || value.fingerprint !== dependency.fingerprint || !fresh(value.observedAt, now) || !record || value.qboId !== record.Id || value.syncToken !== record.SyncToken || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken || '') || value.recordHash !== hash(record)) fail('An originating transaction is stale or differs from its verified intent.');
+    if (!currentObservation(value) || !sameScope(value.scope, scope) || !['verified', 'financially-verified'].includes(value.state) || value.entity !== dependency.entity || value.fingerprint !== dependency.fingerprint || !fresh(value.observedAt, now) || !record || value.qboId !== record.Id || value.syncToken !== record.SyncToken || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken || '') || value.recordHash !== hash(record)) fail('An originating transaction is stale or differs from its verified intent.');
+    if (value.state === 'financially-verified') require('./business-readback').verifyPopulationFinancialParent(value, now);
     id(record.Id); date(record.TxnDate);
     if (record.TxnDate > step.txnDate || (value.entity !== 'TimeActivity' && record.CurrencyRef?.value !== 'CAD')) fail('An originating transaction has an incompatible date or currency.');
     parentMap.set(dependency.logicalKey, value);
@@ -77,11 +78,19 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const receivables = (value, expectedId) => {
     if (value.record.ARAccountRef !== undefined) return value.record.ARAccountRef?.value;
     if (value.entity !== 'Invoice') fail('Only invoices can use independent receivables ledger evidence.');
+    if (value.state === 'financially-verified') { require('./business-readback').verifyPopulationFinancialParent(value, now); return verifyInvoiceReceivables({ observed: value, operationId: observationFence.operationId, writerRevision: observationFence.writerRevision, now }); }
     const accountId = verifyInvoiceReceivables({ observed: value, operationId: observationFence.operationId, writerRevision: observationFence.writerRevision, now }), proof = value.verification;
     if (!proof || proof.version !== 1 || proof.kind !== 'business-readback' || proof.observedHash !== value.recordHash || proof.syncToken !== value.record.SyncToken || !fresh(proof.observedAt, now) || !HASH.test(proof.evidenceHash || '') || proof.compilationHash !== value.accountRouting.compilationHash) fail('The invoice route lacks current persisted verification.');
     const savedAccount = verifyInvoiceReceivables({ observed: { ...value, accountRouting: proof.accountRouting }, now });
     if (accountId !== expectedId || savedAccount !== accountId || proof.accountRouting.receiptHash !== value.accountRouting.receiptHash || proof.accountRouting.requestHash !== value.accountRouting.requestHash || proof.accountRouting.accountDefinitionHash !== value.accountRouting.accountDefinitionHash || value.accountRouting.logicalKey !== value.logicalKey || value.accountRouting.fingerprint !== value.fingerprint) fail('The invoice route differs from its original saved verification.');
     return accountId;
+  };
+  const priorReceivables = (value, expectedId) => {
+    if(value.record.ARAccountRef !== undefined)return value.record.ARAccountRef?.value;
+    if(value.entity !== 'Payment' || value.state !== 'financially-verified')return undefined;
+    require('./business-readback').verifyPopulationFinancialParent(value,now);
+    const actual=require('./business-receivables-route').verifyAccountPosting({observed:value,operationId:observationFence.operationId,writerRevision:observationFence.writerRevision,now});
+    return actual===expectedId?actual:undefined;
   };
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
@@ -149,7 +158,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
         const wanted = line[line.DetailType], found = sourceLines.filter(value => value[detailType]?.ItemRef?.value === wanted.ItemRef.value && value[detailType]?.Qty === wanted.Qty && cents(value[detailType]?.UnitPrice) === cents(wanted.UnitPrice) && cents(value.Amount) === cents(line.Amount) && (value[detailType]?.TaxCodeRef?.value === wanted.TaxCodeRef.value || require('./business-dated-tax').permitsDatedConversion(step, policy, source, value[detailType]?.TaxCodeRef?.value, wanted.TaxCodeRef.value)));
         if (found.length !== 1 || used.has(found[0].Id)) fail('The originating line cannot be matched unambiguously.');
         const sourceLine = found[0]; id(sourceLine.Id); used.add(sourceLine.Id);
-        if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0 && !(sourceLine.Received === undefined && verifyUnreceivedProof(source, now))) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
+        if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0 && !(sourceLine.Received === undefined && (source.state === 'financially-verified' ? require('./business-population-proof').assertUnreceivedParent(source, now) : verifyUnreceivedProof(source, now)))) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
         if (source.entity === 'PurchaseOrder') line.LinkedTxn = [relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
         else {
           // A complete Estimate converts at document level; retain its exact
@@ -206,7 +215,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       } else {
         const prior = parent('Payment');
         const invoiceLinks = links(source.record).filter(link => ['Payment', 'CreditMemo'].includes(link.TxnType));
-        if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || prior.record.ARAccountRef?.value !== receivables(source, account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
+        if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || priorReceivables(prior,account('accountsReceivable','Accounts Receivable','AccountsReceivable').Id) !== receivables(source, account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
         amount = original - first;
       }
     } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');

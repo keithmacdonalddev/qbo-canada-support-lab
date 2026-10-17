@@ -35,10 +35,12 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, assertInte
     if (!calendar || calendar.contractVersion !== 1 || !same(calendar.currentOperationId, run._id) || calendar.businessKey !== run.businessKey || !same(calendar.blueprintId, run.blueprintId) || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.status !== 'verified' || calendar.baseline.evidenceHash !== run.baselineHash || !revision(calendar.writerRevision) || calendar.revision !== run.expectedRevision + (afterCommit ? 1 : 0) || calendar.verifiedThrough !== (afterCommit ? run.throughDate : run.expectedCursor)) fail('The calendar no longer matches this operation');
     if (afterCommit ? (!calendar.pendingCommit || !same(calendar.pendingCommit.operationId, run._id) || calendar.pendingCommit.planHash !== run.planHash || calendar.pendingCommit.evidenceHash !== run.verificationCandidateHash) : calendar.pendingCommit !== null) fail('The calendar completion receipt is not in the required state');
     const writer = await Writers.findOne({ _id: scope.environment + ':' + scope.realmId, ...scopeFilter(scope) }).session(session).lean();
+    if (writer?.populationDelegation) fail('The company writer is delegated to its population job.');
     if (!writer || writer.contractVersion !== 1 || !revision(writer.revision)) fail('The company writer has not been explicitly prepared');
     return { run, calendar, writer };
   }
   function owner(state) {
+    if (state.writer.populationDelegation) fail('This company writer is delegated to its bulk population job.');
     if (!same(state.writer.operationId, state.run._id) || state.writer.planHash !== state.run.planHash) fail('Another operation owns this company writer');
   }
   async function touch(state, scope, session, writerChange = {}, invalidateEvidence = false) {
