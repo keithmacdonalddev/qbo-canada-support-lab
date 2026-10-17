@@ -168,7 +168,7 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
    return {status:'verified',authorityHash:contentHash,planAuthorityHash:authorityHash,receiptId:s.row._id,operationId:p.operationId,logicalKey:p.logicalKey,financial,graphEvidenceHash:graph.evidenceHash,originalOperationPreserved:true};
   });
  }
- return {approve,admit,settle,graphSnapshot,finalize,finalizeNoEffect,loadPlan,saved,state};
+ return {approve,admit,settle,graphSnapshot,finalize,finalizeNoEffect,loadPlan,saved,state,assertCreations};
 }
 async function assertSavedRepairReceipt(models,scope,p,authorityHash,row,session){
  const {Audits}=models,dispatchKey=dispatchKeyFor(authorityHash),receiptId=hash({scope,dispatchKey}),request=repairRequest(p),observed=row?.observed;
@@ -253,4 +253,4 @@ async function loadOwnedLinkLineage({models,scope,step,session}){
  return {version:1,kind:'verified-owned-link-repair',authorityHash:authority.contentHash,outcomeHash,receiptId:row._id,receiptEvidenceHash:hash({requestHash:row.requestHash,observed:row.observed,startAuditId:String(row.startAuditId),resultAuditId:String(row.resultAuditId)}),compilationHash:step.compilation.compilationHash,creationReceiptHash:step.receipt.evidenceHash,qboId:step.qboId,stage:outcomeHash?'verified-outcome':'provisional-known-saved-read-only'};
 }
 
-module.exports={loadOwnedLinkLineage,createBusinessLinkRepair,assertSavedRepairReceipt,stateSignature,assertRepairGraph,acceptedSteps,dispatchKeyFor,assertReportSources,ACTION,VERIFIED};
+module.exports={loadRepairPlan,assertNoEffectOutcome,loadOwnedLinkLineage,createBusinessLinkRepair,assertSavedRepairReceipt,stateSignature,assertRepairGraph,acceptedSteps,dispatchKeyFor,assertReportSources,ACTION,VERIFIED};
