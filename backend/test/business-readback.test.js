@@ -17,7 +17,7 @@ test('quantity, price, amount and exact PO line links must match', () => {
   for (const change of [r => { r.Line[0].ItemBasedExpenseLineDetail.Qty += 1; }, r => { r.Line[0].ItemBasedExpenseLineDetail.UnitPrice += 0.01; }, r => { r.Line[0].Amount += 0.01; }, r => { r.Line[0].LinkedTxn[0].TxnLineId = '2'; }, r => { delete r.Line[0].LinkedTxn; }, r => { r.Line.push(clone(r.Line[0])); }]) { const h = sample('Bill'); change(h.observed.record); h.refresh(); assert.equal(h.check().matchesIntent, false); }
 });
 test('subcent monetary values and unplanned accounting dimensions fail', () => {
-  for (const change of [r => { r.Line[0].Amount += 0.00000005; }, r => { r.DepartmentRef = { value: '9' }; }, r => { r.Line[0].SalesItemLineDetail.CustomerRef = { value: '99' }; }, r => { r.Line[0].LinkedTxn.push({ TxnId: '9', TxnType: 'Estimate', TxnLineId: '1' }); }]) { const h = sample(); change(h.observed.record); h.refresh(); assert.equal(h.check().matchesIntent, false); }
+  for (const change of [r => { r.Line[0].Amount += 0.00000005; }, r => { r.DepartmentRef = { value: '9' }; }, r => { r.Line[0].SalesItemLineDetail.CustomerRef = { value: '99' }; }, r => { r.Line[0].LinkedTxn = [{ TxnId: '9', TxnType: 'Estimate', TxnLineId: '1' }]; }]) { const h = sample(); change(h.observed.record); h.refresh(); assert.equal(h.check().matchesIntent, false); }
 });
 test('approved tax rates and amounts are checked independently of arithmetic', () => {
   for (const change of [h => { h.taxPolicy = null; }, h => { h.taxPolicy.compilationHash = hash('other'); }, h => { h.observed.record.TxnTaxDetail.TotalTax += 1; h.observed.record.TotalAmt += 1; }, h => { h.observed.record.TxnTaxDetail.TaxLine[0].TaxLineDetail.TaxPercent = 14; }, h => { h.observed.record.TxnTaxDetail.TaxLine[0].TaxLineDetail.NetAmountTaxable = 249; }]) { const h = sample(); change(h); h.refresh(); assert.equal(h.check().matchesIntent, false); }
@@ -35,7 +35,7 @@ test('content proof does not require closed parent graph and cannot claim readba
 });
 test('fresh invoice content can explain billed time before closing the invoice graph', () => {
   const time = sample('TimeActivity'), invoice = sample('Invoice', f => bindParent(f, 1, time));
-  invoice.observed.record.Id = '3000'; invoice.receipt.qboId = '3000'; invoice.refresh();
+  invoice.observed.record.Id = '3000'; invoice.receipt.qboId = '3000'; invoice.parents[0].record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Invoice' }]; invoice.parents[0].recordHash = hash(invoice.parents[0].record); invoice.verifyParents(); invoice.refresh();
   invoice.parents[1].state = 'saved'; delete invoice.parents[1].verification;
   time.observed.record.BillableStatus = 'HasBeenBilled'; time.observed.record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Invoice' }]; time.refresh();
   time.descendants = [descendant(invoice)]; assert.equal(time.check().matchesIntent, true);
@@ -68,7 +68,7 @@ test('adapter binds stored receipt and compilation without laundering mismatched
 test('root proof cannot extend the freshness of related content or completed parent proof', () => {
   const h = sample(); h.parents[0].verification.observedAt = '2026-10-06T11:55:01.000Z'; assert.equal(h.check().observedAt, h.parents[0].verification.observedAt);
   const time = sample('TimeActivity'), invoice = sample('Invoice', f => bindParent(f, 1, time));
-  invoice.observed.record.Id = '3000'; invoice.receipt.qboId = '3000'; invoice.refresh();
+  invoice.observed.record.Id = '3000'; invoice.receipt.qboId = '3000'; invoice.parents[0].record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Invoice' }]; invoice.parents[0].recordHash = hash(invoice.parents[0].record); invoice.verifyParents(); invoice.refresh();
   time.observed.record.BillableStatus = 'HasBeenBilled'; time.observed.record.LinkedTxn = [{ TxnId: '3000', TxnType: 'Invoice' }]; time.refresh();
   const child = descendant(invoice); child.verification.observedAt = '2026-10-06T11:55:01.000Z'; time.descendants = [child];
   assert.equal(time.check().observedAt, child.verification.observedAt);
@@ -102,4 +102,28 @@ test('native BillPaymentCheck links close the exact managed cheque payment witho
   assert.equal(bill.check().matchesIntent, true); assert.equal(JSON.stringify(bill.observed.record), original);
   bill.observed.record.LinkedTxn.at(-1).TxnType = 'BillPaymentCreditCard'; bill.refresh();
   assert.throws(bill.check, /link is invalid/);
+});
+
+test('new whole-Estimate creation refuses incomplete physical conversion and altered quote economics', () => {
+  for (const change of [
+    h => { h.observed.record.LinkedTxn = h.observed.record.LinkedTxn.filter(x => x.TxnType !== 'Estimate'); },
+    h => { h.parents[0].record.TxnStatus = 'Pending'; },
+    h => { h.parents[0].record.LinkedTxn = []; },
+    h => { h.parents[0].record.LinkedTxn.push({ TxnId: '999', TxnType: 'Invoice' }); },
+    h => { h.parents[1].record.BillableStatus = 'Billable'; },
+    h => { h.parents[0].record.Line[0].SalesItemLineDetail.Qty += 1; },
+    h => { h.parents[0].record.TxnTaxDetail.TotalTax += 1; },
+    h => { h.parents[0].record.CustomerRef.value = '99'; },
+    h => { h.observed.record.Line[0].LinkedTxn = [{ TxnId: h.parents[0].qboId, TxnType: 'Estimate', TxnLineId: '1' }]; }
+  ]) {
+    const h = sample('Invoice'); change(h); h.refresh();
+    for (const parent of h.parents) parent.recordHash = hash(parent.record); h.verifyParents();
+    assert.equal(h.check().matchesIntent, false);
+  }
+});
+test('legacy accepted Invoice line requests retain strict original line readback without repair lineage', () => {
+  const h = sample('Invoice', () => {}, { legacyEstimate: true });
+  assert.equal(h.check().matchesIntent, true); const original = clone(h.compiled);
+  delete h.observed.record.Line[0].LinkedTxn; h.refresh();
+  assert.equal(h.check().matchesIntent, false); assert.deepEqual(h.compiled, original);
 });

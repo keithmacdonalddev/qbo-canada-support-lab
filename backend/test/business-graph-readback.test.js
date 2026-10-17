@@ -19,6 +19,7 @@ function graph(kind = 'sales') {
     const invoice = saved('Invoice', '5003', f => { bindParent(f, 0, estimate); bindParent(f, 1, time); });
     const payment = saved('Payment', '5004', f => bindParent(f, 0, invoice));
     const deposit = saved('Deposit', '5005', f => bindParent(f, 0, payment));
+    estimate.observed.record.TxnStatus = 'Closed';
     estimate.observed.record.LinkedTxn = [{ TxnType: 'Invoice', TxnId: '5003' }];
     time.observed.record.BillableStatus = 'HasBeenBilled'; time.observed.record.LinkedTxn = [{ TxnType: 'Invoice', TxnId: '5003' }];
     invoice.observed.record.Balance = 0; invoice.observed.record.LinkedTxn.push({ TxnType: 'Payment', TxnId: '5004' });

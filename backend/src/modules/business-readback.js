@@ -116,7 +116,12 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     childLinks.push({ TxnId: child.record.Id, TxnType: child.entity });
   }
   const estimateConversion = observed.estimateConversion ? require('./business-estimate-conversion').verifyEstimateConversion({ compiled, receipt, observed, parents, now }) : null;
+  if (compiled.relationships.some(link => link.representation !== undefined) && !require('./business-estimate-conversion').verifyWholeEstimateCreation({ compiled, receipt, observed, parents, now })) mismatch('The complete Estimate conversion links, states or economics remain unverified.');
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
+  if (compiled.entity === 'Estimate' && descendants.length) {
+    if (descendants.length !== 1 || descendants[0].entity !== 'Invoice') mismatch('Only one complete managed invoice may convert this Estimate.');
+    expectedHeader.TxnStatus = 'Closed';
+  }
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
   const postingAccount = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
   if (['Invoice', 'Payment', 'BillPayment'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {

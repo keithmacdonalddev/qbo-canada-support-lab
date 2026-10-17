@@ -8,7 +8,7 @@ for (const entity of ['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit
   assert.equal(result.entity, entity); assert.equal(result.request.entity, entity.toLowerCase()); assert.equal(result.authorized, false); assert.equal(payload.TxnDate, '2026-10-06'); assert.equal(payload.Id, undefined); assert.equal(payload.SyncToken, undefined);
   assert.deepEqual(result, f.compile()); assert.equal(result.relationships.length, f.parents.length);
   if (['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill'].includes(entity)) { assert.equal(payload.GlobalTaxCalculation, 'TaxExcluded'); assert.equal(payload.Line[0].Amount, f.step.details.lines[0].amountCents / 100); }
-  if (entity === 'Invoice') { assert.equal(payload.LinkedTxn.length, 2); assert.equal(payload.Line[0].LinkedTxn[0].TxnLineId, '1'); }
+  if (entity === 'Invoice') { assert.equal(payload.LinkedTxn.length, 2); assert.equal(payload.Line[0].LinkedTxn, undefined); const quote = result.relationships.find(x => x.entity === 'Estimate'); assert.equal(quote.representation, 'whole-estimate-header'); assert.equal(quote.sourceLineId, '1'); assert.deepEqual(quote.links, [{ path: 'LinkedTxn' }]); }
   if (entity === 'Bill') { assert.equal(payload.LinkedTxn[0].TxnId, '1002'); assert.equal(payload.Line[0].LinkedTxn[0].TxnLineId, '1'); }
   if (entity === 'TimeActivity') { assert.equal(payload.ItemRef.value, '100'); assert.equal(payload.Hours, 2); assert.equal(payload.Minutes, 0); assert.equal(payload.LinkedTxn, undefined); }
   if (entity === 'Payment') { assert.equal(payload.TotalAmt, 282.5); assert.equal(payload.ProcessPayment, false); assert.equal(payload.DepositToAccountRef.value, '603'); }

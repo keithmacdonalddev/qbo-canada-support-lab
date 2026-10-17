@@ -3,8 +3,16 @@ const { hash } = require('../../src/modules/business-calendar');
 const { verifyBusinessContent, verifyBusinessReadback } = require('../../src/modules/business-readback');
 const { fixture, scope, now, clone } = require('./business-transaction-fixtures');
 const ENTITIES = ['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment'];
-function sample(entity = 'Invoice', configure = () => {}) {
-  const f = fixture(entity); configure(f); f.refresh(); f.approve(); const compiled = f.compile();
+function sample(entity = 'Invoice', configure = () => {}, { legacyEstimate = false } = {}) {
+  const f = fixture(entity); configure(f); f.refresh(); f.approve(); let compiled = f.compile();
+  if (legacyEstimate && entity === 'Invoice') {
+    const body = JSON.parse(compiled.request.body), relationships = clone(compiled.relationships), source = relationships.find(x => x.entity === 'Estimate');
+    body.Line[0].LinkedTxn = [{ TxnId: source.qboId, TxnType: 'Estimate', TxnLineId: source.sourceLineId }];
+    source.links.push({ path: 'Line.0.LinkedTxn', txnLineId: source.sourceLineId }); delete source.representation; delete source.sourceLineId;
+    const request = require('../../src/modules/qbo-write-contract').freezeWriteRequest(scope, 'POST', 'invoice', body);
+    const artifact = { version: compiled.version, logicalKey: compiled.logicalKey, entity, intentHash: compiled.intentHash, request, evidenceHash: compiled.evidenceHash, relationships };
+    compiled = { ...compiled, ...artifact, compilationHash: hash(artifact) };
+  }
   const record = { ...JSON.parse(compiled.request.body), Id: '2000', SyncToken: '0', DocNumber: 'provider-number' };
   if (record.Line) record.Line.forEach((line, i) => { line.Id = String(i + 1); });
   let taxPolicy = null;
@@ -22,6 +30,12 @@ function sample(entity = 'Invoice', configure = () => {}) {
     observed: { scope, entity, observedAt: new Date(now).toISOString(), record, recordHash: hash(record) }, parents: clone(f.parents), descendants: [], taxPolicy, now };
   h.refresh = () => { h.observed.recordHash = hash(record); };
   h.verifyParents = () => { for (const parent of h.parents) parent.verification = { version: 1, kind: 'business-readback', scope, entity: parent.entity, logicalKey: parent.logicalKey, qboId: parent.record.Id, fingerprint: parent.fingerprint, matchesIntent: true, observedHash: parent.recordHash, syncToken: parent.record.SyncToken, observedAt: parent.observedAt, evidenceHash: hash('verified parent ' + parent.logicalKey) }; };
+  if (entity === 'Invoice' && !legacyEstimate) {
+    const quote = h.parents.find(x => x.entity === 'Estimate'), time = h.parents.find(x => x.entity === 'TimeActivity');
+    Object.assign(quote.record, { TxnStatus: 'Closed', LinkedTxn: [{ TxnId: record.Id, TxnType: 'Invoice' }], TxnTaxDetail: clone(record.TxnTaxDetail), TotalAmt: record.TotalAmt });
+    time.record.BillableStatus = 'HasBeenBilled';
+    for (const parent of h.parents) parent.recordHash = hash(parent.record);
+  }
   h.verifyParents(); h.check = () => verifyBusinessReadback(h); h.content = () => verifyBusinessContent(h); return h;
 }
 function bindParent(f, index, target) {

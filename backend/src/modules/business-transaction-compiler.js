@@ -150,7 +150,14 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
         if (found.length !== 1 || used.has(found[0].Id)) fail('The originating line cannot be matched unambiguously.');
         const sourceLine = found[0]; id(sourceLine.Id); used.add(sourceLine.Id);
         if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0 && !(sourceLine.Received === undefined && verifyUnreceivedProof(source, now))) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
-        line.LinkedTxn = [relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
+        if (source.entity === 'PurchaseOrder') line.LinkedTxn = [relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
+        else {
+          // A complete Estimate converts at document level; retain its exact
+          // sole source line internally without requesting a progress line.
+          const relationship = relationships.find(row => row.logicalKey === source.logicalKey);
+          relationship.representation = 'whole-estimate-header';
+          relationship.sourceLineId = sourceLine.Id;
+        }
       });
       if (step.entity === 'Invoice') {
         const time = parent('TimeActivity');
