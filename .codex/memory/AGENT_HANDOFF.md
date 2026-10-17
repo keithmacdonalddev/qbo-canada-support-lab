@@ -1,5 +1,14 @@
 # Codex Agent Handoff
 
+## Exact unadmitted authority serialization recovery (2026-10-17T03:17:30.443Z)
+
+The second owned-link attempt stopped before QBO dispatch: 29 GET, zero POST, no mandatory repair receipt and no unresolved writer pointer. Native database inspection proves the serializer removed seven empty objects from the immutable approval payload (two subtotal details and five empty report Rows), so the stored payload fails its original audited content hash. The old document remains unchanged and inadmissible. Direct private proofs are company-owned-link-repair-fc51af60-4392-4337-8109-b76508e2574a-result-20261017.json and company-owned-link-admission-inspection-result-20261017.json.
+
+BusinessAuthority now preserves empty objects with minimize:false. One deterministic append-only recovery authority may retain the original canonical plan as JSON only when the exact audited original hash, narrow empty-object-loss whitelist, unchanged request/raw chain/all 33 creation identities/current operation state, absent original admission by both receipt ID and workflow correlation, and zero original-to-fresh financial movement are proved. Any prior receipt, competing recovery or other payload change blocks this path. Ordinary loading of the malformed original still fails. The recovery uses the same mandatory one-update gate and known-saved verification barrier; it grants no replay after admission.
+
+The v3 private continuation carries all 54 consumed GET attempts against the original 200 allowance, leaving 146, with the same one sparse Invoice update limit. No repair update has been sent. Actual relationship repair, completed September history and the full-company outcome remain unverified.
+
+
 ## Original September operation continuation (2026-10-17T02:53:11.319Z)
 
 The full-company goal remains active and unmet; current work follows docs/agent-harness/FULL_GOAL_EXECUTION.md. Earlier three-record/ordinal-two and unintegrated AR claims below are superseded by the dated direct evidence in that handoff.

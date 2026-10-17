@@ -32,3 +32,9 @@ A known-saved update can resume read-only verification without another POST. Its
 ## Integration evidence
 
 Invoice header linking to Estimates and TimeActivities is described in the [official Invoice API reference](https://developer.intuit.com/docs/api/accounting/invoice). Sparse-update retention and future create behavior are separate integration claims. Passing fixtures proves the bounded implementation; actual company readback is required before claiming either provider behavior worked.
+
+## Storage-integrity recovery before admission
+
+BusinessAuthority uses minimize:false to preserve empty objects covered by its content hash. A legacy malformed approval is never rewritten or accepted by ordinary plan loading. A distinct business-link-repair-recovery-plan may retain the original plan as bounded canonical JSON only when the old hash and approval audit match, the sole stored differences are the explicitly allowed missing empty subtotal/report objects, every raw before-image and exact request/creation identity/state is unchanged, and fresh financial evidence proves no movement.
+
+Recovery requires absence of the original mandatory receipt by both deterministic ID and workflow correlation. Any receipt state forbids this source-only path. One deterministic recovery target prevents competing approvals; later lineage rejects ambiguous recovery IDs and regenerates the original native graph. No receipt, original approval or accepted creation is replaced. A fresh recovery authority still admits only one update through the same scoped gate and protected-period controls.

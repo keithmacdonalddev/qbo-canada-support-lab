@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { assertRun, assertRunApproval } = require('./business-period-store');
 const { businessTransportEvidence, assertBusinessTransportAudits } = require('./business-dispatch-receipt');
-const { PLAN, OUTCOME, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
+const { PLAN, RECOVERY_PLAN, OUTCOME, fail, equal, fresh, creationIdentity, repairRequest, assertPlan, assertRepairReadback } = require('./business-link-repair-contract');
 const ACTION = 'Owned business Invoice link repair approved', VERIFIED = 'Owned business Invoice link repair verified';
 const read=(Model,filter,session)=>Model.findOne(filter).session(session).maxTimeMS(3000).lean();
 const plain=value=>JSON.parse(JSON.stringify(value));
@@ -87,7 +87,8 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
  }
  async function loadPlan(scope,authorityHash,session){
   const authority=await read(Authorities,{...scope,contentHash:authorityHash},session),p=authority?.payload;
-  if(!authority||authority.contractVersion!==1||hash(p)!==authorityHash||!same(authority.actorId,p?.ownerId))fail('The exact immutable repair authority is unavailable.');assertPlan(p,now());
+  if(!authority||authority.contractVersion!==1||String(authority._id)!==hash({scope,kind:p?.kind,logicalKey:p?.logicalKey}).slice(0,24)||hash(p)!==authorityHash||!same(authority.actorId,p?.ownerId))fail('The exact immutable repair authority is unavailable.');assertPlan(p,now());
+  await require('./business-link-repair-recovery').assertRecoverySource({models,scope,plan:p,session,clock:now()});
   const audit=await read(Audits,{_id:authority.auditId,userId:p.ownerId,realmId:scope.realmId,action:ACTION,actionType:'manual',outcome:'success'},session);
   if(!audit||!equal(audit.afterState,approvalState(p,authorityHash)))fail('The exact repair approval audit is unavailable.');
   return {authority,p};
@@ -98,8 +99,12 @@ function createBusinessLinkRepair({models,transaction,assertReady,access,assertB
   return transaction(async session=>{
    const current=await state(p.scope,p.operationId,session,null,true);if(current.actor.ownerId!==p.ownerId||!equal(stateSignature(current.run,current.calendar,current.writer),p.state)||current.run.authorityHash!==p.publishedAuthorityHash||!equal(p.period,{fromDate:current.run.fromDate,throughDate:current.run.throughDate})||p.currentDate!==require('./business-activity-preview').businessDate(new Date(now())))fail('The reviewed company operation changed.');await assertCreations(p,session);
    // One plan per original creation, even after a rejection. No retry authority is inferred.
-   if(await read(Authorities,{...p.scope,'payload.kind':PLAN,'payload.logicalKey':p.logicalKey},session))fail('This original Invoice already has a retained repair plan. Inspect it without another update.');
-   await Authorities.create([{_id:hash({scope:p.scope,kind:PLAN,logicalKey:p.logicalKey}).slice(0,24),contractVersion:1,...p.scope,contentHash:authorityHash,payload:p,actorId:p.ownerId,auditId}],{session});
+   if(p.kind===PLAN){if(await read(Authorities,{...p.scope,'payload.kind':{$in:[PLAN,RECOVERY_PLAN]},'payload.logicalKey':p.logicalKey},session))fail('This original Invoice already has a retained repair plan. Inspect it without another update.');}
+   else {
+    await require('./business-link-repair-recovery').assertRecoverySource({models,scope:p.scope,plan:p,session,clock:now()});
+    if(await read(Authorities,{...p.scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':p.logicalKey},session)||await read(Receipts,{...p.scope,kind:'business-link-repair',logicalKey:p.logicalKey},session))fail('This original target already has recovery authority or transport evidence.');
+   }
+   await Authorities.create([{_id:hash({scope:p.scope,kind:p.kind,logicalKey:p.logicalKey}).slice(0,24),contractVersion:1,...p.scope,contentHash:authorityHash,payload:p,actorId:p.ownerId,auditId}],{session});
    await Audits.create([{_id:auditId,userId:p.ownerId,realmId:p.scope.realmId,action:ACTION,actionType:'manual',outcome:'success',afterState:approvalState(p,authorityHash)}],{session});
    return {authorityHash,auditId,request:repairRequest(p)};
   });
@@ -169,9 +174,13 @@ async function assertSavedRepairReceipt(models,scope,p,authorityHash,row,session
 // verified outcome. Neither path authorizes another write.
 async function loadOwnedLinkLineage({models,scope,step,session}){
  const {Authorities,Receipts,Audits,Writers}=models;
- const authority=await read(Authorities,{...scope,'payload.kind':PLAN,'payload.logicalKey':step.logicalKey},session);
+ const recoveryId=hash({scope,kind:RECOVERY_PLAN,logicalKey:step.logicalKey}).slice(0,24);
+ if(await read(Authorities,{...scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':step.logicalKey,_id:{$ne:recoveryId}},session))fail('Several recovery authorities claim this original target.');
+ const recoveryAuthority=await read(Authorities,{_id:recoveryId,...scope,'payload.kind':RECOVERY_PLAN,'payload.logicalKey':step.logicalKey},session);
+ const authority=recoveryAuthority||await read(Authorities,{_id:hash({scope,kind:PLAN,logicalKey:step.logicalKey}).slice(0,24),...scope,'payload.kind':PLAN,'payload.logicalKey':step.logicalKey},session);
  if(!authority)return null;
  const p=authority.payload;assertPlan(p,Date.now());
+ await require('./business-link-repair-recovery').assertRecoverySource({models,scope,plan:p,session});
  if(hash(p)!==authority.contentHash||!same(authority.actorId,p.ownerId)||p.originalStep.compilation.compilationHash!==step.compilation.compilationHash||p.originalStep.receipt.evidenceHash!==step.receipt.evidenceHash||p.originalStep.qboId!==step.qboId)fail('The exact legacy line-repair authority changed.');
  const approval=await read(Audits,{_id:authority.auditId,userId:p.ownerId,realmId:scope.realmId,action:ACTION,actionType:'manual',outcome:'success'},session);
  if(!approval||!equal(approval.afterState,approvalState(p,authority.contentHash)))fail('The repair approval audit is required for compatibility.');

@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/;
-const PLAN = 'business-link-repair-plan', OUTCOME = 'business-link-repair-outcome';
+const PLAN = 'business-link-repair-plan', RECOVERY_PLAN = 'business-link-repair-recovery-plan', OUTCOME = 'business-link-repair-outcome';
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_LINK_REPAIR_UNVERIFIED' }); }
 const equal = (a,b) => canonical(a) === canonical(b);
 const fresh = (stamp, now) => typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) && new Date(stamp).toISOString() === stamp && Date.parse(stamp) <= now && now - Date.parse(stamp) <= 300000;
@@ -22,7 +22,12 @@ function repairRequest(plan) {
   return freezeWriteRequest(plan.scope, 'POST', 'invoice', { Id: invoice.Id, SyncToken: invoice.SyncToken, sparse: true, LinkedTxn: plan.links });
 }
 function assertPlan(p, now, requireFresh = false) {
-  if (!p || p.version !== 1 || p.kind !== PLAN || !ID.test(p.ownerId || '') || !ID.test(p.operationId || '') || !HASH.test(p.planHash || '') || !HASH.test(p.logicalKey || '') || !HASH.test(p.publishedAuthorityHash || '') || !fresh(p.reviewedAt, requireFresh ? now : Date.parse(p.reviewedAt)) || typeof p.reason !== 'string' || p.reason.length < 30 || p.reason.length > 2000 || !Array.isArray(p.identities) || p.identities.length < 3 || p.identities.length > 500 || new Set(p.identities.map(x=>x.logicalKey)).size !== p.identities.length || !p.state || !p.before || !Array.isArray(p.links) || p.links.length !== 2) fail('An exact reviewed owned-link repair plan is required.');
+  if (!p || p.version !== 1 || ![PLAN,RECOVERY_PLAN].includes(p.kind) || !ID.test(p.ownerId || '') || !ID.test(p.operationId || '') || !HASH.test(p.planHash || '') || !HASH.test(p.logicalKey || '') || !HASH.test(p.publishedAuthorityHash || '') || !fresh(p.reviewedAt, requireFresh ? now : Date.parse(p.reviewedAt)) || typeof p.reason !== 'string' || p.reason.length < 30 || p.reason.length > 2000 || !Array.isArray(p.identities) || p.identities.length < 3 || p.identities.length > 500 || new Set(p.identities.map(x=>x.logicalKey)).size !== p.identities.length || !p.state || !p.before || !Array.isArray(p.links) || p.links.length !== 2) fail('An exact reviewed owned-link repair plan is required.');
+  if(p.kind===RECOVERY_PLAN){
+    if(p.recovery?.version!==1||!HASH.test(p.recovery.originalAuthorityHash||'')||typeof p.recovery.originalPlanJson!=='string'||Buffer.byteLength(p.recovery.originalPlanJson)>8000000)fail('An exact original malformed source is required for recovery.');
+    const original=JSON.parse(p.recovery.originalPlanJson);if(original.kind!==PLAN||hash(original)!==p.recovery.originalAuthorityHash)fail('The recovered source differs from the original audited plan hash.');
+    assertPlan(original,Date.parse(original.reviewedAt));
+  }
   const scope = scoped(p.scope); if (!equal(scope,p.scope)) fail('The repair scope changed.');
   for (const identity of p.identities) if (!HASH.test(identity.logicalKey || '') || !QID.test(identity.qboId || '') || !['fingerprint','compilationHash','compilation','dispatch','receipt'].every(k=>HASH.test(identity[k] || ''))) fail('Original accepted creation evidence is incomplete.');
   const step=p.originalStep, request=require('./business-readback').validateCompilation(step?.compilation), original=JSON.parse(request.body);
@@ -69,4 +74,4 @@ function assertReadFence(value) {
   if(!q || q.version!==1 || q.kind!=='known-saved-link-repair' || !HASH.test(q.authorityHash || '') || !HASH.test(q.receiptId || '') || !HASH.test(q.receiptEvidenceHash || '') || !HASH.test(q.requestHash || '') || !HASH.test(q.dispatchKey || '') || !QID.test(q.qboId || '') || q.operationId!==value.operationId || u?.kind!=='business-link-repair' || u.authorityHash!==q.authorityHash || u.key!==q.dispatchKey || u.requestHash!==q.requestHash || u.transportConsumed?.receiptId!==q.receiptId || u.responseReceiptId!==q.receiptId) fail('Only the exact known-saved repair may be inspected while its barrier is held.');
   return value;
 }
-module.exports={PLAN,OUTCOME,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};
+module.exports={PLAN,RECOVERY_PLAN,OUTCOME,fail,equal,fresh,observation,headerLinks,creationIdentity,repairRequest,assertPlan,assertRepairReadback,assertReadFence};

@@ -1,0 +1,28 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {fixture,scope,now,clone}=require('./helpers/business-link-repair-fixture');
+const {hash,canonical}=require('../src/modules/business-calendar');
+const Authority=require('../src/models/BusinessAuthority');
+const {RECOVERY_PLAN}=require('../src/modules/business-link-repair-contract');
+const {dispatchKeyFor,loadOwnedLinkLineage}=require('../src/modules/business-link-repair');
+const {createEstimateConversionProof}=require('../src/modules/business-estimate-conversion');
+const {reconcileBusinessGraph}=require('../src/modules/business-graph-readback');
+async function legacy(){
+ const h=fixture();for(const key of ['invoice','estimate']){h.plan.before[key].record.Line.push({Amount:250,DetailType:'SubTotalLineDetail',SubTotalLineDetail:{}});h.plan.before[key].recordHash=hash(h.plan.before[key].record);h.after[key].record.Line.push({Amount:250,DetailType:'SubTotalLineDetail',SubTotalLineDetail:{}});h.after[key].recordHash=hash(h.after[key].record);h.entries.find(e=>e.step.entity===(key==='invoice'?'Invoice':'Estimate')).observed=clone(h.plan.before[key]);}
+ await h.approve();h.originalPlan=clone(h.plan);h.originalApproval=clone(h.approval);
+ const old=h.data.Authorities[0],doc=new Authority({contractVersion:1,...scope,actorId:h.ownerId,auditId:old.auditId,contentHash:old.contentHash,payload:old.payload});old.payload=doc.toObject({minimize:true}).payload;h.badOriginal=clone(old);
+ h.plan={...clone(h.originalPlan),kind:RECOVERY_PLAN,recovery:{version:1,originalAuthorityHash:h.originalApproval.authorityHash,originalPlanJson:canonical(h.originalPlan)},reason:h.originalPlan.reason+' Retain the unadmitted malformed serialization source unchanged.'};return h;
+}
+async function graph(h){const lineage=await loadOwnedLinkLineage({models:h.models,scope,step:h.plan.originalStep});h.after.invoice.estimateConversion=createEstimateConversionProof({compiled:h.plan.originalStep.compilation,receipt:h.plan.originalStep.receipt,observed:h.after.invoice,estimateObserved:h.after.estimate,timeObserved:h.after.time,lineage,now:h.clock});const entries=h.entries.map(e=>({...clone(e),observed:clone(h.after[e.step.entity==='TimeActivity'?'time':e.step.entity.toLowerCase()])})),g=reconcileBusinessGraph({scope,roots:[h.plan.logicalKey],entries,now:h.clock}),writerFence=await h.transaction(session=>h.service.graphSnapshot({scope,intent:{operationId:h.operationId,planHash:h.planHash},authorityHash:h.approval.authorityHash,session}));return{...g,sourcesJson:JSON.stringify(entries),sourcesHash:hash(JSON.stringify(entries)),writerFence,evidenceHash:hash({graph:g.evidenceHash,writerFence})};}
+test('one append-only recovery preserves bad source while full original graph and one exact update complete',async()=>{
+ const h=await legacy();await assert.rejects(h.service.loadPlan(scope,h.originalApproval.authorityHash,{}));await h.approve();assert.equal(h.data.Authorities.length,2);assert.equal(h.approval.request.body,h.originalApproval.request.body);await h.send();const g=await graph(h);assert.equal(g.complete,true,JSON.stringify(g.failures));const result=await h.service.finalize({scope,authorityHash:h.approval.authorityHash,after:h.after,reports:clone(h.plan.reports),graph:g});assert.equal(result.status,'verified');assert.equal(h.sent.length,1);assert.deepEqual(h.data.Authorities[0],h.badOriginal);assert.equal(h.data.Writers[0].operationId,h.operationId);assert.equal(h.data.Runs[0].nextOrdinal,32);await assert.rejects(h.send());const lineage=await loadOwnedLinkLineage({models:h.models,scope,step:h.plan.originalStep});assert.equal(lineage.authorityHash,h.approval.authorityHash);assert.ok(lineage.outcomeHash);
+});
+test('valid prior authority, changed raw reconstruction, different request or non-minimization corruption cannot be recovered',async()=>{
+ for(const mutate of [h=>h.data.Authorities[0].payload=clone(h.originalPlan),h=>{const p=JSON.parse(h.plan.recovery.originalPlanJson);p.before.invoice.record.TotalAmt++;h.plan.recovery.originalPlanJson=canonical(p);},h=>h.data.Authorities[0].payload.before.invoice.record.TotalAmt++,h=>h.plan.before.invoice.record.SyncToken='9',h=>h.plan.identities[0].receipt=hash('changed'),h=>h.data.Audits.find(x=>String(x._id)===h.data.Authorities[0].auditId).afterState.requestHash=hash('wrong')]){const h=await legacy();mutate(h);await assert.rejects(h.approve());assert.equal(h.sent.length,0);assert.equal(h.data.Authorities.length,1);}
+});
+test('any old admission receipt, including known rejection, forbids source-only recovery',async()=>{
+ for(const state of ['possibly-sent','unknown','saved','rejected']){const h=await legacy(),key=dispatchKeyFor(h.originalApproval.authorityHash);h.data.Receipts.push({_id:hash({scope,dispatchKey:key}),...scope,kind:'business-link-repair',workflow:{version:1,kind:'business-link-repair',authorityHash:h.originalApproval.authorityHash},state});await assert.rejects(h.approve());assert.equal(h.sent.length,0);}
+});
+test('competing recovery approvals serialize by deterministic target and ambiguous later lineage stops',async()=>{
+ const h=await legacy(),other=clone(h.plan);other.reason+=' Another reason.';const settled=await Promise.allSettled([h.service.approve(h.plan),h.service.approve(other)]);assert.equal(settled.filter(x=>x.status==='fulfilled').length,1);assert.equal(h.data.Authorities.length,2);const duplicate=clone(h.data.Authorities[1]);duplicate._id='f'.repeat(24);duplicate.payload.reason+=' invalid duplicate';duplicate.contentHash=hash(duplicate.payload);h.data.Authorities.push(duplicate);await assert.rejects(loadOwnedLinkLineage({models:h.models,scope,step:h.plan.originalStep}),/Several recovery/);assert.equal(h.sent.length,0);
+});
