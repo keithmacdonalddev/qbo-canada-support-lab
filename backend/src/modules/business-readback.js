@@ -266,6 +266,7 @@ function verifyPopulationFinancialContent({ compiled, receipt, observed, parents
   }).filter(Boolean);
   const hasChild = entity => children.some(child => child.entity === entity);
   const estimate = parents.find(parent => parent.entity === 'Estimate'), time = parents.find(parent => parent.entity === 'TimeActivity');
+  const exactWholeEstimate = compiled.entity === 'Invoice' && compiled.relationships.some(link=>link.entity==='Estimate'&&link.representation==='whole-estimate-header') && require('./business-estimate-conversion').verifyWholeEstimateCreation({compiled,receipt,observed,parents,now});
   const missingEstimate = compiled.entity === 'Invoice' && compiled.relationships.length === 2 && estimate && time && linkList(payload.LinkedTxn).some(link => link.TxnType === 'Estimate') && !linkList(record.LinkedTxn).some(link => link.TxnType === 'Estimate');
   if (missingEstimate) {
     const quote = estimate.record, work = time.record, line = payload.Line?.[0], detail = line?.SalesItemLineDetail;
@@ -305,7 +306,7 @@ function verifyPopulationFinancialContent({ compiled, receipt, observed, parents
       used.add(index); const line = actual[index], detail = line[line.DetailType];
       for (const key of ['ClassRef','ProjectRef']) if (!expected[key] && line[key]?.value) invalid('An unplanned financial line dimension is present.');
       if (detail) for (const key of ['CustomerRef','ClassRef','ProjectRef','AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) invalid('An unplanned financial line relationship is present.');
-      if (!expected.LinkedTxn && linkList(line.LinkedTxn).length) invalid('An unplanned source line link is present.');
+      if (!expected.LinkedTxn && linkList(line.LinkedTxn).length && !exactWholeEstimate) invalid('An unplanned source line link is present.');
     }
     if (['Estimate','Invoice','SalesReceipt','PurchaseOrder','Bill'].includes(compiled.entity) && (!taxMatches(taxPolicy,compiled,record) || cents(record.TotalAmt) !== subtotal + cents(record.TxnTaxDetail?.TotalTax))) invalid('Population tax or gross amount differs from the approved dated policy.');
     if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== subtotal) invalid('Deposit total differs.');

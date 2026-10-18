@@ -70,10 +70,11 @@ function validRelationshipProof(row) {
     return canonical(replayed)===canonical(financial)&&proof.evidenceHash===hash({logicalKey:row.logicalKey,fingerprint:row.fingerprint,qboId:row.qboId,financialEvidenceHash:financial.evidenceHash,validatedAt:proof.validatedAt,matches:true});
   }catch{return false;}
 }
+function validCreationRelationshipProof(row){const source=sourceOf(row);return validRelationshipProof(row)&&source?.observed?.record?.SyncToken===row.receipt?.syncToken;}
 async function assertRelationshipAudit(models,scope,row,session,ownerId,actorId){
-  if(!validRelationshipProof(row))throw denied('The strict relationship evidence changed.');
+  if(!validCreationRelationshipProof(row))throw denied('Only an unchanged original-create relationship can establish a new creation pattern.');
   const proof=row.relationshipProof,audit=await models.Audits.findOne({_id:proof.auditId,realmId:scope.realmId}).session(session).maxTimeMS(5000).lean(),state=audit?.afterState;
   if(String(audit?.userId)!==ownerId||String(audit?.actorUserId||audit?.userId)!==actorId||audit?.action!=='Business population relationship-evidence-observed'||audit.outcome!=='success'||state?.environment!==scope.environment||String(state.connectionId)!==String(scope.connectionId)||state.realmId!==scope.realmId||state.logicalKey!==row.logicalKey||state.qboId!==row.qboId||state.receiptHash!==proof.receiptHash||state.financialEvidenceHash!==proof.financialEvidenceHash||state.relationshipEvidenceHash!==proof.evidenceHash||state.matches!==true||state.observedAt!==proof.observedAt||state.validatedAt!==proof.validatedAt||state.qboWrites!==0)throw denied('The original relationship observation audit changed.');
 }
 function assertIssueCode(code) { if (!CODES.has(code)) throw denied('Choose an existing relationship issue.'); }
-module.exports = { DEFINITIONS, CODES, recordQuery, issueCodes, issueView, recordEvidence, snapshot, sourceOf, hasBilledTime, isConversion, strictConversion, relationshipProof, validRelationshipProof, assertRelationshipAudit, assertIssueCode };
+module.exports = { DEFINITIONS, CODES, recordQuery, issueCodes, issueView, recordEvidence, snapshot, sourceOf, hasBilledTime, isConversion, strictConversion, relationshipProof, validRelationshipProof, validCreationRelationshipProof, assertRelationshipAudit, assertIssueCode };

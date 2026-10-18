@@ -119,7 +119,7 @@ async function runPopulationJob(input) {
       const pattern={...scope,authorityHash:job.authorityHash,entity:'Invoice','step.dependencies.entity':'Estimate',state:'saved'};
       if(job.relationshipPolicyVersion===1){
         patternBlocked=Boolean(await read(Records,{...pattern,'relationshipProof.matches':false}));
-        const prior=await read(Records,{...pattern,'relationshipProof.matches':true});patternPassed=Boolean(prior&&populationIssues.validRelationshipProof(prior));
+        const prior=await read(Records,{...pattern,'relationshipProof.matches':true});patternPassed=Boolean(prior&&populationIssues.validCreationRelationshipProof(prior));patternBlocked ||= Boolean(prior&&!patternPassed);
         if(!patternBlocked){trialRows=await Records.find({...pattern,relationshipProof:null}).sort({txnDate:1,logicalKey:1}).limit(30).maxTimeMS(5000).lean();
           const retained=new Map(window.all.map(row=>[row.logicalKey,row]));for(const row of trialRows)retained.set(row.logicalKey,row);
           const parents=await loadRows({...scope,logicalKey:{$in:[...new Set(trialRows.flatMap(row=>row.step.dependencies.map(link=>link.logicalKey)))]}});for(const row of parents)retained.set(row.logicalKey,row);
@@ -132,7 +132,7 @@ async function runPopulationJob(input) {
         activeReadControl=reader.control;
         if(trialRows.length){
           await reader.prime(window.all.filter(row=>row.state==='saved'));
-          for(const row of trialRows){try{const value=await reader.financial(row),proof=populationIssues.relationshipProof(row,value.financialProof,now());await rememberProofs([value]);patternBlocked ||= !proof.matches;patternPassed ||= proof.matches;}catch(error){const observed=await reader.observed(row);await Records.updateOne({_id:row._id,...scope,state:'saved'},{$set:{relationshipCheck:{runId:'creation-trial',checkedAt:new Date(now()).toISOString(),outcome:'error',snapshot:populationIssues.snapshot({compiled:row.compilation,observed,parents:[],children:[]}),message:'The accepted trial could not be verified. Recheck its original saved record before creating another conversion.'}}});throw error;}}
+          for(const row of trialRows){try{const value=await reader.financial(row),proof=populationIssues.relationshipProof(row,value.financialProof,now());await rememberProofs([value]);const originalCreate=proof.matches&&populationIssues.sourceOf({financialProof:value.financialProof})?.observed?.record?.SyncToken===row.receipt?.syncToken;patternBlocked ||= !originalCreate;patternPassed ||= originalCreate;}catch(error){const observed=await reader.observed(row);await Records.updateOne({_id:row._id,...scope,state:'saved'},{$set:{relationshipCheck:{runId:'creation-trial',checkedAt:new Date(now()).toISOString(),outcome:'error',snapshot:populationIssues.snapshot({compiled:row.compilation,observed,parents:[],children:[]}),message:'The accepted trial could not be verified. Recheck its original saved record before creating another conversion.'}}});throw error;}}
 
           patternBlocked ||= Boolean(await read(Records,{...pattern,relationshipProof:null}));
         }
