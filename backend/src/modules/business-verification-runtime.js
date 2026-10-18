@@ -126,7 +126,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     const expectation = taxExpectation(policy, compiled);
     const current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);
     if (current?.actorId !== actor?.actorId || current?.ownerId !== actor?.ownerId) fail('The graph reader changed.');
-    return expectation ? { ...expectation, status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
+    return expectation ? { ...expectation,...(intent.step.details?.datedTax?{originalStep:intent.step,originalPolicy:policy}:{}), status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
   };
   const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, loadTaxPolicy, retainSources, now });
   const loadGraphReadback = input => { checkScope(input?.scope); return reader(input); };

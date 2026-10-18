@@ -267,6 +267,7 @@ function verifyPopulationFinancialContent({ compiled, receipt, observed, parents
   const hasChild = entity => children.some(child => child.entity === entity);
   const estimate = parents.find(parent => parent.entity === 'Estimate'), time = parents.find(parent => parent.entity === 'TimeActivity');
   const exactWholeEstimate = compiled.entity === 'Invoice' && compiled.relationships.some(link=>link.entity==='Estimate'&&link.representation==='whole-estimate-header') && require('./business-estimate-conversion').verifyWholeEstimateCreation({compiled,receipt,observed,parents,now});
+  const exactLegacyWholeReference=compiled.entity==='Invoice'&&compiled.relationships.some(link=>link.entity==='Estimate'&&link.representation===undefined)&&require('./business-estimate-conversion').verifyLegacyWholeEstimateLineReference({compiled,receipt,observed,parents,now});
   const missingEstimate = compiled.entity === 'Invoice' && compiled.relationships.length === 2 && estimate && time && linkList(payload.LinkedTxn).some(link => link.TxnType === 'Estimate') && !linkList(record.LinkedTxn).some(link => link.TxnType === 'Estimate');
   if (missingEstimate) {
     const quote = estimate.record, work = time.record, line = payload.Line?.[0], detail = line?.SalesItemLineDetail;
@@ -300,13 +301,13 @@ function verifyPopulationFinancialContent({ compiled, receipt, observed, parents
     if (actual.length !== payload.Line.length || totals.length > 1 || totals.some(line => line !== record.Line.at(-1) || cents(line.Amount) !== subtotal)) invalid('Population financial line counts or subtotals differ.');
     for (const wanted of payload.Line) {
       const expected = { ...wanted };
-      if (missingEstimate && expected.LinkedTxn?.every(link => link.TxnType === 'Estimate')) delete expected.LinkedTxn;
+      if ((missingEstimate||exactLegacyWholeReference) && expected.LinkedTxn?.every(link => link.TxnType === 'Estimate')) delete expected.LinkedTxn;
       const index = actual.findIndex((line,i) => !used.has(i) && subset(expected,line));
       if (index < 0) invalid('Population amounts, quantities, rates, tax codes or line links differ.');
       used.add(index); const line = actual[index], detail = line[line.DetailType];
       for (const key of ['ClassRef','ProjectRef']) if (!expected[key] && line[key]?.value) invalid('An unplanned financial line dimension is present.');
       if (detail) for (const key of ['CustomerRef','ClassRef','ProjectRef','AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) invalid('An unplanned financial line relationship is present.');
-      if (!expected.LinkedTxn && linkList(line.LinkedTxn).length && !exactWholeEstimate) invalid('An unplanned source line link is present.');
+      if (!expected.LinkedTxn && linkList(line.LinkedTxn).length && !exactWholeEstimate && !exactLegacyWholeReference) invalid('An unplanned source line link is present.');
     }
     if (['Estimate','Invoice','SalesReceipt','PurchaseOrder','Bill'].includes(compiled.entity) && (!taxMatches(taxPolicy,compiled,record) || cents(record.TotalAmt) !== subtotal + cents(record.TxnTaxDetail?.TotalTax))) invalid('Population tax or gross amount differs from the approved dated policy.');
     if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== subtotal) invalid('Deposit total differs.');

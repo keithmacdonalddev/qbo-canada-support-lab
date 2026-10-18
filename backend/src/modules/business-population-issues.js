@@ -38,6 +38,7 @@ function strictConversion(financialProof, now) {
   if (!financialProof || financialProof.matchesFinancialIntent !== true || financialProof.coverageGaps?.length || typeof financialProof.sourceJson !== 'string' || hash(financialProof.sourceJson) !== financialProof.sourceHash) return false;
   const source = JSON.parse(financialProof.sourceJson);
   if (source.compiled.relationships.some(link => link.entity === 'Estimate' && link.representation === 'whole-estimate-header')) return require('./business-estimate-conversion').verifyWholeEstimateCreation({ ...source, now });
+  if(require('./business-estimate-conversion').verifyLegacyWholeEstimateLineReference({...source,now}))return true;
   return strictLegacyConversion(source);
 
 }

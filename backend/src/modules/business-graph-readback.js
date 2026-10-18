@@ -58,7 +58,7 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
   const input = key => {
     const node = nodes.get(key), step = node.step;
     return { compiled: step.compilation, receipt: { ...step.receipt, scope, entity: step.entity, logicalKey: key }, observed: node.observed, taxPolicy: node.taxPolicy, now,
-      parents: node.parents.map(observation), descendants: node.linkedChildren.map(childKey => { const child = nodes.get(childKey); return { ...observation(childKey), compilationHash: child.step.compilation.compilationHash, creationReceipt: { ...child.step.receipt, scope, entity: child.step.entity, logicalKey: childKey }, verification: content.get(childKey) }; }) };
+      parents: node.parents.map(parentKey=>{const value=observation(parentKey),parent=nodes.get(parentKey);return {...value,...(step.entity==='Invoice'&&node.taxPolicy?.originalStep?.details?.datedTax&&value.entity==='Estimate'?{originalStep:parent.taxPolicy?.originalStep,originalPolicy:parent.taxPolicy?.originalPolicy,conversionStep:node.taxPolicy.originalStep,conversionPolicy:node.taxPolicy.originalPolicy}:{})};}), descendants: node.linkedChildren.map(childKey => { const child = nodes.get(childKey); return { ...observation(childKey), compilationHash: child.step.compilation.compilationHash, creationReceipt: { ...child.step.receipt, scope, entity: child.step.entity, logicalKey: childKey }, verification: content.get(childKey) }; }) };
   };
   const recordFailure = (key, messages) => failures.set(key, { logicalKey: key, entity: nodes.get(key).step.entity, status: 'unverified', issues: messages });
   // Child content is checked first, without falsely claiming its parent closure.
@@ -72,7 +72,7 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
   for (const key of order) {
     const node = nodes.get(key); if (content.get(key)?.matchesIntent !== true) continue;
     if (node.parents.some(parent => !completed.has(parent))) { recordFailure(key, ['An originating activity is unverified.']); continue; }
-    const value = input(key); value.parents = node.parents.map(parent => ({ ...observation(parent), state: 'verified', verification: completed.get(parent) }));
+    const value = input(key); value.parents = value.parents.map(parent => ({ ...parent, state: 'verified', verification: completed.get(parent.logicalKey) }));
     const proof = verifyBusinessReadback(value); if (proof.matchesIntent) completed.set(key, proof); else recordFailure(key, proof.issues);
   }
   const records = order.map(key => ({ logicalKey: key, entity: nodes.get(key).step.entity, qboId: nodes.get(key).step.qboId, fingerprint: nodes.get(key).step.fingerprint, stepRevision: nodes.get(key).step.revision, compilationHash: nodes.get(key).step.compilation.compilationHash, proof: completed.get(key) || null }));
