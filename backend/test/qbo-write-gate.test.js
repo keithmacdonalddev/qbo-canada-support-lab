@@ -11,7 +11,7 @@ const request = freezeWriteRequest(scope, 'POST', 'invoice', { TxnDate: '2026-10
 const clone = value => structuredClone(value);
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
 const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => value && typeof value === 'object' && !(value instanceof Date) ? ('$in' in value ? value.$in.includes(at(row, key)) : '$exists' in value ? (at(row, key) !== undefined) === value.$exists : false) : value instanceof Date ? new Date(at(row, key)).getTime() === value.getTime() : at(row, key) === value);
-function harness(business = false) {
+function harness(business = false, options = {}) {
   const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [] }, sequence: 0 };
   h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active', periodControl: controls(scope, ownerId, h.clock) });
   h.data.Writers.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, operationId: null, planHash: null, unresolved: null });
@@ -34,7 +34,7 @@ function harness(business = false) {
   }]));
   let queue = Promise.resolve();
   h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let output; try { output = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } if (h.loseReply) { h.loseReply = false; throw new Error('commit reply lost'); } return output; }); queue = result.catch(() => {}); return result; };
-  h.gate = createQboWriteGate({ ...h.models, transaction: h.transaction, assertBusinessAuthority: async () => {}, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
+  h.gate = createQboWriteGate({ ...h.models, ...options, transaction: h.transaction, assertBusinessAuthority: async () => {}, now: () => h.clock, assertReady: async () => { if (h.notReady) throw new Error('not prepared'); }, nonce: () => String(++h.sequence) });
   h.rawGate = h.gate;
   h.periodClient = { query: async () => ({ QueryResponse: { Preferences: [{ AccountingInfoPrefs: {}, SalesFormsPrefs: { AutoApplyCredit: false } }] } }) };
   h.gate = { ...h.rawGate, begin: async input => h.rawGate.begin({ ...input, periodEvidence: input.periodEvidence === undefined ? await h.rawGate.preflight({ request: input.request, client: h.periodClient }) : input.periodEvidence }) };
@@ -323,3 +323,16 @@ test('original v1 transport receipts remain readable when current preferences wo
  const reader=createBusinessDispatchReceiptReader({...h.models,transaction:h.transaction,assertReady:async()=>{},authorize:async()=>({actorId:ownerId,ownerId})});const result=await reader({...scope,operationId,logicalKey,entity:'Invoice',state:'dispatched',dispatch:h.data.Steps[0].dispatch});assert.equal(result.status,'found');assert.equal(result.receipt.qboId,'100');assert.equal(queries,0);assert.equal(row.periodProof.evidence.version,1);
  await assert.rejects(h.rawGate.preflight({request,client:h.periodClient}));assert.equal(queries,1);assert.equal(row.state,'saved');
 });
+
+function populationRepairFixture(){
+ let h;const transport={admit:async({writer,receiptId,dispatchKey,request,session})=>{assert.ok(session);assert.equal(writer.populationDelegation.jobId,operationId);assert.equal(writer.unresolved,null);if(h.data.Receipts.some(r=>r._id===receiptId))throw Error('repair already consumed');return{kind:'population-link-repair',key:dispatchKey,requestHash:request.requestHash,transportConsumed:{receiptId}};},settle:async()=>{h.settled=(h.settled||0)+1;}};
+ h=harness(false,{populationRepairTransport:transport});h.writer().populationDelegation={jobId:operationId};h.input={request:freezeWriteRequest(scope,'POST','invoice',{Id:'100',SyncToken:'0',sparse:true,LinkedTxn:[{TxnId:'10',TxnType:'Estimate'}]}),ownerId,actorId:ownerId,workflow:{version:1,kind:'population-link-repair',authorityHash:hash('exact repair')}};
+ h.periodClient.read=async(entity,id)=>({[entity==='invoice'?'Invoice':'Estimate']:{Id:id,SyncToken:'0',TxnDate:'2026-10-06'}});return h;
+}
+test('dedicated population repair keeps saved or unknown updates held and preserves native receipts',async()=>{for(const response of [{status:200,json:{Invoice:{Id:'100',SyncToken:'1'}}},{status:503,json:{}}]){const h=populationRepairFixture(),ticket=await h.gate.begin(h.input);assert.equal(ticket.kind,'population-link-repair');assert.equal(h.data.Receipts[0].operation,'update');assert.equal(h.data.Receipts[0].workflow.authorityHash,h.input.workflow.authorityHash);await h.gate.complete(ticket,h.input.request,response);assert.ok(h.writer().unresolved);assert.equal(h.settled,1);assert.equal(h.data.Audits.length,response.status===200?2:3);await assert.rejects(h.gate.begin(h.input));assert.equal(h.data.Receipts.length,1);}});
+test('population repair needs a dedicated adapter, exact owner and Invoice update; ordinary writes stay fenced',async()=>{
+ const missing=harness();missing.writer().populationDelegation={jobId:operationId};const input=populationRepairFixture().input;await assert.rejects(missing.rawGate.begin(input),/dedicated/);
+ for(const mutate of [h=>h.input.actorId='e'.repeat(24),h=>h.input.permit={},h=>h.input.request=request,h=>h.input.request=freezeWriteRequest(scope,'POST','estimate',{Id:'10',SyncToken:'0'})]){const h=populationRepairFixture();mutate(h);await assert.rejects(h.gate.begin(h.input));assert.equal(h.data.Receipts.length,0);}
+ const h=populationRepairFixture();await assert.rejects(h.gate.begin({...h.input,workflow:null}),/delegated/);assert.equal(h.data.Receipts.length,0);
+});
+test('definite repair rejection releases only its barrier but cannot reset the consumed authority',async()=>{const h=populationRepairFixture(),ticket=await h.gate.begin(h.input);await h.gate.complete(ticket,h.input.request,rejection);assert.equal(h.writer().unresolved,null);assert.equal(h.writer().populationDelegation.jobId,operationId);assert.equal(h.data.Receipts[0].state,'rejected');await assert.rejects(h.gate.begin(h.input),/consumed/);assert.equal(h.data.Receipts.length,1);});
