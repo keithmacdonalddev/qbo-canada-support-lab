@@ -11,6 +11,9 @@ async function parallel(values, work, limit = 3) {
   await Promise.allSettled(Array.from({length:Math.min(limit,values.length)},async()=>{while(!failure&&next<values.length){const index=next++;try{results[index]=await work(values[index],index);}catch(error){failure ||= error;}}}));
   if(failure)throw failure;return results;
 }
+// Provider header links have no ordering field. Keep actual raw observations;
+// only their root relation ordering may differ between the two scoped reads.
+function samePostingRecord(entity,before,after){if(canonical(before)===canonical(after))return true;if(entity!=='Invoice'||!Array.isArray(before?.LinkedTxn)||!Array.isArray(after?.LinkedTxn))return false;const valid=list=>list.every(link=>link&&Object.keys(link).every(key=>['TxnId','TxnType','TxnLineId'].includes(key))&&/^\d{1,30}$/.test(link.TxnId||'')&&['TimeActivity','Estimate','Payment'].includes(link.TxnType)&&[undefined,'0'].includes(link.TxnLineId))&&new Set(list.map(link=>link.TxnType+':'+link.TxnId)).size===list.length;if(!valid(before.LinkedTxn)||!valid(after.LinkedTxn))return false;const normalized=value=>({...value,LinkedTxn:[...value.LinkedTxn].sort((a,b)=>canonical(a).localeCompare(canonical(b)))});return canonical(normalized(before))===canonical(normalized(after));}
 function createPopulationReader({ scope, jobId, client, records, readFence, masterCache = new Map(), validateCreation, now = () => Date.now(), signal, readQueue = require('./business-population-reads').createPopulationReadQueue() }) {
   const raw = new Map(), routes = new Map(), reports = new Map(), byKey = new Map(records.map(row=>[row.logicalKey,row])), children = new Map();
   const check = () => { if (signal?.aborted) throw denied('Population reads were stopped before dispatch.'); };
@@ -67,7 +70,10 @@ function createPopulationReader({ scope, jobId, client, records, readFence, mast
     const after=await readFence();if(canonical(before)!==canonical(after))throw denied('Company activity changed during grouped financial reads.');
     await parallel(omitted,async row=>{
       const key=row.entity+':'+row.qboId,first=originals.get(key),observed=raw.get(key);
-      if(first.recordHash!==observed.recordHash)throw denied('A transaction changed during posting-account verification.');
+      if(!samePostingRecord(row.entity,first.record,observed.record))throw denied('A transaction changed during posting-account verification.');
+      // Use the authentic first response bound to the intervening ledger report.
+      // The second response independently confirms its complete content/link set.
+      raw.set(key,first);
       const accountBinding=row.step.references.find(ref=>ref.key===(row.entity==='BillPayment'?'accountsPayable':'accountsReceivable')),accountObserved=await master('Account',accountBinding.id),source=await reports.get(endpointFor(observed.record,accountBinding.id));
       const accountRouting=accountPostingEvidence({compiled:row.compilation,receipt:row.receipt,observed:first,accountBinding,accountObserved,report:source.report,reportObservedAt:source.observedAt,beforeFence:before,afterFence:after,now:now()});
       routes.set(key,accountRouting);
@@ -88,4 +94,4 @@ function createPopulationReader({ scope, jobId, client, records, readFence, mast
   }
   return { prime, observed, financial, master, get, queryMany, control };
 }
-module.exports = { createPopulationReader, parallel };
+module.exports = { createPopulationReader, parallel, samePostingRecord };
