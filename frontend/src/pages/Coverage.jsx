@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowUpRight, Check, Clock3, HelpCircle, LoaderCircle, RefreshCw, Search, WandSparkles, X } from 'lucide-react'
 import Layout from '../components/Layout'
 import CoverageTargets from '../components/CoverageTargets'
+import CoverageResults from '../components/CoverageResults'
 import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { Button } from '@/components/ui/button'
@@ -61,11 +62,12 @@ function FeatureDetail({ area, signal, canAsk, onClose }) {
 export default function Coverage() {
   const connection = useConnection()
   const ready = connection?.ready === true
-  const { result, state, error, check } = useCoverage(ready)
+  const { result, state, error, check } = useCoverage(ready, { autoCheck: false, acceptOlderCache: true })
   const areas = useMemo(() => measuredAreas(result), [result])
   const [aiReady, setAiReady] = useState(false)
   const [params] = useSearchParams()
   const [mode, setMode] = useState(() => params.get('area') ? 'data' : 'overview')
+  const [targetFeature, setTargetFeature] = useState(null)
   const [selection, setSelection] = useState(() => ({ area: params.get('area'), feature: null }))
   const [query, setQuery] = useState('')
   const [domain, setDomain] = useState('all')
@@ -94,14 +96,15 @@ export default function Coverage() {
   return (
     <Layout>
       <div className="mx-auto max-w-[1440px]">
-        <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 ref={pageHeading} tabIndex={-1} className="scroll-mt-20 text-[22px] font-semibold tracking-[-0.015em] focus-visible:outline-2 focus-visible:outline-[var(--link)]">Coverage</h1><p className="mt-1 max-w-[80ch] text-[13.5px] text-[var(--ink-2)]">The business, features and reports this company is intended to cover — compared with available evidence.</p></div>{ready && state !== 'unavailable' && <div className="flex items-center gap-3 text-[12px] text-[var(--ink-3)]">{result && <span>Read {relativeTime(result.checkedAt)}</span>}<Button variant="outline" onClick={() => check({ refresh: true })} disabled={checking}>{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{checking ? 'Reading company…' : 'Refresh record evidence'}</Button></div>}</div>
-        <nav aria-label="Coverage workspace" className="mt-5 flex flex-wrap gap-1 border-b border-[var(--line)] pb-3">{[['overview', 'Intended coverage'], ['features', 'Feature requirements'], ['reports', 'Report requirements'], ['data', 'Company data']].map(([key, label]) => <Button key={key} variant={mode === key ? 'secondary' : 'ghost'} size="sm" aria-pressed={mode === key} onClick={() => setMode(key)}>{label}</Button>)}</nav>
-        {mode !== 'data' && <CoverageTargets mode={mode} onModeChange={setMode} connection={connection} result={result} recordState={ready ? state : 'disconnected'} onInspectArea={key => { setSelection({ area: key, feature: null }); setQuery(areas.find(area => area.key === key)?.name || ''); setView('all'); setDomain('all'); setMode('data') }} />}
+        <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 ref={pageHeading} tabIndex={-1} className="scroll-mt-20 text-[22px] font-semibold tracking-[-0.015em] focus-visible:outline-2 focus-visible:outline-[var(--link)]">Coverage</h1><p className="mt-1 max-w-[80ch] text-[13.5px] text-[var(--ink-2)]">What this company actually represents: features, reports and completed business history.</p></div>{ready && state !== 'unavailable' && <div className="flex items-center gap-3 text-[12px] text-[var(--ink-3)]">{result && <span>Read {relativeTime(result.checkedAt)}</span>}<Button variant="outline" onClick={() => check({ refresh: true })} disabled={checking}>{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{checking ? 'Reading company…' : result ? 'Refresh record evidence' : 'Read company data'}</Button></div>}</div>
+        <nav aria-label="Coverage workspace" className="mt-5 flex flex-wrap gap-1 border-b border-[var(--line)] pb-3">{[['overview', 'Coverage results'], ['features', 'Feature requirements'], ['reports', 'Report requirements'], ['data', 'Company data']].map(([key, label]) => <Button key={key} variant={mode === key ? 'secondary' : 'ghost'} size="sm" aria-pressed={mode === key} onClick={() => setMode(key)}>{label}</Button>)}</nav>
+        <div hidden={mode !== 'overview'}><CoverageResults connection={connection} result={result} recordState={ready ? state : 'disconnected'} inspectArea={key => { setSelection({ area: key, feature: null }); setQuery(areas.find(area => area.key === key)?.name || ''); setView('all'); setDomain('all'); setMode('data') }} requirement={key => { setTargetFeature(key); setMode('features') }} /></div>
+        {['features', 'reports'].includes(mode) && <CoverageTargets mode={mode} initialFeature={targetFeature} connection={connection} result={result} recordState={ready ? state : 'disconnected'} onInspectArea={key => { setSelection({ area: key, feature: null }); setQuery(areas.find(area => area.key === key)?.name || ''); setView('all'); setDomain('all'); setMode('data') }} />}
         {mode === 'data' && <>
         <div className="mt-6"><h2 className="text-[18px] font-semibold">Supporting company data</h2><p className="mt-1 text-[13px] text-[var(--ink-2)]">Record and setup observations support the coverage requirements. They do not establish the complete intended business or report coverage.</p></div>
         {!ready ? <p className="mt-8 text-[13.5px] text-[var(--ink-2)]">Connect the QuickBooks company to see its feature coverage.</p>
           : state === 'unavailable' ? <CoverageUnavailable className="mt-8" />
-            : !result ? state === 'error' ? <p role="alert" className="mt-8 text-[13px] text-[var(--danger-ink)]">{error} <button type="button" className="text-[var(--link)] underline" onClick={() => check({ refresh: true })}>Try again</button></p>
+            : !result ? state === 'idle' ? <p className="mt-8 text-[13px] text-[var(--ink-2)]">No saved feature scan is available. Use Read company data to inspect records and setup.</p> : state === 'error' ? <p role="alert" className="mt-8 text-[13px] text-[var(--danger-ink)]">{error} <button type="button" className="text-[var(--link)] underline" onClick={() => check({ refresh: true })}>Try again</button></p>
               : <p role="status" className="mt-8 flex items-center gap-2 text-[13px] text-[var(--ink-2)]"><LoaderCircle className="size-4 animate-spin" />Reading company records and setup…</p>
               : <>
                 {state === 'error' && <p role="alert" className="mt-4 text-[13px] text-[var(--danger-ink)]">{error} Showing the earlier coverage findings.</p>}

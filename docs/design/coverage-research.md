@@ -70,30 +70,48 @@ an overall readiness score, or a claim that every QuickBooks feature is covered.
 
 ## Chosen experience
 
-1. **Overview, default:** intended business lines, initial history target,
-   capability/report scope, saved publication/calendar state and a domain map
-   comparing the required outcome with the limits of currently available
-   evidence. Explicitly identify Advanced features not yet mapped in the catalog.
-2. **Feature requirements:** browse all canonical capability areas by domain and
-   priority; select one to compare its purpose, required variations and
-   prerequisites with actual record observations and unresolved proof. Existing
-   record matches never turn into a target-level covered verdict automatically.
-3. **Report requirements:** browse all catalog report definitions, their business
-   question, required periods and expected accounting content; open the existing
-   report evidence workflow for retained company findings. No fabricated result.
-4. **Company data:** retain the recent feature-presence view as supporting
-   evidence with local filters and its existing record-type links.
+The entry screen must present **actual coverage results**, with requirements as
+supporting detail. A static description of the intended company is insufficient.
+
+1. **Coverage results, default:** three evidence-backed comparisons: named business
+   situations represented against the canonical variants; reports with verified,
+   partial, failed or unverified evidence for their recorded scope; completed managed
+   months against the current published company target. The first viewport exposes
+   these results and named per-area gaps, rather than business-description cards.
+2. **Feature results:** every business variant receives represented, not represented
+   in the scanned scope, or not verified. Mapping is explicit and conservative.
+   Unassessed variants remain in the denominator and visibly unverified. Positive
+   narrow predicates do not automatically establish broad absence. Setup volume
+   thresholds are distinguished from canonical variant existence. Linked history
+   and accounting acceptance are not inferred from this representation count.
+3. **Report results:** all 48 definitions share one result surface. Existing retained
+   manual evidence and saved accounting observations are read independently. Scope,
+   returned basis, periods, failed relationships, historical definitions and unread
+   history remain visible. A populated report is partial proof; it cannot certify all
+   report requirements. No new accounting reports are requested or saved on entry.
+4. **History results:** use saved calendar verification and the matching published
+   blueprint's history length. An accepted opening baseline counts as zero completed
+   months. A different saved draft cannot supply the published target. Existing
+   unmanaged records are not treated as completed managed periods.
+5. **Requirements and company data:** retain canonical prerequisites, variations,
+   report assertions and direct links to supporting data and retained report sources
+   as secondary inspection workflows.
 
 Keep native company scope bound to actor, realm, environment and connection.
-Disconnects or read failures must leave the intended scope visible and mark
-the company comparison unavailable. Draft settings must not be presented as
-published authority. A published calendar cursor proves only its named managed
-period checks, not every feature, report or reconciliation requirement.
+Disconnects or read failures remain unavailable rather than zero achievement.
+Feature scan snapshots remain visible with their original date; opening Coverage
+reads the cached scan, and a new QBO scan requires the page's explicit read action.
+Manual report reads use four workers; stored observation detail reads use two.
+Only the latest bounded manual-history page per report and ten stored accounting
+observations are inspected; unread history remains explicitly unverified.
+
+The six externally identified unmapped Advanced areas remain unresolved scope
+classification; the current catalog is not an exhaustive product denominator.
 
 ## Acceptance evidence
 
-- The first screen answers what business, historical depth, functional breadth
-  and report coverage the app is intended to deliver.
+- The first screen answers what coverage the company actually demonstrates, how
+  much is not represented or unverified, and which report scopes/history are proven.
 - Every canonical capability and report is reachable; required variants and
   conditional scope are retained without silent omission.
 - An operator can move from an intended capability to its company data and from

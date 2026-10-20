@@ -1,20 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, ArrowUpRight, BookOpen, ChevronRight, Search } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, ChevronRight, Search } from 'lucide-react'
 import catalog from '../../../docs/discovery/catalog.v1.json'
-import client from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { cn } from '@/lib/utils'
-import { filterTargets, matchesScope, recordEvidence, RELEASE_TARGETS, savedComparison, targetGroups, UNMAPPED_ADVANCED } from '@/lib/coverage-targets.mjs'
+import { filterTargets, recordEvidence, targetGroups } from '@/lib/coverage-targets.mjs'
 
 const groups = targetGroups(catalog)
 const tierLabel = { 'tier-1': 'Essential · Tier 1', 'tier-2': 'Extended · Tier 2', 'manual-only-critical': 'Essential · manual evidence', critical: 'Critical report', supporting: 'Supporting report' }
 const familyLabel = { financial: 'Financial statements', cash: 'Cash', receivables: 'Receivables', payables: 'Payables', expenses: 'Expenses', sales: 'Sales', inventory: 'Inventory', projects: 'Projects', tax: 'Canadian tax', budget: 'Budgets', reconciliation: 'Reconciliation', audit: 'Audit & exceptions' }
 const panel = 'rounded-[10px] border border-[var(--line)] bg-[var(--surface)]'
 const muted = 'text-[var(--ink-2)]'
-function date(value) { return value ? new Date(value.slice(0, 10) + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—' }
 function SectionHeading({ eyebrow, title, children }) { return <div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-3)]">{eyebrow}</p><h2 className="mt-1 text-[19px] font-semibold tracking-tight">{title}</h2>{children && <p className="mt-1.5 max-w-[90ch] text-[13px] leading-relaxed text-[var(--ink-2)]">{children}</p>}</div> }
 function Tags({ items }) { return <ul className="flex flex-wrap gap-1.5">{items.map((s, i) => <li key={i} className="rounded border border-[var(--line)] bg-[var(--sunken)] px-2 py-1 text-[12px]">{s}</li>)}</ul> }
 function BulletList({ items }) { return items?.length ? <ul className="list-disc space-y-1.5 pl-4 text-[13px] leading-relaxed text-[var(--ink-2)]">{items.map((s, i) => <li key={i}>{s}</li>)}</ul> : <p className="text-[12px] text-[var(--ink-3)]">None specified in this requirement.</p> }
@@ -26,44 +24,6 @@ function EvidenceSummary({ evidence, result, recordState, compact = false }) {
     {!!evidence.missing.length && <p><span className="font-medium text-[var(--attention)]">Data gaps:</span> <span className={muted}>{evidence.missing.slice(0, compact ? 2 : undefined).join(', ')}{compact && evidence.missing.length > 2 ? '…' : ''}</span></p>}
     {!!evidence.unresolved.length && <p className={muted}>Needs verification: {evidence.unresolved.slice(0, compact ? 2 : undefined).join(', ')}{compact && evidence.unresolved.length > 2 ? '…' : ''}</p>}
     {!compact && <p className="pt-2 text-[var(--ink-3)]">These observations establish record or setup presence. Required variations, linked history and accounting agreement still need their specified evidence.</p>}
-  </div>
-}
-function SavedBusiness({ saved, onRetry }) {
-  const comparison = savedComparison(saved.plan.data, saved.governance.data)
-  const { draft, published, calendar, draftIsPublished } = comparison
-  return <section className={cn(panel, 'p-5')} aria-label="Saved company history comparison">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-[14px] font-semibold">This company's managed history</h3><p className="mt-1 text-[12px] text-[var(--ink-3)]">Saved business plan and calendar</p></div><Link to="/company" className="text-[12px] text-[var(--link)] hover:underline">Open business plan <span aria-hidden="true">↗</span></Link></div>
-    <dl className="mt-4 grid gap-4 sm:grid-cols-3">
-      <div><dt className="text-[11px] text-[var(--ink-3)]">Published starting point</dt><dd className="mt-1 text-[14px] font-medium">{saved.governance.state !== 'ready' ? saved.governance.state === 'loading' ? 'Reading…' : 'Unavailable' : published ? date(published.openingDate || calendar?.openingDate) : 'Not published'}</dd></div>
-      <div><dt className="text-[11px] text-[var(--ink-3)]">Managed periods verified through</dt><dd className="mt-1 text-[14px] font-medium">{saved.governance.state !== 'ready' ? saved.governance.state === 'loading' ? 'Reading…' : 'Unavailable' : calendar?.verifiedThrough ? date(calendar.verifiedThrough) : 'No verified period saved'}</dd></div>
-      <div><dt className="text-[11px] text-[var(--ink-3)]">Saved plan's history target</dt><dd className="mt-1 text-[14px] font-medium">{saved.plan.state !== 'ready' ? saved.plan.state === 'loading' ? 'Reading…' : 'Unavailable' : draft ? draft.business.historicalMonths + ' months' : 'No current draft saved'}</dd>{draft && <p className="mt-1 text-[11px] text-[var(--ink-3)]">{draftIsPublished ? 'Matches published plan' : 'Draft · publication not established for this version'}</p>}</div>
-    </dl>
-    {['plan', 'governance'].some(key => saved[key].state === 'error') && <p role="alert" className="mt-4 text-[12px] text-[var(--attention)]">Some saved state could not be read. It has not been treated as missing progress. <button type="button" onClick={onRetry} className="text-[var(--link)] underline">Retry saved-state read</button></p>}
-    {saved.governance.state === 'disconnected' && <p className="mt-4 text-[12px] text-[var(--ink-3)]">Connect the company to compare its saved progress with the target.</p>}
-    <p className="mt-4 border-t border-[var(--line)] pt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">A verified calendar period records managed activity checks. It does not certify every feature, report or bank reconciliation. Existing unmanaged records may extend beyond it.</p>
-  </section>
-}
-function Overview({ result, recordState, saved, retry, chooseFeature, showReports }) {
-  return <div className="space-y-7">
-    <section className={cn(panel, 'overflow-hidden')} aria-label="Intended company coverage">
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_310px]">
-        <div className="p-5"><SectionHeading eyebrow="The company this app is built to maintain" title="One believable Canadian business. Three connected lines of work.">QuickBooks Online Advanced Canada, with coherent activity across service projects, inventory and wholesale, and recurring services.</SectionHeading>
-          <ul className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-[12px] font-medium">{['Service & projects', 'Inventory & wholesale', 'Recurring services'].map(name => <li key={name} className="border-l-2 border-[var(--line-strong)] pl-2.5">{name}</li>)}</ul>
-        </div>
-        <div className="border-t border-[var(--line)] bg-[var(--sunken)] p-5 lg:border-t-0 lg:border-l"><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--ink-3)]">Initial approved design horizon</p><p className="mt-2 text-[28px] font-semibold tracking-tight">36 months</p><p className="mt-1 text-[12px] leading-relaxed text-[var(--ink-2)]">Coherent historical business, followed by continuing activity on a governed calendar.</p><p className="mt-2 text-[11px] text-[var(--ink-3)]">Design target · saved progress shown below</p></div>
-      </div>
-      <div className="flex flex-wrap gap-x-7 gap-y-2 border-t border-[var(--line)] px-6 py-3 text-[12px] text-[var(--ink-2)]"><span><strong className="text-[var(--ink)]">21</strong> business capability areas</span><span><strong className="text-[var(--ink)]">48</strong> report requirements</span><span><strong className="text-[var(--ink)]">3</strong> app operating requirements</span><span className="text-[var(--ink-3)]">Defined project scope · remaining product scope gaps below</span></div>
-    </section>
-    <section><div className="flex flex-wrap items-end justify-between gap-3"><SectionHeading eyebrow="Intended functional breadth" title="What this company must be able to demonstrate">Coverage means representative business variations, coherent linked records and the accounting evidence behind them. Record presence is one part of that proof.</SectionHeading><Button variant="outline" size="sm" onClick={showReports}><BookOpen /> Review report requirements</Button></div>
-      <div className={cn(panel, 'mt-4 overflow-hidden')}><div className="hidden grid-cols-[1fr_1.15fr] gap-6 border-b border-[var(--line)] bg-[var(--sunken)] px-5 py-3 text-[11px] font-medium text-[var(--ink-3)] lg:grid"><span>Required business outcome and variations</span><span>Current company observations · coverage not yet certified here</span></div>
-        {groups.map(group => <div key={group.key} className="grid gap-4 border-b border-[var(--line)] p-5 last:border-b-0 lg:grid-cols-[1fr_1.15fr] lg:gap-6"><div><button type="button" onClick={() => chooseFeature(group.keys[0])} className="group inline-flex items-center gap-2 text-left text-[14px] font-semibold hover:text-[var(--link)] focus-visible:outline-2 focus-visible:outline-[var(--link)]">{group.name}<ChevronRight className="size-3.5 text-[var(--ink-3)] group-hover:text-[var(--link)]" /></button>{group.internal && <span className="ml-2 text-[10px] text-[var(--ink-3)]">App reliability</span>}<p className="mt-1 text-[13px] text-[var(--ink-2)]">{group.outcome}</p><p className="mt-2 text-[11.5px] leading-relaxed text-[var(--ink-3)]">{group.examples}</p></div><div><EvidenceSummary evidence={recordEvidence(result, group.keys)} result={result} recordState={recordState} compact /><button type="button" onClick={() => chooseFeature(group.keys[0])} className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--link)] hover:underline">Review requirements & evidence <ArrowRight className="size-3" /></button></div></div>)}
-      </div>
-    </section>
-    <SavedBusiness saved={saved} onRetry={retry} />
-    <div className="grid items-start gap-5 xl:grid-cols-2">
-      <section className={cn(panel, 'p-5')}><SectionHeading eyebrow="Approved release targets · achievement not calculated" title="What counts as enough coverage" /><ul className="mt-4 divide-y divide-[var(--line)]">{RELEASE_TARGETS.map(([value, label]) => <li key={label} className="flex items-baseline gap-4 py-3 text-[12px]"><span className="w-14 shrink-0 font-semibold tabular-nums">{value}</span><span className={muted}>{label}</span></li>)}</ul><p className="mt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">Business dates must also have no calendar gaps or overlaps. Complete requirements and period-specific evidence are needed before calculating achievement.</p></section>
-      <section className={cn(panel, 'p-5')}><SectionHeading eyebrow="Scope still needs classification" title="The catalog does not cover all Advanced functionality">Intuit lists these Advanced Canada features, but they have no explicit capability classification in this project's current catalog. Their intended inclusion, manual path or exclusion remains unresolved.</SectionHeading><div className="mt-4"><Tags items={UNMAPPED_ADVANCED} /></div><p className="mt-4 text-[11px] leading-relaxed text-[var(--ink-3)]">These are scope decisions, not missing-data findings. Payroll and other conditional functionality also depend on actual entitlement.</p><a href="https://quickbooks.intuit.com/ca/online/advanced/" target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-[12px] text-[var(--link)] hover:underline">Intuit's Canadian Advanced features <ArrowUpRight className="size-3" /></a></section>
-    </div>
   </div>
 }
 function RequirementDetail({ item, kind, result, recordState, inspectArea, headingRef }) {
@@ -98,33 +58,10 @@ function Requirements({ kind, selected, onSelect, result, recordState, inspectAr
     {!visible.length ? <div className={cn(panel, 'p-8 text-center')}><p className="text-[13px] text-[var(--ink-2)]">No requirements match these filters.</p><Button variant="link" onClick={() => { setQuery(''); setGroup('all'); setPriority('all') }}>Show all requirements</Button></div> : <div className="grid items-start gap-5 lg:grid-cols-[minmax(280px,0.65fr)_minmax(0,1.35fr)]"><nav aria-label={isReport ? 'Report requirements' : 'Feature requirements'} className={cn(panel, 'overflow-hidden lg:max-h-[calc(100vh-170px)] lg:overflow-y-auto lg:sticky lg:top-20')}>{visible.map(c => <button key={c.key} type="button" aria-current={c.key === item.key ? 'true' : undefined} onClick={() => { shouldFocus.current = true; onSelect(c.key) }} className={cn('flex w-full items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-3.5 text-left last:border-b-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--link)]', item.key === c.key ? 'bg-[var(--sunken)] shadow-[inset_3px_0_0_var(--link)]' : 'hover:bg-[var(--hover)]')}><span><span className="block text-[10px] text-[var(--ink-3)]">{isReport ? familyLabel[c.family] : groups.find(g => g.keys.includes(c.key))?.name} · {tierLabel[c.tier] || c.tier}</span><span className="mt-1 block text-[13px] font-medium">{c.name}</span></span><ChevronRight className="size-3.5 shrink-0 text-[var(--ink-3)]" /></button>)}</nav><RequirementDetail item={item} kind={kind} result={result} recordState={recordState} inspectArea={inspectArea} headingRef={heading} /></div>}
   </section>
 }
-function ScopedTargets({ mode, onModeChange, connection, result, recordState, onInspectArea }) {
-  const [feature, setFeature] = useState('sales.receivables-lifecycle')
+function ScopedTargets({ mode, initialFeature, result, recordState, onInspectArea }) {
+  const [feature, setFeature] = useState(initialFeature || 'sales.receivables-lifecycle')
   const [report, setReport] = useState('report.balance-sheet')
-  const [attempt, setAttempt] = useState(0)
-  const enabled = connection?.ready === true
-  const initial = { state: enabled ? 'loading' : 'disconnected', data: null }
-  const [saved, setSaved] = useState({ plan: initial, governance: initial })
-  const scope = { realmId: connection?.status?.realmId, environment: connection?.environment, connectionId: connection?.status?.connectionId }
-  const { realmId, environment, connectionId } = scope
-  useEffect(() => {
-    if (!enabled || !realmId || !connectionId) return
-    const controller = new AbortController()
-    const scope = { realmId, environment, connectionId }
-    Promise.allSettled(['/company/business-plan', '/company/business-governance'].map(path => client.get(path, { signal: controller.signal }))).then(responses => {
-      if (controller.signal.aborted) return
-      const next = {}
-      responses.forEach((response, i) => {
-        const key = i === 0 ? 'plan' : 'governance'
-        const data = response.status === 'fulfilled' ? response.value.data?.data : null
-        next[key] = matchesScope(data, scope) ? { state: 'ready', data } : { state: 'error', data: null }
-      })
-      setSaved(next)
-    })
-    return () => controller.abort()
-  }, [enabled, realmId, environment, connectionId, attempt])
-  function chooseFeature(key) { setFeature(key); onModeChange('features') }
-  return <div className="mt-6">{recordState === 'error' && result && <p role="alert" className="mb-4 rounded-md border border-[var(--line)] p-3 text-[12px] text-[var(--attention)]">The latest company read failed. Showing earlier record observations from {date(result.checkedAt)} at {new Date(result.checkedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}. Use Refresh record evidence to retry.</p>}{mode === 'overview' ? <Overview result={result} recordState={recordState} saved={saved} retry={() => { setSaved({ plan: initial, governance: initial }); setAttempt(a => a + 1) }} chooseFeature={chooseFeature} showReports={() => onModeChange('reports')} /> : mode === 'features' ? <Requirements key="features" kind="feature" selected={feature} onSelect={setFeature} result={result} recordState={recordState} inspectArea={onInspectArea} /> : <Requirements key="reports" kind="report" selected={report} onSelect={setReport} result={result} recordState={recordState} inspectArea={onInspectArea} />}</div>
+  return <div className="mt-6">{mode === 'features' ? <Requirements key="features" kind="feature" selected={feature} onSelect={setFeature} result={result} recordState={recordState} inspectArea={onInspectArea} /> : <Requirements key="reports" kind="report" selected={report} onSelect={setReport} result={result} recordState={recordState} inspectArea={onInspectArea} />}</div>
 }
 export default function CoverageTargets(props) {
   const { user } = useAuth()

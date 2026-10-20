@@ -1,48 +1,68 @@
-# Intended coverage and company evidence
+# Actual coverage results and supporting requirements
 
-Coverage defaults to the intended company scope, rather than record-presence results.
-The approved business has services/projects, inventory/wholesale and recurring services,
-an initial 36-month design horizon, continuing governed activity and explainable reports.
-See [research and design rationale](../design/coverage-research.md) for primary sources.
+Coverage defaults to results for the connected company. Static requirements and
+record-presence lists remain secondary. See [research](../design/coverage-research.md).
 
-## Requirements and evidence
+## Feature representation
 
-- **Intended coverage:** business outcomes and representative variations across nine
-  business groups, plus app operating requirements. Current record observations sit
-  alongside the target without becoming a target-level covered verdict.
-- **Feature requirements:** all 24 canonical capability entries, including the 21
-  business areas and three app operating requirements. Required variants, prerequisites,
-  conditional scope, evidence methods, limitations and approved exclusions remain
-  catalog-owned. Search includes variants. Each requirement links available company
-  observations and related report evidence.
-- **Report requirements:** all 48 project report definitions, including periods,
-  populated content, prerequisites and accounting relationships. Deep links open the
-  existing per-report retained evidence workflow; this list does not infer results.
-- **Company data:** supporting named record/setup observations from the existing
-  read-only coverage endpoint. Local filters, old-record handling, limited structural
-  evidence, manual instructions, source failures and Explorer links are retained.
+The canonical discovery catalog supplies all business areas and named variants.
+The three app-operating requirements remain outside the company-data denominator.
+Every business variant receives a result; unmapped variants are visibly unverified.
+The explicit semantic mappings in coverage-results.mjs compare existing scoped scan
+observations with those named variants. They do not turn arbitrary payments into full
+settlement, overdue invoices into paid-late invoices, or generic foreign activity into
+USD customer/vendor evidence. Positive narrow predicates do not prove broad absence.
+One qualifying asset or liability establishes its category even when the older scan
+volume threshold was two. A missing result requires a complete qualifying observation.
 
-The frontend imports the canonical discovery JSON for target definitions. Historical
-catalog coverage/implementation statuses and verification dates are never interpreted
-as live company findings. Current Canadian Advanced features with no explicit catalog
-classification are identified as unresolved scope decisions, not automatically adopted
-requirements or missing company records. Release thresholds are targets from PRD §8,
-not calculated company achievement.
+The summary counts represented, missing and unverified **business situations**, not
+successful internal checks. This is observed functionality, not certification of every
+linked lifecycle, realistic amount or report. Required periods and report evidence
+remain separate. Rows expose the exact represented and unresolved names and their
+qualifying observation counts/dates, with links to source data and full requirements.
 
-## Saved company comparison
+Coverage alone opts into useCoverage's cached-only initial read and accepts older
+snapshots with their original timestamp. It does not replace useful prior results
+with a long automatic scan. The explicit Read company data / Refresh record evidence
+action retains the existing read workflow. Other useCoverage callers keep the existing
+automatic-scan default. Connection changes invalidate in-flight feature reads.
 
-Only existing GETs for business-plan and business-governance are added. Both read saved
-application state without QBO writes or database mutations. Responses must match realm,
-environment and connection. Actor/scope changes remount and abort outstanding reads.
-Failures remain unavailable rather than becoming zero progress. Proposed defaults are
-never shown as saved settings. A current draft matches publication only when its hash
-matches the published blueprint hash. The calendar cursor proves only managed period
-verification; it does not certify all features, reports, unmanaged history or bank
-reconciliation.
+## Report outcomes
 
-The company-data detail panel still provides a separate support-case action only for a
-confirmed eligible presence gap. It preserves existing case authorization and never
-advances the business calendar. This redesign adds no execution or approval path.
+The result workspace reads existing manual report-history GETs with four concurrent
+workers and saved baseline-list/detail GETs with at most two detail readers. No new
+report capture or save is triggered. Responses must match realm, environment and
+connection, with actor/scope remounting and cancellation. Read failures never establish
+missing evidence. Earlier manual/history pages remain labelled unsearched.
 
-Focused non-live tests: coverage-features.test.mjs and coverage-targets.test.mjs under
-frontend/src/lib. Build/lint and actual desktop inspection are recorded in the task evidence.
+A complete owner-recorded result requires all four evidence levels and assertions to
+pass for the current matching definition; its exact period, basis and filters remain
+visible. The latest decision per identical scope is used; different scopes remain
+separate. Withdrawn observations do not count. Saved native report availability is
+partial proof. Relevant failed balance/aging relationships produce differences for
+their related reports only. Returned basis and report evidence type are preserved;
+a common requested Accrual scope never invents a basis absent from an aging statement.
+
+The page inspects one bounded manual page per report and ten stored observations.
+Unsearched history and failed source reads remain explicit. A verified recorded scope
+is not an assertion that every catalog period or full historical report coverage passes.
+
+## Historical coverage
+
+The published starting date and managed calendar cursor establish completed managed
+months. An opening baseline contributes zero completed months. The target length is
+read from the current saved draft only when its content hash matches the published
+blueprint. Otherwise the target is unavailable. Unmanaged old records, app protection
+and bank reconciliation are not conflated with managed business-period verification.
+
+## Supporting workflows and boundaries
+
+Feature/report requirements retain the catalog's prerequisites, conditional scope,
+variations, source-dated applicability and API/manual classifications. Company data
+retains local filters, manual instructions, source failures, Explorer links and the
+existing eligible support-case action. No new mutation, execution, auth, or approval
+route is introduced. No services or company records are changed by this implementation.
+
+Focused non-live tests cover target accounting, semantic mapping boundaries, partial
+and failed evidence, exact scope/definition checks, month completion, bounded report
+concurrency and cancellation, alongside the prior feature/target tests.

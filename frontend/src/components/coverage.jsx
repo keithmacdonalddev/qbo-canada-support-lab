@@ -125,11 +125,11 @@ const isMissingRoute = (err) => err.response?.status === 404 && err.response?.da
  * away when the server has one, then checks again if it has none.
  * state: 'loading' | 'checking' | 'ready' | 'unavailable' | 'error'
  */
-export function useCoverage(enabled) {
+export function useCoverage(enabled, { autoCheck = true, acceptOlderCache = false } = {}) {
   const connection = useConnection()
   const { user } = useAuth()
   const realmId = connection?.status?.realmId
-  const scope = [user?._id || user?.id, realmId, connection?.environment, enabled].join(':')
+  const scope = [user?._id || user?.id, realmId, connection?.environment, connection?.status?.connectionId, enabled].join(':')
   const [view, setView] = useState({ scope: null, result: null, state: 'loading', error: null })
   const requestId = useRef({ value: 0 })
 
@@ -161,17 +161,19 @@ export function useCoverage(enabled) {
         if (request !== requests.value) return
         const cached = res.data?.data
         const age = cached ? Date.now() - new Date(cached.checkedAt).getTime() : Infinity
-        if (cached && String(cached.realmId) === String(realmId) && age >= 0 && age < 10 * 60 * 1000) {
+        if (cached && String(cached.realmId) === String(realmId) && (acceptOlderCache || (age >= 0 && age < 10 * 60 * 1000))) {
           setView({ scope, result: cached, state: 'ready', error: null })
-        } else check()
+        } else if (autoCheck) check()
+        else setView({ scope, result: null, state: 'idle', error: null })
       })
       .catch((err) => {
         if (request !== requests.value) return
         if (isMissingRoute(err)) setView({ scope, result: null, state: 'unavailable', error: null })
-        else check()
+        else if (autoCheck) check()
+        else setView({ scope, result: null, state: 'error', error: 'Saved company observations could not be read.' })
       })
     return () => { requests.value++ }
-  }, [enabled, realmId, scope, check])
+  }, [enabled, realmId, scope, check, autoCheck, acceptOlderCache])
 
   return { ...(view.scope === scope ? view : { result: null, state: 'loading', error: null }), check }
 }
