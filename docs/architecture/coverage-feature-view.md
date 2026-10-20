@@ -1,29 +1,48 @@
-# Company feature coverage
+# Intended coverage and company evidence
 
-The Coverage page presents named QuickBooks functionality under **Covered by
-company data** and **Missing data or needs verification**. It uses the existing
-read-only `/api/coverage` result. It does not show a global completion percentage
-or treat the number of successful internal signals as overall company coverage.
+Coverage defaults to the intended company scope, rather than record-presence results.
+The approved business has services/projects, inventory/wholesale and recurring services,
+an initial 36-month design horizon, continuing governed activity and explainable reports.
+See [research and design rationale](../design/coverage-research.md) for primary sources.
 
-`frontend/src/lib/coverage-features.mjs` adapts those results for this view:
+## Requirements and evidence
 
-- Older matching transactions remain evidence of feature presence. Their age is
-  shown separately; age alone does not offer another test case.
-- Customer/vendor record-volume shortfalls retain the existing feature data as
-  limited. Unmet structural requirements, such as multiple provinces, remain
-  incomplete and identify that additional setup data is needed.
-- Missing prerequisites, manual verification, and failed reads stay distinct
-  from a confirmed absence of data.
-- Search and filters operate locally on named features and business areas.
+- **Intended coverage:** business outcomes and representative variations across nine
+  business groups, plus app operating requirements. Current record observations sit
+  alongside the target without becoming a target-level covered verdict.
+- **Feature requirements:** all 24 canonical capability entries, including the 21
+  business areas and three app operating requirements. Required variants, prerequisites,
+  conditional scope, evidence methods, limitations and approved exclusions remain
+  catalog-owned. Search includes variants. Each requirement links available company
+  observations and related report evidence.
+- **Report requirements:** all 48 project report definitions, including periods,
+  populated content, prerequisites and accounting relationships. Deep links open the
+  existing per-report retained evidence workflow; this list does not infer results.
+- **Company data:** supporting named record/setup observations from the existing
+  read-only coverage endpoint. Local filters, old-record handling, limited structural
+  evidence, manual instructions, source failures and Explorer links are retained.
 
-Selecting a feature opens its existing counts, dates, read limitations and
-manual instructions. Supported record types link to the existing Explorer;
-these links browse that type and do not claim individual matching record IDs.
-Related report names are dependencies, not report-verification evidence.
+The frontend imports the canonical discovery JSON for target definitions. Historical
+catalog coverage/implementation statuses and verification dates are never interpreted
+as live company findings. Current Canadian Advanced features with no explicit catalog
+classification are identified as unresolved scope decisions, not automatically adopted
+requirements or missing company records. Release thresholds are targets from PRD §8,
+not calculated company achievement.
 
-The view covers the server's listed functionality and bounded search period;
-it does not establish every QuickBooks feature, full business history, or
-reconciled reports. Existing case authorization and backend reads are unchanged.
+## Saved company comparison
 
-Focused non-live regression coverage:
-`node --test frontend/src/lib/coverage-features.test.mjs`.
+Only existing GETs for business-plan and business-governance are added. Both read saved
+application state without QBO writes or database mutations. Responses must match realm,
+environment and connection. Actor/scope changes remount and abort outstanding reads.
+Failures remain unavailable rather than becoming zero progress. Proposed defaults are
+never shown as saved settings. A current draft matches publication only when its hash
+matches the published blueprint hash. The calendar cursor proves only managed period
+verification; it does not certify all features, reports, unmanaged history or bank
+reconciliation.
+
+The company-data detail panel still provides a separate support-case action only for a
+confirmed eligible presence gap. It preserves existing case authorization and never
+advances the business calendar. This redesign adds no execution or approval path.
+
+Focused non-live tests: coverage-features.test.mjs and coverage-targets.test.mjs under
+frontend/src/lib. Build/lint and actual desktop inspection are recorded in the task evidence.

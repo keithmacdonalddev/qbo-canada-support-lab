@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowUpRight, Check, Clock3, HelpCircle, LoaderCircle, RefreshCw, Search, WandSparkles, X } from 'lucide-react'
 import Layout from '../components/Layout'
+import CoverageTargets from '../components/CoverageTargets'
 import client from '../api/client'
 import { useConnection } from '../context/ConnectionContext'
 import { Button } from '@/components/ui/button'
@@ -64,11 +65,17 @@ export default function Coverage() {
   const areas = useMemo(() => measuredAreas(result), [result])
   const [aiReady, setAiReady] = useState(false)
   const [params] = useSearchParams()
+  const [mode, setMode] = useState(() => params.get('area') ? 'data' : 'overview')
   const [selection, setSelection] = useState(() => ({ area: params.get('area'), feature: null }))
   const [query, setQuery] = useState('')
   const [domain, setDomain] = useState('all')
   const [view, setView] = useState('all')
   const returnFocus = useRef(null)
+  const pageHeading = useRef(null)
+  const previousMode = useRef(mode)
+  useEffect(() => {
+    if (previousMode.current !== mode) { pageHeading.current?.focus({ preventScroll: true }); pageHeading.current?.scrollIntoView({ block: 'start' }); previousMode.current = mode }
+  }, [mode])
   useEffect(() => {
     let cancelled = false
     client.get('/ai/config').then(res => { if (!cancelled) setAiReady(res.data?.data?.available === true) }).catch(() => {})
@@ -87,7 +94,11 @@ export default function Coverage() {
   return (
     <Layout>
       <div className="mx-auto max-w-[1440px]">
-        <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 className="text-[22px] font-semibold tracking-[-0.015em]">Coverage</h1><p className="mt-1 max-w-[80ch] text-[13.5px] text-[var(--ink-2)]">Which QuickBooks features have data in this company, and what is missing?</p></div>{ready && state !== 'unavailable' && <div className="flex items-center gap-3 text-[12px] text-[var(--ink-3)]">{result && <span>Read {relativeTime(result.checkedAt)}</span>}<Button variant="outline" onClick={() => check({ refresh: true })} disabled={checking}>{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{checking ? 'Reading company…' : 'Refresh coverage'}</Button></div>}</div>
+        <div className="flex flex-wrap items-end justify-between gap-4"><div><h1 ref={pageHeading} tabIndex={-1} className="scroll-mt-20 text-[22px] font-semibold tracking-[-0.015em] focus-visible:outline-2 focus-visible:outline-[var(--link)]">Coverage</h1><p className="mt-1 max-w-[80ch] text-[13.5px] text-[var(--ink-2)]">The business, features and reports this company is intended to cover — compared with available evidence.</p></div>{ready && state !== 'unavailable' && <div className="flex items-center gap-3 text-[12px] text-[var(--ink-3)]">{result && <span>Read {relativeTime(result.checkedAt)}</span>}<Button variant="outline" onClick={() => check({ refresh: true })} disabled={checking}>{checking ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}{checking ? 'Reading company…' : 'Refresh record evidence'}</Button></div>}</div>
+        <nav aria-label="Coverage workspace" className="mt-5 flex flex-wrap gap-1 border-b border-[var(--line)] pb-3">{[['overview', 'Intended coverage'], ['features', 'Feature requirements'], ['reports', 'Report requirements'], ['data', 'Company data']].map(([key, label]) => <Button key={key} variant={mode === key ? 'secondary' : 'ghost'} size="sm" aria-pressed={mode === key} onClick={() => setMode(key)}>{label}</Button>)}</nav>
+        {mode !== 'data' && <CoverageTargets mode={mode} onModeChange={setMode} connection={connection} result={result} recordState={ready ? state : 'disconnected'} onInspectArea={key => { setSelection({ area: key, feature: null }); setQuery(areas.find(area => area.key === key)?.name || ''); setView('all'); setDomain('all'); setMode('data') }} />}
+        {mode === 'data' && <>
+        <div className="mt-6"><h2 className="text-[18px] font-semibold">Supporting company data</h2><p className="mt-1 text-[13px] text-[var(--ink-2)]">Record and setup observations support the coverage requirements. They do not establish the complete intended business or report coverage.</p></div>
         {!ready ? <p className="mt-8 text-[13.5px] text-[var(--ink-2)]">Connect the QuickBooks company to see its feature coverage.</p>
           : state === 'unavailable' ? <CoverageUnavailable className="mt-8" />
             : !result ? state === 'error' ? <p role="alert" className="mt-8 text-[13px] text-[var(--danger-ink)]">{error} <button type="button" className="text-[var(--link)] underline" onClick={() => check({ refresh: true })}>Try again</button></p>
@@ -113,8 +124,9 @@ export default function Coverage() {
                   {selectedArea && selectedSignal && <div className="lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto"><FeatureDetail area={selectedArea} signal={selectedSignal} canAsk={ready && aiReady} onClose={closeDetails} /></div>}
                 </div>
                 {!!result.sourceErrors?.length && <p className="mt-4 text-[12px] text-[var(--attention)]">Some sources could not be read: {result.sourceErrors.map(source => source.source).join(', ')}. Their feature coverage remains unverified.</p>}
-                <p className="mt-4 text-[12px] leading-relaxed text-[var(--ink-3)]">Coverage here means the listed functionality has supporting records or setup. It does not establish complete business history, every QuickBooks feature, or reconciled reports. <Link to="/reports" className="text-[var(--link)] underline">Inspect reports</Link>.</p>
+                <p className="mt-4 text-[12px] leading-relaxed text-[var(--ink-3)]">These findings show which listed features have supporting records or setup. They do not establish complete business history, every QuickBooks feature, or reconciled reports. <Link to="/reports" className="text-[var(--link)] underline">Inspect reports</Link>.</p>
               </>}
+        </>}
       </div>
     </Layout>
   )
