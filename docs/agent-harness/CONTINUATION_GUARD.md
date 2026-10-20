@@ -40,14 +40,18 @@ An exact continue or resume acknowledges only the captured generation of an ordi
 
 ## Configuration, activation and proof
 
-Only this checkout's Codex configuration is changed. Existing workflow handlers remain intact. New Stop, Interrupt and additional UserPromptSubmit handlers invoke continuation.cjs. Windows uses direct absolute Node commands with no PowerShell/cmd wrapper. The module itself launches no child process. Its tests launch owned short-lived Node children with windowsHide:true and shell:false and clean only their verified temporary roots.
+Only this checkout's Codex configuration is changed. Existing workflow handlers remain intact. New Stop, Interrupt and additional UserPromptSubmit handlers invoke continuation.cjs. Windows command strings launch the fixed Node executable through .NET ProcessStartInfo with UseShellExecute=false and CreateNoWindow=true. They redirect stdin/stdout/stderr, bound input and child execution, forward the child exit code, and terminate only their owned child on timeout. This bypasses PowerShell executable/file-association resolution. The continuation module itself launches no child process. Regression tests use hidden bounded processes and clean only their verified temporary roots.
 
 Official native protocol: [Codex hooks](https://developers.openai.com/codex/hooks#stop). A Stop decision:block produces a continuation prompt; Interrupt is a root-session event. New or changed non-managed hook definitions require the client's normal review/trust before execution. Do not bypass that trust, edit personal trust records, or infer activation from configuration files.
 
 Verification layers are separate:
 
 - Fixture/CLI checks prove the handler's behavior and JSON output, including the exact unfinished-status handoff, explicit stops, cancellation under lock contention, blocked actions, evidence changes, retry limits, path containment and session isolation.
-- The static harness verifier checks exact event wiring and direct Windows Node launch strings.
+- The static harness verifier checks exact event wiring and required no-window process settings. Windows regression tests run the actual configured commands with PATHEXT empty and require valid event-specific JSON, not just exit zero.
 - Fresh client execution of a trusted Stop hook must be observed before claiming native automatic continuation is active. Neither of the first two layers proves that.
 
 Required checks run through verified Luna/low: node --test scripts/agent-harness/continuation.test.cjs scripts/agent-harness/workflow.test.cjs, node scripts/agent-harness/verify.cjs, and git diff --check. App builds and QBO writes are unnecessary for this guard.
+
+### Windows launch failure, 2026-10-19
+
+The original quoted executable command failed PowerShell parsing. Adding the invocation operator exposed a second failure: PowerShell treated Node as a document, returned no hook output, and opened visible Node windows despite the parent process being hidden. Do not repeat that native invocation test route. The replacement uses explicit no-window process creation with shell execution disabled; it does not change hook trust, execution policy, or continuation decisions. Subprocess verification and native client reload/trust remain separate facts.

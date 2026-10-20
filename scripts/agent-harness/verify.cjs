@@ -22,7 +22,7 @@ for(const event of ['SessionStart','UserPromptSubmit','PreToolUse']){
 for(const event of ['Stop','Interrupt','UserPromptSubmit']){
  const handlers=cx.hooks[event]?.flatMap(group=>group.hooks).filter(handler=>handler.command?.includes('continuation.cjs'))||[];
  check(handlers.length===1,'Exactly one Codex continuation handler '+event);
- check(handlers[0].commandWindows?.startsWith('"C:/Program Files/nodejs/node.exe"')&&!/powershell|cmd[.]exe/i.test(handlers[0].commandWindows),'Direct Node Windows continuation '+event);
+ check(handlers[0].commandWindows?.includes("$info.FileName='C:/Program Files/nodejs/node.exe'")&&handlers[0].commandWindows.includes('$info.UseShellExecute=$false')&&handlers[0].commandWindows.includes('$info.CreateNoWindow=$true'),'No-window direct process continuation '+event);
 }
 check(fs.existsSync(path.join(root,'scripts/agent-harness/continuation.test.cjs')),'Continuation regression coverage present');
 check(read('AGENT_WORKFLOW.md').includes('coding requests authorize committing and pushing'),'Git policy');

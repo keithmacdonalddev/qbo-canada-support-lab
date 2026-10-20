@@ -26,3 +26,23 @@ test('a clear replacement objective prevents continuation of stale ready actions
 
 test('resume acknowledges only its captured pause generation and preserves a newer interruption',()=>{const h=fixture(),read=fs.readFileSync;try{h.arm();processEvent('interrupt',h.event,h.root,NOW);let injected=false;fs.readFileSync=function(file,...args){const value=read.call(fs,file,...args);if(!injected&&String(file).endsWith('.paused')){injected=true;processEvent('interrupt',h.event,h.root,NOW+1);}return value;};processEvent('prompt',{...h.event,prompt:'continue'},h.root,NOW+2);fs.readFileSync=read;assert.equal(injected,true);assert.deepEqual(h.stop(),{});}finally{fs.readFileSync=read;h.close();}});
 test('a repeated Stop still honors an interruption arriving during evidence reads',()=>{const h=fixture(),read=fs.readFileSync;try{h.contract.requirements.push({id:'second-outcome',status:'pending'});h.arm();const proof=evidence(h);update(h.root,ID,{requirements:[{id:'live-outcome',status:'verified',evidence:proof},{id:'second-outcome',status:'pending'}]});assert.equal(h.stop().decision,'block');let injected=false;fs.readFileSync=function(file,...args){const value=read.call(fs,file,...args);if(!injected&&String(file).endsWith('observed.json')){injected=true;processEvent('interrupt',h.event,h.root,NOW+1);}return value;};assert.deepEqual(h.stop(),{});assert.equal(injected,true);}finally{fs.readFileSync=read;h.close();}});
+
+// Run the exact configured command in a shell without executable associations.
+for (const [event, mode] of [['UserPromptSubmit', 'prompt'], ['Stop', 'stop'], ['Interrupt', 'interrupt']]) {
+  test('Windows no-window continuation launch: ' + event, { skip: process.platform !== 'win32' }, () => {
+    const root = path.resolve(__dirname, '../..');
+    const config = JSON.parse(fs.readFileSync(path.join(root, '.codex/hooks.json'), 'utf8'));
+    const handler = config.hooks[event].flatMap(group => group.hooks).find(hook => hook.command.includes('continuation.cjs'));
+    assert.ok(handler.commandWindows.includes('$info.UseShellExecute=$false'));
+    assert.ok(handler.commandWindows.includes('$info.CreateNoWindow=$true'));
+    const result = cp.spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', handler.commandWindows], {
+      cwd: root, windowsHide: true, shell: false, timeout: 5000, encoding: 'utf8',
+      env: { ...process.env, PATHEXT: '' },
+      input: JSON.stringify({ session_id: crypto.randomUUID(), cwd: root, turn_id: 'synthetic-windows-' + mode, prompt: 'Read-only unicode café verification' }),
+    });
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const output = JSON.parse(result.stdout);
+    if (mode === 'prompt') assert.equal(output.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    else assert.deepEqual(output, {});
+  });
+}
