@@ -212,30 +212,29 @@ export default function Layout({ children }) {
           data-collapsed={collapsed}
           className="app-sidebar hidden h-screen max-h-full shrink-0 flex-col border-r border-[var(--line)] bg-[var(--canvas)] px-3 pb-3 pt-4 md:flex"
         >
-          <SidebarHint label="Test Data Lab home" enabled={collapsed}>
-            <Link to="/" aria-label="Test Data Lab home" className="sidebar-brand mb-3 flex min-h-8 items-center gap-2.5 px-1.5 no-underline">
+          <div className="sidebar-header mb-3 flex min-h-9 shrink-0 items-center gap-1">
+            <Link to="/" aria-label="Test Data Lab home" className="sidebar-brand flex min-w-0 flex-1 items-center gap-2.5 no-underline">
               <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center rounded-[6px] bg-[var(--ink)] text-[11px] font-semibold tracking-tight text-white">
                 TD
               </span>
               <span className="sidebar-label text-[14px] font-semibold tracking-[-0.01em] text-[var(--ink)]" aria-hidden={collapsed || undefined}>Test Data Lab</span>
             </Link>
-          </SidebarHint>
-          <SidebarHint label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-            <button
-              type="button"
-              onClick={() => setCollapsed((value) => !value)}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              aria-expanded={!collapsed}
-              aria-controls="desktop-sidebar"
-              className="sidebar-item sidebar-toggle mb-3 flex shrink-0 items-center gap-2.5 rounded-md px-2.5 text-[12px] text-[var(--ink-3)] hover:bg-[var(--sunken)] hover:text-[var(--ink)] focus-visible:outline-offset-[-2px]"
-            >
-              <span className="sidebar-toggle-icon relative size-4 shrink-0" aria-hidden="true">
-                <PanelLeftClose className="sidebar-close-icon absolute inset-0 size-4" strokeWidth={1.75} />
-                <PanelLeftOpen className="sidebar-open-icon absolute inset-0 size-4" strokeWidth={1.75} />
-              </span>
-              <span className="sidebar-label" aria-hidden={collapsed || undefined}>Collapse sidebar</span>
-            </button>
-          </SidebarHint>
+            <SidebarHint label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+              <button
+                type="button"
+                onClick={() => setCollapsed((value) => !value)}
+                aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                aria-expanded={!collapsed}
+                aria-controls="desktop-sidebar"
+                className="sidebar-toggle grid size-8 shrink-0 place-items-center rounded-md text-[var(--ink-3)] hover:bg-[var(--sunken)] hover:text-[var(--ink)] focus-visible:outline-offset-[-2px]"
+              >
+                <span className="sidebar-toggle-icon relative size-4 shrink-0" aria-hidden="true">
+                  <PanelLeftClose className="sidebar-close-icon absolute inset-0 size-4" strokeWidth={1.75} />
+                  <PanelLeftOpen className="sidebar-open-icon absolute inset-0 size-4" strokeWidth={1.75} />
+                </span>
+              </button>
+            </SidebarHint>
+          </div>
           <div className="sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto">{nav(collapsed)}</div>
           {footer(collapsed)}
         </aside>

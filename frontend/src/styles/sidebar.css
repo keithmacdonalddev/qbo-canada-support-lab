@@ -40,7 +40,8 @@
 .app-sidebar .sidebar-logout svg { width: 16px; height: 16px; }
 .app-sidebar .sidebar-brand { padding-inline: 7.5px; }
 .app-sidebar .sidebar-brand > span:first-child { width: 24px; height: 24px; }
-.sidebar-toggle { text-align: left; }
+.app-sidebar[data-collapsed="true"] .sidebar-brand { display: none; }
+.app-sidebar[data-collapsed="true"] .sidebar-header { justify-content: center; }
 .sidebar-toggle:active .sidebar-toggle-icon { transform: scale(0.92); }
 .sidebar-toggle-icon { transition: transform 160ms var(--sidebar-ease); }
 .sidebar-toggle-icon svg { transition: opacity 160ms ease; }
