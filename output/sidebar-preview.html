@@ -1,0 +1,74 @@
+<div id="sidebar-demo" class="viz-dotted-background">
+  <style>
+    #sidebar-demo { padding: 24px; }
+    #sidebar-demo .sample { display: flex; min-height: 270px; background: #111113; color: #ededee; border: 1px solid #29292d; border-radius: 12px; overflow: hidden; font: 14px/1.4 Arial, sans-serif; }
+    #sidebar-demo aside { width: 256px; flex-shrink: 0; background: #09090b; border-right: 1px solid #26262a; transition: width 180ms ease; }
+    #sidebar-demo header { height: 64px; display: flex; align-items: center; gap: 10px; padding: 0 12px; }
+    #sidebar-demo .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; flex: 1; font-weight: 600; }
+    #sidebar-demo .logo { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #43c5ef; color: #071013; font-size: 13px; font-weight: 500; }
+    #sidebar-demo button { display: flex; align-items: center; justify-content: center; border: 0; background: transparent; color: #a1a1aa; border-radius: 7px; font: inherit; }
+    #sidebar-demo button:hover { background: #232327; color: #fafafa; }
+    #sidebar-demo button:focus-visible { outline: 2px solid #43c5ef; outline-offset: 2px; }
+    #sidebar-demo .toggle { width: 32px; height: 32px; flex-shrink: 0; }
+    #sidebar-demo nav { padding: 8px 12px; display: grid; gap: 6px; }
+    #sidebar-demo .item { height: 40px; justify-content: flex-start; padding: 0 10px; gap: 12px; white-space: nowrap; }
+    #sidebar-demo .item.selected { background: #232327; color: #f4f4f5; }
+    #sidebar-demo svg { width: 18px; height: 18px; flex-shrink: 0; }
+    #sidebar-demo main { padding: 23px 24px; flex: 1; }
+    #sidebar-demo main span { color: #a1a1aa; font-size: 12px; }
+    #sidebar-demo h3 { margin: 8px 0; font-size: 18px; font-weight: 500; color: #ededee; }
+    #sidebar-demo .expand { display: none; }
+    #sidebar-demo.collapsed aside { width: 64px; }
+    #sidebar-demo.collapsed header { justify-content: center; }
+    #sidebar-demo.collapsed .brand, #sidebar-demo.collapsed .item span, #sidebar-demo.collapsed .collapse { display: none; }
+    #sidebar-demo.collapsed .expand { display: inline-flex; }
+    #sidebar-demo.collapsed .item { justify-content: center; padding: 0; }
+    @media (max-width: 480px) { #sidebar-demo { padding: 8px; } #sidebar-demo main { display: none; } #sidebar-demo .sample { min-height: 260px; } }
+    @media (prefers-reduced-motion: reduce) { #sidebar-demo aside { transition: none; } }
+  </style>
+  <div class="sample">
+    <aside aria-label="Sidebar preview">
+      <header>
+        <div class="brand"><span class="logo">TD</span><span>Test Data Lab</span></div>
+        <button class="toggle cursor-interaction" type="button" aria-label="Collapse sidebar" aria-expanded="true" data-tooltip="Collapse sidebar" data-tooltip-placement="bottom">
+          <span class="collapse"><i data-lucide="panel-left-close" aria-hidden="true"></i></span>
+          <span class="expand"><i data-lucide="panel-left-open" aria-hidden="true"></i></span>
+        </button>
+      </header>
+      <nav aria-label="Example navigation">
+        <button class="item selected cursor-interaction" type="button" aria-label="Dashboard" data-tooltip="Dashboard"><i data-lucide="layout-dashboard" aria-hidden="true"></i><span>Dashboard</span></button>
+        <button class="item cursor-interaction" type="button" aria-label="Explorer" data-tooltip="Explorer"><i data-lucide="search" aria-hidden="true"></i><span>Explorer</span></button>
+        <button class="item cursor-interaction" type="button" aria-label="Settings" data-tooltip="Settings"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></button>
+      </nav>
+    </aside>
+    <main><span>Test Data Lab</span><h3>Dashboard</h3></main>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('sidebar-demo');
+      const toggle = root.querySelector('.toggle');
+      function render(collapsed) {
+        root.classList.toggle('collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+        toggle.setAttribute('aria-label', label);
+        toggle.setAttribute('data-tooltip', label);
+      }
+      render(window.openai?.widgetState?.privateContent?.collapsed === true);
+      toggle.addEventListener('click', () => {
+        const collapsed = !root.classList.contains('collapsed');
+        render(collapsed);
+        window.openai?.setWidgetState?.({ privateContent: { collapsed } })?.catch(() => {});
+      });
+      window.addEventListener('openai:set_globals', event => {
+        const state = event.detail?.globals?.widgetState;
+        if (state) render(state.privateContent?.collapsed === true);
+      });
+      root.querySelectorAll('.item').forEach(button => button.addEventListener('click', () => {
+        root.querySelectorAll('.item').forEach(item => item.classList.remove('selected'));
+        button.classList.add('selected');
+        root.querySelector('h3').textContent = button.getAttribute('aria-label');
+      }));
+    })();
+  </script>
+</div>
