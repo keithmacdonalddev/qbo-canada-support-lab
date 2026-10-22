@@ -64,7 +64,7 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
   const publicationReview = review?.review.blueprintHash === draft?.contentHash ? review : null
   const draftSchedulePending = environment === 'production' && draft?.business.activityTemplateVersion === 3, publishedSchedulePending = environment === 'production' && view?.published?.activityTemplateVersion === 3
   if (!enabled) return null
-  return <section id="business-maintenance" aria-label="Business publication and calendar" className="mt-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)]">
+  return <section id="business-maintenance" tabIndex={-1} aria-label="Business publication and calendar" className="mt-5 scroll-mt-20 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">
     <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3"><h2 className="text-[13px] font-semibold">Business publication and calendar</h2><Button variant="ghost" size="sm" disabled={busy} onClick={() => act(load)}>Refresh business state</Button></header>
     <div className="space-y-4 px-5 py-4 text-[13px]">
       {view && <p className="text-[var(--ink-2)]">{view.companyName} · {view.environment} · {view.realmId}</p>}

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import Layout from '../components/Layout'
 import BookEvidence from '../components/BookEvidence'
+import CompanyProgress from '../components/CompanyProgress'
 import BusinessBaseline from '../components/BusinessBaseline'
 import BusinessMaintenance from '../components/BusinessMaintenance'
 import BusinessSetup from '../components/BusinessSetup'
@@ -136,6 +137,8 @@ function CompanyContent({ connection }) {
         <h1 className="text-[22px] font-semibold tracking-[-0.015em] text-[var(--ink)]">{status?.companyName || 'Company'}</h1>
         <p className="mt-1 text-[13.5px] text-[var(--ink-2)]">Maintain a realistic business, keep its records current, and verify the results.</p>
 
+        <CompanyProgress enabled={ready} realmId={status?.realmId} environment={connection?.environment} connectionId={status?.connectionId} />
+
         <section className="mt-6 flex flex-wrap items-center gap-5 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] px-6 py-5">
           <StatusDot tone={currency.tone} className="size-2.5" />
           <div className="min-w-0 flex-1">
@@ -157,7 +160,7 @@ function CompanyContent({ connection }) {
               {(currency.stale || currency.checkFailed || currency.incomplete) && <p role="status" className="mt-2 text-[var(--attention)]">{currency.checkFailed ? 'The latest check failed. Earlier findings are shown below.' : currency.stale ? 'These findings need refreshing.' : 'Some records could not be read completely.'}</p>}
               <ul className="mt-3 list-disc space-y-1 pl-5">
                 <li>Business calendar: {businessState?.calendar?.verifiedThrough ? 'managed records and named accounting checks verified through ' + businessState.calendar.verifiedThrough + '.' : businessState ? 'no managed business period verified yet.' : 'saved calendar has not been confirmed.'}</li>
-                <li>Reports and reconciliation: completeness has not been established.</li>
+                <li>Report observations and their accounting checks appear in Company progress above; reconciliation is reviewed separately.</li>
                 <li>{currency.unanswered} coverage checks still require evidence or a successful read.</li>
               </ul>
             </div>
@@ -181,11 +184,11 @@ function CompanyContent({ connection }) {
 
         <BusinessMaintenance realmId={status?.realmId} environment={connection?.environment} enabled={ready} refreshVersion={readVersion} onState={setBusinessState} onChanged={() => setSetupVersion(v => v + 1)} />
 
-        <BusinessPopulation realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <div id="business-population" tabIndex={-1} className="scroll-mt-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]"><BusinessPopulation realmId={status?.realmId} environment={connection?.environment} enabled={ready} /></div>
 
         <BusinessOperations key={`operations:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
 
-        <BusinessBaseline key={`baseline:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} />
+        <div id="business-observations" tabIndex={-1} className="scroll-mt-20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]"><BusinessBaseline key={`baseline:${setupVersion}`} realmId={status?.realmId} environment={connection?.environment} enabled={ready} /></div>
 
         <BookEvidence realmId={status?.realmId} environment={connection?.environment} connectionId={status?.connectionId} enabled={ready} />
 
