@@ -7,6 +7,7 @@ const SPECIALIST_TYPES = Object.freeze({receivables:['Customer','Invoice','Payme
 const schema=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
 const text={type:'string'}, id={type:'string',pattern:'^[a-f0-9]{24}$'}, digest={type:'string',pattern:'^[a-f0-9]{64}$'};
 const EXTRA_TOOLS = Object.freeze([
+  {name:'getBusinessDecision',description:'Read the full retained evidence and owner response for one exact decision summarized in the operating context.',input_schema:schema({decisionId:id},['decisionId'])},
   {name:'getBusinessState',description:'Inspect current synchronization, published policy, retained work, accounting checks, owner decisions and blockers before acting.',input_schema:schema()},
   {name:'getObligations',description:'Read currently mirrored unpaid invoices or bills with dates and amounts. Results are explicitly provisional when source synchronization is incomplete.',input_schema:schema({area:{type:'string',enum:['receivables','payables']},overdueOnly:{type:'boolean'},limit:{type:'integer',minimum:1,maximum:50}},['area'])},
   {name:'inspectBusinessOperation',description:'Read the immutable saved accounting plan and its retained verification/recovery state.',input_schema:schema({operationId:id,offset:{type:'integer',minimum:0,maximum:1000}},['operationId'])},
@@ -56,6 +57,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     }
     let result;
     if(READ_NAMES.includes(name))result=await native.toolHandlers[name](input,{qbo:await readClient(name==='runReport'),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}});
+    else if(name==='getBusinessDecision')result={success:true,data:await store.decision(row,input.decisionId)};
     else if(name==='getBusinessState')result={success:true,data:{business:await store.business(scope),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities()}};
     else if(name==='getObligations'){
       const today=businessDate(new Date(now())),entity=input.area==='receivables'?'Invoice':'Bill';

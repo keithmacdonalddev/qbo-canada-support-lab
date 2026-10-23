@@ -307,3 +307,28 @@ test('an extra durable intent outside the manifest is still rejected by bounded 
   await assert.rejects(h.store.approve(scope, saved.operationId, saved.planHash), /activities are missing/);
   assert.equal(h.runs.get(saved.operationId).status, 'previewed'); assert.equal(h.fences, 0);
 });
+
+function withAgent(h) {
+  const authority = { version: 1, agentId: 'a'.repeat(24), ownerId: actorId, grantId: hash('standing owner grant'), authorityHash: hash('published business') };
+  h.current.authorityHash = authority.authorityHash; h.request.candidateHash = hash(h.current); h.agentEnabled = true;
+  const transaction = h.deps.transaction;
+  h.deps.transaction = work => transaction(session => work({ ...session, inTransaction: () => true }));
+  h.deps.agentAuthority = authority;
+  h.deps.Agents = { findOneAndUpdate(filter, update, options) { assert.equal(filter['grant.id'], authority.grantId); assert.ok(options.session.inTransaction()); return { lean: async () => h.agentEnabled ? { _id: authority.agentId } : null }; } };
+  h.store = createBusinessOperationPlanStore(h.deps); return authority;
+}
+test('agent origin is immutable plan evidence and approval records the standing-grant decision source', async () => {
+  const h = harness(), authority = withAgent(h), saved = await h.prepare();
+  assert.deepEqual(h.runs.get(saved.operationId).agentAuthority, authority); assert.deepEqual([...h.plans.values()][0].agentAuthority, authority);
+  await h.store.approve(scope, saved.operationId, saved.planHash);
+  assert.deepEqual(h.runs.get(saved.operationId).approval.agentAuthority, authority);
+  assert.equal(h.runs.get(saved.operationId).approval.decisionSource, 'agent-standing-authority');
+  assert.equal([...h.audits.values()].at(-1).details.agentGrantId, authority.grantId);
+});
+test('pause between preparation and approval blocks an agent approval; changed run origin cannot reuse a plan', async () => {
+  const h = harness(); withAgent(h); const saved = await h.prepare(); h.agentEnabled = false;
+  await assert.rejects(h.store.approve(scope, saved.operationId, saved.planHash), /paused/);
+  assert.equal(h.runs.get(saved.operationId).status, 'previewed');
+  h.agentEnabled = true; delete h.runs.get(saved.operationId).agentAuthority;
+  await assert.rejects(h.store.page(scope, saved.operationId), /origin changed/);
+});

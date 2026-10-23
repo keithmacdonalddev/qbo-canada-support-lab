@@ -173,7 +173,7 @@ function Conversation({ messages, pending, failedText, chatError, onRetry, loadi
             {failedText && (
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" onClick={onRetry}>Try again</Button>
-                <Link to="/" className="text-[12.5px] font-medium text-[var(--ink-2)] hover:underline">Back to Reproduce</Link>
+                <Link to="/reproduce" className="text-[12.5px] font-medium text-[var(--ink-2)] hover:underline">Back to Reproduce</Link>
               </div>
             )}
           </div>
@@ -803,7 +803,7 @@ export default function Case() {
   useEffect(() => {
     if (!isNew || started.current || !connection?.ready) return;
     started.current = true;
-    if (!initialMessage) { navigate('/', { replace: true }); return; }
+    if (!initialMessage) { navigate('/reproduce', { replace: true }); return; }
     startCase(initialMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, initialMessage, connection?.ready]);
@@ -883,7 +883,7 @@ export default function Case() {
   return (
     <Layout>
       <div className="mx-auto max-w-[1280px]">
-        <Link to="/" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> All cases</Link>
+        <Link to="/reproduce" className="inline-flex items-center gap-1.5 text-[12.5px] text-[var(--ink-2)] no-underline hover:text-[var(--ink)]"><ArrowLeft className="size-3.5" /> All cases</Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
           <h1 className="line-clamp-2 max-w-[60ch] text-[22px] font-semibold leading-snug text-[var(--ink)]">{title}</h1>
           {(session || isNew) && <Stepper states={stages} />}

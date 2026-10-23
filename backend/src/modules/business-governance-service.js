@@ -189,7 +189,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       await touchCoordination(bound, current, session);
       return { reportEvidence, scope, operationId, planHash, actorId, expectedRevision: manifest.expectedRevision, fenceHash: hash({ authorityHash: state.authority.contentHash, manifest, periodControlHash: current.policy.periodControl.contentHash, reportSourceHash: reportFence.sourceHash }) };
     };
-    return createBusinessOperationPlanStore({ ...models, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, verifyApproval: ({ run, session }) => readApprovalReports({ models, run, ownerId, session }), loadCandidate: async (_scope, candidateHash, session) => {
+    return createBusinessOperationPlanStore({ ...models, agentAuthority: dependencies.agentAuthority, Agents: dependencies.Agents, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, verifyApproval: ({ run, session }) => readApprovalReports({ models, run, ownerId, session }), loadCandidate: async (_scope, candidateHash, session) => {
       const row = await read(models.Candidates, { ...scope, candidateHash }, session);
       if (!row || hash(row.payload) !== candidateHash || !row.auditId) fail('The exact server-prepared candidate is unavailable.');
       await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: row.payload, session, fence: true });
@@ -204,6 +204,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     // Lost-response retries return the original saved candidate before new reads.
     const operationId = hash({ scope, actorId, requestKey: input.requestKey }).slice(0, 24), existing = await read(models.Runs, { _id: operationId, ...scope });
     if (existing) {
+      if (dependencies.agentAuthority && (!existing.agentAuthority || !require('./business-agent-authority').sameAuthority(existing.agentAuthority, dependencies.agentAuthority))) fail('This preparation belongs to a different agent authorization.');
       if (existing.status === 'retired') fail('This preparation was retired. Prepare with a new request identifier.');
       const saved = await read(models.Plans, { _id: existing.planId, ...scope });
       if (!saved || saved.manifest.throughDate !== input.throughDate || String(saved.createdBy) !== actorId) fail('This request identifier belongs to different work.');
@@ -305,7 +306,7 @@ function createBusinessGovernanceService(dependencies = {}) {
   const continuity = require('./business-continuity-service').createBusinessContinuityService({ models, connection, transaction, now, bind, fence, coordination, touchCoordination, readSetup: dependencies.readSetup, readMasters: dependencies.readMasters });
   const retirement = createBusinessOperationRetirement({ models, transaction, now, bind, fence });
   const taxReview = createBusinessPolicyAmendment({ models, transaction, now, bind, fence });
-  const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence });
+  const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence, agentAuthority: dependencies.agentAuthority, Agents: dependencies.Agents });
   const unknownRecovery = createBusinessUnknownRecovery({ models, connection, transaction, now, bind, fence });
   return { ...unknownRecovery, ...recovery, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
 }

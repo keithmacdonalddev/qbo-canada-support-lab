@@ -47,6 +47,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     if (!policy || policy.contractVersion !== 1 || String(policy.connectionId) !== scope.connectionId || !['active', 'preparing'].includes(policy.state) || !HASH.test(policy.preparationEvidenceHash || '') || !Number.isSafeInteger(policy.revision) || policy.revision < 0) fail('Company-wide write coordination must be explicitly prepared.');
     if (['reserve', 'claim', 'dispatch'].includes(phase)) {
       const run = await models.Runs.findOne({ _id: operationId, ...scope }).session(session).maxTimeMS(3000).lean();
+      await require('./business-agent-authority').fenceAgentAuthority({ run, scope, ownerId, actorId, Agents: models.Agents, session });
       await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: run, session, fence: true });
       if (policy.state !== 'active' || !session?.inTransaction?.()) fail('New operation work requires active write coordination.');
       const fenced = await models.Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision, preparationEvidenceHash: policy.preparationEvidenceHash }, { $inc: { revision: 1 } }, { new: true, session }).lean();

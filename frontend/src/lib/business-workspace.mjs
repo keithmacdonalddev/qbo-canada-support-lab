@@ -18,10 +18,13 @@ export function ageLabel(value, now = Date.now()) {
 export function syncPresentation(sync, settings, now = Date.now()) {
   const sources = Array.isArray(sync?.sources) ? sync.sources : Object.entries(sync?.sources || {}).map(([entity, source]) => ({ entity, ...source }))
   const last = sync?.lastSuccessAt ? new Date(sync.lastSuccessAt).getTime() : NaN
-  const recent = Number.isFinite(last) && last <= now + 5000 && now - last <= Math.max(90, (settings?.syncIntervalSeconds || 30) * 3) * 1000
+  const windowMs = Math.max(120, (settings?.syncIntervalSeconds || 30) * 4) * 1000
+  const individuallyFresh = sources.length > 0 && sources.every(source => { const until = Date.parse(source.freshUntil); const observed = Date.parse(source.lastSuccessAt); return Number.isFinite(until) && until > now && Number.isFinite(observed) && observed <= now })
+  const summary = Date.parse(sync?.summaryAt)
+  const recent = Number.isFinite(last) && last <= now && (individuallyFresh ? Number.isFinite(summary) && summary <= now && now - summary <= windowMs : now - last <= windowMs)
   const incomplete = !sources.length || sources.some(source => source.complete !== true && !['current', 'complete', 'ready'].includes(source.status) || ['error', 'blocked', 'saturated', 'bootstrap', 'catching-up', 'initializing', 'resync-required'].includes(source.status))
   if (!settings?.monitoring) return { label: 'Monitoring off', tone: 'quiet', detail: 'Start monitoring to keep this workspace aligned with QuickBooks.', sources }
-  if (['error', 'blocked', 'saturated', 'failed'].includes(sync?.status)) return { label: 'Sync needs attention', tone: 'attention', detail: 'Some company data could not be updated. Earlier observations remain visible.', sources }
+  if (['attention', 'error', 'blocked', 'saturated', 'failed'].includes(sync?.status) || sources.some(source => ['error', 'blocked', 'saturated'].includes(source.status))) return { label: 'Sync needs attention', tone: 'attention', detail: 'Some company data could not be updated. Earlier observations remain visible.', sources }
   if (!Number.isFinite(last) || incomplete || ['initializing', 'catching-up', 'syncing', 'bootstrap', 'partial'].includes(sync?.status)) return { label: 'Catching up', tone: 'working', detail: 'Reading company records. Totals remain provisional until every source has caught up.', sources }
   if (!recent) return { label: 'Data needs refreshing', tone: 'attention', detail: 'The last complete company read is older than the monitoring interval.', sources }
   return { label: 'Monitoring current', tone: 'good', detail: 'All monitored sources have a recent complete observation.', sources }
@@ -38,6 +41,6 @@ export function recordLink(record) {
   return '/explorer?' + new URLSearchParams({ type: entity, id: String(id) })
 }
 export function textValue(value, fallback = '') {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return value.trim() ? value : fallback
   return value?.title || value?.summary || value?.label || value?.detail || fallback
 }

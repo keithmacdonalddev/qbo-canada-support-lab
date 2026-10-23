@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Reproduce from './pages/Reproduce'
 import Case from './pages/Case'
 import Company from './pages/Company'
+import BusinessWorkspace from './pages/BusinessWorkspace'
 import BookChecks from './pages/BookChecks'
 import Reports from './pages/Reports'
 import Reconciliation from './pages/Reconciliation'
@@ -28,9 +29,11 @@ export default function App() {
       <ToastProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/" element={<ProtectedRoute><Reproduce /></ProtectedRoute>} />
+        <Route path="/" element={<Navigate to="/company" replace />} />
+        <Route path="/reproduce" element={<ProtectedRoute><Reproduce /></ProtectedRoute>} />
         <Route path="/cases/:id" element={<ProtectedRoute><Case /></ProtectedRoute>} />
-        <Route path="/company" element={<ProtectedRoute><Company /></ProtectedRoute>} />
+        <Route path="/company" element={<ProtectedRoute><BusinessWorkspace /></ProtectedRoute>} />
+        <Route path="/company/manage" element={<ProtectedRoute><Company /></ProtectedRoute>} />
         <Route path="/company/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
         <Route path="/company/reports" element={<ProtectedRoute><BookChecks /></ProtectedRoute>} />
         <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />

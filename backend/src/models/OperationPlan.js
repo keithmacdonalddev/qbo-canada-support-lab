@@ -8,6 +8,7 @@ const schema = new mongoose.Schema({
   operationId: fixed(mongoose.Schema.Types.ObjectId), createdBy: fixed(mongoose.Schema.Types.ObjectId),
   requestKey: fixed(String), candidateHash: fixed(String), planHash: fixed(String),
   manifest: fixed(mongoose.Schema.Types.Mixed), auditId: fixed(String),
+  agentAuthority: { type: mongoose.Schema.Types.Mixed, immutable: true },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, operationId: 1 }, { unique: true });
 schema.pre('save', function () { if (!this.isNew) throw new Error('Saved operation intent is append-only'); });

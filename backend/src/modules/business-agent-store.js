@@ -74,9 +74,20 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   }
   async function events(row){const rows=await Events.find({agentId:String(row._id)}).sort({at:-1,_id:-1}).limit(40).maxTimeMS(3000).lean();return rows.map(publicEvent);}
   async function decisions(row){
-    const rows=await Events.find({agentId:String(row._id),kind:'decision'}).sort({at:-1,_id:-1}).limit(20).maxTimeMS(3000).lean();
-    const responses=await Events.find({agentId:String(row._id),kind:'decision-response','data.decisionId':{$in:rows.map(row=>String(row._id))}}).limit(20).maxTimeMS(3000).lean();
-    return rows.map(row=>{const response=responses.find(answer=>answer.data.decisionId===String(row._id));return {...publicEvent(row),status:response?response.data.choice:'pending',response:response?publicEvent(response):null};});
+    const agentId=String(row._id);
+    const rows=await Events.aggregate([
+      {$match:{agentId,kind:'decision'}},
+      {$lookup:{from:Events.collection.name,let:{decisionId:'$_id'},pipeline:[{$match:{agentId,kind:'decision-response',$expr:{$eq:['$data.decisionId','$$decisionId']}}},{$sort:{at:-1,_id:-1}},{$limit:1}],as:'responses'}},
+      {$addFields:{answered:{$gt:[{$size:'$responses'},0]}}},{$sort:{answered:1,at:-1,_id:-1}},{$limit:20},
+    ]).option({maxTimeMS:3000});
+    return rows.map(value=>{const response=value.responses[0];return {...publicEvent(value),status:response?response.data.choice:'pending',response:response?publicEvent(response):null};});
+  }
+  async function decision(row,id){
+    if(!/^[a-f0-9]{24}$/.test(id||''))fail('Choose a saved business decision.',400);
+    const value=await Events.findOne({_id:id,agentId:String(row._id),kind:'decision'}).maxTimeMS(3000).lean();
+    if(!value)fail('This decision does not belong to the selected business.');
+    const response=await Events.findOne({agentId:String(row._id),kind:'decision-response','data.decisionId':id}).maxTimeMS(3000).lean();
+    return {...publicEvent(value),status:response?response.data.choice:'pending',response:response?publicEvent(response):null};
   }
   async function due(limit=20){return Agents.find({'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]}).select('_id').sort({nextWakeAt:1,_id:1}).limit(limit).maxTimeMS(3000).lean();}
   async function claim(id,token,leaseMs){return Agents.findOneAndUpdate({_id:id,'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]},{$set:{leaseToken:token,leaseExpiresAt:new Date(now()+leaseMs),currentWork:'Checking the current business state'}},{new:true}).lean();}
@@ -85,6 +96,6 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function release(row,token,changes){return Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token},{$set:{...changes,leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true}).lean();}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,events,decisions,event,due,claim,current,update,release,run,ownedRuns,scopeOf};
+  return {models,get,setup,control,business,events,decisions,decision,event,due,claim,current,update,release,run,ownedRuns,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

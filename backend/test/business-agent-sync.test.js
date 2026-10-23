@@ -39,7 +39,7 @@ function fixture(entities = ['Invoice']) {
   };
   const respond = async control => { await control.beforeAttempt(); const result = replies.shift(); if (result instanceof Error) throw result; if (result === undefined) throw new Error('fixture response not supplied'); return copy(result); };
   const client = { query: async (query, control) => { queries.push(query); return respond(control); }, apiCall: async (method, endpoint, body, r, a, control) => { calls.push({ method, endpoint, body }); return respond(control); } };
-  const options = { client, scope, Records, entities, assertClient: () => {}, now: () => clock, authorize: async () => { if (denied) throw Object.assign(new Error('lease revoked'), { code: 'LEASE_REVOKED' }); },
+  const options = { client, scope, Records, entities, homeCurrency: 'CAD', assertClient: () => {}, now: () => clock, authorize: async () => { if (denied) throw Object.assign(new Error('lease revoked'), { code: 'LEASE_REVOKED' }); },
     loadState: async () => copy(state), saveState: async value => { if (failSave > 0) { failSave--; throw new Error('fixture cursor not committed'); } state = copy(value); } };
   const h = { rows, queries, calls, replies, options, sync: createBusinessAgentSync(options), state: () => copy(state), setState: value => { state = copy(value); },
     now: () => clock, advance: ms => { clock += ms; }, deny: () => { denied = true; }, failSave: () => { failSave = 1; }, failBulk: value => { failBulk = value; }, failSummary: value => { failSummary = value; },
@@ -124,9 +124,9 @@ test('CDC failures leave the previous complete cursor and figures visibly stale'
 
 test('TimeActivity, tax sources and singletons refresh through complete snapshots without CDC', async () => {
   for (const entity of ['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']) {
-    const h = fixture([entity]); h.replies.push(h.query(entity, [invoice(1)])); let result = await h.sync.tick({ maxRequests: 1 });
+    const h = fixture([entity]); const currency = entity === 'Preferences' ? { CurrencyPrefs: { HomeCurrency: { value: 'CAD' } } } : {}; h.replies.push(h.query(entity, [invoice(1, currency)])); let result = await h.sync.tick({ maxRequests: 1 });
     assert.equal(result.status, 'current'); assert.equal(h.calls.length, 0);
-    h.advance(entity === 'TimeActivity' ? 300001 : 31000); h.replies.push(h.query(entity, [invoice(1, { SyncToken: '1' })])); result = await h.sync.tick({ maxRequests: 1 });
+    h.advance(entity === 'TimeActivity' ? 300001 : 31000); h.replies.push(h.query(entity, [invoice(1, { SyncToken: '1', ...currency })])); result = await h.sync.tick({ maxRequests: 1 });
     assert.equal(result.status, 'current'); assert.equal(h.rows.get(entity + ':1').record.SyncToken, '1');
   }
 });
@@ -197,4 +197,20 @@ test('a multi-slice TimeActivity replacement exposes its cadence and previous co
   h.advance(300001); h.replies.push(h.query('TimeActivity', page)); result = await h.sync.tick({ maxRequests: 1 });
   assert.equal(result.sources[0].status, 'current'); assert.equal(result.sources[0].refreshing, true);
   h.advance(300001); const stale = await h.sync.snapshot(); assert.equal(stale.status, 'catching-up'); assert.equal(stale.company.provisional, true);
+});
+
+test('unobserved home currency never labels available HomeBalance as CAD', async () => {
+  const h=fixture(); h.sync=createBusinessAgentSync({...h.options,homeCurrency:null});
+  const result=await initial(h,'Invoice',[invoice(1,{HomeBalance:120})]);
+  assert.equal(result.company.totals.currency,null); assert.equal(result.company.totals.receivables,null); assert.equal(result.company.totals.incompleteCurrency,true);
+});
+test('Preferences provides the independently observed home currency before totals are published', async () => {
+  const h=fixture(['Preferences']); h.sync=createBusinessAgentSync({...h.options,homeCurrency:null});
+  h.replies.push(h.query('Preferences',[{Id:'1',CurrencyPrefs:{HomeCurrency:{value:'USD'}}}]));
+  const result=await h.sync.tick({maxRequests:1}); assert.equal(h.state().homeCurrency,'USD'); assert.equal(result.company.totals.currency,'USD');
+});
+
+test('an old provider response cannot become a fresh company observation',async()=>{
+  const h=fixture();const response=h.query('Invoice',[invoice(1)]);response.time='2026-10-23T11:00:00.000Z';h.replies.push(response);
+  const result=await h.sync.tick({maxRequests:1});assert.equal(result.sources[0].status,'error');assert.equal(result.lastSuccessAt,null);
 });

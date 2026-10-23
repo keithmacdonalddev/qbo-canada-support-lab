@@ -26,6 +26,7 @@ function assertRunApproval(run) {
     const consent = run.approval?.productionConsent;
     if (consent?.confirmed !== true || consent.environment !== 'production' || consent.realmId !== run.realmId || !same(consent.connectionId, run.connectionId) || consent.actorId !== run.approval.actorId || consent.planHash !== run.planHash) throw problem('The exact real Production company and plan require explicit owner confirmation before execution');
   }
+  require('./business-agent-authority').assertAgentApproval(run);
   const approval = run?.approval, stamp = typeof approval?.approvedAt === 'string' ? Date.parse(approval.approvedAt) : NaN;
   if (!approval || !validHash(run.planHash) || approval.planHash !== run.planHash || !validHash(approval.fenceHash) || typeof approval.auditId !== 'string' || !approval.auditId || approval.auditId.length > 100 || typeof approval.actorId !== 'string' || !/^[a-f0-9]{24}$/.test(approval.actorId) || !Number.isFinite(stamp) || new Date(stamp).toISOString() !== approval.approvedAt) throw problem('Operation needs its exact durable approval before execution');
 }

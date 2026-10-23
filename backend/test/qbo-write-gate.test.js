@@ -12,7 +12,7 @@ const clone = value => structuredClone(value);
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
 const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => value && typeof value === 'object' && !(value instanceof Date) ? ('$in' in value ? value.$in.includes(at(row, key)) : '$exists' in value ? (at(row, key) !== undefined) === value.$exists : false) : value instanceof Date ? new Date(at(row, key)).getTime() === value.getTime() : at(row, key) === value);
 function harness(business = false, options = {}) {
-  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [] }, sequence: 0 };
+  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [], Agents: [] }, sequence: 0 };
   h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active', periodControl: controls(scope, ownerId, h.clock) });
   h.data.Writers.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, operationId: null, planHash: null, unresolved: null });
   h.data.Connections.push({ _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' });
@@ -338,3 +338,30 @@ test('population repair needs a dedicated adapter, exact owner and Invoice updat
 test('definite repair rejection releases only its barrier but cannot reset the consumed authority',async()=>{const h=populationRepairFixture(),ticket=await h.gate.begin(h.input);await h.gate.complete(ticket,h.input.request,rejection);assert.equal(h.writer().unresolved,null);assert.equal(h.writer().populationDelegation.jobId,operationId);assert.equal(h.data.Receipts[0].state,'rejected');await assert.rejects(h.gate.begin(h.input),/consumed/);assert.equal(h.data.Receipts.length,1);});
 
 test('repair batches require their complete dedicated adapter and retain their native receipt barrier',async()=>{let calls=0;const authorityHash=hash('repair batch'),batchRequest=freezeWriteRequest(scope,'POST','batch?requestid=repair-batch-123456',{BatchItemRequest:[{bId:'1',operation:'update',Invoice:{Id:'100',SyncToken:'0',sparse:true}}]}),transport={preflight:async({coordination})=>({coordination}),assertPeriod:()=>({evidenceHash:hash('batch periods')}),receiptEvidence:async()=>({kind:'population-link-repair-batch'}),admit:async x=>({kind:'population-link-repair',key:x.dispatchKey,transportConsumed:{receiptId:x.receiptId}}),classify:async()=>{calls++;return{entity:'batch',operation:'create',outcome:'saved',httpStatus:200,responseHash:hash('response'),items:[{bId:'1',outcome:'saved',operation:'update',qboId:'100',syncToken:'1'}]};},settle:async()=>{}};const h=harness(false,{populationRepairTransport:transport});h.writer().populationDelegation={jobId:'d'.repeat(24)};const input={request:batchRequest,ownerId,actorId:ownerId,workflow:{version:1,kind:'population-link-repair',authorityHash}},ticket=await h.gate.begin(input);await h.gate.complete(ticket,batchRequest,{status:200,json:{}},'tid');assert.equal(calls,1);assert.equal(h.data.Receipts[0].kind,'population-link-repair');assert.equal(h.data.Receipts[0].population.kind,'population-link-repair-batch');assert.ok(h.writer().unresolved);await assert.rejects(h.gate.begin({...input,actorId:'e'.repeat(24)}));assert.throws(()=>harness(false,{populationTransport:{},populationRepairTransport:transport}),/one exact batch/);const noAdapter=harness();await assert.rejects(noAdapter.gate.begin(input));});
+
+function agentHarness() {
+  const h = harness(true), authority = { version: 1, agentId: 'e'.repeat(24), grantId: hash('standing grant'), authorityHash: hash('published business'), ownerId };
+  const run = h.data.Runs[0]; Object.assign(run, { createdBy: ownerId, authorityHash: authority.authorityHash, agentAuthority: authority });
+  Object.assign(run.approval, { agentAuthority: authority, decisionSource: 'agent-standing-authority' });
+  h.data.Steps[0].dispatch.policyHash = hash('policy'); h.writer().unresolved.policyHash = hash('policy');
+  h.data.Agents.push({ _id: authority.agentId, ...scope, ownerId, settings: { monitoring: true, autonomous: true }, grant: { id: authority.grantId, authorityHash: authority.authorityHash, ownerId }, dispatchRevision: 0 });
+  return h;
+}
+test('agent pause and changed standing grant fence native admission before a receipt or SDK request exists', async () => {
+  for (const mutate of [h => { h.data.Agents[0].settings.autonomous = false; }, h => { h.data.Agents[0].settings.monitoring = false; }, h => { h.data.Agents[0].grant.id = hash('replaced grant'); }, h => { h.data.Agents[0].grant.authorityHash = hash('other policy'); }, h => { h.data.Agents[0].connectionId = 'f'.repeat(24); }]) {
+    const h = agentHarness(); mutate(h); await assert.rejects(h.gate.begin(h.input), /paused|authorization changed/);
+    assert.equal(h.data.Receipts.length, 0); assert.equal(h.data.Audits.length, 0); assert.equal(h.data.Agents[0].dispatchRevision, 0);
+  }
+});
+test('agent work consumes standing authorization in the same accounting transaction and can settle after Pause', async () => {
+  const h = agentHarness(), ticket = await h.gate.begin(h.input);
+  assert.equal(h.data.Agents[0].dispatchRevision, 1); assert.equal(h.data.Receipts.length, 1);
+  h.data.Agents[0].settings.autonomous = false;
+  assert.equal((await h.gate.complete(ticket, request, success)).outcome, 'saved');
+  assert.equal(h.data.Receipts[0].state, 'saved');
+});
+test('agent origin and exact approval provenance cannot be stripped or forged', async () => {
+  for (const mutate of [h => { delete h.data.Runs[0].approval.agentAuthority; }, h => { h.data.Runs[0].approval.decisionSource = 'manual'; }, h => { h.data.Runs[0].createdBy = 'f'.repeat(24); }, h => { h.data.Runs[0].agentAuthority = { ...h.data.Runs[0].agentAuthority, extra: true }; }]) {
+    const h = agentHarness(); mutate(h); await assert.rejects(h.gate.begin(h.input)); assert.equal(h.data.Receipts.length, 0);
+  }
+});

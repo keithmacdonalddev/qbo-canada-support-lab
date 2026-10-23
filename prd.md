@@ -9,7 +9,9 @@
 
 Test Data Lab is a local control and visibility application for maintaining one flagship QuickBooks Online Advanced Canada company as a believable, continually evolving business.
 
-The product helps an authorized operator define the intended business, measure feature and report coverage, prepare coherent data, advance activity on a controlled business calendar, inspect supported records, and complete recurring report and close evidence. Support agents reproduce customer problems manually in the flagship company; automated support reasoning is not part of the rebuild release.
+Owner direction, 2026-10-23: the in-app agent owns the fictional medium-sized business as head accountant, manager, consultant and decision maker. The owner has complete UI tools to inspect, manage, direct and override the business. While the server runs, continuous company monitoring and recurring hourly business decisions operate independently of browser tabs, with no end date or application-imposed lifetime transaction quota. This is an ongoing troubleshooting, teaching and learning company. Useful specialist agents may loop within their responsibilities and report to the main accountant, who remains accountable end to end; their benefit must substantially outweigh their coordination and maintenance cost.
+
+The app must keep its company view synchronized with QBO, show data freshness and failures, retain decisions and unfinished obligations, and verify results. The owner can use both manual and agent-assisted troubleshooting. Individual work passes remain bounded for reliable execution and recovery; those bounds do not end the business or impose a lifetime activity ceiling.
 
 The practical mental model is:
 
@@ -59,7 +61,7 @@ Application permissions and QBO-company roles are different things. The server m
 6. Reports and reconciliation evidence validate the resulting accounting story.
 7. A support agent can then reproduce a customer condition manually in the surrounding realistic company.
 
-Automatic production scheduling remains off unless it receives separate approval after stable sandbox and manual production evidence.
+Continuous monitoring and autonomous business management are core product requirements. They begin through explicit company-scoped owner controls; standing owner authority covers routine work within the published business policy. Exact execution, accounting-period, current-access, audit and uncertain-write protections remain mandatory. Implementation does not itself activate Production monitoring or accounting writes. The current implementation boundary and remaining adaptive-activity work are recorded in docs/architecture/business-agent.md.
 
 ## 6. Product requirements
 

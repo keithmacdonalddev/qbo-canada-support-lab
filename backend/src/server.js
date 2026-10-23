@@ -47,6 +47,9 @@ async function start() {
     execution.start();
     const population = require('./modules/business-population-service').getBusinessPopulationService();
     population.startWorker();
+    const businessAgent = require('./modules/business-agent-service').getBusinessAgentService();
+    businessAgent.start();
+    server.on('close', () => businessAgent.close());
     server.on('close', () => population.close());
     server.on('close', () => execution.close());
     console.log(`Server running on port ${config.port}`);

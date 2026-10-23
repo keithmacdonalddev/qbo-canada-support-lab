@@ -4,7 +4,7 @@ const { scoped } = require('./qbo-write-contract');
 
 // These sources match the current app's structured read-tool surface. Unsupported
 // CDC entities and singleton preferences use complete replacement observations.
-const ENTITIES = Object.freeze(['Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']);
+const ENTITIES = Object.freeze(['Preferences', 'CompanyInfo', 'Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
 const SNAPSHOT_ONLY = new Set(['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']);
 const SINGLETONS = new Set(['CompanyInfo', 'Preferences']);
 const LISTS = new Set(['Customer', 'Vendor', 'Item', 'Account', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
@@ -19,10 +19,10 @@ const refreshInterval = (entity, intervalMs) => entity === 'TimeActivity' ? Math
 const safeText = (value, max = 160) => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, max) : '';
 function cents(value) { const n = typeof value === 'number' ? value : NaN; return Number.isFinite(n) && Number.isSafeInteger(Math.round(n * 100)) ? Math.round(n * 100) : null; }
 function recordSummary(entity, record, homeCurrency) {
-  const currency = safeText(record.CurrencyRef?.value, 8) || homeCurrency;
+  const currency = safeText(record.CurrencyRef?.value, 8) || homeCurrency || null;
   const home = currency === homeCurrency;
   const balance = cents(record.Balance), amount = cents(record.TotalAmt);
-  const homeBalance = cents(record.HomeBalance) ?? (home ? balance : null);
+  const homeBalance = homeCurrency ? cents(record.HomeBalance) ?? (home ? balance : null) : null;
   const accountBalance = entity === 'Account' && record.AccountType === 'Bank' && home ? cents(record.CurrentBalance) : null;
   return { name: safeText(record.DisplayName || record.Name || record.CompanyName), docNumber: safeText(record.DocNumber, 80),
     txnDate: /^\d{4}-\d{2}-\d{2}$/.test(record.TxnDate || '') ? record.TxnDate : null,
@@ -34,7 +34,7 @@ function recordSummary(entity, record, homeCurrency) {
 function parseBody(body, entity, cdc, clock) {
   if (!plain(body) || body.Fault || body.fault) throw fail('QuickBooks returned an incomplete source response.');
   const serverTime = stamp(body.time);
-  if (serverTime === null || serverTime > clock + 300000) throw fail('QuickBooks source time is missing or ahead of this server.');
+  if (serverTime === null || serverTime > clock + 300000 || serverTime < clock - 300000) throw fail('QuickBooks source time is missing or ahead of this server.');
   let blocks;
   if (cdc) {
     if (!Array.isArray(body.CDCResponse) || body.CDCResponse.length !== 1 || !plain(body.CDCResponse[0]) || body.CDCResponse[0].Fault || !Array.isArray(body.CDCResponse[0].QueryResponse)) throw fail('The change response is incomplete.');
@@ -87,7 +87,7 @@ function publicSnapshot(state, entities, clock, intervalMs) {
     company: { ...(state.company || { counts: {}, totals: {}, recent: [] }), provisional: !complete || !summaryFresh },
     summaryAt: state.summaryAt || null, summaryError: state.summaryError || null };
 }
-async function summarizeCompanyMirror({ Records, scope, homeCurrency = 'CAD', now = () => Date.now() }) {
+async function summarizeCompanyMirror({ Records, scope, homeCurrency = null, now = () => Date.now() }) {
   scope = scoped(scope);
   const storedScope = { ...scope, connectionId: Records.schema?.path('connectionId')?.cast(scope.connectionId) || scope.connectionId };
   const grouped = await Records.aggregate([
@@ -103,9 +103,9 @@ async function summarizeCompanyMirror({ Records, scope, homeCurrency = 'CAD', no
     accounts: byType.Account?.active || 0, openInvoices: byType.Invoice?.open || 0, openBills: byType.Bill?.open || 0,
     records: grouped.reduce((total, row) => total + row.records, 0) };
   const rows = await Records.find({ ...scope, deleted: false, entity: { $nin: [...SINGLETONS] } }).select('entity qboId summary changedAt lastObservedAt').sort({ changedAt: -1, _id: 1 }).limit(20).maxTimeMS(5000).lean();
-  return { counts, totals: { receivables: (byType.Invoice?.balance || 0) / 100, payables: (byType.Bill?.balance || 0) / 100,
-    cash: (byType.Account?.bank || 0) / 100, currency: homeCurrency,
-    incompleteCurrency: Boolean(byType.Invoice?.missingCurrency || byType.Bill?.missingCurrency) },
+  return { counts, totals: { receivables: homeCurrency ? (byType.Invoice?.balance || 0) / 100 : null, payables: homeCurrency ? (byType.Bill?.balance || 0) / 100 : null,
+    cash: homeCurrency ? (byType.Account?.bank || 0) / 100 : null, currency: homeCurrency,
+    incompleteCurrency: !homeCurrency || Boolean(byType.Invoice?.missingCurrency || byType.Bill?.missingCurrency) },
     entityCounts: Object.fromEntries(grouped.map(row => [row._id, row.records])),
     recent: rows.map(row => ({ entity: row.entity, qboId: row.qboId, name: row.summary.name, docNumber: row.summary.docNumber,
       txnDate: row.summary.txnDate, amount: row.summary.amountCents === null ? null : row.summary.amountCents / 100,
@@ -117,10 +117,10 @@ function originalClient(client, scope) {
   const base = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
   if (!(client instanceof QBOClient) || client.query !== QBOClient.prototype.query || client.apiCall !== QBOClient.prototype.apiCall || client.apiBase !== base || String(client.realmId) !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active') throw fail('The synchronization client no longer matches the selected company.');
 }
-function createBusinessAgentSync({ client, scope, Records, loadState, saveState, authorize, signal, now = () => Date.now(), entities = ENTITIES, homeCurrency = 'CAD', intervalMs = 30000, assertClient = originalClient }) {
+function createBusinessAgentSync({ client, scope, Records, loadState, saveState, authorize, signal, now = () => Date.now(), entities = ENTITIES, homeCurrency = null, intervalMs = 30000, assertClient = originalClient }) {
   scope = scoped(scope);
-  if (!client || typeof client.query !== 'function' || typeof client.apiCall !== 'function' || !Records || [loadState, saveState, authorize, now, assertClient].some(fn => typeof fn !== 'function') || !Array.isArray(entities) || !entities.length || new Set(entities).size !== entities.length || entities.some(entity => !ENTITIES.includes(entity)) || !/^[A-Z]{3}$/.test(homeCurrency) || !Number.isInteger(intervalMs) || intervalMs < 1000 || intervalMs > 3600000) throw new TypeError('Company sync needs concrete scoped adapters and supported sources.');
-  let ticking = null;
+  if (!client || typeof client.query !== 'function' || typeof client.apiCall !== 'function' || !Records || [loadState, saveState, authorize, now, assertClient].some(fn => typeof fn !== 'function') || !Array.isArray(entities) || !entities.length || new Set(entities).size !== entities.length || entities.some(entity => !ENTITIES.includes(entity)) || (homeCurrency !== null && !/^[A-Z]{3}$/.test(homeCurrency)) || !Number.isInteger(intervalMs) || intervalMs < 1000 || intervalMs > 3600000) throw new TypeError('Company sync needs concrete scoped adapters and supported sources.');
+  let ticking = null, observedHomeCurrency = homeCurrency;
   async function check() { signal?.throwIfAborted(); assertClient(client, scope); await authorize(); signal?.throwIfAborted(); assertClient(client, scope); }
   async function stateRead() {
     await check(); const value = await loadState();
@@ -135,7 +135,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     const ops = rows.map(record => ({ updateOne: {
       filter: { ...scope, entity, qboId: record.Id, $or: [{ lastReadStartedAt: { $lte: new Date(started) } }, { lastReadStartedAt: { $exists: false } }] },
       update: { $set: { record: copy(record), generation: source.generation, deleted: record.status === 'Deleted', lastReadStartedAt: new Date(started),
-        lastObservedAt: new Date(observed), changedAt: stamp(record.MetaData?.LastUpdatedTime) === null ? null : new Date(record.MetaData.LastUpdatedTime), summary: recordSummary(entity, record, homeCurrency) },
+        lastObservedAt: new Date(observed), changedAt: stamp(record.MetaData?.LastUpdatedTime) === null ? null : new Date(record.MetaData.LastUpdatedTime), summary: recordSummary(entity, record, observedHomeCurrency) },
         $setOnInsert: { _id: createHash('sha256').update(JSON.stringify({ ...scope, entity, qboId: record.Id })).digest('hex'), version: 1, ...scope, entity, qboId: record.Id } }, upsert: true,
     } }));
     await Records.bulkWrite(ops, { ordered: true }); await check();
@@ -148,7 +148,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     await check();
   }
   async function perform() {
-    const state = await stateRead(); let attempts = 0, requests = 0, changed = false, observedSource = false;
+    const state = await stateRead(); observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
     const controller = new AbortController(), abort = () => controller.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     const deadline = setTimeout(abort, 120000); deadline.unref?.();
@@ -184,6 +184,15 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
             if (source.lastId && parsed.rows.some(record => record.Id === source.lastId)) throw fail('The keyset source repeated its previous cursor.');
             if (SINGLETONS.has(entity) && parsed.rows.length !== 1) throw fail('The company singleton source is missing or repeated.');
             if (source.since === null) source.since = iso(Math.min(started, parsed.serverTime) - OVERLAP_MS);
+            if (entity === 'Preferences') {
+              const currency = parsed.rows[0]?.CurrencyPrefs?.HomeCurrency?.value;
+              if (!/^[A-Z]{3}$/.test(currency || '')) throw fail('The company home currency could not be independently observed.');
+              if (state.homeCurrency !== currency) {
+                for (const other of Object.keys(state.sources)) if (other !== entity) delete state.sources[other];
+                state.company = null; state.summaryAt = null;
+              }
+              state.homeCurrency = currency; observedHomeCurrency = currency;
+            }
             await persistRows(entity, parsed.rows, source, started, now()); changed ||= parsed.rows.length > 0;
             source.observed += parsed.rows.length; source.error = null;
             if (!SINGLETONS.has(entity) && parsed.rows.length === PAGE_SIZE) { source.lastId = parsed.rows.at(-1).Id; source.status = 'bootstrap'; }
@@ -217,7 +226,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
       }
       if (changed || !state.company || !state.summaryAt || state.summaryError) {
         try {
-          await check(); state.company = await summarizeCompanyMirror({ Records, scope, homeCurrency, now });
+          await check(); state.company = await summarizeCompanyMirror({ Records, scope, homeCurrency: observedHomeCurrency, now });
           for (const source of Object.values(state.sources)) if (source.status === 'current') source.count = state.company.entityCounts[source.entity] || 0;
           state.summaryAt = iso(now()); state.summaryError = null; await save(state);
         } catch (error) { signal?.throwIfAborted(); state.summaryError = 'The company summary could not be refreshed. Earlier figures may be stale.'; await save(state); }

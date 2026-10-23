@@ -11,7 +11,7 @@ const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   if(populationTransport&&populationRepairTransport)throw new TypeError('Install one exact batch transport per coordinated client.');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId });
@@ -105,6 +105,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
           periodProof.businessCreditSource = { ...creditSource, evidenceHash: hash(creditSource) };
         }
         assertRunApproval(run);
+        await require('./business-agent-authority').fenceAgentAuthority({ run, scope, ownerId, actorId, Agents, session });
         if (run.authorityHash && (!HASH.test(step.dispatch?.policyHash || '') || step.dispatch.policyHash !== writer.unresolved.policyHash || (step.dispatch.policyAmendmentHash || null) !== (run.policyAmendmentHash || null))) throw denied('The exact owner-approved business policy changed before sending.');
         if (typeof assertBusinessAuthority !== 'function') throw denied('The published business authority verifier is required.');
         await assertBusinessAuthority({ scope, run, session });

@@ -2,7 +2,7 @@
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const ID = /^[a-f0-9]{24}$/;
-const FIELDS = new Set(['environment', 'realmId', 'connectionId', 'actorId', 'operationId', 'planHash', 'phase', 'nextOrdinal', 'logicalKey', 'revision', 'dispatchKey', 'qboId', 'action', 'evidenceHash', 'sourceHash', 'evidenceRevision', 'recordCount', 'throughDate', 'reportEvidenceHash', 'reportSourceHash']);
+const FIELDS = new Set(['environment', 'realmId', 'connectionId', 'actorId', 'operationId', 'planHash', 'phase', 'nextOrdinal', 'logicalKey', 'revision', 'dispatchKey', 'qboId', 'action', 'evidenceHash', 'sourceHash', 'evidenceRevision', 'recordCount', 'throughDate', 'reportEvidenceHash', 'reportSourceHash', 'decisionSource', 'agentId', 'agentGrantId', 'agentAuthorityHash']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_AUDIT_UNAVAILABLE' }); }
 function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transaction, access }) {
   scope = scoped(scope);
@@ -12,6 +12,7 @@ function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transactio
     if (['reportEvidenceHash', 'reportSourceHash'].some(key => details[key] !== undefined && !/^[a-f0-9]{64}$/.test(details[key])) || (details.reportEvidenceHash === undefined) !== (details.reportSourceHash === undefined)) fail('Approval report hashes must be complete and exact.');
     const retained = JSON.parse(canonical(details)); if (Buffer.byteLength(canonical(retained)) > 10000) fail('Audit metadata exceeds its budget.');
     const id = hash({ scope, actorId, ownerId, eventKey }).slice(0, 24), params = { eventKey, ...scope, details: retained };
+    const actionType = retained.decisionSource === 'agent-standing-authority' ? 'ai_plan' : 'manual';
     const save = async currentSession => {
       if (!currentSession?.inTransaction?.()) fail('Operation audit requires a transaction.');
       const stopRequest = eventKey === 'business-period:' + details.operationId + ':stop-request' && details.action === 'Business period stop requested';
@@ -22,8 +23,8 @@ function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transactio
       if (actor?.actorId !== actorId || actor?.ownerId !== ownerId) fail('The operation audit actor changed.');
       const row = await Audits.findOne({ _id: id }).session(currentSession).maxTimeMS(3000).lean();
       if (row) {
-        if (String(row.userId) !== ownerId || String(row.actorUserId || row.userId) !== actorId || row.realmId !== scope.realmId || row.action !== 'Business operation evidence recorded' || row.actionType !== 'manual' || row.outcome !== 'success' || canonical(row.inputParams) !== canonical(params)) fail('The saved audit event differs from this operation.');
-      } else await Audits.create([{ _id: id, userId: ownerId, ...(actorId !== ownerId ? { actorUserId: actorId } : {}), realmId: scope.realmId, action: 'Business operation evidence recorded', actionType: 'manual', outcome: 'success', inputParams: params }], { session: currentSession });
+        if (String(row.userId) !== ownerId || String(row.actorUserId || row.userId) !== actorId || row.realmId !== scope.realmId || row.action !== 'Business operation evidence recorded' || row.actionType !== actionType || row.outcome !== 'success' || canonical(row.inputParams) !== canonical(params)) fail('The saved audit event differs from this operation.');
+      } else await Audits.create([{ _id: id, userId: ownerId, ...(actorId !== ownerId ? { actorUserId: actorId } : {}), realmId: scope.realmId, action: 'Business operation evidence recorded', actionType, outcome: 'success', inputParams: params }], { session: currentSession });
       return { id, eventKey };
     };
     return session ? save(session) : transaction(save);

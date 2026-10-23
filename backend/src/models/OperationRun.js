@@ -18,6 +18,7 @@ const schema = new mongoose.Schema({
   status: { type: String, enum: ['previewed', 'approved', 'reserved', 'running', 'blocked', 'stopped', 'awaiting-evidence', 'committing', 'verified', 'retired'], default: 'previewed' },
   // Steps, planned intents and record receipts belong in separately paginated stores.
   recordCount: { ...immutable(Number), min: 0, max: 10000 },
+  agentAuthority: { type: mongoose.Schema.Types.Mixed, immutable: true },
   approval: { type: mongoose.Schema.Types.Mixed, default: null },
   retirement: { type: mongoose.Schema.Types.Mixed, default: null },
   policyAmendmentHash: String,

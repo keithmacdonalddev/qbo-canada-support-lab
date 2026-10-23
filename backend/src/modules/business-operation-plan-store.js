@@ -102,7 +102,9 @@ function runFields(manifest, planId, actorId) {
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false }) {
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, Agents }) {
+  const { agentAuthority: normalizeAgentAuthority, sameAuthority, fenceAgentAuthority } = require('./business-agent-authority');
+  const agentAuthority = suppliedAgentAuthority ? normalizeAgentAuthority(suppliedAgentAuthority) : null;
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
   for (const fn of [assertReady, authorize, transaction, now, ...(!readOnly ? [loadCandidate, checkCurrent, writeAudit] : [])]) if (typeof fn !== 'function') throw new TypeError('Operation plans require explicit trusted adapters');
   async function authority(scope, action, session) {
@@ -112,7 +114,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
   }
   async function audit(scope, actorId, operationId, planHash, phase, session, reportEvidence) {
     const eventKey = 'business-plan:' + operationId + ':' + phase;
-    const result = await writeAudit(eventKey, { ...scope, actorId, operationId, planHash, phase, ...(reportEvidence ? { reportEvidenceHash: reportEvidence.evidenceHash, reportSourceHash: reportEvidence.sourceHash } : {}) }, session);
+    const result = await writeAudit(eventKey, { ...scope, actorId, operationId, planHash, phase, ...(reportEvidence ? { reportEvidenceHash: reportEvidence.evidenceHash, reportSourceHash: reportEvidence.sourceHash } : {}), ...(agentAuthority ? { decisionSource: 'agent-standing-authority', agentId: agentAuthority.agentId, agentGrantId: agentAuthority.grantId, agentAuthorityHash: agentAuthority.authorityHash } : {}) }, session);
     if (result?.eventKey !== eventKey || typeof result.id !== 'string' || !result.id) fail('Operation plan audit was not saved');
     return result.id;
   }
@@ -123,6 +125,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     check(); assertRun(run, scope);
     const plan = await Plans.findOne({ _id: run.planId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); if (!plan || plan.contractVersion !== 1 || plan.planHash !== run.planHash || hash(plan.manifest) !== plan.planHash || !sameScope(plan.manifest.scope, scope) || String(plan.operationId) !== operationId || !plan.auditId) fail('The immutable saved operation plan is missing or changed');
+    if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && !sameAuthority(run.agentAuthority, plan.agentAuthority)) || (agentAuthority && (!run.agentAuthority || !sameAuthority(agentAuthority, run.agentAuthority)))) fail('The immutable agent origin changed.');
     const expected = runFields(plan.manifest, String(plan._id), String(plan.createdBy));
     for (const [key, value] of Object.entries(expected)) {
       const actual = ['planId', 'blueprintId', 'connectionId', 'createdBy'].includes(key) ? String(run[key]) : run[key];
@@ -149,11 +152,15 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const candidate = snapshot(await loadCandidate(scope, request.candidateHash, session));
       if (hash(candidate) !== request.candidateHash) fail('The server candidate changed before it could be saved');
       const prepared = validateOperationCandidate(candidate, scope, now());
+      if (agentAuthority) {
+        if (prepared.manifest.authorityHash !== agentAuthority.authorityHash) fail('The agent grant belongs to a different published business.');
+        await fenceAgentAuthority({ authority: agentAuthority, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
+      }
       const auditId = await audit(scope, actorId, operationId, prepared.planHash, 'prepared', session);
-      await Plans.create([{ _id: planId, contractVersion: 1, ...scope, operationId, createdBy: actorId, requestKey: request.requestKey, candidateHash: request.candidateHash, manifest: prepared.manifest, planHash: prepared.planHash, auditId }], { session });
+      await Plans.create([{ _id: planId, contractVersion: 1, ...scope, operationId, createdBy: actorId, requestKey: request.requestKey, candidateHash: request.candidateHash, manifest: prepared.manifest, planHash: prepared.planHash, auditId, ...(agentAuthority ? { agentAuthority } : {}) }], { session });
       // Bounded immutable documents keep receipts and future verification out of the plan.
       if (prepared.entries.length) await Intents.insertMany(prepared.entries.map((entry, ordinal) => ({ _id: hash({ planId, logicalKey: entry.step.logicalKey }).slice(0, 24), contractVersion: 1, ...scope, planId, planHash: prepared.planHash, ordinal, kind: entry.kind, step: entry.step, policy: entry.policy, fingerprint: hash(entry.step), logicalKey: entry.step.logicalKey })), { session, ordered: true });
-      await Runs.create([{ _id: operationId, ...runFields(prepared.manifest, planId, actorId), status: 'previewed', approval: null }], { session });
+      await Runs.create([{ _id: operationId, ...runFields(prepared.manifest, planId, actorId), ...(agentAuthority ? { agentAuthority } : {}), status: 'previewed', approval: null }], { session });
       return { operationId, planHash: prepared.planHash, status: 'previewed', persisted: true, reused: false };
     });
   }
@@ -164,6 +171,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     return transaction(async session => {
       if (await authority(scope, 'operations.execute', session) !== actorId) fail('The operation actor changed', 403);
       const { run, plan } = await read(scope, operationId, session);
+      if (agentAuthority) await fenceAgentAuthority({ authority: agentAuthority, run, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
       if (run.status === 'retired') fail('This unsent operation was retired; prepare a fresh plan.');
       if (plan.planHash !== planHash) fail('The reviewed operation plan changed');
       await loadEntries(scope, operationId, 0, MAX_RECORDS, session);
@@ -177,7 +185,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const fence = await checkCurrent({ scope, operationId, planHash, manifest: snapshot(plan.manifest), actorId, session });
       if (!fence || !sameScope(fence.scope, scope) || fence.operationId !== operationId || fence.planHash !== planHash || fence.actorId !== actorId || fence.expectedRevision !== run.expectedRevision || !validHash(fence.fenceHash)) fail('Current blueprint, baseline, policies and calendar could not be fenced');
       const auditId = await audit(scope, actorId, operationId, planHash, 'approved', session, fence.reportEvidence);
-      const approval = { actorId, planHash, fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString(), ...(fence.reportEvidence ? { reportEvidence: snapshot(fence.reportEvidence) } : {}), ...(scope.environment === 'production' ? { productionConsent: { confirmed: true, ...scope, actorId, planHash } } : {}) };
+      const approval = { actorId, planHash, ...(run.agentAuthority ? { agentAuthority: { ...run.agentAuthority }, decisionSource: agentAuthority ? 'agent-standing-authority' : 'owner-review' } : {}), fenceHash: fence.fenceHash, auditId, approvedAt: new Date(now()).toISOString(), ...(fence.reportEvidence ? { reportEvidence: snapshot(fence.reportEvidence) } : {}), ...(scope.environment === 'production' ? { productionConsent: { confirmed: true, ...scope, actorId, planHash, ...(run.agentAuthority ? { source: agentAuthority ? 'agent-standing-authority' : 'owner-review' } : {}) } } : {}) };
       const saved = await Runs.findOneAndUpdate({ _id: operationId, ...scope, status: 'previewed', planHash, approval: null }, { $set: { status: 'approved', approval } }, { new: true, session }).lean();
       if (!saved) fail('Operation approval changed concurrently');
       return { operationId, planHash, status: 'approved', approved: true, reused: false };

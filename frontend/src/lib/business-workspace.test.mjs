@@ -36,3 +36,13 @@ test('unknown counts and timestamps are represented honestly', () => {
   assert.equal(ageLabel(undefined, now), 'Not yet observed')
   assert.equal(ageLabel('2026-10-23T14:59:00.000Z', now), '1m ago')
 })
+
+test('individual source freshness supports the longer observed snapshot cadence', () => {
+  const snapshot = { status:'current',lastSuccessAt:'2026-10-23T14:56:00.000Z',summaryAt:'2026-10-23T14:59:45.000Z',sources:[{entity:'TimeActivity',status:'current',lastSuccessAt:'2026-10-23T14:56:00.000Z',freshUntil:'2026-10-23T15:06:00.000Z'}] }
+  assert.equal(syncPresentation(snapshot,settings,now).tone,'good')
+  assert.notEqual(syncPresentation({...snapshot,summaryAt:'2026-10-23T14:50:00.000Z'},settings,now).tone,'good')
+})
+test('backend attention and individual source failure are reported as attention', () => {
+  assert.equal(syncPresentation({...current,status:'attention'},settings,now).label,'Sync needs attention')
+  assert.equal(syncPresentation({...current,sources:[{entity:'Invoice',status:'error'}]},settings,now).label,'Sync needs attention')
+})

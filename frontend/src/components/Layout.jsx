@@ -15,9 +15,9 @@ import { cn } from '@/lib/utils'
 // Keep continuing business activity, report evidence, support reproduction,
 // company records and the retained history directly accessible.
 const NAV = [
-  { to: '/', label: 'Reproduce', icon: WandSparkles, match: (p) => p === '/' || p.startsWith('/cases') },
+  { to: '/company', label: 'Business', icon: Building2, match: (p) => p === '/' || (p.startsWith('/company') && !p.startsWith('/company/reports') && !p.startsWith('/company/period-close')) || p.startsWith('/lab') },
+  { to: '/reproduce', label: 'Reproduce', icon: WandSparkles, match: (p) => p.startsWith('/reproduce') || p.startsWith('/cases') },
   { to: '/coverage', label: 'Coverage', icon: LayoutGrid, match: (p) => p.startsWith('/coverage') },
-  { to: '/company', label: 'Company', icon: Building2, match: (p) => (p.startsWith('/company') && !p.startsWith('/company/reports') && !p.startsWith('/company/period-close')) || p.startsWith('/lab') },
   { to: '/reports', label: 'Reports', icon: FileText, match: (p) => p.startsWith('/reports') || p.startsWith('/company/reports') || p.startsWith('/company/period-close') },
   { to: '/explorer', label: 'Records', icon: Table2, match: (p) => p.startsWith('/explorer') },
   { to: '/audit', label: 'History', icon: History, match: (p) => p.startsWith('/audit') },

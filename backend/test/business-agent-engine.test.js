@@ -28,3 +28,10 @@ test('fatal lease/authority failures propagate instead of becoming ordinary tool
  let chats=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>{chats++;return {stop_reason:'tool_use',content:[{type:'tool_use',id:'one',name:'getBusinessState',input:{}}]};}};
  const engine=createBusinessAgentEngine({provider});await assert.rejects(engine.run({context:{},tools:[],execute:async()=>{throw Object.assign(new Error('lost lease'),{businessAgentFatal:true});}}),/lost lease/);assert.equal(chats,1);
 });
+
+test('legal full decision history is summarized without stopping future reviews',async()=>{
+  let size=0;const provider={resolveProvider:async()=> 'anthropic',chat:async(messages,tools,options)=>{size=Buffer.byteLength(messages[0].content);assert.equal(options.maxAttempts,1);return {stop_reason:'end_turn',content:[{type:'text',text:'Review complete.'}]};}};
+  const decisions=Array.from({length:20},(_,i)=>({id:String(i),title:'Decision',detail:'e'.repeat(5000),response:{detail:'r'.repeat(3000)},status:'accept'}));
+  const result=await createBusinessAgentEngine({provider}).run({context:{decisions,specialistReports:Array.from({length:8},()=>({detail:'s'.repeat(6000)}))},tools:[],execute:async()=>({})});
+  assert.equal(result.complete,true);assert.ok(size<60000);
+});
