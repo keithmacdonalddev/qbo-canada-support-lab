@@ -126,7 +126,7 @@ test('TimeActivity, tax sources and singletons refresh through complete snapshot
   for (const entity of ['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']) {
     const h = fixture([entity]); h.replies.push(h.query(entity, [invoice(1)])); let result = await h.sync.tick({ maxRequests: 1 });
     assert.equal(result.status, 'current'); assert.equal(h.calls.length, 0);
-    h.advance(31000); h.replies.push(h.query(entity, [invoice(1, { SyncToken: '1' })])); result = await h.sync.tick({ maxRequests: 1 });
+    h.advance(entity === 'TimeActivity' ? 300001 : 31000); h.replies.push(h.query(entity, [invoice(1, { SyncToken: '1' })])); result = await h.sync.tick({ maxRequests: 1 });
     assert.equal(result.status, 'current'); assert.equal(h.rows.get(entity + ':1').record.SyncToken, '1');
   }
 });
@@ -181,4 +181,20 @@ test('caller cancellation releases a pending read without committing a cursor', 
   h.client = h.options.client; h.client.query = async (_query, control) => { await control.beforeAttempt(); controller.abort(); return new Promise(() => {}); };
   const sync = createBusinessAgentSync({ ...h.options, signal: controller.signal });
   await assert.rejects(sync.tick(), /abort/i); assert.deepEqual(h.state(), {});
+});
+
+test('CDC omitted rows below the response limit retain the original change cursor', async () => {
+  const h = fixture(); await initial(h, 'Invoice', [invoice(1)]); const since = h.state().sources.Invoice.since; h.advance(31000);
+  h.replies.push(h.cdc('Invoice', [invoice(2)], { totalCount: 2 })); const result = await h.sync.tick({ maxRequests: 1 });
+  assert.equal(result.status, 'attention'); assert.equal(result.sources[0].status, 'error'); assert.match(result.sources[0].error, /omitted declared/);
+  assert.equal(h.state().sources.Invoice.since, since); assert.equal(h.rows.has('Invoice:2'), false);
+});
+
+test('a multi-slice TimeActivity replacement exposes its cadence and previous complete freshness', async () => {
+  const h = fixture(['TimeActivity']); const page = Array.from({ length: PAGE_SIZE }, (_, i) => invoice(i + 1));
+  h.replies.push(h.query('TimeActivity', page), h.query('TimeActivity', [])); let result = await h.sync.tick({ maxRequests: 2 });
+  assert.equal(result.status, 'current'); assert.equal(result.sources[0].refreshEverySeconds, 300);
+  h.advance(300001); h.replies.push(h.query('TimeActivity', page)); result = await h.sync.tick({ maxRequests: 1 });
+  assert.equal(result.sources[0].status, 'current'); assert.equal(result.sources[0].refreshing, true);
+  h.advance(300001); const stale = await h.sync.snapshot(); assert.equal(stale.status, 'catching-up'); assert.equal(stale.company.provisional, true);
 });

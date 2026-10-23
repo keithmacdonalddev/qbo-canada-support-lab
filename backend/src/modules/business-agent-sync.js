@@ -15,6 +15,7 @@ const copy = value => JSON.parse(JSON.stringify(value));
 const fail = message => Object.assign(new Error(message), { status: 409, code: 'BUSINESS_SYNC_INCOMPLETE' });
 const stamp = value => { const n = typeof value === 'string' ? Date.parse(value) : NaN; return Number.isFinite(n) ? n : null; };
 const iso = value => new Date(value).toISOString();
+const refreshInterval = (entity, intervalMs) => entity === 'TimeActivity' ? Math.max(intervalMs, 300000) : intervalMs;
 const safeText = (value, max = 160) => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, max) : '';
 function cents(value) { const n = typeof value === 'number' ? value : NaN; return Number.isFinite(n) && Number.isSafeInteger(Math.round(n * 100)) ? Math.round(n * 100) : null; }
 function recordSummary(entity, record, homeCurrency) {
@@ -58,7 +59,9 @@ function parseBody(body, entity, cdc, clock) {
     }
   }
   if (rows.length > (cdc ? CDC_LIMIT : PAGE_SIZE) || (!cdc && declared > rows.length && rows.length < PAGE_SIZE)) throw fail('The source page omitted declared records.');
-  return { rows, serverTime, saturated: cdc && (rows.length >= CDC_LIMIT || declared >= CDC_LIMIT) };
+  const saturated = cdc && (rows.length >= CDC_LIMIT || declared >= CDC_LIMIT);
+  if (cdc && !saturated && declared > rows.length) throw fail('The change response omitted declared records.');
+  return { rows, serverTime, saturated };
 }
 function sourceStart(entity, clock, previous) {
   return { entity, mode: SNAPSHOT_ONLY.has(entity) ? 'snapshot' : 'cdc', phase: 'bootstrap', status: 'bootstrap', generation: randomUUID(),
@@ -69,12 +72,15 @@ function publicSnapshot(state, entities, clock, intervalMs) {
   const sources = entities.map(entity => {
     const row = state.sources?.[entity];
     if (!row) return { entity, status: 'waiting', count: 0, lastSuccessAt: null, error: null };
-    const current = row.status === 'current' && stamp(row.lastSuccessAt) !== null && clock - stamp(row.lastSuccessAt) <= Math.max(intervalMs * 4, 120000);
-    return { entity, status: row.status === 'current' && !current ? 'stale' : row.status, mode: row.mode, count: row.count || 0,
+    const cadence = refreshInterval(entity, intervalMs), completedAt = stamp(row.lastSuccessAt), freshFor = Math.max(cadence * 2, 120000);
+    const recentComplete = completedAt !== null && completedAt <= clock && clock - completedAt <= freshFor;
+    const refreshing = row.mode === 'snapshot' && row.status === 'bootstrap' && recentComplete;
+    const current = recentComplete && (row.status === 'current' || refreshing);
+    return { entity, status: current ? 'current' : row.status === 'current' ? 'stale' : row.status, mode: row.mode, refreshing, refreshEverySeconds: cadence / 1000, freshUntil: completedAt === null ? null : iso(completedAt + freshFor), count: row.count || 0,
       observed: row.observed || 0, lastSuccessAt: row.lastSuccessAt || null, error: row.error || null };
   });
   const complete = sources.every(row => row.status === 'current');
-  const summaryFresh = stamp(state.summaryAt) !== null && clock - stamp(state.summaryAt) <= Math.max(intervalMs * 4, 120000);
+  const summaryFresh = stamp(state.summaryAt) !== null && stamp(state.summaryAt) <= clock && clock - stamp(state.summaryAt) <= Math.max(intervalMs * 4, 120000);
   const error = sources.some(row => ['error', 'saturated'].includes(row.status)) || Boolean(state.summaryError);
   return { status: complete && summaryFresh ? 'current' : error ? 'attention' : sources.some(row => row.status === 'stale') ? 'stale' : 'catching-up',
     lastSuccessAt: complete ? sources.map(row => row.lastSuccessAt).sort()[0] : null, sources,
@@ -184,7 +190,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
             else if (!SNAPSHOT_ONLY.has(entity)) { source.phase = 'catchup'; source.status = 'catching-up'; source.lastId = null; }
             else {
               await finishGeneration(entity, source, now()); source.phase = 'incremental'; source.status = 'current'; source.count = source.observed;
-              source.lastSuccessAt = iso(now()); source.nextAt = iso(now() + intervalMs); changed = true;
+              source.lastSuccessAt = iso(now()); source.nextAt = iso(now() + refreshInterval(entity, intervalMs)); changed = true;
             }
           } else {
             const params = new URLSearchParams({ entities: entity, changedSince: source.since });
