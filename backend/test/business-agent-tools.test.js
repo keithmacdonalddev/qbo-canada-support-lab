@@ -33,3 +33,9 @@ test('resume uses the exact existing recovery review before queueing original wo
  const h=fixture();h.run.status='stopped';h.run.executionRevision=7;await h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Resume the exact original work after the owner enabled business operation.'});assert.equal(h.resumed,1);assert.equal(h.queued,1);assert.equal(h.events[0][1],'plan-decision');
  h.run.agentAuthority.grantId='0'.repeat(64);await assert.rejects(h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Do not permit another grant to resume retained work.'}),/standing grant/);assert.equal(h.resumed,1);
 });
+
+test('financial report tools enforce reports permission before any SDK request',async()=>{
+ let sdk=0;const row={_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}};
+ const tools=createBusinessAgentTools({row,scope,passId:'report-pass',store:{},guard:async()=>{},access:{authorize:async(scope,action)=>{assert.equal(action,'reports.observe');throw Object.assign(new Error('reports denied'),{code:'BUSINESS_ACCESS_DENIED'});}},readTools:{toolDefinitions:[{name:'runReport',input_schema:{type:'object',properties:{report:{type:'string'}},required:['report']}}],toolHandlers:{runReport:async(input,context)=>context.qbo.apiCall('GET','reports/BalanceSheet')}},clientFor:async()=>({apiCall:async()=>{sdk++;return {};}}),signal:new AbortController().signal});
+ await assert.rejects(tools.execute('runReport',{report:'BalanceSheet'}),/reports denied/);assert.equal(sdk,0);
+});

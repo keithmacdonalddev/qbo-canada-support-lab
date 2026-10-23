@@ -38,13 +38,14 @@ function operationAllowed(run,row) {const origin=run?.agentAuthority;return Bool
 function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase}={}) {
   const native=readTools||require('./ai-tools');
   const definitions=[...native.toolDefinitions.filter(tool=>READ_NAMES.includes(tool.name)),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation'].includes(tool.name))];
-  const byName=new Map(definitions.map(tool=>[tool.name,tool]));let qbo=null,calls=0,readAttempts=0;
-  async function readClient(){
-    if(qbo)return qbo;
-    const client=await (clientFor?clientFor():access.resolveClient(scope,{signal}));
-    const control={signal,beforeAttempt:async()=>{await guard();if(++readAttempts>48)fail('This business review used its read allowance; its next pass will continue.');},onFailure:()=>{}};
-    qbo={query:async query=>{await guard();return client.query(query,control);},read:async(entity,id)=>{await guard();return client.apiCall('GET',entity+'/'+encodeURIComponent(id),undefined,0,0,control);},apiCall:async(method,endpoint)=>{await guard();if(method!=='GET'||typeof endpoint!=='string'||!endpoint.startsWith('reports/'))fail('Only the supported report read is allowed.');return client.apiCall('GET',endpoint,undefined,0,0,control);}};
-    return qbo;
+  const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0;
+  async function readClient(reportsOnly=false){
+    if(reportsOnly)await access.authorize(scope,'reports.observe',{signal});
+    if(clients.has(reportsOnly))return clients.get(reportsOnly);
+    const client=await (clientFor?clientFor({reportsOnly}):access.resolveClient(scope,{signal,reportsOnly}));
+    const control={signal,beforeAttempt:async()=>{await guard();if(reportsOnly)await access.authorize(scope,'reports.observe',{signal});if(++readAttempts>48)fail('This business review used its read allowance; its next pass will continue.');},onFailure:()=>{}};
+    const qbo={query:async query=>{await guard();return client.query(query,control);},read:async(entity,id)=>{await guard();return client.apiCall('GET',entity+'/'+encodeURIComponent(id),undefined,0,0,control);},apiCall:async(method,endpoint)=>{await guard();if(method!=='GET'||typeof endpoint!=='string'||!endpoint.startsWith('reports/'))fail('Only the supported report read is allowed.');return client.apiCall('GET',endpoint,undefined,0,0,control);}};
+    clients.set(reportsOnly,qbo);return qbo;
   }
   async function execute(name,input={}){
     if(++calls>24)fail('This decision pass reached its tool allowance. Saved work continues in the next pass.');
@@ -54,7 +55,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       if(name==='getObligations'&&input.area!==role)fail('This obligations queue belongs to another responsibility.',403);
     }
     let result;
-    if(READ_NAMES.includes(name))result=await native.toolHandlers[name](input,{qbo:await readClient(),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}});
+    if(READ_NAMES.includes(name))result=await native.toolHandlers[name](input,{qbo:await readClient(name==='runReport'),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}});
     else if(name==='getBusinessState')result={success:true,data:{business:await store.business(scope),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities()}};
     else if(name==='getObligations'){
       const today=businessDate(new Date(now())),entity=input.area==='receivables'?'Invoice':'Bill';
@@ -91,7 +92,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       if(!session||!ID.test(String(session._id)))fail('This troubleshooting case does not belong to the selected company.');
       result={success:true,data:await store.event(row,'case-linked','Troubleshooting case linked',input.reason.slice(0,3000),{sessionId:input.sessionId,href:'/cases/'+input.sessionId},null,hash({passId,sessionId:input.sessionId}),role)};
     }
-    await guard();const bytes=Buffer.byteLength(JSON.stringify(result));if(bytes>100000)return {success:false,error:'This result is too large for one review. Use smaller record/report pages; no complete observation is claimed.',truncated:true};return result;
+    await guard();if(name==='runReport')await access.authorize(scope,'reports.observe',{signal});const bytes=Buffer.byteLength(JSON.stringify(result));if(bytes>100000)return {success:false,error:'This result is too large for one review. Use smaller record/report pages; no complete observation is claimed.',truncated:true};return result;
   }
   return {definitions,execute,stats:()=>({calls,readAttempts})};
 }
