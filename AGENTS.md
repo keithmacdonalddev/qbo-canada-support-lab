@@ -55,10 +55,6 @@ Owner direction, 2026-10-17: make explicit value decisions; do not spend disprop
 - Use focused verification and the required independent reviews. Do not broaden checks or repeat unchanged checks without a new failure, material change or unresolved risk. Do not commission specialist work on a deferred optional issue.
 - Report value-checkpoint decisions plainly. Distinguish instructions and manually checked deadlines from mechanically enforced hooks. Do not claim an automatic timer, token cap, cost cap or billing visibility unless the actual mechanism is installed and directly verified. These instructions currently establish agent stop-loss behavior and an audit trail, not a universal tool-blocking hook.
 
-## Enforced continuation for multi-step owner work
-
-For the owner's authorized multi-step action work, arm the exact current Codex session under [the bounded continuation guard](docs/agent-harness/CONTINUATION_GUARD.md) before substantive implementation. Keep the original outcome, settled decisions, direct evidence and next authorized actions in its ignored session contract. Ordinary questions do not create tasks; questions and frustration during active work do not cancel it. Code checks, commits, summaries and known limitations do not satisfy a pending outcome. Preserve explicit stops, all existing safety/permission boundaries and actual user budgets; never silently renew an exhausted continuation window or replay a deferred repair. Configuration, trusted activation and observed native continuation are distinct facts. This guard is project-local and does not authorize account, database, provider or service operations.
-
 ## Current UI Target
 
 The owner uses this app on desktop. Prioritize desktop UI and rendered desktop verification. Do not spend time on mobile or 390px viewport checks unless the owner explicitly requests them. Responsive improvements may be made when useful, but they do not create a mobile testing requirement for current work. This project-specific direction overrides the generic responsive check in `AGENT_WORKFLOW.md`.
