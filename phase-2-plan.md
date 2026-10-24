@@ -1,7 +1,7 @@
 # Phase 2: Reality + Inspection — Implementation Plan
 
 **Status:** Historical implementation note — generation/explorer source remains; checkpoints and issue packs are not core rebuild priorities
-**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current product authority:** `prd.md`; current delivery: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The August rebuild plan was deleted at the owner’s request; historical phase claims below are not current progress.
 **Date:** 2026-04-09
 
 ## Current Verification Status

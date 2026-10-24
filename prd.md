@@ -3,7 +3,7 @@
 **Version:** 3.0
 **Status:** Approved product contract; rebuild underway
 **Approved:** 2026-08-08
-**Detailed design authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current completion plan:** `docs/plans/continuous-business-operator-completion-2026-10-24.md`
 
 ## 1. Product statement
 
@@ -126,6 +126,8 @@ Live QBO or database verification is never assumed by implementation work. Each 
 
 ## 8. Release measures
 
+The percentage targets below are retained August rebuild benchmarks, not the completion definition for the current business-operator work. Use the current completion plan’s requirement-level responsibilities, journeys and direct proof as the finish line. Reassess historical catalog counts and percentages only where they serve that outcome; they must not silently expand or narrow it.
+
 | Measure | Release gate |
 | --- | ---: |
 | Relevant capabilities classified | 100%; no `unknown` entries |
@@ -146,7 +148,7 @@ Scale counts are set only after sandbox rate, latency, storage, and report-perfo
 
 - Replacing the QBO bookkeeping interface or becoming a second ledger.
 - Cloning every QBO field into the application database.
-- Automating support diagnosis or making AI necessary to operate the lab.
+- Requiring AI for manual inspection or supported owner management. Autonomous business operation is core; autonomous case reproduction follows section 10. Broader support-diagnosis capabilities are not implied.
 - Generating arbitrary volume without an explainable business narrative.
 - Claiming capability from an entity's existence or report coverage from HTTP 200.
 - Generic destructive management, uncontrolled background writes, or default production automation.
@@ -157,7 +159,7 @@ Scale counts are set only after sandbox rate, latency, storage, and report-perfo
 
 - **Checkpoints and diffs:** deferred. Preserve existing records and code; do not expand them during the core rebuild.
 - **Existing issue packs:** legacy/experimental. Preserve definitions and runs, but do not present the five examples as representative support coverage.
-- **AI investigation and notes:** future/experimental. Preserve code and data; no new core dependency or write authority.
+- **Legacy AI investigation and notes:** preserve their code/data and existing boundaries. This legacy classification does not apply to the core business accountant or the separately approved autonomous reproduction workflow.
 - **Historical owner direction, 2026-10-02 (approval behaviour superseded below):** AI-driven issue reproduction is now the app's primary workflow. The operator describes a customer issue; the assistant reads the company and queues the creates, sparse updates and voids needed to recreate it (no deletes). Every change still runs only after the operator approves the plan, with production confirmation and audit. The assistant can use the owner's Codex CLI (ChatGPT subscription) or an Anthropic key. See `docs/design/ux-overhaul-2026-10.md`.
 
 - **Owner direction, 2026-10-05:** A connected company is authorized for the app's reproduction purpose. Submitting a case starts autonomous setup, case-owned transaction changes (including deletion when needed for the experiment), readback and evidence checks without repeated approval. The app must distinguish reproduced, not reproduced in the tested actions, and unverified. Legacy plan execution retains its approval rules. See [the implementation and verification boundary](docs/architecture/autonomous-reproduction.md).
@@ -168,10 +170,10 @@ These routes remain an implementation baseline during migration. Their presence 
 
 Approved direction includes the Test Data Lab public name, continual flagship-company mission, service/project plus inventory/wholesale plus recurring-service business shape, an initial 36-month planning horizon, the coverage gates above, manual-only classification for unsupported features, the dense adaptive UI direction, realm memberships with server-enforced permissions, one realm-owned flagship connection, production scheduling off by default, and entity-specific destructive policies.
 
-The following remain evidence-gated: exact scale counts, the precise writable feature/report list, connection encryption design, new frontend dependencies, final checkpoint disposition, and any future issue-scenario or AI phase.
+The following remain evidence-gated: exact scale counts, the precise writable feature/report list, connection encryption design, new frontend dependencies, final checkpoint disposition, and new issue-scenario or AI capabilities beyond the already requested business accountant and approved reproduction workflow.
 
 ## 12. Delivery and launch boundary
 
-The rebuild follows the gates in `roadmap.md`. Capability/report discovery and fixture-driven design approval come before new QBO mutation architecture. Sandbox integration comes before a bounded production canary. The release is complete only when the definition of done and evidence requirements in `continual-test-data-lab-rebuild-plan.md` pass.
+The current completion sequence and requirement-level acceptance evidence are in `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The old August phase sequence is historical. Existing authorization, independent review, new-direction acceptance and live-company safety gates remain in force. For new QBO mutation workflows, sandbox integration precedes a bounded Production canary unless an explicit target-specific owner decision approves a different validation path. Reuse valid prior evidence rather than repeat a passed gate solely because the plan changed. This plan does not activate accounting writes. Product completion requires direct evidence of the intended owner outcomes.
 
-The product launches as a local, internal operational tool for the approved flagship company. Expansion to other companies, public packaging, payroll automation, or autonomous support workflows requires a separate proposal.
+The product launches as a local, internal operational tool for the approved flagship company. Expansion to other companies, public packaging, payroll automation, or support automation beyond the already approved reproduction workflow requires a separate proposal.

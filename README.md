@@ -2,26 +2,22 @@
 
 Test Data Lab is a local control and visibility application for maintaining one flagship QuickBooks Online Advanced Canada company as a believable, continually evolving business.
 
-The app is being rebuilt around business definition, capability and report coverage, controlled historical and forward operations, complete data inspection, reconciliation evidence, and governed administration. Support agents reproduce customer problems manually in the resulting company.
+The intended experience is an in-app accountant that continuously manages a believable medium-sized business for troubleshooting, teaching and learning, with complete owner controls. Manual support work and the separately approved autonomous reproduction workflow remain available.
 
-## Rebuild status
+## Current delivery
 
-Updated: 2026-08-09
-
-- Phase 0 product reset is complete.
-- Phase 1 has an owner-approved catalog/profile/volume direction and all 48 report rows are statically classified; 30 exact Tier 1 operations and dataset evidence remain open.
-- Phase 2's fixture design and six rendered workflows were owner-accepted on 2026-08-09; React interaction, NVDA, and Windows forced-colours checks remain Phase 4 gates.
-- An initial Phase 3 read-only foundation adds server-owned context/definition routes and additive membership/blueprint models. No migration, scheduler, new QBO mutation path, or live operation has been run.
-- Existing seeding, generation, explorer, checkpoints, issue packs, audit, and AI surfaces remain in source during migration.
-- Checkpoints are deferred; current issue packs and AI are legacy/experimental, not core rebuild requirements.
+Updated: 2026-10-24. The continuous business-operator outcome is unfinished. Source includes company synchronization, a server-owned agent loop, scoped controls/tools and an owner workspace. Source presence and earlier monitoring evidence do not prove autonomous accounting or days/weeks of successful operation.
 
 Start with:
 
-- `prd.md` — approved product contract;
-- `roadmap.md` — current phase status and next gate;
-- `continual-test-data-lab-rebuild-plan.md` — detailed architecture, UI, safety, and delivery plan;
-- `REBUILD_RELEASE_EVIDENCE.md` — evidence required to pass each rebuild gate;
-- `docs/discovery/` — versioned capability/report discovery artifacts.
+- `prd.md` — current product contract;
+- `docs/plans/continuous-business-operator-completion-2026-10-24.md` — full intended outcome, current gaps, ordered work and acceptance proof;
+- `docs/architecture/business-agent.md` — implemented operator boundary and outstanding verification;
+- `docs/agent-harness/FULL_GOAL_EXECUTION.md` — dated company execution evidence and existing authority;
+- `docs/discovery/` — capability/report definitions;
+- `roadmap.md` and `REBUILD_RELEASE_EVIDENCE.md` — historical August phase/evidence records, not current progress.
+
+The old August rebuild plan was deleted at the owner’s request. Its AI restrictions and phase order do not govern current work.
 
 ## Production safety
 
@@ -31,17 +27,9 @@ Treat every live QBO operation as a real-company operation. Do not run OAuth, se
 
 Backend startup is still not neutral because it connects to MongoDB. Legacy issue-pack seeding and stale job/plan rewrites are now off by default behind a server flag, but do not start, stop, or restart app services unless explicitly requested.
 
-## Current implementation baseline
+## Implementation evidence
 
-| Area | Present now | Rebuild status |
-| --- | --- | --- |
-| Authentication and connection | Email/password auth, protected routes, QBO OAuth and token handling; initial realm membership/context contracts | Phase 3 migration and encrypted realm-owned connection decision remain open |
-| QBO client | Status-based errors, `intuit_tid`, 429 backoff, Production guard on selected write routes | Preserved foundation; new writes wait for the operation-safety gates |
-| Data preparation | Fixed seeding and randomized historical generation | Legacy implementation; replaced later by blueprint-driven lifecycle operations |
-| Inspection | Dashboard snapshot and 13-type explorer with bounded results | Preserved; Phase 4/9 add truthful overview and fully paginated catalog |
-| Checkpoints and issue packs | Existing routes, models, and pages; issue-pack execution default-off | Deferred or legacy/experimental |
-| AI | Existing provider, sessions, plans, tools, SSE, notes, and command center; plan execution default-off | Experimental; no new core dependency or write authority |
-| UI | React/Vite shell and local primitives | Phase 2 fixture contract accepted; Phase 4 React migration and assistive-technology acceptance are next |
+Use the current completion plan for observed source and outstanding outcome proof, and `docs/architecture/business-agent.md` for the operator implementation boundary. Earlier August phase tables are historical; they do not describe today’s runtime.
 
 ## Project layout
 
@@ -51,8 +39,8 @@ frontend/                Vite/React frontend
 docs/discovery/          Versioned rebuild discovery artifacts
 scripts/phase-0/         Historical QBO API validation scripts
 prd.md                   Approved product contract
-roadmap.md               Current rebuild status and gates
-continual-*.md           Detailed rebuild plan
+roadmap.md               Historical August phase record
+docs/plans/              Current completion plan
 REBUILD_RELEASE_EVIDENCE.md
 phase-*.md               Historical implementation plans and notes
 AGENTS.md                OpenAI Codex project guidance

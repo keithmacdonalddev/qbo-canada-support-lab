@@ -1,7 +1,7 @@
 # Phase 1 Foundation Plan
 
 **Status:** Historical implementation note — source remains, but this is not rebuild Phase 1
-**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current product authority:** `prd.md`; current delivery: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The August rebuild plan was deleted at the owner’s request; historical phase claims below are not current progress.
 **Duration:** 3-4 weeks  
 **Phase objective:** Ship the first end-to-end internal product slice after the API spike passes.
 

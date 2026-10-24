@@ -1,9 +1,11 @@
 # Test Data Lab Rebuild Roadmap
 
-**Status:** Rebuild underway
+**Status:** Historical August phase record; current delivery plan linked below
 **Updated:** 2026-08-09
 **Product contract:** `prd.md`
-**Detailed plan and phase gates:** `continual-test-data-lab-rebuild-plan.md`
+**Current delivery plan:** `docs/plans/continuous-business-operator-completion-2026-10-24.md`
+
+The August phase positions and AI priorities below are historical, not the current implementation sequence or present-state claims. The superseded rebuild plan was deleted at the owner’s request on 2026-10-24. Use the current plan and fresh source/live evidence for progress; the full continuous business-operator outcome remains unfinished.
 
 ## Current position
 
@@ -35,7 +37,7 @@ The connected company is a real Production QBO Advanced Canada company. No rebui
 
 Delivered by the first rebuild slice:
 
-- approved `continual-test-data-lab-rebuild-plan.md` as the detailed product-priority authority;
+- approved an August rebuild plan, since deleted at the owner’s request; its obsolete AI priorities and phase order are superseded by the current plan;
 - replaced the old PRD and roadmap direction;
 - adopted the public name **Test Data Lab** while keeping QBO terminology descriptive only;
 - classified checkpoints as deferred and issue packs/AI as legacy or experimental;

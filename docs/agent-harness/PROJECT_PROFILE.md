@@ -19,7 +19,7 @@ Paths in the following tables are relative to the repository root. Wildcards mea
 
 | Work | Read |
 | --- | --- |
-| Product/rebuild | prd.md; roadmap.md; continual-test-data-lab-rebuild-plan.md; REBUILD_RELEASE_EVIDENCE.md |
+| Product/rebuild | prd.md; roadmap.md; docs/plans/continuous-business-operator-completion-2026-10-24.md; REBUILD_RELEASE_EVIDENCE.md |
 | Orientation | .agents/skills/qbo-project/SKILL.md |
 | Backend/frontend | .agents/rules/backend.md; .agents/rules/frontend.md |
 | Live-company safety | .agents/rules/qbo-safety.md; .agents/skills/qbo-safety-review/SKILL.md |

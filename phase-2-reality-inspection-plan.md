@@ -1,7 +1,7 @@
 # Phase 2 — Reality + Inspection Plan
 
 **Status:** Historical design — superseded by `phase-2-plan.md`, then by the Test Data Lab rebuild for product priority
-**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current product authority:** `prd.md`; current delivery: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The August rebuild plan was deleted at the owner’s request; historical phase claims below are not current progress.
 **Depends on:** Phase 1 complete (Gate B passed)
 **Phase objective:** Turn the seeded flagship company into a realistic, inspectable support lab.
 

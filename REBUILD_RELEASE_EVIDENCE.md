@@ -1,8 +1,10 @@
 # Test Data Lab Rebuild Evidence
 
-**Status:** Active checklist
+**Status:** Historical August rebuild checklist; current acceptance is in the completion plan
 **Opened:** 2026-08-08
-**Authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current acceptance plan:** `docs/plans/continuous-business-operator-completion-2026-10-24.md`
+
+The phase claims below are retained historical evidence. They are not the current release sequence or proof of current completion. The former rebuild plan was deleted at the owner’s request on 2026-10-24; use the current plan’s requirement-level outcomes and live-evidence boundaries.
 **Rule:** A phase passes only when its evidence is linked here and the stated reviewer accepts it. Source presence or a successful build is not a substitute for missing runtime, rendered, accounting, accessibility, or live-path evidence.
 
 ## Status vocabulary

@@ -1,7 +1,7 @@
 # Phase 4 - Hardening, Polish, And Continuous Activity Plan
 
 **Status:** Historical proposal — not implemented and superseded as the active roadmap
-**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current product authority:** `prd.md`; current delivery: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The August rebuild plan was deleted at the owner’s request; historical phase claims below are not current progress.
 **Depends on:** Phase 1-3 source surfaces verified against a real intended sandbox/test setup
 **Phase objective:** Make the QBO Support Lab reliable enough for repeated daily internal support use.
 

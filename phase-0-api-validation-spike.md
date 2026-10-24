@@ -1,7 +1,7 @@
 # Phase 0 API Validation Spike
 
 **Status:** Historical — completed API validation; retained as evidence for the Test Data Lab rebuild
-**Current product authority:** `continual-test-data-lab-rebuild-plan.md`
+**Current product authority:** `prd.md`; current delivery: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. The August rebuild plan was deleted at the owner’s request; historical phase claims below are not current progress.
 **Duration:** 1-2 weeks  
 **Source of truth:** `prd.md`
 

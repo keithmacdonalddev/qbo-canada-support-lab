@@ -17,11 +17,12 @@ an overall readiness score, or a claim that every QuickBooks feature is covered.
 
 - `prd.md` sections 3 and 6 define the approved business, capability/report
   registry, coherent history, governed calendar, reconciliation and evidence.
-- `continual-test-data-lab-rebuild-plan.md` sections 6.3–6.4 distinguish
-  representative feature variants and meaningful reports from mere presence.
-- Sections 9.1 and 9.3 define service/projects, wholesale/inventory and recurring
-  services, with an initial 36-month planning horizon followed by ongoing work.
-  This is a design target, not proof of the saved or completed company period.
+- `prd.md` sections 6.2 and 6.6 distinguish representative feature/report
+  evidence from mere record presence. Its sections 1, 3 and 11 retain the
+  three-division business and initial history target followed by ongoing work.
+  These are design targets, not proof of completed company periods. Current
+  delivery and acceptance are in
+  `docs/plans/continuous-business-operator-completion-2026-10-24.md`.
 - `docs/discovery/catalog.v1.json` is the canonical catalog of 24 capability
   areas (21 business areas and 3 app operating requirements) and 48 report definitions. It records prerequisites, variations,
   priorities, report periods and assertions. Definition dates and historical

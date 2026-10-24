@@ -73,7 +73,7 @@ Multiple coding-agent sessions may work in this checkout at the same time.
 
 Treat docs as useful but potentially stale. Re-check source before making status claims. Use [the current full-goal handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md) and its direct evidence for current company progress; the dated early-rebuild snapshots below are historical and must not reset an already prepared company to an empty state.
 
-- Rebuild authority: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, and `REBUILD_RELEASE_EVIDENCE.md`.
+- Current product contract: `prd.md`; current delivery and acceptance: `docs/plans/continuous-business-operator-completion-2026-10-24.md`. `roadmap.md` and `REBUILD_RELEASE_EVIDENCE.md` retain historical August phase evidence, not the current backlog or progress.
 - Rebuild status (2026-08-09): Phase 0 is complete; Phase 1's catalog/profile/volume direction is owner-approved and all 48 report rows are statically classified, while 24 create/update cells, six void operations, two lower-tier API questions, and dataset evidence remain open; Phase 2's fixture-design gate is accepted, with React interaction/NVDA/forced-colours checks deferred to Phase 4; an initial non-live Phase 3 read-only server foundation exists. No new rebuild QBO mutation path exists.
 - Phase 3 read-only foundation: `backend/src/routes/rebuild.js` serves server-owned `/api/context`, capability/report definitions, the operation matrix, and proposal reads. `CompanyMembership` and `BlueprintVersion` are additive models only; no migration has run. See `docs/architecture/rebuild-phase-3-foundation.md`.
 - Server-owned flags default legacy AI plan execution, issue-pack execution, and legacy startup database maintenance off. Importing `backend/src/server.js` does not start the server. Explicit backend startup still connects MongoDB; do not run it without permission.
@@ -81,7 +81,7 @@ Treat docs as useful but potentially stale. Re-check source before making status
 - Phase 0 scripts exist under `scripts/phase-0/`.
 - Backend code exists under `backend/src/` with Express, Mongoose, QBO OAuth/client modules, seeding, generation, checkpoints, issue packs, audit, and AI routes.
 - Frontend code exists under `frontend/src/` with Vite, React, protected routes, dashboard, onboarding, explorer, checkpoints, issue packs, settings, audit, and AI command center pages.
-- Checkpoints are deferred; current issue packs and AI are preserved as legacy/experimental during the rebuild. Their presence in source is not rebuild completion evidence.
+- Checkpoints are deferred; old issue packs and legacy AI investigation/notes retain their existing boundaries. The core business accountant and separately approved autonomous reproduction workflow are not classified as future/experimental. Source presence is not completion evidence.
 - The old `CLAUDE.md` claimed Phase 1/Phase 2 status and should not be treated as current source of truth after this architecture update.
 - QBO error handling is status-based. `backend/src/modules/qbo-client.js` `apiCall()` captures Intuit `intuit_tid` from response headers (`getLastIntuitTid()`), retries 429 with clamped exponential backoff (60s/attempt cap, max 5 attempts), and throws errors carrying `err.status`, `err.intuit_tid`, and the QBO Fault message on 4xx/5xx. Helper `backend/src/modules/qbo-error.js` (`isQboError`/`respondQboError`) maps QBO upstream errors to HTTP 502 (429 passthrough) with `{ error, intuit_tid, qboStatus }`. Routes must NOT surface a QBO-side 401 as an app-level 401: the frontend treats any 401 as session expiry and force-logs-out the user. Wired into `ai`, `checkpoint`, `company`, `explore` routes; `seed`/`generate`/`issuepacks` are intentionally unchanged (fire-and-forget background jobs surfaced via `/status` and `/log`).
 - SDK gotcha: installed `intuit-oauth@4.2.2` is axios-based. `makeApiCall` RESOLVES on 2xx-4xx (`validateStatus < 500`) and THROWS an OAuthError on 5xx/network failures with the HTTP status in `err.code` (a string), not `err.status`/`.statusCode`/`.authResponse`.
@@ -92,7 +92,7 @@ Treat docs as useful but potentially stale. Re-check source before making status
 
 Read only the files needed for the task. Use this routing before broad scanning.
 
-- Project orientation: `prd.md`, `roadmap.md`, `continual-test-data-lab-rebuild-plan.md`, `REBUILD_RELEASE_EVIDENCE.md`, `package.json`, `backend/package.json`, `frontend/package.json`.
+- Project orientation: `prd.md`, `docs/plans/continuous-business-operator-completion-2026-10-24.md`, `docs/architecture/business-agent.md`, `package.json`, `backend/package.json`, `frontend/package.json`.
 - Capability/report discovery: `docs/discovery/README.md`, `docs/discovery/registry.schema.v1.json`, `docs/discovery/catalog.v1.json`, `docs/discovery/catalog.v1.md`.
 - Backend startup and side effects: `backend/src/server.js`, `backend/src/app.js`, `backend/src/config/index.js`, `backend/src/config/database.js`.
 - Rebuild context/definitions: `backend/src/routes/rebuild.js`, `backend/src/modules/rebuild-context.js`, `backend/src/modules/rebuild-definitions.js`, `backend/src/modules/rebuild-permissions.js`, `backend/src/models/CompanyMembership.js`, `backend/src/models/BlueprintVersion.js`.
