@@ -39,3 +39,17 @@ test('native accounting admission requires the renewed activity policy and keeps
  await assert.rejects(fenceAgentAuthority({authority,run:{createdBy:authority.ownerId,authorityHash:authority.authorityHash,activityBatch:batch},scope,ownerId:authority.ownerId,actorId:authority.ownerId,Agents,session:{inTransaction:()=>true}}),/paused|authorization changed/);
  assert.equal(filter['grant.activityPolicyHash'],POLICY_HASH);assert.equal(filter['settings.autonomous'],true);assert.equal(filter['grant.id'],authority.grantId);
 });
+const settle = () => ({ decisionKey:'adopted-settlement-decision-001', purpose:'Collect a customer payment received today and pay a supplier bill now due.', activities:[{type:'collect-adopted-invoice',invoiceId:'10720',customerKey:'care-client-021',amountCents:28386,purpose:'Customer paid the September care invoice in full.'},{type:'pay-adopted-bill',billId:'10655',vendorKey:'stock-supplier-2',amountCents:69768,purpose:'Pay the stock supplier bill that falls due today.'}] });
+test('adopted obligations settle as a standalone payment with its deposit, and a standalone bill payment',()=>{
+ const f=prepared(settle());assert.deepEqual(f.activity.events.map(row=>row.entity),['Payment','Deposit','BillPayment']);validateActivityBatch(f.batch,f.candidate);
+ const [payment,deposit,bill]=f.candidate.entries.map(row=>row.step);
+ assert.deepEqual(payment.dependencies,[]);assert.deepEqual(bill.dependencies,[]);assert.equal(deposit.details.amountSourceKey,payment.logicalKey);
+ const collect=batchLifecycle(payment),pay=batchLifecycle(bill);
+ assert.equal(collect.mode,'adopted-settlement');assert.deepEqual(collect.adopted,{entity:'Invoice',qboId:'10720',amountCents:28386});
+ assert.equal(pay.mode,'adopted-settlement');assert.deepEqual(pay.adopted,{entity:'Bill',qboId:'10655',amountCents:69768});
+ assert.equal(batchLifecycle(deposit).mode,'standard');
+});
+test('adopted settlements reject foreign parties, duplicates, oversized amounts and tampered terms',()=>{
+ for(const mutate of [x=>{x.activities[0].invoiceId='INV-1';},x=>{x.activities[0].customerKey='stock-supplier-1';},x=>{x.activities[1].vendorKey='care-client-001';},x=>{x.activities[0].amountCents=5000001;},x=>{x.activities[0].amountCents=0;},x=>{x.activities[1]={...x.activities[0]};},x=>{x.activities[0].billId='1';}]){const value=settle();mutate(value);assert.throws(()=>validateChoices(value));}
+ for(const mutate of [s=>{s.details.adoptedSettlement.amountCents=5000001;},s=>{s.details.adoptedSettlement.entity='Bill';},s=>{s.dependencies=[{logicalKey:'f'.repeat(64)}];},s=>{s.details.amountSourceKey='f'.repeat(64);},s=>{s.details.destination='operating_bank';},s=>{delete s.details.adoptedSettlement;}]){const f=prepared(settle()),step=structuredClone(f.candidate.entries[0].step);mutate(step);assert.throws(()=>batchLifecycle(step));}
+});

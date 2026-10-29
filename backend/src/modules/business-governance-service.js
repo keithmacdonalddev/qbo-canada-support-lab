@@ -227,6 +227,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       const batchTools = require('./business-activity-batch');
       const batch = batchTools.makeActivityBatch({ scope, businessKey: active.value.businessKey, day: input.throughDate, choices: batchChoices });
       batchTools.assertBatchPreparation(active, batch, now());
+      await checkAdoptedSettlements(scope, active, batch, client);
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
       prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity);
       prepared.activityBatch = batch;
@@ -302,6 +303,34 @@ function createBusinessGovernanceService(dependencies = {}) {
     });
     return store.prepare(scope, { requestKey: input.requestKey, candidateHash });
   }
+  // Fail before any plan is saved: each adopted obligation must be a saved record of
+  // the adopted import, owed by the named party, with an open balance covering the
+  // settlement. Compilation repeats the balance check against a fresh read.
+  async function checkAdoptedSettlements(scope, active, batch, client) {
+    const settlements = batch.activities.filter(row => ['collect-adopted-invoice', 'pay-adopted-bill'].includes(row.type));
+    if (!settlements.length) return;
+    const { importedObligation } = require('./business-adopted-settlement'), Records = models.PopulationRecords || require('../models/BusinessPopulationRecord');
+    const adoption = active.calendar.adoption;
+    if (adoption?.kind !== 'adopted-history') fail('No adopted import history exists for this company.');
+    for (const row of settlements) {
+      const entity = row.type === 'collect-adopted-invoice' ? 'Invoice' : 'Bill', qboId = row.invoiceId || row.billId, partyKey = row.customerKey || row.vendorKey;
+      const origin = importedObligation(await Records.findOne({ environment: scope.environment, realmId: scope.realmId, entity, qboId }).maxTimeMS(3000).lean(), scope, adoption, entity, qboId);
+      if (origin.partyKey !== partyKey) fail('Adopted ' + entity.toLowerCase() + ' ' + qboId + ' belongs to another ' + (entity === 'Invoice' ? 'customer' : 'supplier') + '.');
+      const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + qboId))?.[entity], balance = Math.round(Number(record?.Balance) * 100);
+      if (record?.Id !== qboId || record.CurrencyRef?.value !== 'CAD' || !Number.isSafeInteger(balance) || balance < row.amountCents) fail('Adopted ' + entity.toLowerCase() + ' ' + qboId + ' has an open balance of ' + (Number.isSafeInteger(balance) ? balance : 0) + ' cents, less than this settlement.');
+    }
+  }
+  // Open obligations from the adopted import, from the synchronized company copy.
+  // Balances are a starting point; preparation re-reads each chosen record.
+  async function adoptedObligations(scope, active) {
+    if (active.calendar.adoption?.kind !== 'adopted-history') return { adoptedInvoices: [], adoptedBills: [] };
+    const Records = models.PopulationRecords || require('../models/BusinessPopulationRecord'), Mirror = models.Mirror || require('../models/CompanySyncRecord');
+    const open = await Mirror.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity: { $in: ['Invoice', 'Bill'] }, deleted: false, 'summary.balanceCents': { $gt: 0 } }).select('entity qboId summary').sort({ 'summary.dueDate': 1, _id: 1 }).limit(500).maxTimeMS(3000).lean();
+    const imported = await Records.find({ environment: scope.environment, realmId: scope.realmId, state: 'saved', entity: { $in: ['Invoice', 'Bill'] }, qboId: { $in: open.map(row => row.qboId) }, txnDate: { $lte: active.calendar.adoption.importedThrough } }).select('entity qboId step.details.customerKey step.details.vendorKey').limit(500).maxTimeMS(3000).lean();
+    const party = new Map(imported.map(row => [row.entity + ':' + row.qboId, row.step?.details?.customerKey || row.step?.details?.vendorKey]));
+    const list = entity => open.filter(row => row.entity === entity && party.has(entity + ':' + row.qboId)).slice(0, 60).map(row => ({ [entity === 'Invoice' ? 'invoiceId' : 'billId']: row.qboId, [entity === 'Invoice' ? 'customerKey' : 'vendorKey']: party.get(entity + ':' + row.qboId), docNumber: row.summary.docNumber || null, txnDate: row.summary.txnDate, dueDate: row.summary.dueDate || null, balanceCents: row.summary.balanceCents }));
+    return { adoptedInvoices: list('Invoice'), adoptedBills: list('Bill') };
+  }
   async function activityOptions(user, { signal } = {}) {
     const bound = await bind(user, 'operations.preview', true), { scope, access } = bound;
     const active = await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true });
@@ -312,8 +341,9 @@ function createBusinessGovernanceService(dependencies = {}) {
     const customers = rows.filter(row => row.entity === 'Customer' && /^(field-client|care-client)-/.test(row.key));
     const services = rows.filter(row => row.entity === 'Item' && ['field-service-hour','care-plan-1','care-plan-2','care-plan-3'].includes(row.key));
     const vendors = rows.filter(row => row.entity === 'Vendor' && /^overhead-supplier-[1-3]$/.test(row.key));
+    const adopted = await adoptedObligations(scope, active);
     await access.authorize(scope, 'operations.preview', { signal });
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...adopted, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     const choices = require('./business-activity-batch').validateChoices(input);

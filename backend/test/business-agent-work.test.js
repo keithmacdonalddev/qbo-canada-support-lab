@@ -105,5 +105,9 @@ test('adopted history keeps its open balances as accountant work', () => {
   const work = businessWork({ ...running, business: { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' }, coverage: null });
   const item = work.items.find(row => row.key === 'inherited-obligations');
   assert.equal(item.owner, 'accountant');
-  assert.equal(item.state, 'blocked');
+  assert.equal(item.state, 'working', 'daily activity settles them under the approved rules');
+  const renew = businessWork({ ...running, activityPolicyHash: 'b'.repeat(64), business: { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' }, coverage: null });
+  assert.equal(byKey(renew, 'inherited-obligations').state, 'waiting');
+  assert.match(byKey(renew, 'inherited-obligations').next, /approve/);
+  assert.ok(ownerKeys(renew).includes('renew-authority'));
 });

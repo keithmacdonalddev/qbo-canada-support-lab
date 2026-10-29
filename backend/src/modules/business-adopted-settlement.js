@@ -1,0 +1,28 @@
+'use strict';
+// Evidence for settling an obligation from the adopted import history: the
+// adoption marker, the obligation's saved import record (with its financial
+// proof and posting account) and a fresh QuickBooks read of the obligation.
+// Read-only. The transaction compiler decides whether the settlement is allowed.
+const ID = /^\d{1,30}$/;
+function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_ADOPTED_SETTLEMENT_UNVERIFIED' }); }
+function importedObligation(row, scope, adoption, entity, qboId) {
+  if (!row || row.environment !== scope.environment || row.realmId !== scope.realmId || String(row.connectionId) !== scope.connectionId || row.entity !== entity || row.qboId !== qboId || row.state !== 'saved' || row.receipt?.qboId !== qboId || !row.financialProof || row.txnDate > adoption.importedThrough || typeof row.compilation?.request?.body !== 'string') fail('This ' + entity.toLowerCase() + ' is not a saved, financially verified record of the adopted import.');
+  const payload = JSON.parse(row.compilation.request.body), details = row.step?.details || {};
+  const accountId = entity === 'Invoice' ? payload.ARAccountRef?.value : payload.APAccountRef?.value, partyKey = entity === 'Invoice' ? details.customerKey : details.vendorKey;
+  if (!ID.test(accountId || '') || typeof partyKey !== 'string' || !partyKey) fail('The imported obligation lacks its original party or control account.');
+  return { logicalKey: row.logicalKey, entity, qboId, txnDate: row.txnDate, accountId, partyKey, adoptionId: adoption.adoptionId };
+}
+function createAdoptedSettlementReader({ Calendars, PopulationRecords, readRecord }) {
+  return async function adoptedSources(scope, settlement, { signal } = {}) {
+    if (!Calendars || !PopulationRecords || typeof readRecord !== 'function') fail('Adopted settlement evidence needs the calendar, the import records and a record reader.');
+    if (!settlement || !['Invoice', 'Bill'].includes(settlement.entity) || !ID.test(settlement.qboId || '')) fail('Name one adopted invoice or bill.');
+    const calendar = await Calendars.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId }).select('adoption').maxTimeMS(3000).lean();
+    const adoption = calendar?.adoption;
+    if (adoption?.kind !== 'adopted-history' || !/^[a-f0-9]{24}$/.test(adoption.adoptionId || '') || !/^\d{4}-\d{2}-\d{2}$/.test(adoption.importedThrough || '')) fail('No adopted import history exists for this company.');
+    const row = await PopulationRecords.findOne({ environment: scope.environment, realmId: scope.realmId, entity: settlement.entity, qboId: settlement.qboId }).maxTimeMS(3000).lean();
+    const population = importedObligation(row, scope, adoption, settlement.entity, settlement.qboId);
+    const observed = await readRecord(scope, settlement.entity, settlement.qboId, { signal });
+    return { ...observed, population };
+  };
+}
+module.exports = { createAdoptedSettlementReader, importedObligation };

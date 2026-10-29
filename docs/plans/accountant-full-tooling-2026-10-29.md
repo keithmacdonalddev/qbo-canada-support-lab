@@ -20,6 +20,20 @@ and the app shows the owner exactly which tools exist and what they reach.
   type `ai_plan`), Progress Invoicing's dropped estimate link is accepted as a
   recorded limitation, QuickBooks per-page `totalCount` is read correctly.
 
+- Workflow 1 (code, not yet live): same-day activity policy v2
+  (`business-activity-v2`) adds `collect-adopted-invoice` (Payment to
+  undeposited funds, then Deposit) and `pay-adopted-bill` (BillPayment from the
+  operating bank) for open invoices and bills of the adopted import. The
+  obligation is not a managed dependency: compilation reads it fresh inside
+  the writer fence (`business-adopted-settlement.js`), binds it to its saved,
+  financially verified import record and the adoption marker, checks party,
+  CAD, control account and that the amount never exceeds the open balance.
+  Preparation repeats those checks before saving a plan;
+  `getBusinessActivityChoices` lists the open adopted obligations. Usable only
+  after the owner approves the updated rules (policy hash changed). Open
+  invoices and bills entered outside the app before the import (55 invoices on
+  Production) are still out of scope.
+
 ## Constraint that shapes every workflow
 
 Every write must stay inside the governed operation pipeline. Period

@@ -105,7 +105,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   }
   async function execute({ signal } = {}) {
     await bind();
-    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
+    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, adoptedSources: require('./business-adopted-settlement').createAdoptedSettlementReader({ Calendars: models.Calendars, PopulationRecords: models.PopulationRecords || require('../models/BusinessPopulationRecord'), readRecord: verification.rawRecord }), now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
     return createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence: evidence.prepareEvidence, validateOpening })(scope, operationId, { signal });
   }
   return Object.freeze({ execute, settleStop: async () => {

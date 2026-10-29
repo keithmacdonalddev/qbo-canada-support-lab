@@ -135,6 +135,6 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (input?.intent?.operationId !== operationId || input?.intent?.planHash !== planHash) fail('The verification operation changed.');
     return graphSnapshot(input);
   };
-  return { loadGraphReadback, graphSnapshot: boundSnapshot, readRecord, loadTaxPolicy, readFence };
+  return { loadGraphReadback, graphSnapshot: boundSnapshot, readRecord, rawRecord, loadTaxPolicy, readFence };
 }
 module.exports = { createBusinessVerificationRuntime, taxExpectation };

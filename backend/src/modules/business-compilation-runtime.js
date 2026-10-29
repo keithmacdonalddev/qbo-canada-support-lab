@@ -48,7 +48,7 @@ async function depositSet(client, paymentId, call, check) {
   }
   fail('Deposit observation exceeds the supported record budget.');
 }
-function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, now = () => Date.now() }) {
+function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || [access?.authorize, access?.resolveClient, plans?.loadIntent, steps?.verifyGraph, steps?.evidence, verification?.readRecord, verification?.readFence, assertReady, now].some(value => typeof value !== 'function')) throw new TypeError('Compilation needs an exact operation and concrete observation adapters');
   const { authorize, resolveClient } = access, { loadIntent } = plans;
@@ -101,6 +101,15 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         if (intent.step.details.datedTax !== undefined && ['Estimate', 'PurchaseOrder'].includes(dependency.entity)) { const retained = await call(() => loadIntent(scope, operationId, dependency.logicalKey)); check(); if (!retained || retained.fingerprint !== dependency.fingerprint || retained.step?.txnDate !== observed.record.TxnDate) fail('The original dated-tax conversion policy is unavailable.'); original = { originalStep: retained.step, originalPolicy: retained.policy }; }
         parents.push({ ...observed, ...tag, ...original, ...(observed.accountRouting || (dependency.entity === 'PurchaseOrder' && observed.record.Line?.some(line => line.Received === undefined)) ? { verification: proof } : {}), logicalKey: dependency.logicalKey, entity: dependency.entity, fingerprint: dependency.fingerprint, state: 'verified', qboId: saved.qboId, syncToken: observed.record.SyncToken });
       });
+      // An adopted settlement reads its imported obligation fresh, inside the same
+      // writer fence as every other observation.
+      let adopted = null;
+      const settlement = intent.step.details?.adoptedSettlement;
+      if (settlement !== undefined) jobs.push(async () => {
+        if (typeof adoptedSources !== 'function' || intent.dependencies.length) fail('Adopted obligation evidence is unavailable.');
+        const value = await call(() => adoptedSources(scope, settlement, { signal: controller.signal })); check();
+        adopted = { ...value, ...tag };
+      });
       let next = 0, error;
       await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, async () => {
         while (!error && next < jobs.length) { const job = jobs[next++]; try { check(); await job(); } catch (cause) { error ||= cause; controller.abort(); } }
@@ -127,7 +136,7 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       const current = await call(() => authorize(scope, 'operations.execute', { signal: controller.signal })); check();
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The operation actor changed during observations.');
       referenceEvidence.sort((a, b) => (a.entity + ':' + a.record.Id).localeCompare(b.entity + ':' + b.record.Id)); parents.sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
-      const evidence = { referenceEvidence, parents, observationFence: { scope, ...tag, observedAt: new Date(started).toISOString() } };
+      const evidence = { referenceEvidence, parents, adopted, observationFence: { scope, ...tag, observedAt: new Date(started).toISOString() } };
       // Preflight all business constraints, including independent tax expectations,
       // before handing any observations to durable dispatch. This creates nothing.
       const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, ...evidence, now: now() });
