@@ -33,7 +33,7 @@ function populationStockRows(scope, jobId, items, row) {
 async function readPopulationStock(models, scope, jobId, items, { fromDate, through, session = null }) {
   const rows = [], ids = items.map(item => item.itemId);
   const query = { environment: scope.environment, realmId: scope.realmId, entity: { $in: ['Bill', 'SalesReceipt'] }, state: 'saved', txnDate: { $gte: fromDate, $lte: through } };
-  for await (const row of models.Records.find(query).select('logicalKey entity txnDate state qboId receipt compilation').sort({ txnDate: 1, _id: 1 }).session(session).maxTimeMS(30000).lean().cursor()) {
+  for await (const row of models.Records.find(query).select('logicalKey entity txnDate state qboId receipt compilation').sort({ txnDate: 1, _id: 1 }).limit(50001).batchSize(50001).session(session).maxTimeMS(30000).lean()) {
     const body = row.compilation?.request?.body;
     if (typeof body !== 'string' || !ids.some(id => body.includes('"value":"' + id + '"'))) continue;
     rows.push(...populationStockRows(scope, jobId, items, row));

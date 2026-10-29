@@ -21,7 +21,7 @@ const operation = extra => ({ operationId: 'o', status: 'blocked', agentAuthorit
 test('a healthy running business needs nothing from the owner and owns only features it can create', () => {
   const work = businessWork({ ...running, coverage });
   assert.equal(work.needsOwner, 0);
-  assert.equal(work.headline, 'Nothing needs you. The accountant is blocked on work it cannot do yet.');
+  assert.equal(work.headline, 'Nothing needs you. The accountant is running the business; some work waits for capabilities still being built.');
   const features = byKey(work, 'use-features');
   assert.equal(features.state, 'working');
   assert.deepEqual(features.features.map(item => item.key), ['estimates', 'purchase-orders']);

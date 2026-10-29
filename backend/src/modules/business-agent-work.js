@@ -69,7 +69,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   }else add({key:'check-features',owner:ACCOUNTANT,state:'waiting',title:'Check which QuickBooks features are in use',detail:'No feature check is available since the server started.',next:'Appears after the next feature check on the Coverage page.',href:'/coverage'});
 
   const needsOwner=items.filter(item=>item.owner===OWNER&&item.state==='needs-owner'),blocked=items.filter(item=>item.owner===ACCOUNTANT&&item.state==='blocked');
-  const headline=needsOwner.length?(needsOwner.length===1?'One thing needs you: '+needsOwner[0].title.charAt(0).toLowerCase()+needsOwner[0].title.slice(1)+'.':needsOwner.length+' things need you.'):!running?'Nothing needs you right now. The accountant is not running yet.':blocked.length?'Nothing needs you. The accountant is blocked on work it cannot do yet.':'Nothing needs you. The accountant is running the business.';
+  const headline=needsOwner.length?(needsOwner.length===1?'One thing needs you: '+needsOwner[0].title.charAt(0).toLowerCase()+needsOwner[0].title.slice(1)+'.':needsOwner.length+' things need you.'):!running?'Nothing needs you right now. The accountant is not running yet.':blocked.length?'Nothing needs you. The accountant is running the business; some work waits for capabilities still being built.':'Nothing needs you. The accountant is running the business.';
   return {headline,needsOwner:needsOwner.length,items};
 }
 

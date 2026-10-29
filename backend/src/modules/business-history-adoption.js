@@ -46,7 +46,7 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
     const limitations = {};
     for (const code of ISSUE_CODES) limitations[code] = 0;
     const gapped = [];
-    for await (const row of models.Records.find({ ...records, $or: [{ 'coverageGaps.0': { $exists: true } }, { 'relationshipCheck.outcome': 'error' }] }).select('_id logicalKey coverageGaps relationshipCheck.outcome').sort({ _id: 1 }).session(session).maxTimeMS(10000).lean().cursor()) {
+    for await (const row of models.Records.find({ ...records, $or: [{ 'coverageGaps.0': { $exists: true } }, { 'relationshipCheck.outcome': 'error' }] }).select('_id logicalKey coverageGaps relationshipCheck.outcome').sort({ _id: 1 }).limit(20001).batchSize(20001).session(session).maxTimeMS(10000).lean()) {
       const codes = new Set((row.coverageGaps || []).filter(code => ISSUE_CODES.includes(code)));
       if (row.relationshipCheck?.outcome === 'error') codes.add('record-verification-failed');
       for (const code of codes) limitations[code]++;
@@ -61,7 +61,7 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
       if (!run) add('original-missing', 'The original operation is not saved.');
       else {
         if (!IDLE_RUN.has(run.status) || run.leaseToken || run.executionRequest?.pending || run.planHash !== writer.planHash) add('original-active', 'The original operation is not idle.');
-        const steps = await models.Steps.find({ ...company, operationId: run._id }).select('logicalKey entity fingerprint state compilation dispatch receipt qboId').limit(5001).session(session).maxTimeMS(10000).lean();
+        const steps = await models.Steps.find({ ...company, operationId: run._id }).select('logicalKey entity fingerprint state compilation dispatch receipt qboId').limit(5001).batchSize(5001).session(session).maxTimeMS(10000).lean();
         if (steps.length > 5000) add('original-too-large', 'The original operation exceeds its review bound.');
         if (steps.some(row => ['dispatched', 'unknown', 'rejected'].includes(row.state))) add('original-uncertain', 'An original request is still uncertain or rejected.');
         const identities = steps.filter(row => ['saved', 'verified'].includes(row.state)).map(creationIdentity).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
@@ -147,7 +147,9 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
     // Content only: no observation times, so the same company state always yields
     // the same hash between review and adopt. Report generation times are removed.
     const unpack = (name, body) => [2, 3].includes(reports.version) ? require('./business-report-source').unpackReport(name, body, reports.version) : body;
-    const reportBodies = Object.fromEntries(Object.entries(reports.reports || {}).map(([name, body]) => { const copy = structuredClone(unpack(name, body)); if (copy?.Header) delete copy.Header.Time; return [name, copy]; }));
+    // The general ledger lists same-day rows in no fixed order, so only its passed
+    // checks (reportStatus) are part of the hash; summary reports are hashed whole.
+    const reportBodies = Object.fromEntries(Object.entries(reports.reports || {}).filter(([name]) => name !== 'GeneralLedger').map(([name, body]) => { const copy = structuredClone(unpack(name, body)); if (copy?.Header) delete copy.Header.Time; return [name, copy]; }));
     const contentHash = hash({ through, transactions: inventory.sourceHash, reports: { version: reports.version ?? null, period: reports.period ?? null, accounts: reports.accounts ?? null, bodies: Object.keys(reportBodies).length ? require('node:crypto').createHash('sha256').update(require('./report-json').canonicalReportCollection(reportBodies)).digest('hex') : null }, reportStatus: evaluation.status, after, missing, unobserved });
     return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), contentHash, reports, qboWrites: 0 };
   }
