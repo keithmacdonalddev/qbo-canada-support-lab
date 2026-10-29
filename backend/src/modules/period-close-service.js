@@ -60,7 +60,7 @@ function createPeriodCloseService(dependencies = {}) {
   async function idle(bound,value,session,b) {
     const company={environment:bound.scope.environment,realmId:bound.scope.realmId};
     if (value.writer.operationId!==null || value.writer.planHash!==null || value.writer.unresolved!==null || (value.calendar && (value.calendar.currentOperationId!==null || value.calendar.pendingCommit))) C.fail('Finish current work and settle uncertain requests before a period decision.');
-    if (await read(models.Runs,{...company,status:{$nin:['verified','retired']}},session,b) || await read(models.Steps,{...company,state:{$nin:['verified']}},session,b) || await read(models.Receipts,{...company,state:{$in:['possibly-sent','unknown']}},session,b)) C.fail('Finish or retire every unfinished business plan and recover uncertain company records first.');
+    if (await read(models.Runs,{...company,status:{$nin:['verified','retired']}},session,b) || await read(models.Steps,{...company,state:{$nin:['verified']},...(value.calendar?.adoption?.original?.operationId?{operationId:{$ne:value.calendar.adoption.original.operationId}}:{})},session,b) || await read(models.Receipts,{...company,state:{$in:['possibly-sent','unknown']}},session,b)) C.fail('Finish or retire every unfinished business plan and recover uncertain company records first.');
     const other=dependencies.activeWork ? await dependencies.activeWork(bound.scope,session) : await companyActiveWork(connection.db,bound.scope,{session});
     if (other.length) C.fail('Finish earlier legacy or master-record company work first.');
   }

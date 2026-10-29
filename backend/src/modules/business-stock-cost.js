@@ -33,7 +33,7 @@ function itemIdentity(item) {
 }
 function validateOrigin(source, scope) {
   exact(source, ['operationId', 'scopeHash', 'logicalKey', 'qboId', 'lineIndex', 'compilationHash', 'requestHash', 'receiptHash', 'receiptSource'], 'Original stock-line provenance');
-  if (!ID.test(source.operationId || '') || !['request-correlated-readback', 'owner-attributed-readback'].includes(source.receiptSource) || source.scopeHash !== hash(scope) || (typeof source.qboId !== 'string' || !QID.test(source.qboId)) || ![source.logicalKey, source.compilationHash, source.requestHash, source.receiptHash].every(value => HASH.test(value || ''))) fail('Original stock-line receipt provenance is incomplete or scoped elsewhere.');
+  if (!ID.test(source.operationId || '') || !['request-correlated-readback', 'owner-attributed-readback', 'population-readback'].includes(source.receiptSource) || source.scopeHash !== hash(scope) || (typeof source.qboId !== 'string' || !QID.test(source.qboId)) || ![source.logicalKey, source.compilationHash, source.requestHash, source.receiptHash].every(value => HASH.test(value || ''))) fail('Original stock-line receipt provenance is incomplete or scoped elsewhere.');
   integer(source.lineIndex, { max: 99 });
   return source;
 }

@@ -24,6 +24,15 @@ async function committedReceipt(models,scope,ownerId,operationId,session) {
   if (String(evidence.auditId) !== hash({scope,actorId,ownerId,eventKey}).slice(0,24) || !observed || String(observed.actorUserId || observed.userId) !== actorId || !equal(observed.inputParams,{eventKey,...scope,details})) fail('The original stock observation audit is unavailable or changed.');
   return {run,evidence};
 }
+// Adopted import history has no committed period: its carry is the FIFO replay of
+// the imported stock lines, re-derived and matched to the hashes recorded at adoption.
+function adoptedCalendar(calendar) { const adoption = calendar?.adoption; return Boolean(adoption?.kind === 'adopted-history' && calendar.verifiedThrough === adoption.through && !calendar.lastVerifiedOperationId); }
+async function adoptedOpening(models,active,root,session) {
+  const adoption = active.calendar.adoption, scope = active.value.scope;
+  const {state,carry} = await require('./business-adopted-stock').replayAdoptedStock({models:{Records:models.PopulationRecords || require('../models/BusinessPopulationRecord')},scope,root,jobId:adoption.jobId,through:adoption.through,session});
+  if (state.stateHash !== adoption.stock?.stateHash || carry.replayHash !== adoption.stock?.replayHash || carry.costCents !== adoption.stock?.costCents) fail('The adopted stock history no longer replays to the state recorded at adoption.');
+  return {state,carry};
+}
 async function assertFrozenStockOpening(models,active,expectation,session) {
   const {scope} = expectation, root = validateStockRoot(active.value.stockRoot,scope,active.view);
   validateStockExpectation(expectation,scope,expectation.period);
@@ -31,6 +40,11 @@ async function assertFrozenStockOpening(models,active,expectation,session) {
   if (active.calendar.verifiedThrough === null) {
     const opening = emptyStockState({scope,rootHash:root.rootHash,throughDate:shift(root.openingDate,-1),items:root.items});
     if (expectation.carry.kind !== 'zero-root' || !equal(expectation.opening,opening) || expectation.carry.costCents !== root.openingCostCents) fail('The initial stock state cannot replace its accepted zero root.');
+    return;
+  }
+  if (adoptedCalendar(active.calendar)) {
+    const {state,carry} = await adoptedOpening(models,active,root,session);
+    if (expectation.carry.kind !== 'adopted-history' || !equal(expectation.carry,carry) || !equal(expectation.opening,state)) fail('Use the exact stock state carried from adopted history.');
     return;
   }
   const operationId = String(active.calendar.lastVerifiedOperationId || '');
@@ -46,6 +60,7 @@ async function readCommittedStockOpening(models,active,session) {
     const state = emptyStockState({scope,rootHash:root.rootHash,throughDate:shift(root.openingDate,-1),items:root.items});
     return {state,carry:{kind:'zero-root',rootHash:root.rootHash,throughDate:state.throughDate,stateHash:state.stateHash,costCents:root.openingCostCents}};
   }
+  if (adoptedCalendar(active.calendar)) return adoptedOpening(models,active,root,session);
   const operationId = String(active.calendar.lastVerifiedOperationId || ''), {run,evidence} = await committedReceipt(models,scope,active.value.ownerId,operationId,session);
   const plan = await read(models.Plans,{_id:run.planId,...scope,operationId,planHash:run.planHash},session), manifest = plan?.manifest;
   if (!manifest || hash(manifest) !== run.planHash || !manifest.stockCostExpectation || run.throughDate !== active.calendar.verifiedThrough || run.baselineHash !== root.baselineHash || !(active.lineage?.entries || [{authority:active.authority}]).some(entry => entry.authority.contentHash === run.authorityHash)) fail('The last committed stock period is outside this business lineage.');

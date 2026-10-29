@@ -236,6 +236,23 @@ function createBusinessGovernanceService(dependencies = {}) {
         prepared.continuity = { version: 1, authorityHash: active.authority.contentHash, lineageHash: active.lineage.lineageHash, segments: active.lineage.segments, origins: activity.events.map(event => ({ logicalKey: event.logicalKey, authorityHash: segment.authorityHash, blueprintId: segment.blueprintId, blueprintHash: segment.blueprintHash, occurrence: event.occurrence, ruleKey: event.ruleKey, stepKey: event.stepKey })).sort((a,b) => a.logicalKey.localeCompare(b.logicalKey)) };
       }
     } else prepared = active.lineage ? require('./business-continuity-plan').prepareContinuingBusiness(active, scope, request, setup, masters, new Date(now())) : prepareBusinessOperation(view, request, setup, masters, new Date(now()));
+    // Forward cutover after adopted import history: scheduled follow-ups of
+    // imported (adopted) occurrences are not managed calendar work. They and
+    // anything depending on them are excluded and retained as inherited, so no
+    // write ever depends on an unverified imported record.
+    const adoptedThrough = require('./business-calendar').calendarCursor(active.calendar).adoptedThrough || active.calendar.adoption?.through || null;
+    if (adoptedThrough && !batchChoices) {
+      if (active.lineage) fail('A republished business cannot yet continue from adopted import history.');
+      const adopted = new Set(prepared.earlierRequirements.filter(row => row.txnDate <= adoptedThrough).map(row => row.logicalKey)), excluded = new Set();
+      for (let changed = true; changed;) { changed = false; for (const step of prepared.steps) if (!excluded.has(step.logicalKey) && step.dependencies.some(link => adopted.has(link.logicalKey) || excluded.has(link.logicalKey))) { excluded.add(step.logicalKey); changed = true; } }
+      if (excluded.size) {
+        prepared.steps = prepared.steps.filter(step => !excluded.has(step.logicalKey));
+        prepared.earlierRequirements = prepared.earlierRequirements.filter(row => !adopted.has(row.logicalKey));
+        prepared.inheritedFollowUps = { version: 1, adoptionId: active.calendar.adoption.adoptionId, through: adoptedThrough, excluded: [...excluded].sort() };
+        prepared.limitations = [...(prepared.limitations || []), excluded.size + ' scheduled follow-ups of adopted import history were not prepared. Their obligations stay open in QuickBooks for separate handling.'];
+      }
+      if (!prepared.steps.length) fail('Nothing schedulable remains in this period after excluding follow-ups of adopted history.');
+    }
     // The owner's published tax choices are resolved structurally here. Their
     // dated rates and exact expected tax are derived independently below.
     for (const step of prepared.steps) {
@@ -338,9 +355,10 @@ function createBusinessGovernanceService(dependencies = {}) {
   }
   const continuity = require('./business-continuity-service').createBusinessContinuityService({ models, connection, transaction, now, bind, fence, coordination, touchCoordination, readSetup: dependencies.readSetup, readMasters: dependencies.readMasters });
   const retirement = createBusinessOperationRetirement({ models, transaction, now, bind, fence });
+  const historyAdoption = require('./business-history-adoption-service').createHistoryAdoptionService({ models, transaction, now, bind, fence, readers: dependencies.adoptionReaders || {} });
   const taxReview = createBusinessPolicyAmendment({ models, transaction, now, bind, fence });
   const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence, agentAuthority: dependencies.agentAuthority, Agents: dependencies.Agents });
   const unknownRecovery = createBusinessUnknownRecovery({ models, connection, transaction, now, bind, fence });
-  return { ...unknownRecovery, ...recovery, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, activityOptions, prepareActivityBatch, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
+  return { ...unknownRecovery, ...recovery, reviewHistoryAdoption: historyAdoption.review, adoptHistory: historyAdoption.adopt, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, activityOptions, prepareActivityBatch, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
 }
 module.exports = { createBusinessGovernanceService, reportHash };

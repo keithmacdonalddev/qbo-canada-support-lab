@@ -87,7 +87,7 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
   }
   // Step 4: read-only QuickBooks evidence for the reviewed terms. Readers are the
   // existing scoped GET-only inventory and seven-report readers; nothing is written.
-  async function observe(scope, terms, { access, signal, readInventory, readReports, checkInventory, evaluateReports } = {}) {
+  async function observe(scope, terms, { access, signal, readInventory, readReports, checkInventory, evaluateReports, period: chosen } = {}) {
     const unmet = [], add = (code, detail) => unmet.push({ code, detail });
     const { createBusinessInventoryReader, inventorySummary } = require('./business-record-inventory');
     const inventory = await (readInventory || createBusinessInventoryReader({ access, now, stockMetadata: true }))(scope, { signal });
@@ -104,13 +104,13 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
       else if (!ids.has(row.qboId)) missing[row.entity] = (missing[row.entity] || 0) + 1;
     }
     if (Object.keys(missing).length) add('records-missing', 'Imported records are no longer in QuickBooks (' + Object.entries(missing).map(([entity, n]) => n + ' ' + entity).join(', ') + ').');
-    const fromDate = [terms.fromDate, shift(terms.through, -365)].sort().at(-1), period = { fromDate, throughDate: terms.through };
+    const period = chosen || { fromDate: [terms.fromDate, shift(terms.through, -365)].sort().at(-1), throughDate: terms.through };
     const { createBusinessReportReader } = require('./business-report-evidence');
     const reports = await (readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, period, { signal });
     const evaluation = (evaluateReports || require('./book-evidence').evaluateReportSources)(reports, { allowExplicitZero: true });
     if (evaluation.status !== 'checks-passed') add('reports-failed', 'The accounting reports through ' + terms.through + ' do not pass their named checks (' + evaluation.status + ').');
     const evidence = { version: 1, termsHash: hash(terms), inventorySourceHash: inventory.sourceHash, reportSourceHash: reports.sourceHash, reportStatus: evaluation.status, period, after, missing, unobserved, observedAt: new Date(now()).toISOString() };
-    return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), qboWrites: 0 };
+    return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), reports, qboWrites: 0 };
   }
   return { review, pending, observe };
 }
