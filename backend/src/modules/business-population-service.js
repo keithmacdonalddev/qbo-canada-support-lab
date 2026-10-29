@@ -89,6 +89,7 @@ function createBusinessPopulationService(options = {}) {
     const bound=await bind(user,'operations.preview');if(bound.ownerId!==bound.actorId)throw denied('Only the company owner can prepare population.');
     if(await read(Jobs,{...bound.scope,'verification.status':{$in:['queued','running']}}))throw denied('Finish the company relationship recheck before preparing more records.');
     const active=await assertPublishedBusiness({...models,scope:bound.scope,requireScheduleAcceptance:true,verifyBaseline:true});
+    if(active.calendar.verifiedThrough||active.calendar.adoption)throw denied('The business calendar already continues from verified or adopted history; population can no longer add records.');
     const jobId=hash({scope:bound.scope,authorityHash:active.authority.contentHash,throughDate:body.throughDate,purpose:'business-population-v1'}).slice(0,24),existing=await read(Jobs,{_id:jobId,...bound.scope});if(existing)return {scope:bound.scope,job:await publicJob(existing),reused:true};
     const writer=await read(models.Writers,bound.scope),calendar=active.calendar;
     if(!writer || writer.unresolved!==null || calendar.pendingCommit || calendar.stopRequested)throw denied('Settle company writes and its Stop request before preparing population.');
@@ -130,7 +131,7 @@ function createBusinessPopulationService(options = {}) {
       if(!job||!Array.isArray(job.manifest)||hash(job.manifest)!==job.manifestHash||job.manifestHash!==body.manifestHash||String(job.ownerId)!==bound.ownerId||job.actorId.toString()!==bound.actorId||!policy||policy.state!=='active'||!writer||writer.unresolved!==null||(bound.scope.environment==='production'&&!body.confirmProduction))throw denied('Population approval or company coordination changed.');
       if(await read(Jobs,{...bound.scope,_id:{$ne:id},'verification.status':{$in:['queued','running']}},session))throw denied('Finish the other company relationship recheck before adding records.');
       if(['queued','running'].includes(job.verification?.status))throw denied('Stop the relationship recheck before adding records.');
-      if(done(job.status))return;
+      if(job.status==='adopted')throw denied('This history was adopted; population is closed.');if(done(job.status))return;
       if((job.batch&&!await recoverableUnsent(job,writer,session)) || (job.leaseToken&&new Date(job.leaseExpiresAt).getTime()>now()))throw denied('Population is active or has an unsettled cohort.');
       const unsettled=await pageRows(Records,{...bound.scope,authorityHash:job.authorityHash,txnDate:{$gte:job.fromDate,$lte:job.throughDate},state:{$in:['rejected','unknown','dispatched']}},session);
       if(unsettled.some(row=>row.state!=='rejected')||(unsettled.length&&!body.retryRejected))throw denied('A rejected or uncertain population item needs its explicit recovery before restart.');
@@ -141,6 +142,7 @@ function createBusinessPopulationService(options = {}) {
         await audit(bound,id,'definite-rejections-retried',{manifestHash:job.manifestHash,revision:job.revision,items:retried},session);
       }
       const active=await assertPublishedBusiness({...models,scope:bound.scope,requireScheduleAcceptance:true,session,fence:true});
+      if(job.status==='adopted'||active.calendar.verifiedThrough||active.calendar.adoption)throw denied('This history was adopted; population is closed.');
       if(active.authority.contentHash!==job.authorityHash||active.value.blueprintHash!==job.blueprintHash||active.calendar.stopRequested||active.calendar.pendingCommit||String(writer.operationId||'')!==String(job.originalOperationId||''))throw denied('Population business authority or calendar changed.');
       const delegated=writer.populationDelegation;
       if(delegated&&delegated.jobId!==id){const previous=await read(Jobs,{_id:delegated.jobId,...bound.scope},session);if(!previous||!done(previous.status)||previous.batch||previous.leaseToken)throw denied('Another population job owns this writer.');}

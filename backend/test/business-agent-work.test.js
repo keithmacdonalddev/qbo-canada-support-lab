@@ -98,3 +98,10 @@ test('the calendar cursor distinguishes adopted import history from verified act
   assert.deepEqual(calendarCursor({ verifiedThrough: '2026-10-17', adoption }), { through: '2026-10-17', basis: 'adopted', adoptedThrough: '2026-10-17' });
   assert.equal(calendarCursor({ verifiedThrough: '2026-10-27', adoption }).basis, 'verified');
 });
+
+test('adopted history keeps its open balances as accountant work', () => {
+  const work = businessWork({ ...running, business: { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' }, coverage: null });
+  const item = work.items.find(row => row.key === 'inherited-obligations');
+  assert.equal(item.owner, 'accountant');
+  assert.equal(item.state, 'blocked');
+});

@@ -122,3 +122,14 @@ test('QuickBooks evidence refuses later activity, missing imported records and f
   const reports = await adoption.observe(scope, terms, readers(records(), 'checks-failed'));
   assert.deepEqual(reports.unmet.map(item => item.code), ['reports-failed']);
 });
+
+test('the evidence content hash ignores report generation times in packed reports', async () => {
+  const { packReport } = require('../src/modules/business-report-source');
+  const report = time => ({ Header: { Time: time, ReportName: 'TrialBalance' }, Columns: { Column: [] }, Rows: { Row: [] } });
+  const reportsAt = time => ({ version: 3, period: { fromDate: '2025-10-17', throughDate: '2026-10-17' }, accounts: [], sourceHash: hash({ time }), reports: { TrialBalance: packReport('TrialBalance', report(time), 3) } });
+  const adoption = createBusinessHistoryAdoption({ models: populationModels(), now: () => Date.now() });
+  const run = time => adoption.observe(scope, terms, { readInventory: async () => records(), checkInventory: () => {}, readReports: async () => reportsAt(time), evaluateReports: () => ({ status: 'checks-passed' }) });
+  const [first, second] = [await run('2026-10-29T10:00:00-07:00'), await run('2026-10-29T10:05:00-07:00')];
+  assert.notEqual(first.reports.reports.TrialBalance.sha256, second.reports.reports.TrialBalance.sha256);
+  assert.equal(first.contentHash, second.contentHash);
+});

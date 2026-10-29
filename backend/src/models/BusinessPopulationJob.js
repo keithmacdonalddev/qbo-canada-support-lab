@@ -11,7 +11,7 @@ const schema = new mongoose.Schema({
   fromDate: { type: String, required: true, immutable: true }, throughDate: { type: String, required: true, immutable: true },
   manifest: { type: [mongoose.Schema.Types.Mixed], required: true, immutable: true }, manifestHash: { type: String, required: true, immutable: true },
   importedHash: { type: String, required: true, immutable: true }, importedCount: { type: Number, required: true, immutable: true },
-  status: { type: String, enum: ['prepared','running','stopping','stopped','blocked','populated-with-gaps','populated'], default: 'prepared' },
+  status: { type: String, enum: ['prepared','running','stopping','stopped','blocked','populated-with-gaps','populated','adopted'], default: 'prepared' },
   approval: { type: mongoose.Schema.Types.Mixed, default: null },
   revision: { type: Number, default: 0 }, stopRequested: { type: Boolean, default: false },
   leaseToken: { type: String, default: null }, leaseExpiresAt: { type: Date, default: null },
@@ -23,6 +23,8 @@ const schema = new mongoose.Schema({
   metrics: { type: mongoose.Schema.Types.Mixed, default: null },
   verification: { type: mongoose.Schema.Types.Mixed, default: null },
   relationshipPolicyVersion: { type: Number, default: 0, immutable: true },
+  // Set when the history was adopted as the business starting point; the job is then closed.
+  adoption: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, createdAt: -1 });
 module.exports = mongoose.model('BusinessPopulationJob', schema);

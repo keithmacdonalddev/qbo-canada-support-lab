@@ -105,6 +105,7 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
           seen.add(record.Id); rows.push({ id: record.Id, transactionDate: record.TxnDate || null, ...(stockLines ? { stockLines: true } : {}) });
         }
         if (list.length < 1000) break;
+        if (start > 100000) throw Object.assign(new Error('QuickBooks has more ' + entity + ' records than adoption can read completely.'), { status: 409, code: 'BUSINESS_ADOPTION_BLOCKED' });
       }
       digest.push({ entity, ids: hash(rows) });
     }
@@ -135,6 +136,7 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
       if (!ids) unobserved[row.entity] = (unobserved[row.entity] || 0) + 1;
       else if (!ids.has(row.qboId)) missing[row.entity] = (missing[row.entity] || 0) + 1;
     }
+    if (Object.keys(unobserved).length) add('records-unobserved', 'Imported record types could not be checked in QuickBooks (' + Object.keys(unobserved).join(', ') + ').');
     if (Object.keys(missing).length) add('records-missing', 'Imported records are no longer in QuickBooks (' + Object.entries(missing).map(([entity, n]) => n + ' ' + entity).join(', ') + ').');
     const period = chosen ? { ...chosen, throughDate: through } : { fromDate: [terms.fromDate, shift(through, -365)].sort().at(-1), throughDate: through };
     const { createBusinessReportReader } = require('./business-report-evidence');
@@ -142,7 +144,12 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
     const evaluation = (evaluateReports || require('./book-evidence').evaluateReportSources)(reports, { allowExplicitZero: true });
     if (evaluation.status !== 'checks-passed') add('reports-failed', 'The accounting reports through ' + through + ' do not pass their named checks (' + evaluation.status + ').');
     const evidence = { version: 1, termsHash: hash(terms), through, inventorySourceHash: inventory.sourceHash, reportSourceHash: reports.sourceHash, reportStatus: evaluation.status, period, after, missing, unobserved, observedAt: new Date(now()).toISOString() };
-    return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), reports, qboWrites: 0 };
+    // Content only: no observation times, so the same company state always yields
+    // the same hash between review and adopt. Report generation times are removed.
+    const unpack = (name, body) => [2, 3].includes(reports.version) ? require('./business-report-source').unpackReport(name, body, reports.version) : body;
+    const reportBodies = Object.fromEntries(Object.entries(reports.reports || {}).map(([name, body]) => { const copy = structuredClone(unpack(name, body)); if (copy?.Header) delete copy.Header.Time; return [name, copy]; }));
+    const contentHash = hash({ through, transactions: inventory.sourceHash, reports: { version: reports.version ?? null, period: reports.period ?? null, accounts: reports.accounts ?? null, bodies: Object.keys(reportBodies).length ? require('node:crypto').createHash('sha256').update(require('./report-json').canonicalReportCollection(reportBodies)).digest('hex') : null }, reportStatus: evaluation.status, after, missing, unobserved });
+    return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), contentHash, reports, qboWrites: 0 };
   }
   return { review, pending, observe };
 }

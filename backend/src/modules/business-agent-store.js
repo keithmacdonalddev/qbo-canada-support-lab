@@ -65,7 +65,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     const run=calendar?.currentOperationId?await models.Runs.findOne({_id:calendar.currentOperationId,...scope}).select('_id status fromDate throughDate recordCount nextOrdinal planHash lastError agentAuthority executionRequest activityBatch').maxTimeMS(3000).lean():null;
     const observation=await models.Baselines.findOne(scope).sort({createdAt:-1}).select('payload.period payload.observedAt payload.evaluation.status payload.evaluation.checks').maxTimeMS(3000).lean();
     let recordCount=job?.counts?.saved??null;
-    if(recordCount===null&&job&&['populated','populated-with-gaps'].includes(job.status)){
+    if(recordCount===null&&job&&['populated','populated-with-gaps','adopted'].includes(job.status)){
       const key=String(job._id)+':'+String(job.updatedAt);
       if(!completedCounts.has(key)){const rows=await models.Jobs.aggregate([{$match:{_id:job._id}},{$project:{count:{$size:'$manifest'}}}]).option({maxTimeMS:3000});if(Number.isSafeInteger(rows[0]?.count)){if(completedCounts.size>=20)completedCounts.clear();completedCounts.set(key,rows[0].count);}}
       recordCount=completedCounts.get(key)??null;

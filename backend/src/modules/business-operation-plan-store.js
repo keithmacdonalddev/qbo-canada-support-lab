@@ -91,6 +91,12 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   }
   if (copy.continuity !== undefined) manifest.continuity = require('./business-continuity-plan').validateOperationContinuity(copy.continuity, copy);
   if (copy.activityBatch !== undefined) manifest.activityBatch = require('./business-activity-batch').validateActivityBatch(copy.activityBatch, copy);
+  if (copy.inheritedFollowUps !== undefined) {
+    // Scheduled follow-ups of adopted import history that this period deliberately does not create.
+    const value = copy.inheritedFollowUps, keys = value?.excluded;
+    if (!value || value.version !== 1 || !/^[a-f0-9]{24}$/.test(value.adoptionId || '') || !/^\d{4}-\d{2}-\d{2}$/.test(value.through || '') || !Array.isArray(keys) || !keys.length || keys.length > 1000 || keys.some(key => !validHash(key)) || new Set(keys).size !== keys.length || records.some(row => keys.includes(row.logicalKey))) fail('The excluded follow-ups of adopted history are malformed.');
+    manifest.inheritedFollowUps = { version: 1, adoptionId: value.adoptionId, through: value.through, excluded: [...keys].sort() };
+  }
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };

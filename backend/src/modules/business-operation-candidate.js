@@ -94,7 +94,7 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
   };
   for (const key of [...current.keys()].sort()) visit(key);
   if (retained.size !== current.size + original.size) fail('History contains unrelated earlier activities.');
-  const value = { version: 1, candidate: { ...base, ...(payload.activityBatch ? { activityBatch: payload.activityBatch } : {}), ...(payload.continuity ? { continuity: payload.continuity } : {}), entries: [...retained.values()] }, sources: { operationHash, historyHash: sourceHash, preparedAt, historyObservedAt: source.observedAt }, origins,
+  const value = { version: 1, candidate: { ...base, ...(payload.activityBatch ? { activityBatch: payload.activityBatch } : {}), ...(payload.continuity ? { continuity: payload.continuity } : {}), ...(payload.inheritedFollowUps ? { inheritedFollowUps: payload.inheritedFollowUps } : {}), entries: [...retained.values()] }, sources: { operationHash, historyHash: sourceHash, preparedAt, historyObservedAt: source.observedAt }, origins,
     requirements: payload.remaining.map(({ key, reason }) => ({ key, reason })),
     policyRequests: [...retained.values()].filter(entry => entry.kind === 'create').map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) })),
     persisted: false, readyToExecute: false, requiresActivationFence: true, requiresOwnershipReview: true, requiresFreshReadback: true };

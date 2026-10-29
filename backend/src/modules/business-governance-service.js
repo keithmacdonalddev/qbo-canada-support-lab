@@ -243,12 +243,17 @@ function createBusinessGovernanceService(dependencies = {}) {
     const adoptedThrough = require('./business-calendar').calendarCursor(active.calendar).adoptedThrough || active.calendar.adoption?.through || null;
     if (adoptedThrough && !batchChoices) {
       if (active.lineage) fail('A republished business cannot yet continue from adopted import history.');
-      const adopted = new Set(prepared.earlierRequirements.filter(row => row.txnDate <= adoptedThrough).map(row => row.logicalKey)), excluded = new Set();
+      // Inherited: dated on/before adoption, or (after adoption) never saved because an
+      // earlier period already excluded it as a follow-up of adopted history.
+      const later = prepared.earlierRequirements.filter(row => row.txnDate > adoptedThrough).map(row => row.logicalKey), saved = new Set();
+      for (let offset = 0; offset < later.length; offset += 100) for (const row of await models.Steps.find({ environment: scope.environment, realmId: scope.realmId, logicalKey: { $in: later.slice(offset, offset + 100) } }).select('logicalKey').limit(101).maxTimeMS(3000).lean()) saved.add(row.logicalKey);
+      const adopted = new Set(prepared.earlierRequirements.filter(row => row.txnDate <= adoptedThrough || !saved.has(row.logicalKey)).map(row => row.logicalKey)), excluded = new Set();
       for (let changed = true; changed;) { changed = false; for (const step of prepared.steps) if (!excluded.has(step.logicalKey) && step.dependencies.some(link => adopted.has(link.logicalKey) || excluded.has(link.logicalKey))) { excluded.add(step.logicalKey); changed = true; } }
       if (excluded.size) {
         prepared.steps = prepared.steps.filter(step => !excluded.has(step.logicalKey));
         prepared.earlierRequirements = prepared.earlierRequirements.filter(row => !adopted.has(row.logicalKey));
         prepared.inheritedFollowUps = { version: 1, adoptionId: active.calendar.adoption.adoptionId, through: adoptedThrough, excluded: [...excluded].sort() };
+        if (prepared.continuity) fail('A continuing business revision cannot yet exclude follow-ups of adopted history.');
         prepared.limitations = [...(prepared.limitations || []), excluded.size + ' scheduled follow-ups of adopted import history were not prepared. Their obligations stay open in QuickBooks for separate handling.'];
       }
       if (!prepared.steps.length) fail('Nothing schedulable remains in this period after excluding follow-ups of adopted history.');
