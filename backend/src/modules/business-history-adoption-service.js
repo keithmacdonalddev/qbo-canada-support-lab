@@ -21,11 +21,11 @@ function createHistoryAdoptionService({ models, transaction, now, bind, fence, r
     const root = active.value.stockRoot, terms = saved.terms;
     if (active.authority.contentHash !== terms.authorityHash) fail('The published business changed since the review.');
     const period = root ? { fromDate: [terms.fromDate, fiscalStart(terms.through, root.fiscalYearStartMonth)].sort().at(-1), throughDate: terms.through } : null;
-    const observed = await adoption.observe(bound.scope, terms, { access: bound.access, signal, period, readInventory: readers.inventory, readReports: readers.reports, checkInventory: readers.checkInventory, evaluateReports: readers.evaluateReports });
+    const observed = await adoption.observe(bound.scope, terms, { access: bound.access, signal, period, stockItemIds: root ? root.items.map(item => item.itemId) : [], readInventory: readers.inventory, readReports: readers.reports, checkInventory: readers.checkInventory, evaluateReports: readers.evaluateReports });
     const unmet = [...observed.unmet];
     let stock = null;
     if (root) {
-      const replay = await require('./business-adopted-stock').replayAdoptedStock({ models: { Records: population.Records }, scope: bound.scope, root, jobId: terms.jobId, through: terms.through });
+      const replay = await require('./business-adopted-stock').replayAdoptedStock({ models: { Records: population.Records }, scope: bound.scope, root, jobId: terms.jobId, through: observed.evidence.through });
       const stockSource = await (readers.stock || require('./business-stock-source').createBusinessStockReader({ access: bound.access, now, purpose: 'operations.preview' }))(bound.scope, replay.state, { signal });
       try { (readers.assertQuantities || require('./business-stock-evidence').assertQuantities)(replay.state, stockSource); }
       catch (error) { if (error.code !== 'BUSINESS_STOCK_COST_UNVERIFIED') throw error; unmet.push({ code: 'stock-quantity', detail: 'QuickBooks quantities on hand differ from the replayed imported purchases and sales.' }); }
@@ -34,8 +34,8 @@ function createHistoryAdoptionService({ models, transaction, now, bind, fence, r
       if (balances.costOfGoods !== replay.carry.costCents) unmet.push({ code: 'stock-cost', detail: 'Cost of goods sold this fiscal year (' + balances.costOfGoods + ' cents) differs from the replayed FIFO cost (' + replay.carry.costCents + ' cents).' });
       stock = { stateHash: replay.state.stateHash, replayHash: replay.carry.replayHash, costCents: replay.carry.costCents, valueCents: replay.summary.valueCents, quantity: replay.summary.quantity, lines: replay.replay.lines, stockSourceHash: stockSource.sourceHash || null };
     }
-    const result = { ready: !unmet.length, stage: 'quickbooks-evidence', unmet, terms, termsHash: saved.termsHash, evidenceHash: observed.evidenceHash, evidence: observed.evidence, stock, qboWrites: 0 };
-    return { ...result, reviewHash: hash({ termsHash: result.termsHash, evidenceHash: result.evidenceHash, stock }) };
+    const result = { ready: !unmet.length, stage: 'quickbooks-evidence', unmet, terms, through: observed.evidence.through, termsHash: saved.termsHash, evidenceHash: observed.evidenceHash, evidence: observed.evidence, stock, qboWrites: 0 };
+    return { ...result, reviewHash: hash({ termsHash: result.termsHash, through: result.through, evidenceHash: result.evidenceHash, stock }) };
   }
   function stockBalances(reports, root) {
     const { balances } = require('./business-financial-movements'), { unpackReport } = require('./business-report-source');
@@ -66,7 +66,7 @@ function createHistoryAdoptionService({ models, transaction, now, bind, fence, r
       const { writer, job } = again, original = again.original;
       const policy = await read(models.Policies, company, session);
       if (!policy || policy.state !== 'active') fail('Company write coordination changed.');
-      const marker = { version: 1, kind: 'adopted-history', jobId: terms.jobId, adoptionId, auditId, through: terms.through, termsHash: reviewed.termsHash, evidenceHash: reviewed.evidenceHash, reviewHash: input.reviewHash, original: terms.original, stock: reviewed.stock && { stateHash: reviewed.stock.stateHash, replayHash: reviewed.stock.replayHash, costCents: reviewed.stock.costCents }, limitations: terms.limitations, adoptedAt: new Date(now()).toISOString(), actorId };
+      const marker = { version: 1, kind: 'adopted-history', jobId: terms.jobId, adoptionId, auditId, through: reviewed.through, importedThrough: terms.through, termsHash: reviewed.termsHash, evidenceHash: reviewed.evidenceHash, reviewHash: input.reviewHash, original: terms.original, stock: reviewed.stock && { stateHash: reviewed.stock.stateHash, replayHash: reviewed.stock.replayHash, costCents: reviewed.stock.costCents }, limitations: terms.limitations, adoptedAt: new Date(now()).toISOString(), actorId };
       if (Buffer.byteLength(canonical(marker)) > 16000) fail('The adoption marker exceeds its budget.');
       if (original) {
         const run = await read(models.Runs, { _id: original.operationId, ...scope }, session);
@@ -76,13 +76,13 @@ function createHistoryAdoptionService({ models, transaction, now, bind, fence, r
         if (!retired) fail('The original operation changed during adoption.');
       }
       const released = await models.Writers.findOneAndUpdate({ _id: writer._id, ...company, revision: writer.revision, unresolved: null, 'populationDelegation.jobId': terms.jobId }, { $set: { populationDelegation: null, operationId: null, planHash: null }, $inc: { revision: 1 } }, { new: true, session }).lean();
-      const advanced = await models.Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, revision: calendar.revision, writerRevision: calendar.writerRevision, verifiedThrough: null, pendingCommit: null, adoption: null, stopRequested: false }, { $set: { verifiedThrough: terms.through, adoption: marker, currentOperationId: null }, $inc: { revision: 1, writerRevision: 1 } }, { new: true, session }).lean();
+      const advanced = await models.Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, revision: calendar.revision, writerRevision: calendar.writerRevision, verifiedThrough: null, pendingCommit: null, adoption: null, stopRequested: false }, { $set: { verifiedThrough: reviewed.through, adoption: marker, currentOperationId: null }, $inc: { revision: 1, writerRevision: 1 } }, { new: true, session }).lean();
       const touched = await models.Policies.findOneAndUpdate({ _id: policy._id, ...company, revision: policy.revision, state: 'active' }, { $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!released || !advanced || !touched) fail('Company ownership changed before adoption.');
       await models.Audits.create([{ _id: auditId, userId: ownerId, actorUserId: actorId !== ownerId ? actorId : undefined, realmId: scope.realmId, action: 'Imported business history adopted', actionType: 'manual', outcome: 'success',
         beforeState: { ...scope, jobId: terms.jobId, jobStatus: job.status, manifestHash: terms.manifestHash, importedHash: terms.importedHash, original, writerRevision: writer.revision, calendarRevision: calendar.revision, verifiedThrough: null },
         afterState: { ...scope, marker, evidence: reviewed.evidence, basis: 'adopted', qboWrites: 0, reason: input.reason.trim() } }], { session });
-      return { adopted: true, reused: false, adoptionId, through: terms.through, qboWrites: 0 };
+      return { adopted: true, reused: false, adoptionId, through: reviewed.through, qboWrites: 0 };
     });
   }
   return { review, adopt, evidence };

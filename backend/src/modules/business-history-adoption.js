@@ -85,17 +85,49 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
     const limitationTotal = Object.values(result.terms?.limitations || {}).reduce((sum, value) => sum + value, 0);
     return { ready: !result.unmet.length, unmet: result.unmet, terms: result.terms || null, termsHash: result.termsHash || null, original: result.original || null, limitedRecords: result.gapped || 0, limitationTotal, qboWrites: 0 };
   }
+  // Every transaction id and date of the managed record types, paged by id. The
+  // shared inventory reader expects a stable per-page totalCount, which large
+  // QuickBooks lists do not report, so adoption reads ids and dates directly.
+  const TRANSACTIONS = ['Invoice', 'Payment', 'Deposit', 'Estimate', 'TimeActivity', 'Bill', 'BillPayment', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'RefundReceipt', 'VendorCredit', 'JournalEntry', 'Purchase', 'Transfer'];
+  async function readTransactions(scope, { access, signal, stockItemIds = new Set() }) {
+    await access.authorize(scope, 'operations.preview', { signal });
+    const client = await access.resolveClient(scope, { signal }), records = {}, digest = [];
+    for (const entity of TRANSACTIONS) {
+      const rows = records[entity] = [], seen = new Set();
+      for (let start = 1; start <= 100001; start += 1000) {
+        if (signal?.aborted) throw Object.assign(new Error('The adoption evidence read was cancelled.'), { status: 409, code: 'BUSINESS_ADOPTION_BLOCKED' });
+        const body = await client.query('SELECT * FROM ' + entity + ' ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000');
+        const page = body?.QueryResponse, list = page?.[entity] || [];
+        if (!page || !Array.isArray(list) || list.length > 1000) throw Object.assign(new Error('QuickBooks returned an incomplete ' + entity + ' page.'), { status: 409, code: 'BUSINESS_ADOPTION_BLOCKED' });
+        for (const record of list) {
+          if (!/^\d{1,30}$/.test(record?.Id || '') || seen.has(record.Id)) throw Object.assign(new Error('QuickBooks repeated or omitted a ' + entity + ' id.'), { status: 409, code: 'BUSINESS_ADOPTION_BLOCKED' });
+          const stockLines = (record.Line || []).some(line => ['ItemBasedExpenseLineDetail', 'SalesItemLineDetail', 'ItemReceiptLineDetail'].includes(line?.DetailType) && stockItemIds.has(line[line.DetailType]?.ItemRef?.value));
+          seen.add(record.Id); rows.push({ id: record.Id, transactionDate: record.TxnDate || null, ...(stockLines ? { stockLines: true } : {}) });
+        }
+        if (list.length < 1000) break;
+      }
+      digest.push({ entity, ids: hash(rows) });
+    }
+    return { records, sourceHash: hash(digest) };
+  }
   // Step 4: read-only QuickBooks evidence for the reviewed terms. Readers are the
   // existing scoped GET-only inventory and seven-report readers; nothing is written.
-  async function observe(scope, terms, { access, signal, readInventory, readReports, checkInventory, evaluateReports, period: chosen } = {}) {
+  async function observe(scope, terms, { access, signal, readInventory, readReports, checkInventory, evaluateReports, period: chosen, stockItemIds = [], today = null } = {}) {
     const unmet = [], add = (code, detail) => unmet.push({ code, detail });
-    const { createBusinessInventoryReader, inventorySummary } = require('./business-record-inventory');
-    const inventory = await (readInventory || createBusinessInventoryReader({ access, now, stockMetadata: true }))(scope, { signal });
-    (checkInventory || inventorySummary)(inventory, scope);
+    const inventory = await (readInventory || readTransactions)(scope, { access, signal, stockItemIds: new Set(stockItemIds) });
+    if (checkInventory) checkInventory(inventory, scope);
     const present = new Map(Object.entries(inventory.records).map(([entity, rows]) => [entity, new Set(rows.map(row => row.id))]));
-    const after = {};
-    for (const [entity, rows] of Object.entries(inventory.records)) for (const row of rows) if (row.transactionDate && row.transactionDate > terms.through) after[entity] = (after[entity] || 0) + 1;
-    if (Object.keys(after).length) add('activity-after', 'QuickBooks has transactions dated after ' + terms.through + ' (' + Object.entries(after).map(([entity, n]) => n + ' ' + entity).join(', ') + '). Adoption must cover every transaction up to the day it starts.');
+    // Transactions entered outside the app after the import (for example manual
+    // expenses) are adopted with the history when they are dated before today and
+    // touch no managed stock: the adoption date then moves to the latest of them.
+    const after = {}, stockAfter = {}; let through = terms.through;
+    for (const [entity, rows] of Object.entries(inventory.records)) for (const row of rows) if (row.transactionDate && row.transactionDate > terms.through) {
+      after[entity] = (after[entity] || 0) + 1; if (row.stockLines) stockAfter[entity] = (stockAfter[entity] || 0) + 1;
+      if (row.transactionDate > through) through = row.transactionDate;
+    }
+    const current = today || require('./business-activity-preview').businessDate(new Date(now()));
+    if (Object.keys(stockAfter).length) add('stock-after', 'QuickBooks has stock transactions dated after ' + terms.through + ' (' + Object.entries(stockAfter).map(([entity, n]) => n + ' ' + entity).join(', ') + ') that the imported history does not include.');
+    if (through >= current) add('activity-today', 'QuickBooks has transactions dated today or later; adoption must end before the open business day.');
     const missing = {}, unobserved = {};
     const records = { environment: scope.environment, realmId: scope.realmId, authorityHash: terms.authorityHash, txnDate: { $gte: terms.fromDate, $lte: terms.through }, state: 'saved' };
     for await (const row of models.Records.find(records).select('entity qboId').sort({ _id: 1 }).maxTimeMS(20000).lean().cursor()) {
@@ -104,12 +136,12 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
       else if (!ids.has(row.qboId)) missing[row.entity] = (missing[row.entity] || 0) + 1;
     }
     if (Object.keys(missing).length) add('records-missing', 'Imported records are no longer in QuickBooks (' + Object.entries(missing).map(([entity, n]) => n + ' ' + entity).join(', ') + ').');
-    const period = chosen || { fromDate: [terms.fromDate, shift(terms.through, -365)].sort().at(-1), throughDate: terms.through };
+    const period = chosen ? { ...chosen, throughDate: through } : { fromDate: [terms.fromDate, shift(through, -365)].sort().at(-1), throughDate: through };
     const { createBusinessReportReader } = require('./business-report-evidence');
     const reports = await (readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, period, { signal });
     const evaluation = (evaluateReports || require('./book-evidence').evaluateReportSources)(reports, { allowExplicitZero: true });
-    if (evaluation.status !== 'checks-passed') add('reports-failed', 'The accounting reports through ' + terms.through + ' do not pass their named checks (' + evaluation.status + ').');
-    const evidence = { version: 1, termsHash: hash(terms), inventorySourceHash: inventory.sourceHash, reportSourceHash: reports.sourceHash, reportStatus: evaluation.status, period, after, missing, unobserved, observedAt: new Date(now()).toISOString() };
+    if (evaluation.status !== 'checks-passed') add('reports-failed', 'The accounting reports through ' + through + ' do not pass their named checks (' + evaluation.status + ').');
+    const evidence = { version: 1, termsHash: hash(terms), through, inventorySourceHash: inventory.sourceHash, reportSourceHash: reports.sourceHash, reportStatus: evaluation.status, period, after, missing, unobserved, observedAt: new Date(now()).toISOString() };
     return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), reports, qboWrites: 0 };
   }
   return { review, pending, observe };

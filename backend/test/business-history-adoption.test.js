@@ -110,8 +110,13 @@ test('QuickBooks evidence passes when every imported record exists, nothing is d
 test('QuickBooks evidence refuses later activity, missing imported records and failed reports', async () => {
   const adoption = createBusinessHistoryAdoption({ models: populationModels(), now: () => Date.now() });
   const later = await adoption.observe(scope, terms, readers(records({ Bill: [{ id: '5', transactionDate: '2026-10-20' }] })));
-  assert.deepEqual(later.unmet.map(item => item.code), ['activity-after']);
-  assert.deepEqual(later.evidence.after, { Bill: 1 });
+  assert.deepEqual(later.unmet, [], 'later non-stock activity is adopted with the history');
+  assert.equal(later.evidence.through, '2026-10-20');
+  assert.equal(later.evidence.period.throughDate, '2026-10-20');
+  const stock = await adoption.observe(scope, terms, readers(records({ Bill: [{ id: '5', transactionDate: '2026-10-20', stockLines: true }] })));
+  assert.deepEqual(stock.unmet.map(item => item.code), ['stock-after']);
+  const today = await adoption.observe(scope, terms, { ...readers(records({ Purchase: [{ id: '6', transactionDate: '2026-10-29' }] })), today: '2026-10-29' });
+  assert.deepEqual(today.unmet.map(item => item.code), ['activity-today']);
   const missing = await adoption.observe(scope, terms, readers(records({ Invoice: [{ id: '1', transactionDate: '2024-01-01' }] })));
   assert.deepEqual(missing.unmet.map(item => item.code), ['records-missing']);
   const reports = await adoption.observe(scope, terms, readers(records(), 'checks-failed'));

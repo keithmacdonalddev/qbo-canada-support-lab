@@ -19,8 +19,8 @@ function setup({ ready = true, unmet = [] } = {}) {
   const models = { Calendars: store([calendar]), Writers: store([writer]), Runs: store([run]), Policies: store([{ _id: 'p', ...company, revision: 4, state: 'active' }]), Audits: store([]), Jobs: store([]), PopulationRecords: store([]) };
   const service = createHistoryAdoptionService({ models, transaction: work => work('session'), now: () => Date.parse('2026-10-29T12:00:00Z'), bind: async () => ({ scope, ownerId: 'o'.repeat(24), actorId: 'o'.repeat(24), access: {} }), fence: async () => {} });
   // Replace the evidence pipeline with fixed results; the readers are covered by their own tests.
-  const reviewed = { ready, unmet, terms, termsHash: hash(terms), evidenceHash: '1'.repeat(64), evidence: { ok: true }, stock: { stateHash: '2'.repeat(64), replayHash: '3'.repeat(64), costCents: 10 } };
-  reviewed.reviewHash = hash({ termsHash: reviewed.termsHash, evidenceHash: reviewed.evidenceHash, stock: reviewed.stock });
+  const reviewed = { ready, unmet, terms, through: '2026-10-20', termsHash: hash(terms), evidenceHash: '1'.repeat(64), evidence: { ok: true }, stock: { stateHash: '2'.repeat(64), replayHash: '3'.repeat(64), costCents: 10 } };
+  reviewed.reviewHash = hash({ termsHash: reviewed.termsHash, through: reviewed.through, evidenceHash: reviewed.evidenceHash, stock: reviewed.stock });
   return { models, service, reviewed, calendar, writer, run };
 }
 test('adoption is refused unless the review is ready and unchanged', async () => {
@@ -37,7 +37,8 @@ test('adoption settles the import in one transaction and is idempotent', async (
   const result = await service.adopt({}, input);
   assert.equal(result.adopted, true);
   assert.equal(result.qboWrites, 0);
-  assert.equal(calendar.verifiedThrough, '2026-10-17');
+  assert.equal(calendar.verifiedThrough, '2026-10-20');
+  assert.equal(calendar.adoption.importedThrough, '2026-10-17');
   assert.equal(calendar.adoption.kind, 'adopted-history');
   assert.equal(calendar.currentOperationId, null);
   assert.equal(writer.populationDelegation, null);
