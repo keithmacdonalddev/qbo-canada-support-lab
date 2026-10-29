@@ -60,7 +60,7 @@ function createPeriodCloseReader({ access, now = () => Date.now() }) {
       for (let start = 1; start <= MAX_RECORDS + 1; start += 1000) {
         const body = await query('SELECT * FROM Account WHERE Active IN (true, false) ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000'), rows = body.Account ?? [];
         if (Object.keys(body).some(key => !['Account','startPosition','maxResults','totalCount'].includes(key)) || !Array.isArray(rows) || rows.length > 1000 || (rows.length && body.startPosition !== start) || (body.startPosition !== undefined && body.startPosition !== start) || (body.maxResults !== undefined && body.maxResults !== rows.length)) C.fail('The current account inventory page is incomplete.');
-        if (body.totalCount !== undefined) { if (!Number.isSafeInteger(body.totalCount) || body.totalCount < 0 || body.totalCount > MAX_RECORDS || (declared !== null && declared !== body.totalCount)) C.fail('The account count changed or exceeds this review budget.'); declared = body.totalCount; }
+        if (body.totalCount !== undefined) { if (!Number.isSafeInteger(body.totalCount) || body.totalCount < 0 || body.totalCount > MAX_RECORDS || body.totalCount !== rows.length) C.fail('The account count changed or exceeds this review budget.'); declared = (declared ?? 0) + body.totalCount; }
         for (const record of rows) {
           const row = compact(record);
           if (seen.has(row.id) || accounts.length >= MAX_RECORDS) C.fail('Current accounts were repeated or exceeded the bounded inventory.');

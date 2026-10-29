@@ -22,8 +22,8 @@ async function depositSet(client, paymentId, call, check) {
     const values = page.Deposit || [];
     if (values.length > 1000 || (values.length && page.startPosition !== start) || (page.startPosition !== undefined && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== values.length)) fail('Deposit query pagination is inconsistent.');
     if (page.totalCount !== undefined) {
-      if (!Number.isSafeInteger(page.totalCount) || page.totalCount < 0 || page.totalCount > 10000 || (declaredTotal !== null && declaredTotal !== page.totalCount)) fail('Deposit query count changed or exceeds its budget.');
-      declaredTotal = page.totalCount;
+      if (!Number.isSafeInteger(page.totalCount) || page.totalCount < 0 || page.totalCount > 10000 || page.totalCount !== values.length) fail('Deposit query count changed or exceeds its budget.');
+      declaredTotal = (declaredTotal ?? 0) + page.totalCount;
     }
     for (const record of values) {
       check(); bytes += Buffer.byteLength(canonical(record));

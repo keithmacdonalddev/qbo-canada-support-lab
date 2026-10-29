@@ -19,7 +19,7 @@ function harness() {
     const type = match[1], start = Number(match[3]); h.calls.push({ type, start, query });
     if (h.onRead) await h.onRead({ type, start, query });
     const rows = structuredClone(h.rows[type].slice(start - 1, start + 999));
-    let body = { QueryResponse: { [type]: rows, startPosition: start, maxResults: rows.length, totalCount: h.rows[type].length } };
+    let body = { QueryResponse: { [type]: rows, startPosition: start, maxResults: rows.length, totalCount: rows.length } }; // QuickBooks counts each page
     if (h.response) body = h.response(body, { type, start });
     return { status: 200, json: body };
   } } });

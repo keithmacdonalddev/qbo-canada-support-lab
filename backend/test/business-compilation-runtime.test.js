@@ -82,7 +82,7 @@ test('deposit scans must be complete, non-sparse and unchanged across both obser
 });
 test('deposit paging includes later pages and requires an identical complete second scan', async () => {
   const h = harness('Deposit'), firstPage = Array.from({ length: 1000 }, (_, index) => deposit(String(9000 + index)));
-  h.queryBody = async query => { const start = Number(query.match(/STARTPOSITION (\d+)/)[1]), rows = start === 1 ? firstPage : [deposit('10000')]; return { QueryResponse: { Deposit: rows, startPosition: start, maxResults: rows.length, totalCount: 1001 } }; };
+  h.queryBody = async query => { const start = Number(query.match(/STARTPOSITION (\d+)/)[1]), rows = start === 1 ? firstPage : [deposit('10000')]; return { QueryResponse: { Deposit: rows, startPosition: start, maxResults: rows.length, totalCount: rows.length } }; }; // QuickBooks counts each page
   const result = await h.read(); assert.equal(result.parents[0].availability.status, 'available'); assert.equal(h.queries.length, 4); assert.match(h.queries[1], /STARTPOSITION 1001/);
 });
 test('a changed payment after the deposit scan prevents availability proof', async () => {

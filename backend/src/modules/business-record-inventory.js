@@ -110,7 +110,7 @@ function createBusinessInventoryReader({ access, now = () => Date.now(), stockMe
             if (!plain(body) || Object.keys(body).some(key => !['QueryResponse', 'time'].includes(key)) || !plain(body.QueryResponse)) fail('A complete inventory query response is required.');
             const page = body.QueryResponse, rows = page[type] === undefined ? [] : page[type];
             if (Object.keys(page).some(key => ![type, 'startPosition', 'maxResults', 'totalCount'].includes(key)) || !Array.isArray(rows) || rows.length > LIMITS.page || (rows.length && page.startPosition !== start) || (page.startPosition !== undefined && page.startPosition !== start) || (page.maxResults !== undefined && page.maxResults !== rows.length)) fail('Inventory pagination is incomplete.');
-            if (page.totalCount !== undefined) { if (!Number.isSafeInteger(page.totalCount) || page.totalCount < 0 || page.totalCount > LIMITS.records || (declared !== null && declared !== page.totalCount)) fail('Inventory count changed or exceeds its budget.'); declared = page.totalCount; }
+            if (page.totalCount !== undefined) { if (!Number.isSafeInteger(page.totalCount) || page.totalCount < 0 || page.totalCount > LIMITS.records || page.totalCount !== rows.length) fail('Inventory count changed or exceeds its budget.'); declared = (declared ?? 0) + page.totalCount; }
             for (const record of rows) {
               const row = compact(type, record, version); if (seen.has(row.id)) fail('Inventory pagination repeated a record.');
               count++; bytes += Buffer.byteLength(encoded(row, LIMITS.recordBytes)); if (count > LIMITS.records || bytes > LIMITS.compactBytes) fail('Inventory exceeds its retained evidence budget.');
