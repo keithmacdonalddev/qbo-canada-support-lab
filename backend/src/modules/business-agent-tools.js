@@ -9,6 +9,7 @@ const text={type:'string'}, id={type:'string',pattern:'^[a-f0-9]{24}$'}, digest=
 const EXTRA_TOOLS = Object.freeze([
   {name:'getBusinessDecision',description:'Read the full retained evidence and owner response for one exact decision summarized in the operating context.',input_schema:schema({decisionId:id},['decisionId'])},
   {name:'getBusinessState',description:'Inspect current synchronization, published policy, retained work, accounting checks, owner decisions and blockers before acting.',input_schema:schema()},
+  {name:'getBusinessWork',description:'Read the complete business work list: what you (the accountant) own, what is blocked and why, which QuickBooks features still need to be used, and the few items only the owner can do. Treat accountant-owned items as your responsibility.',input_schema:schema()},
   {name:'getObligations',description:'Read currently mirrored unpaid invoices or bills with dates and amounts. Results are explicitly provisional when source synchronization is incomplete.',input_schema:schema({area:{type:'string',enum:['receivables','payables']},overdueOnly:{type:'boolean'},limit:{type:'integer',minimum:1,maximum:50}},['area'])},
   {name:'inspectBusinessOperation',description:'Read the immutable saved accounting plan and its retained verification/recovery state.',input_schema:schema({operationId:id,offset:{type:'integer',minimum:0,maximum:1000}},['operationId'])},
   {name:'getBusinessActivityChoices',description:'Read currently observed customer, service and non-stock supplier roles available for additional business activity. Use the returned role keys, not guessed names or raw QBO IDs.',input_schema:schema()},
@@ -38,7 +39,7 @@ function validateArguments(value,definition,path='input') {
   }
 }
 function operationAllowed(run,row) {const origin=run?.agentAuthority;return Boolean(run&&String(run.createdBy)===String(row.ownerId)&&origin?.version===1&&origin.agentId===String(row._id)&&origin.grantId===row.grant?.id&&origin.authorityHash===row.grant?.authorityHash&&origin.ownerId===String(row.ownerId));}
-function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase}={}) {
+function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase,coverageFor=()=>null}={}) {
   const native=readTools||require('./ai-tools');
   const definitions=[...native.toolDefinitions.filter(tool=>READ_NAMES.includes(tool.name)),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation'].includes(tool.name))];
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0;
@@ -60,6 +61,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     let result;
     if(READ_NAMES.includes(name))result=await native.toolHandlers[name](input,{qbo:await readClient(name==='runReport'),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}});
     else if(name==='getBusinessDecision')result={success:true,data:await store.decision(row,input.decisionId)};
+    else if(name==='getBusinessWork'){const business=await store.business(scope);result={success:true,data:require('./business-agent-work').businessWork({settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:require('./business-agent-service').publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};}
     else if(name==='getBusinessState')result={success:true,data:{business:await store.business(scope),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities()}};
     else if(name==='getObligations'){
       const today=businessDate(new Date(now())),entity=input.area==='receivables'?'Invoice':'Bill';

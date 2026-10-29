@@ -343,7 +343,7 @@ async function readAll(qbo, names, since, budget = { pages: MAX_CHECK_PAGES, rec
 // ---------------------------------------------------------------------------
 
 function evaluateSignal(signal, data, ctx) {
-  const base = { key: signal.key, label: signal.label, kind: signal.kind, fill: fillFor(signal) };
+  const base = { key: signal.key, label: signal.label, kind: signal.kind, fill: fillFor(signal), entity: LIST_SOURCES[signal.source]?.entity || signal.source || null };
   if (signal.kind === 'manual') return { ...base, status: 'manual', how: signal.how };
 
   if (signal.read) {

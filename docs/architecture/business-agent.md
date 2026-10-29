@@ -46,3 +46,25 @@ Existing standing grants cannot silently acquire this policy. New autonomous gra
 This additional code has authored pure, accounting-flow, interrupted-completion, stock-preservation and native grant tests. Fresh execution, independent implementation/safety review and the complete rendered owner preparation/review journey remain pending after the owner's 1pm delegation cutoff. Earlier passing foundation checks do not certify these later changes. No additional activity has been run against the live company.
 
 The full requested outcome remains incomplete. Existing populated-but-uncommitted history and its retained blocked operation must be inspected and settled from their original evidence; an empty verified cursor must never trigger rebuilding. Live autonomous accounting acceptance and days/weeks operation remain unverified. Delegated work ended before the owner's cutoff; further verification delegation requires the pending owner decision. No persistent service was manually started, stopped or restarted.
+
+## Operating model — owner direction, 2026-10-28
+
+The app's job is to run the QuickBooks company like a real business, 24/7, through the API, using QuickBooks features as a normal part of that business. Issues are reproduced in QuickBooks itself, not in this app. The owner should not have to manage the accountant.
+
+- **The accountant owns the work.** One server-computed work list (`business-agent-work.js`) holds everything the business needs. Recovery of its own interrupted work, catching up with QuickBooks, adopting imported history, uncertain-write/completion/coordination recovery and putting unused QuickBooks features to use are accountant work. The agent reads the same list (`context.work`, `getBusinessWork`) and is instructed never to hand accountant work to the owner.
+- **The owner sees only genuinely human work:** monitoring consent, the one-time autonomy grant for this company (and a renewal when new kinds of work are added), the owner's own pause or stop, publishing the business, fixing the AI connection, and features QuickBooks only allows in its own screens (optional). There is no routine "resume" or "review this problem" for the owner.
+- **Honest status.** Accountant items are Working, Up next or Blocked. Blocked means the accountant lacks a capability; the item names it rather than asking the owner to act.
+- **The Business page leads with this list**, then the existing company figures and accountant details.
+
+### Current state (read 2026-10-28, Production company ending 2856)
+
+Monitoring is on; the accountant has never been granted authority. The three saved blockers all come from the earlier bulk import: population job `53807d1c…` saved and content-checked 10,359 records through 2026-10-17; the writer is still delegated to that job; the original September 2023 operation `2dbe87a5…` is blocked at step 32 of 198; the calendar has no verified date. Coverage reports 67 of 81 measured features in use.
+
+### Next capability: history adoption
+
+Until the accountant can adopt the imported history, it cannot prepare any new period or same-day activity. Proposed design, pending an independent design challenge before any mutation source is written:
+
+1. Preconditions from saved evidence only: the population job is `populated` with every required record saved and content-checked, no pending/rejected/unknown rows, no uncertain write, completed relationship verification (or documented limitations), and the blocked original operation's accepted records are among the job's native origins.
+2. A bounded read-only QuickBooks check at the adoption date: balance sheet balances, receivables/payables agree with open documents, and no negative stock quantities. The observed closing stock becomes a new `adopted-history` stock carry.
+3. One app-database transaction (no QuickBooks writes): supersede the original operation while retaining its receipts, release the population delegation and current operation, and record the calendar as adopted (not verified) through the import date with its evidence hash and limitations. The UI and agent must keep "adopted" distinct from "verified".
+4. The accountant then catches up the dated calendar from the day after the import to yesterday and resumes hourly same-day activity, all through the existing governed preparation, native write gate and verification.

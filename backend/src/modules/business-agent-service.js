@@ -6,6 +6,7 @@ const { createBusinessAgentStore, scopeOf } = require('./business-agent-store');
 const { createBusinessRuntimeAccess } = require('./business-runtime-access');
 const { createBusinessAgentEngine } = require('./business-agent-engine');
 const { createBusinessAgentTools, businessAgentCapabilities } = require('./business-agent-tools');
+const { businessWork } = require('./business-agent-work');
 const { DEFAULT_SETTINGS, validateControl, reduceControl, fail, ID } = require('./business-agent-policy');
 const { runAsActor } = require('./actor-context');
 const iso=value=>value?new Date(value).toISOString():null;
@@ -26,6 +27,7 @@ function createBusinessAgentService(options={}) {
   const makeSync=options.createSync||require('./business-agent-sync').createBusinessAgentSync;
   const execution=options.execution||require('./business-execution-service').getBusinessExecutionService();
   const governanceFor=options.governanceFor||((origin)=>require('./business-governance-service').createBusinessGovernanceService({...(origin?{agentAuthority:origin,Agents:store.models.Agents}:{})}));
+  const coverageFor=options.coverageFor||(scope=>{try{return require('./coverage').getCached(scope.realmId);}catch{return null;}});
   const jobs=new Map();let interval=null,scanPromise=null,closed=false,lastScanError=null;
   const leaseMs=240000,scanMs=5000;
   async function bind(user,action='operations.read') {
@@ -45,7 +47,8 @@ function createBusinessAgentService(options={}) {
     const expired=row?.leaseToken&&at(row.leaseExpiresAt)<=now();
     return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,configured:Boolean(row),revision:row?.revision||0,settings,
       agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':expired?'recovering':row.status||'ready',summary:row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),memory:row?.memory||'',currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:row?.lastError||lastScanError,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
-      sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities()};
+      sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities(),
+      work:businessWork({settings,agent:{id:row?String(row._id):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};
   }
   async function status(user){const bound=await bind(user);return workspace(bound,await store.get(bound.scope));}
   async function checkGrant(bound,business,session){
@@ -106,14 +109,14 @@ function createBusinessAgentService(options={}) {
         const pass=row.activePass&&row.activePass.role===role?row.activePass:{id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
         await update({activePass:pass,status:'reviewing',currentWork:role==='accountant'?'Main accountant is reviewing and managing the business':role+' specialist is reviewing its work'});
         const business=await store.business(scope),decisions=await store.decisions(row),events=await store.events(row);
-        const tools=createBusinessAgentTools({row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
+        const tools=createBusinessAgentTools({row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
-        const context={ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now()))};
+        const context={ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),work:businessWork({settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH}).items};
         const result=await engine.run({role,context,tools:tools.definitions,execute:tools.execute,userApiKey:typeof key==='string'?key:key?.anthropicApiKey,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,beforeModel:()=>guard(true)});
         await guard(true);
         await store.event(row,role==='accountant'?'review-completed':'specialist-report',role==='accountant'?'Main accountant completed a business review':role+' specialist report',result.summary,{passId:pass.id,toolCalls:result.calls||0,complete:result.complete===true,...(role==='accountant'?{}:{reportsTo:'accountant'})},null,pass.id,role);
         const next=new Date(now()+(result.complete?row.settings.decisionIntervalMinutes:5)*60000);
-        if(role==='accountant')await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:next,status:business.blockers.length?'attention':'ready',activePass:null});
+        if(role==='accountant')await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:next,status:business.blockers.length?'attention':'ready',activePass:null,lastError:null});
         else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',summary:result.summary,lastDecisionAt:new Date(now()).toISOString(),nextDecisionAt:next.toISOString()}},nextDecisionAt:new Date(Math.min(at(row.nextDecisionAt)||now(),now()+60000)),activePass:null,status:'ready'});
       });
     }catch(error){
