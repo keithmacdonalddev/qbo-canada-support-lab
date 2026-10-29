@@ -13,6 +13,7 @@ import Reports from './pages/Reports'
 import Reconciliation from './pages/Reconciliation'
 import CompanySetup from './pages/CompanySetup'
 import Coverage from './pages/Coverage'
+import AccountantTools from './pages/AccountantTools'
 import Onboarding from './pages/Onboarding'
 import Settings from './pages/Settings'
 import AuditLog from './pages/AuditLog'
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/cases/:id" element={<ProtectedRoute><Case /></ProtectedRoute>} />
         <Route path="/company" element={<ProtectedRoute><BusinessWorkspace /></ProtectedRoute>} />
         <Route path="/company/manage" element={<ProtectedRoute><Company /></ProtectedRoute>} />
+        <Route path="/company/accountant/tools" element={<ProtectedRoute><AccountantTools /></ProtectedRoute>} />
         <Route path="/company/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
         <Route path="/company/reports" element={<ProtectedRoute><BookChecks /></ProtectedRoute>} />
         <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />

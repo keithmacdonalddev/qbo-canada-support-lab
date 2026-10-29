@@ -1,0 +1,31 @@
+.act-lead { margin: -4px 0 18px; max-width: 900px; color: var(--ink-2); font-size: 14px; line-height: 1.6; }
+.act-lead strong { color: var(--ink); font-weight: 650; }
+.act-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .act-columns { grid-template-columns: minmax(0, 1fr); } }
+
+.act-group { padding: 6px 17px 12px; border-top: 1px solid var(--line); }
+.act-group:first-of-type { border-top: 0; }
+.act-group h3 { display: flex; align-items: center; gap: 7px; margin: 10px 0 2px; color: var(--ink-3); font-size: 10.5px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+.act-group h3 svg { width: 14px; height: 14px; }
+.act-group h3 span { margin-left: auto; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.act-group ul { list-style: none; margin: 0; padding: 0; }
+.act-group li { padding: 10px 0; border-top: 1px solid var(--line); }
+.act-group li:first-child { border-top: 0; }
+.act-tool-head code { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.act-group li > p { margin: 2px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
+.act-group details { margin-top: 4px; }
+.act-group summary { width: fit-content; color: var(--bw-accent); font-size: 11.5px; font-weight: 550; cursor: pointer; }
+.act-group details p { margin: 6px 0 0; padding: 9px 11px; border-radius: 8px; background: var(--sunken); color: var(--ink-2); font-size: 12px; line-height: 1.55; }
+
+.act-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.act-table thead th { padding: 9px 12px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
+.act-table thead th:first-child, .act-table tbody th { padding-left: 17px; }
+.act-table td, .act-table tbody th { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.act-table tbody th { font-weight: 600; color: var(--ink); }
+.act-table small { display: block; margin-top: 3px; color: var(--ink-3); font-size: 11.5px; font-weight: 400; line-height: 1.45; }
+.act-table .act-area th { padding-top: 14px; color: var(--ink-3); font-size: 10.5px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+.act-pill { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.act-pill--good { color: var(--bw-good); background: color-mix(in srgb, var(--bw-good) 9%, var(--surface)); }
+.act-pill--working { color: var(--bw-accent); background: color-mix(in srgb, var(--bw-accent) 9%, var(--surface)); }
+.act-pill--attention { color: var(--bw-warn); background: color-mix(in srgb, var(--bw-warn) 9%, var(--surface)); }
+.act-pill--quiet { color: var(--ink-2); background: var(--sunken); }

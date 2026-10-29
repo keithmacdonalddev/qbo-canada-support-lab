@@ -22,7 +22,7 @@ export default function BusinessWork({ work, disabled, onAction }) {
         {item.action && <Button disabled={disabled && item.action.kind !== 'link'} onClick={() => act(item.action)}>{item.action.label}<ArrowRight /></Button>}
       </article>)}
     </div>}
-    <div className="bwk-list-head"><Bot aria-hidden="true" /><span>The accountant’s work</span></div>
+    <div className="bwk-list-head"><Bot aria-hidden="true" /><span>The accountant’s work</span><Link to="/company/accountant/tools" className="bw-text-button bwk-tools-link">Its tools and what it can do<ArrowRight /></Link></div>
     <ol className="bwk-list">
       {theirs.map(item => {
         const [label, Icon] = STATES[item.state] || STATES.waiting
