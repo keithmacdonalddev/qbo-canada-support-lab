@@ -7,6 +7,10 @@ const POLICY = Object.freeze({ version: 2, key: 'business-activity-v2', maxActiv
 // business party; preparation and compilation prove both against the adoption.
 const PARTY = /^(field-client-0(?:0[1-9]|1[0-5])|care-client-0(?:0[1-9]|1[0-9]|2[0-5]))$/, SUPPLIER = /^(overhead|stock)-supplier-[1-3]$/, QBO_ID = /^\d{1,30}$/;
 const POLICY_HASH = hash(POLICY), HASH = /^[a-f0-9]{64}$/;
+// Earlier policies, kept so batches saved under them can still be read and
+// verified. New batches always use POLICY.
+const POLICY_V1 = Object.freeze({ version: 1, key: 'non-stock-business-activity-v1', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense'] });
+const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [POLICY_HASH, POLICY]]);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_ACTIVITY_UNVERIFIED' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the supported business choices without raw accounting or authority overrides.'); }
 function text(value, min, max) { if (typeof value !== 'string' || value.trim().length < min || value.length > max || /[\u0000-\u001f]/.test(value)) fail('Retain a concise business purpose and unique decision identifier.'); return value.trim(); }
@@ -50,7 +54,9 @@ function makeActivityBatch({ scope, businessKey, day, choices }) {
 }
 function buildBatchActivity(batch, scope, businessKey) {
   exact(batch, ['version', 'policyHash', 'key', 'requestHash', 'day', 'decisionKey', 'purpose', 'activities']);
-  const expected = makeActivityBatch({ scope, businessKey, day: batch.day, choices: { decisionKey: batch.decisionKey, purpose: batch.purpose, activities: batch.activities } });
+  const saved = SAVED_POLICIES.get(batch.policyHash);
+  if (!saved || batch.activities?.some?.(row => !saved.workflows.includes(row?.type))) fail('The exact additional activity decision or policy changed.');
+  const expected = { ...makeActivityBatch({ scope, businessKey, day: batch.day, choices: { decisionKey: batch.decisionKey, purpose: batch.purpose, activities: batch.activities } }), policyHash: batch.policyHash };
   if (canonical(batch) !== canonical(expected)) fail('The exact additional activity decision or policy changed.');
   const events = [], byLogicalKey = {};
   for (const [index, choice] of batch.activities.entries()) {

@@ -33,6 +33,15 @@ and the app shows the owner exactly which tools exist and what they reach.
   after the owner approves the updated rules (policy hash changed). Open
   invoices and bills entered outside the app before the import (55 invoices on
   Production) are still out of scope.
+  Safety review (2026-10-29) fixes: only records saved by the adopted job
+  (`authorityHash`) with a matching financial proof and no failed recheck
+  qualify, in both preparation and the choices list; batches saved under the
+  first policy still rebuild (the verified Oct 29 batch is one); the owner's
+  approval text names the new payment authority. Known limits: a plan whose
+  target balance drops before saving stops part-way and holds the writer until
+  recovered; re-running the import's relationship recheck on a settled
+  obligation reports a false failure (and then excludes it from further
+  settlement).
 
 ## Constraint that shapes every workflow
 

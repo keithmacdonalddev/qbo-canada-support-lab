@@ -74,14 +74,17 @@ test('adopted evidence cannot attach to an ordinary settlement, and an adopted s
 });
 
 test('the reader binds the settlement to the adoption and a saved, financially verified import record', async () => {
-  const adoption = { kind: 'adopted-history', adoptionId: 'a'.repeat(24), importedThrough: '2026-10-17' };
-  const row = { environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity: 'Invoice', qboId: '10720', state: 'saved', txnDate: '2026-09-17', logicalKey: hash('imported'), receipt: { qboId: '10720' }, financialProof: { kind: 'population-financial-content' }, step: { details: { customerKey: 'care-client-021' } }, compilation: { request: { body: JSON.stringify({ ARAccountRef: { value: '601' } }) } } };
+  const adoption = { kind: 'adopted-history', adoptionId: 'a'.repeat(24), importedThrough: '2026-10-17', jobId: 'b'.repeat(24) }, job = { _id: 'b'.repeat(24), status: 'adopted', authorityHash: 'c'.repeat(64) };
+  const row = { authorityHash: job.authorityHash, environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity: 'Invoice', qboId: '10720', state: 'saved', txnDate: '2026-09-17', logicalKey: hash('imported'), receipt: { qboId: '10720' }, financialProof: { kind: 'population-financial-content', matchesFinancialIntent: true }, step: { details: { customerKey: 'care-client-021' } }, compilation: { request: { body: JSON.stringify({ ARAccountRef: { value: '601' } }) } } };
   const query = value => ({ select: () => query(value), maxTimeMS: () => query(value), lean: async () => value });
   const read = async (s, entity, id) => ({ scope: s, entity, record: { Id: id }, recordHash: hash({ Id: id }), observedAt: new Date(now).toISOString() });
-  const reader = (calendar, record) => createAdoptedSettlementReader({ Calendars: { findOne: () => query(calendar) }, PopulationRecords: { findOne: () => query(record) }, readRecord: read });
+  const reader = (calendar, record, saved = job) => createAdoptedSettlementReader({ Calendars: { findOne: () => query(calendar) }, PopulationRecords: { findOne: () => query(record) }, PopulationJobs: { findOne: () => query(saved) }, readRecord: read });
   const value = await reader({ adoption }, row)(scope, { entity: 'Invoice', qboId: '10720' });
   assert.deepEqual(value.population, { logicalKey: row.logicalKey, entity: 'Invoice', qboId: '10720', txnDate: '2026-09-17', accountId: '601', partyKey: 'care-client-021', adoptionId: adoption.adoptionId });
   for (const [calendar, record] of [[{ adoption: null }, row], [{ adoption }, null], [{ adoption }, { ...row, state: 'pending' }], [{ adoption }, { ...row, financialProof: null }], [{ adoption }, { ...row, connectionId: 'f'.repeat(24) }], [{ adoption }, { ...row, txnDate: '2026-10-18' }], [{ adoption }, { ...row, receipt: { qboId: '1' } }]])
     await assert.rejects(reader(calendar, record)(scope, { entity: 'Invoice', qboId: '10720' }));
   await assert.rejects(reader({ adoption }, row)(scope, { entity: 'Payment', qboId: '10720' }));
+  // Only records the adopted job saved, whose proof matched and whose recheck did not fail.
+  for (const [record, saved] of [[{ ...row, financialProof: { kind: 'population-financial-content', matchesFinancialIntent: false } }, job], [{ ...row, relationshipCheck: { outcome: 'error' } }, job], [{ ...row, authorityHash: 'd'.repeat(64) }, job], [row, { ...job, status: 'populated' }], [row, null], [row, { ...job, _id: 'e'.repeat(24) }]])
+    await assert.rejects(reader({ adoption }, record, saved)(scope, { entity: 'Invoice', qboId: '10720' }), /not a verified record of the adopted import/);
 });

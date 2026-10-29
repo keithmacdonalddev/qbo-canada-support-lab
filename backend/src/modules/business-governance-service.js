@@ -309,12 +309,13 @@ function createBusinessGovernanceService(dependencies = {}) {
   async function checkAdoptedSettlements(scope, active, batch, client) {
     const settlements = batch.activities.filter(row => ['collect-adopted-invoice', 'pay-adopted-bill'].includes(row.type));
     if (!settlements.length) return;
-    const { importedObligation } = require('./business-adopted-settlement'), Records = models.PopulationRecords || require('../models/BusinessPopulationRecord');
+    const { importedObligation, adoptedJob } = require('./business-adopted-settlement'), Records = models.PopulationRecords || require('../models/BusinessPopulationRecord');
     const adoption = active.calendar.adoption;
     if (adoption?.kind !== 'adopted-history') fail('No adopted import history exists for this company.');
+    const job = await adoptedJob(models.PopulationJobs, adoption);
     for (const row of settlements) {
       const entity = row.type === 'collect-adopted-invoice' ? 'Invoice' : 'Bill', qboId = row.invoiceId || row.billId, partyKey = row.customerKey || row.vendorKey;
-      const origin = importedObligation(await Records.findOne({ environment: scope.environment, realmId: scope.realmId, entity, qboId }).maxTimeMS(3000).lean(), scope, adoption, entity, qboId);
+      const origin = importedObligation(await Records.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity, qboId }).maxTimeMS(3000).lean(), scope, adoption, entity, qboId, job);
       if (origin.partyKey !== partyKey) fail('Adopted ' + entity.toLowerCase() + ' ' + qboId + ' belongs to another ' + (entity === 'Invoice' ? 'customer' : 'supplier') + '.');
       const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + qboId))?.[entity], balance = Math.round(Number(record?.Balance) * 100);
       if (record?.Id !== qboId || record.CurrencyRef?.value !== 'CAD' || !Number.isSafeInteger(balance) || balance < row.amountCents) fail('Adopted ' + entity.toLowerCase() + ' ' + qboId + ' has an open balance of ' + (Number.isSafeInteger(balance) ? balance : 0) + ' cents, less than this settlement.');
@@ -325,8 +326,11 @@ function createBusinessGovernanceService(dependencies = {}) {
   async function adoptedObligations(scope, active) {
     if (active.calendar.adoption?.kind !== 'adopted-history') return { adoptedInvoices: [], adoptedBills: [] };
     const Records = models.PopulationRecords || require('../models/BusinessPopulationRecord'), Mirror = models.Mirror || require('../models/CompanySyncRecord');
-    const open = await Mirror.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity: { $in: ['Invoice', 'Bill'] }, deleted: false, 'summary.balanceCents': { $gt: 0 } }).select('entity qboId summary').sort({ 'summary.dueDate': 1, _id: 1 }).limit(500).maxTimeMS(3000).lean();
-    const imported = await Records.find({ environment: scope.environment, realmId: scope.realmId, state: 'saved', entity: { $in: ['Invoice', 'Bill'] }, qboId: { $in: open.map(row => row.qboId) }, txnDate: { $lte: active.calendar.adoption.importedThrough } }).select('entity qboId step.details.customerKey step.details.vendorKey').limit(500).maxTimeMS(3000).lean();
+    // Same eligibility as preparation: saved by the adopted job with a matching proof.
+    const job = await require('./business-adopted-settlement').adoptedJob(models.PopulationJobs, active.calendar.adoption);
+    if (job?.status !== 'adopted') return { adoptedInvoices: [], adoptedBills: [] };
+    const imported = await Records.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, authorityHash: job.authorityHash, state: 'saved', entity: { $in: ['Invoice', 'Bill'] }, txnDate: { $lte: active.calendar.adoption.importedThrough }, 'financialProof.matchesFinancialIntent': true, 'relationshipCheck.outcome': { $ne: 'error' } }).select('entity qboId step.details.customerKey step.details.vendorKey').limit(5000).maxTimeMS(3000).lean();
+    const open = await Mirror.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, entity: { $in: ['Invoice', 'Bill'] }, deleted: false, 'summary.balanceCents': { $gt: 0 }, qboId: { $in: imported.map(row => row.qboId) } }).select('entity qboId summary').sort({ 'summary.dueDate': 1, _id: 1 }).limit(500).maxTimeMS(3000).lean();
     const party = new Map(imported.map(row => [row.entity + ':' + row.qboId, row.step?.details?.customerKey || row.step?.details?.vendorKey]));
     const list = entity => open.filter(row => row.entity === entity && party.has(entity + ':' + row.qboId)).slice(0, 60).map(row => ({ [entity === 'Invoice' ? 'invoiceId' : 'billId']: row.qboId, [entity === 'Invoice' ? 'customerKey' : 'vendorKey']: party.get(entity + ':' + row.qboId), docNumber: row.summary.docNumber || null, txnDate: row.summary.txnDate, dueDate: row.summary.dueDate || null, balanceCents: row.summary.balanceCents }));
     return { adoptedInvoices: list('Invoice'), adoptedBills: list('Bill') };

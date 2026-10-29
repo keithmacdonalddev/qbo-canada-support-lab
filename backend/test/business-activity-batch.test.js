@@ -53,3 +53,13 @@ test('adopted settlements reject foreign parties, duplicates, oversized amounts 
  for(const mutate of [x=>{x.activities[0].invoiceId='INV-1';},x=>{x.activities[0].customerKey='stock-supplier-1';},x=>{x.activities[1].vendorKey='care-client-001';},x=>{x.activities[0].amountCents=5000001;},x=>{x.activities[0].amountCents=0;},x=>{x.activities[1]={...x.activities[0]};},x=>{x.activities[0].billId='1';}]){const value=settle();mutate(value);assert.throws(()=>validateChoices(value));}
  for(const mutate of [s=>{s.details.adoptedSettlement.amountCents=5000001;},s=>{s.details.adoptedSettlement.entity='Bill';},s=>{s.dependencies=[{logicalKey:'f'.repeat(64)}];},s=>{s.details.amountSourceKey='f'.repeat(64);},s=>{s.details.destination='operating_bank';},s=>{delete s.details.adoptedSettlement;}]){const f=prepared(settle()),step=structuredClone(f.candidate.entries[0].step);mutate(step);assert.throws(()=>batchLifecycle(step));}
 });
+test('a batch saved under the first policy still rebuilds; it cannot claim the newer workflows',()=>{
+ const v1=hash({version:1,key:'non-stock-business-activity-v1',maxActivities:12,maxQuantity:8,maxUnitPriceCents:100000,maxExpenseCents:1000000,maxBatchCents:12000000,workflows:['settled-service-sale','paid-operating-expense']});
+ assert.equal(v1.slice(0,12),'a3715d415042','the hash saved on Production batches');
+ const saved={...prepared().batch,policyHash:v1};
+ assert.deepEqual(buildBatchActivity(saved,scope,'harbour-pine-v2').events.map(row=>row.entity),['Estimate','TimeActivity','Invoice','Payment','Deposit']);
+ const settlement={...saved,activities:[{type:'collect-adopted-invoice',invoiceId:'10720',customerKey:'care-client-021',amountCents:1000,purpose:'Collect an imported invoice.'}]};
+ settlement.requestHash=hash({decisionKey:settlement.decisionKey,purpose:settlement.purpose,activities:settlement.activities});
+ assert.throws(()=>buildBatchActivity(settlement,scope,'harbour-pine-v2'),/policy changed/);
+ assert.throws(()=>buildBatchActivity({...saved,policyHash:'0'.repeat(64)},scope,'harbour-pine-v2'),/policy changed/);
+});
