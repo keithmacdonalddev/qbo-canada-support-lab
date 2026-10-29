@@ -109,3 +109,18 @@ Until the accountant can adopt the imported history, it cannot prepare any new p
 - **A read-only run of `review` against the Production company's saved state was ready:** 10,359 records through 2026-10-17, no limitations, and an original operation with 177 saved records.
 - **`observe` has not been run live.**
 - **Next: step 5.** Replay FIFO lots from population Bills and sales into an `adopted-history` stock carry, following `business-stock-history.js`.
+
+**Live progress (2026-10-29, Production):**
+- **History adopted through 2026-10-20** (adoption `4330067b…`, commit 4892eb9). No QuickBooks writes. The four manual expenses dated Oct 19–20 are included. The replayed FIFO stock (102 units, $2,631.00) matched QuickBooks.
+- **First accountant catch-up:** the accountant prepared, approved and ran operation `86c4c09e…` for Oct 21–28 under its standing grant. It holds 30 records: 4 POs, 8 estimates, 8 invoices, 6 time activities, 2 bills and 2 sales receipts. All 30 were saved in QuickBooks and 27 verified.
+- **Blocker:** the operation stopped at 29/30 because one estimate→invoice conversion cannot be verified.
+  - The company has Progress Invoicing on (`SalesFormsPrefs.UsingProgressInvoicing`). With it on, QuickBooks ignores the invoice's whole-estimate `LinkedTxn`, so the estimate stays Pending and unlinked.
+  - Operation readback (`verifyBusinessContent`, `verifyWholeEstimateCreation`) requires the link and a Closed estimate.
+  - The same limitation is why the imported history recorded estimate-conversion gaps and why the original September 2023 operation blocked.
+- **Choices to unblock future periods:**
+  - (a) Turn off Progress Invoicing, then repair the saved invoice's estimate link through the existing owned link-repair contract.
+  - (b) Accept an unlinked whole-estimate conversion as a recorded limitation when the economics match exactly.
+  - (c) Stop the dated template from linking invoices to estimates.
+- **Other gaps:**
+  - `inspectBusinessOperation` reports the retained seven-report approval evidence as unavailable for this operation (not yet investigated).
+  - The adopted open invoices and bills still need a settlement workflow.
