@@ -39,8 +39,11 @@ function fixture(change = () => {}) {
   };
   change(state);
   const models = { Calendars: model([state.calendar]), Writers: model([state.writer]), Jobs: model([state.job]), Runs: model([state.run]), Records: model(state.records), Steps: model(state.steps), Receipts: model(state.receipts) };
+  lastModels = models;
   return createBusinessHistoryAdoption({ models, now: () => Date.parse('2026-10-28T12:00:00Z') });
 }
+let lastModels = null;
+const adoptionModels = () => { fixture(); return lastModels; };
 
 test('a complete, idle population is ready for adoption with stable reviewed terms', async () => {
   const result = await fixture().review(scope);
@@ -82,4 +85,35 @@ test('no population delegation means nothing to adopt', async () => {
   const result = await fixture(s => { s.writer.populationDelegation = null; }).review(scope);
   assert.equal(result.ready, false);
   assert.deepEqual(result.unmet.map(item => item.code), ['no-population']);
+});
+
+test('the saved write-protection cutoff must not reach past the adoption date', async () => {
+  const policies = [{ environment: 'production', realmId: '123', state: 'active', periodControl: { closedThrough: '2026-10-20' } }];
+  const adoption = fixture();
+  const blocked = await createBusinessHistoryAdoption({ models: { ...adoptionModels(), Policies: model(policies) } }).review(scope);
+  assert.ok(blocked.unmet.some(item => item.code === 'protected-after'));
+  assert.equal((await adoption.review(scope)).ready, true);
+});
+
+const terms = { through: '2026-10-17', fromDate: '2023-09-01', authorityHash: AUTH };
+const records = (extra = {}) => ({ sourceHash: 's'.repeat(64), records: { Invoice: [{ id: '1', transactionDate: '2024-01-01' }, { id: '2', transactionDate: '2024-01-02' }], Customer: [{ id: '9', active: true }], ...extra } });
+const populationModels = () => ({ Records: model([1, 2].map(id => ({ environment: 'production', realmId: '123', authorityHash: AUTH, txnDate: '2024-01-0' + id, state: 'saved', entity: 'Invoice', qboId: String(id) }))) });
+const readers = (inventory, status = 'checks-passed') => ({ readInventory: async () => inventory, checkInventory: () => {}, readReports: async (scope, period) => ({ sourceHash: 'r'.repeat(64), period }), evaluateReports: () => ({ status }) });
+
+test('QuickBooks evidence passes when every imported record exists, nothing is dated later and reports pass', async () => {
+  const result = await createBusinessHistoryAdoption({ models: populationModels(), now: () => Date.parse('2026-10-28T12:00:00Z') }).observe(scope, terms, readers(records()));
+  assert.deepEqual(result.unmet, []);
+  assert.deepEqual(result.evidence.period, { fromDate: '2025-10-17', throughDate: '2026-10-17' });
+  assert.equal(result.qboWrites, 0);
+});
+
+test('QuickBooks evidence refuses later activity, missing imported records and failed reports', async () => {
+  const adoption = createBusinessHistoryAdoption({ models: populationModels(), now: () => Date.now() });
+  const later = await adoption.observe(scope, terms, readers(records({ Bill: [{ id: '5', transactionDate: '2026-10-20' }] })));
+  assert.deepEqual(later.unmet.map(item => item.code), ['activity-after']);
+  assert.deepEqual(later.evidence.after, { Bill: 1 });
+  const missing = await adoption.observe(scope, terms, readers(records({ Invoice: [{ id: '1', transactionDate: '2024-01-01' }] })));
+  assert.deepEqual(missing.unmet.map(item => item.code), ['records-missing']);
+  const reports = await adoption.observe(scope, terms, readers(records(), 'checks-failed'));
+  assert.deepEqual(reports.unmet.map(item => item.code), ['reports-failed']);
 });

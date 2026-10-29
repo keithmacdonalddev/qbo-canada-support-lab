@@ -1,10 +1,10 @@
 'use strict';
 // History adoption: settle a completed bulk population as the business's
 // starting history so the accountant can continue from the next day.
-// This module currently provides the read-only review of SAVED evidence. It
-// makes no QuickBooks call and writes nothing. QuickBooks evidence, the stock
-// replay and the adopt transaction are later steps (docs/architecture/business-agent.md).
-const { hash } = require('./business-calendar');
+// So far: review() reads SAVED evidence only; observe() reads QuickBooks through
+// the existing GET-only readers. Neither writes. The stock replay and the adopt
+// transaction are later steps (docs/architecture/business-agent.md).
+const { hash, shift } = require('./business-calendar');
 const ISSUE_CODES = ['estimate-invoice-conversion-unverified', 'time-invoice-billing-unverified', 'record-verification-failed'];
 const DONE = new Set(['populated', 'populated-with-gaps']);
 const IDLE_RUN = new Set(['blocked', 'stopped', 'awaiting-evidence']);
@@ -70,6 +70,10 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
       }
     }
     if (await read(models.Receipts, { ...company, state: { $in: ['possibly-sent', 'unknown'] } }, session)) add('receipt-uncertain', 'A QuickBooks request in this company may have been sent without a confirmed result.');
+    const policy = models.Policies ? await read(models.Policies, company, session) : null;
+    if (models.Policies && policy?.state !== 'active') add('coordination-paused', 'Company write coordination is not active.');
+    const cutoff = [policy?.periodControl?.closedThrough, policy?.periodControl?.reconciledThrough].filter(Boolean).sort().at(-1);
+    if (cutoff && through && cutoff > through) add('protected-after', 'The company is closed or reconciled through ' + cutoff + ', after the adoption date; new activity could not start the next day.');
 
     const terms = { version: 1, kind: 'adopted-history', scope, jobId: String(job._id), manifestHash: job.manifestHash, importedHash: job.importedHash, authorityHash: job.authorityHash, fromDate: job.fromDate, through, recordCount: saved, original: original && { operationId: original.operationId, planHash: original.planHash }, limitations, limitedRecordHash: hash(gapped) };
     return { unmet, calendar, writer, job, original, gapped: gapped.length, terms, termsHash: hash(terms) };
@@ -81,6 +85,33 @@ function createBusinessHistoryAdoption({ models, now = () => Date.now() } = {}) 
     const limitationTotal = Object.values(result.terms?.limitations || {}).reduce((sum, value) => sum + value, 0);
     return { ready: !result.unmet.length, unmet: result.unmet, terms: result.terms || null, termsHash: result.termsHash || null, original: result.original || null, limitedRecords: result.gapped || 0, limitationTotal, qboWrites: 0 };
   }
-  return { review, pending };
+  // Step 4: read-only QuickBooks evidence for the reviewed terms. Readers are the
+  // existing scoped GET-only inventory and seven-report readers; nothing is written.
+  async function observe(scope, terms, { access, signal, readInventory, readReports, checkInventory, evaluateReports } = {}) {
+    const unmet = [], add = (code, detail) => unmet.push({ code, detail });
+    const { createBusinessInventoryReader, inventorySummary } = require('./business-record-inventory');
+    const inventory = await (readInventory || createBusinessInventoryReader({ access, now, stockMetadata: true }))(scope, { signal });
+    (checkInventory || inventorySummary)(inventory, scope);
+    const present = new Map(Object.entries(inventory.records).map(([entity, rows]) => [entity, new Set(rows.map(row => row.id))]));
+    const after = {};
+    for (const [entity, rows] of Object.entries(inventory.records)) for (const row of rows) if (row.transactionDate && row.transactionDate > terms.through) after[entity] = (after[entity] || 0) + 1;
+    if (Object.keys(after).length) add('activity-after', 'QuickBooks has transactions dated after ' + terms.through + ' (' + Object.entries(after).map(([entity, n]) => n + ' ' + entity).join(', ') + '). Adoption must cover every transaction up to the day it starts.');
+    const missing = {}, unobserved = {};
+    const records = { environment: scope.environment, realmId: scope.realmId, authorityHash: terms.authorityHash, txnDate: { $gte: terms.fromDate, $lte: terms.through }, state: 'saved' };
+    for await (const row of models.Records.find(records).select('entity qboId').sort({ _id: 1 }).maxTimeMS(20000).lean().cursor()) {
+      const ids = present.get(row.entity);
+      if (!ids) unobserved[row.entity] = (unobserved[row.entity] || 0) + 1;
+      else if (!ids.has(row.qboId)) missing[row.entity] = (missing[row.entity] || 0) + 1;
+    }
+    if (Object.keys(missing).length) add('records-missing', 'Imported records are no longer in QuickBooks (' + Object.entries(missing).map(([entity, n]) => n + ' ' + entity).join(', ') + ').');
+    const fromDate = [terms.fromDate, shift(terms.through, -365)].sort().at(-1), period = { fromDate, throughDate: terms.through };
+    const { createBusinessReportReader } = require('./business-report-evidence');
+    const reports = await (readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, period, { signal });
+    const evaluation = (evaluateReports || require('./book-evidence').evaluateReportSources)(reports, { allowExplicitZero: true });
+    if (evaluation.status !== 'checks-passed') add('reports-failed', 'The accounting reports through ' + terms.through + ' do not pass their named checks (' + evaluation.status + ').');
+    const evidence = { version: 1, termsHash: hash(terms), inventorySourceHash: inventory.sourceHash, reportSourceHash: reports.sourceHash, reportStatus: evaluation.status, period, after, missing, unobserved, observedAt: new Date(now()).toISOString() };
+    return { ready: !unmet.length, unmet, evidence, evidenceHash: hash(evidence), qboWrites: 0 };
+  }
+  return { review, pending, observe };
 }
 module.exports = { createBusinessHistoryAdoption, creationIdentity, ISSUE_CODES };
