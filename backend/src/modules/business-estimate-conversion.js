@@ -24,21 +24,33 @@ function verifyEstimateConversion({compiled,receipt,observed,parents,now}) {
   return proof;
 }
 // Original-create representation. This never supplies compatibility for an old
-// line-link request and never accepts a missing provider relationship.
-function verifyWholeEstimateCreation({compiled,receipt,observed,parents,now}) {
+// line-link request. A missing provider relationship is accepted only through
+// verifyDroppedEstimateLink below, which reports it as a limitation.
+function verifyWholeEstimateCreation({compiled,receipt,observed,parents,now,dropped=false}) {
   const sources=compiled.relationships.filter(x=>x.entity==='Estimate'),times=compiled.relationships.filter(x=>x.entity==='TimeActivity');
   if(compiled.entity!=='Invoice'||sources.length!==1||times.length!==1||compiled.relationships.length!==2||sources[0].representation!=='whole-estimate-header'||!/^\d{1,30}$/.test(sources[0].sourceLineId||'')||!equal(sources[0].links,[{path:'LinkedTxn'}])) fail('An exact original whole-Estimate creation contract is required.');
   const payload=JSON.parse(compiled.request.body),source=parents.find(x=>x.logicalKey===sources[0].logicalKey),worked=parents.find(x=>x.logicalKey===times[0].logicalKey);
   const invoice=observation(observed,compiled.request.scope,'Invoice',receipt.qboId,now),estimate=observation(source,compiled.request.scope,'Estimate',sources[0].qboId,now),time=observation(worked,compiled.request.scope,'TimeActivity',times[0].qboId,now);
   const financial=record=>(record.Line||[]).filter(x=>x.DetailType!=='SubTotalLineDetail'),lines=financial(invoice),quoted=financial(estimate);
   const requested=[{TxnId:estimate.Id,TxnType:'Estimate'},{TxnId:time.Id,TxnType:'TimeActivity'}],actual=(invoice.LinkedTxn||[]).filter(x=>['Estimate','TimeActivity'].includes(x.TxnType));
-  if(!equal(headerLinks(payload.LinkedTxn),requested)||!equal(headerLinks(actual),requested)||!equal(headerLinks(estimate.LinkedTxn),[{TxnId:invoice.Id,TxnType:'Invoice'}])||estimate.TxnStatus!=='Closed'||time.BillableStatus!=='HasBeenBilled') return false;
-  if(payload.Line?.length!==1||lines.length!==1||quoted.length!==1||quoted[0].Id!==sources[0].sourceLineId||payload.Line[0].LinkedTxn!==undefined||(lines[0].LinkedTxn!==undefined&&!equal(lines[0].LinkedTxn,[{TxnId:estimate.Id,TxnType:'Estimate',TxnLineId:sources[0].sourceLineId}])&&!equal(lines[0].LinkedTxn,[{TxnId:estimate.Id,TxnType:'Estimate'}]))||quoted[0].LinkedTxn!==undefined) return false;
+  const linked=dropped?[{TxnId:time.Id,TxnType:'TimeActivity'}]:requested;
+  const estimateState=()=>dropped?headerLinks(estimate.LinkedTxn||[]).length===0&&['Pending','Accepted'].includes(estimate.TxnStatus):equal(headerLinks(estimate.LinkedTxn),[{TxnId:invoice.Id,TxnType:'Invoice'}])&&estimate.TxnStatus==='Closed';
+  if(!equal(headerLinks(payload.LinkedTxn),requested)||!equal(headerLinks(actual),linked)||!estimateState()||time.BillableStatus!=='HasBeenBilled') return false;
+  if(payload.Line?.length!==1||lines.length!==1||quoted.length!==1||quoted[0].Id!==sources[0].sourceLineId||payload.Line[0].LinkedTxn!==undefined||(lines[0].LinkedTxn!==undefined&&(dropped||!equal(lines[0].LinkedTxn,[{TxnId:estimate.Id,TxnType:'Estimate',TxnLineId:sources[0].sourceLineId}])&&!equal(lines[0].LinkedTxn,[{TxnId:estimate.Id,TxnType:'Estimate'}])))||quoted[0].LinkedTxn!==undefined) return false;
   const dated=require('./business-estimate-dated-link').matchesDatedEstimateLink(compiled,invoice,source,source.conversionStep,source.conversionPolicy);
   const economy=line=>({Amount:line.Amount,DetailType:line.DetailType,ItemRef:line.SalesItemLineDetail?.ItemRef?.value,Qty:line.SalesItemLineDetail?.Qty,UnitPrice:line.SalesItemLineDetail?.UnitPrice,...(!dated?{TaxCodeRef:line.SalesItemLineDetail?.TaxCodeRef?.value}:{})});
   const tax=record=>({TotalTax:record.TxnTaxDetail?.TotalTax,lines:(record.TxnTaxDetail?.TaxLine||[]).map(x=>({Amount:x.Amount,DetailType:x.DetailType,rate:x.TaxLineDetail?.TaxRateRef?.value,percent:x.TaxLineDetail?.TaxPercent,based:x.TaxLineDetail?.PercentBased,net:x.TaxLineDetail?.NetAmountTaxable}))});
   if(!equal(economy(payload.Line[0]),economy(lines[0]))||!equal(economy(lines[0]),economy(quoted[0]))||invoice.CustomerRef?.value!==estimate.CustomerRef?.value||time.CustomerRef?.value!==invoice.CustomerRef?.value||time.ItemRef?.value!==lines[0].SalesItemLineDetail?.ItemRef?.value||time.Hours+time.Minutes/60!==lines[0].SalesItemLineDetail?.Qty||invoice.CurrencyRef?.value!=='CAD'||estimate.CurrencyRef?.value!=='CAD'||invoice.GlobalTaxCalculation!==estimate.GlobalTaxCalculation||invoice.ExchangeRate!==estimate.ExchangeRate||(!dated&&(invoice.TotalAmt!==estimate.TotalAmt||!equal(tax(invoice),tax(estimate))))) return false;
   return true;
+}
+// With Progress Invoicing on, QuickBooks ignores an app's whole-Estimate header
+// link: the invoice saves linked only to its TimeActivity and the Estimate stays
+// open. That exact outcome is accepted, with every economic fact still matched,
+// and is reported as a limitation rather than a verified conversion.
+function verifyDroppedEstimateLink(input){
+  if(!verifyWholeEstimateCreation({...input,dropped:true}))return null;
+  const binding=input.compiled.relationships.find(x=>x.entity==='Estimate');
+  return {version:1,kind:'estimate-link-dropped',logicalKey:binding.logicalKey,estimateId:binding.qboId,meaning:'QuickBooks did not link this invoice to its estimate; the estimate stays open. Amounts, tax, customer and hours match exactly.'};
 }
 function verifyLegacyWholeEstimateLineReference({compiled,receipt,observed,parents,now}){
  const quotes=compiled.relationships.filter(x=>x.entity==='Estimate'),times=compiled.relationships.filter(x=>x.entity==='TimeActivity');if(compiled.entity!=='Invoice'||compiled.relationships.length!==2||quotes.length!==1||times.length!==1||quotes[0].representation!==undefined)return false;const binding=quotes[0],physical=binding.links.filter(x=>x.path==='Line.0.LinkedTxn');if(binding.links.length!==2||!binding.links.some(x=>x.path==='LinkedTxn')||physical.length!==1||!/^\d{1,30}$/.test(physical[0].txnLineId||''))return false;
@@ -47,4 +59,4 @@ function verifyLegacyWholeEstimateLineReference({compiled,receipt,observed,paren
  const roots=[{TxnId:estimate.Id,TxnType:'Estimate'},{TxnId:time.Id,TxnType:'TimeActivity'}];if(!equal(headerLinks(payload.LinkedTxn),roots)||!equal(headerLinks((invoice.LinkedTxn||[]).filter(l=>['Estimate','TimeActivity'].includes(l.TxnType))),roots)||!equal(headerLinks(estimate.LinkedTxn),[{TxnId:invoice.Id,TxnType:'Invoice'}])||estimate.TxnStatus!=='Closed'||time.BillableStatus!=='HasBeenBilled')return false;
  const economy=l=>({Amount:l.Amount,DetailType:l.DetailType,item:l.SalesItemLineDetail?.ItemRef?.value,qty:l.SalesItemLineDetail?.Qty,price:l.SalesItemLineDetail?.UnitPrice,tax:l.SalesItemLineDetail?.TaxCodeRef?.value});return billed[0].DetailType==='SalesItemLineDetail'&&equal(economy(wanted[0]),economy(billed[0]))&&equal(economy(billed[0]),economy(quoted[0]))&&invoice.CustomerRef?.value===estimate.CustomerRef?.value&&time.CustomerRef?.value===invoice.CustomerRef?.value&&time.ItemRef?.value===billed[0].SalesItemLineDetail?.ItemRef?.value&&time.Hours+time.Minutes/60===billed[0].SalesItemLineDetail?.Qty&&invoice.CurrencyRef?.value==='CAD'&&estimate.CurrencyRef?.value==='CAD'&&invoice.TotalAmt===estimate.TotalAmt&&invoice.GlobalTaxCalculation===estimate.GlobalTaxCalculation&&invoice.ExchangeRate===estimate.ExchangeRate&&equal(invoice.TxnTaxDetail,estimate.TxnTaxDetail);
 }
-module.exports={createEstimateConversionProof,verifyEstimateConversion,verifyWholeEstimateCreation,verifyLegacyWholeEstimateLineReference};
+module.exports={createEstimateConversionProof,verifyEstimateConversion,verifyWholeEstimateCreation,verifyDroppedEstimateLink,verifyLegacyWholeEstimateLineReference};

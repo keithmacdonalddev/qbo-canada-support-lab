@@ -41,6 +41,18 @@ test('missing or changed retained approval data and either audit cannot be prese
   ];
   for (const mutate of mutations) { h.data = structuredClone(original); mutate(h); const reads = h.reads; await assert.rejects(approve(h), {code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); await assert.rejects(h.service.reviewOperation(h.user, h.p.operationId, 0), {code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); assert.equal(h.reads, reads); assert.equal(h.posts, 0); }
 });
+test('an approval under the owner standing agent grant is read with its ai_plan audit type', async () => {
+  const h = await prepared(); await approve(h);
+  const run = structuredClone(h.data.Runs[0]), audit = h.data.Audits.find(row => row._id === run.approval.auditId);
+  const authority = { version: 1, agentId: 'e'.repeat(24), ownerId: String(run.createdBy), grantId: hash('grant'), authorityHash: hash('published business') };
+  Object.assign(run, { agentAuthority: authority, authorityHash: authority.authorityHash }); Object.assign(run.approval, { agentAuthority: authority, decisionSource: 'agent-standing-authority' });
+  const read = () => readApprovalReports({ models: h.models, run, ownerId: String(audit.userId), session: null });
+  await assert.rejects(read(), { code: 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' }, 'the audit must say who decided');
+  audit.inputParams.details.decisionSource = 'agent-standing-authority';
+  await assert.rejects(read(), { code: 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' }, 'an agent decision is not a manual audit');
+  audit.actionType = 'ai_plan';
+  assert.equal((await read()).reports, 7);
+});
 test('genuine earlier approved events keep their original assurance without a seven-report label', async () => {
   const h = await prepared(); await approve(h); const run = h.data.Runs[0], audit = h.data.Audits.find(row => row._id === run.approval.auditId);
   delete run.approval.reportEvidence; delete audit.inputParams.details.reportEvidenceHash; delete audit.inputParams.details.reportSourceHash;

@@ -64,9 +64,11 @@ test('imported history and its blocked operation become one accountant-owned ite
 });
 
 test('the accountant continues only an operation its current grant can resume', () => {
-  const resumable = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation() }, coverage });
+  const resumable = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
   assert.equal(byKey(resumable, 'continue-operation').state, 'working');
-  const paused = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation() }, coverage });
+  const stuck = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation() }, coverage });
+  assert.equal(byKey(stuck, 'continue-operation').state, 'blocked', 'a blocked operation is not shown as progressing');
+  const paused = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
   assert.equal(byKey(paused, 'continue-operation').state, 'waiting');
   for (const changed of [operation({ status: 'previewed' }), operation({ agentAuthority: { ...operation().agentAuthority, grantId: 'old' } })]) {
     const work = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: changed }, coverage });

@@ -31,8 +31,8 @@ async function retainApprovalReports({ models, scope, operationId, planHash, act
   await models.Audits.create([{ _id: auditId, userId: ownerId, ...(actorId !== ownerId ? { actorUserId: actorId } : {}), realmId: scope.realmId, action: 'Business approval report observation retained', actionType: 'manual', outcome: 'success', afterState: { ...scope, operationId, planHash, reportEvidenceHash: evidenceHash, reportSourceHash: sourceHash, observedAt: source.observedAt, reports: 7 } }], { session });
   return { version: 1, sourceVersion: source.version, evidenceHash, sourceHash, observedAt: source.observedAt };
 }
-function auditIdentity(audit, ownerId, actorId, scope, action) {
-  return audit && String(audit.userId) === ownerId && String(audit.actorUserId || audit.userId) === actorId && audit.realmId === scope.realmId && audit.action === action && audit.actionType === 'manual' && audit.outcome === 'success';
+function auditIdentity(audit, ownerId, actorId, scope, action, actionType = 'manual') {
+  return audit && String(audit.userId) === ownerId && String(audit.actorUserId || audit.userId) === actorId && audit.realmId === scope.realmId && audit.action === action && audit.actionType === actionType && audit.outcome === 'success';
 }
 async function readApprovalReports({ models, run, ownerId, session }) {
   if (!run.approval) return null;
@@ -40,7 +40,10 @@ async function readApprovalReports({ models, run, ownerId, session }) {
   const scope = scopeOf(run), operationId = String(run._id), actorId = run.approval.actorId;
   const approved = await models.Audits.findOne({ _id: run.approval.auditId }).session(session).maxTimeMS(3000).lean();
   const eventKey = 'business-plan:' + operationId + ':approved', params = approved?.inputParams, details = params?.details;
-  if (!auditIdentity(approved, ownerId, actorId, scope, 'Business operation evidence recorded') || params?.eventKey !== eventKey || ['realmId', 'environment', 'connectionId'].some(key => params[key] !== scope[key]) || details?.operationId !== operationId || details.planHash !== run.planHash || details.actorId !== actorId || details.phase !== 'approved' || ['realmId', 'environment', 'connectionId'].some(key => details[key] !== scope[key])) fail();
+  // The audit writer records an approval under the owner's standing agent grant as 'ai_plan'.
+  const agentDecision = details?.decisionSource === 'agent-standing-authority';
+  if (agentDecision !== (run.approval.decisionSource === 'agent-standing-authority')) fail();
+  if (!auditIdentity(approved, ownerId, actorId, scope, 'Business operation evidence recorded', agentDecision ? 'ai_plan' : 'manual') || params?.eventKey !== eventKey || ['realmId', 'environment', 'connectionId'].some(key => params[key] !== scope[key]) || details?.operationId !== operationId || details.planHash !== run.planHash || details.actorId !== actorId || details.phase !== 'approved' || ['realmId', 'environment', 'connectionId'].some(key => details[key] !== scope[key])) fail();
   const pointer = run.approval.reportEvidence;
   // An immutable approval event distinguishes genuine earlier decisions from a
   // damaged mutable run. Removing the pointer cannot downgrade a new approval.

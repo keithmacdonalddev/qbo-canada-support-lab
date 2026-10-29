@@ -97,6 +97,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     return { logicalKey: expected.logicalKey, entity: expected.entity, fingerprint: expected.fingerprint, qboId: parent.Id, syncToken: parent.SyncToken };
   });
   const childKeys = new Set(), childIds = new Set(), childLinks = [];
+  let droppedChild = null;
   for (const child of descendants) {
     if (!child || !HASH.test(child.logicalKey || '') || childKeys.has(child.logicalKey) || !HASH.test(child.fingerprint || '') || !['saved', 'verified'].includes(child.state) || !SUPPORTED.has(child.entity) || !child.creationReceipt || !HASH.test(child.creationReceipt.evidenceHash || '') || child.creationReceipt.qboId !== child.record?.Id) invalid('A downstream activity lacks its managed creation evidence.');
     const physicalKey = child.entity + ':' + child.record?.Id;
@@ -109,18 +110,27 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     const origin = child.verification.relationships?.filter(link => link.logicalKey === compiled.logicalKey);
     if (!origin || origin.length !== 1 || origin[0].entity !== compiled.entity || origin[0].fingerprint !== compiled.intentHash || origin[0].qboId !== record.Id || origin[0].syncToken !== record.SyncToken) invalid('The downstream content proof names a different originating intent or version.');
     const linked = [...linkList(child.record.LinkedTxn), ...(child.record.Line || []).flatMap(line => linkList(line.LinkedTxn))];
-    if (!linked.some(link => link.TxnType === compiled.entity && link.TxnId === receipt.qboId)) invalid('A downstream record does not point back to this saved activity.');
+    const dropped = compiled.entity === 'Estimate' && child.entity === 'Invoice' && child.verification.estimateLinkDropped?.logicalKey === compiled.logicalKey && child.verification.estimateLinkDropped.estimateId === record.Id;
+    if (dropped) droppedChild = child;
+    else if (!linked.some(link => link.TxnType === compiled.entity && link.TxnId === receipt.qboId)) invalid('A downstream record does not point back to this saved activity.');
     for (const link of linked.filter(value => value.TxnType === compiled.entity && value.TxnId === record.Id && value.TxnLineId)) {
       if (!Array.isArray(record.Line) || record.Line.filter(line => line.Id === link.TxnLineId && line.DetailType !== 'SubTotalLineDetail').length !== 1) invalid('A downstream line points to a missing or ambiguous originating line.');
     }
     childLinks.push({ TxnId: child.record.Id, TxnType: child.entity });
   }
   const estimateConversion = observed.estimateConversion ? require('./business-estimate-conversion').verifyEstimateConversion({ compiled, receipt, observed, parents, now }) : null;
-  if (compiled.relationships.some(link => link.representation !== undefined) && !require('./business-estimate-conversion').verifyWholeEstimateCreation({ compiled, receipt, observed, parents, now })) mismatch('The complete Estimate conversion links, states or economics remain unverified.');
+  const conversion = require('./business-estimate-conversion');
+  let estimateLinkDropped = null;
+  if (compiled.relationships.some(link => link.representation !== undefined) && !conversion.verifyWholeEstimateCreation({ compiled, receipt, observed, parents, now })) {
+    estimateLinkDropped = conversion.verifyDroppedEstimateLink({ compiled, receipt, observed, parents, now });
+    if (!estimateLinkDropped) mismatch('The complete Estimate conversion links, states or economics remain unverified.');
+  }
   const expectedHeader = { ...payload }; delete expectedHeader.Line; delete expectedHeader.LinkedTxn;
   if (compiled.entity === 'Estimate' && descendants.length) {
     if (descendants.length !== 1 || descendants[0].entity !== 'Invoice') mismatch('Only one complete managed invoice may convert this Estimate.');
-    expectedHeader.TxnStatus = 'Closed';
+    // A dropped link leaves the Estimate open and unlinked (see verifyDroppedEstimateLink).
+    if (droppedChild) { if (!['Pending', 'Accepted'].includes(record.TxnStatus) || linkList(record.LinkedTxn).length) mismatch('The unlinked Estimate changed after its invoice was saved.'); }
+    else expectedHeader.TxnStatus = 'Closed';
   }
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
   const postingAccount = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
@@ -131,7 +141,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
   for (const key of ['ClassRef', 'DepartmentRef', 'ProjectRef']) if (!payload[key] && record[key]?.value) mismatch('An unplanned transaction dimension is present.');
   const permittedTop = [...linkList(payload.LinkedTxn), ...childLinks], actualTop = linkList(record.LinkedTxn);
-  for (const expected of linkList(payload.LinkedTxn)) if (!actualTop.some(value => canonical(value) === canonical(expected))) mismatch('An originating transaction link is missing.');
+  for (const expected of linkList(payload.LinkedTxn)) if (!(estimateLinkDropped && expected.TxnType === 'Estimate' && expected.TxnId === estimateLinkDropped.estimateId) && !actualTop.some(value => canonical(value) === canonical(expected))) mismatch('An originating transaction link is missing.');
   for (const actual of actualTop) if (!permittedTop.some(value => value.TxnType === actual.TxnType && value.TxnId === actual.TxnId && (value.TxnLineId || null) === (actual.TxnLineId || null))) mismatch('An unplanned transaction link is present.');
   if (payload.Line) {
     if (!Array.isArray(record.Line) || record.Line.length > 101) invalid('Saved transaction lines are unavailable.');
@@ -211,10 +221,11 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (record.POStatus !== (fullyReceived ? 'Closed' : 'Open')) mismatch('The purchase order status differs from its verified consumption.');
   }
   const purchaseOrderConsumption = compiled.entity === 'PurchaseOrder' && issues.length === 0 && record.Line.some(line => line.Received === undefined) ? createUnreceivedProof({ compiled, receipt, observed, descendants }) : null;
+  const dropProof = estimateLinkDropped || droppedChild?.verification.estimateLinkDropped || null;
   const oldest = [observed, ...(observed.accountRouting ? [observed.accountRouting] : []), ...(estimateConversion ? [estimateConversion] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
   return { version: 1, kind: 'business-content', compilationHash: compiled.compilationHash, scope, logicalKey: compiled.logicalKey, entity: compiled.entity, qboId: record.Id, fingerprint: compiled.intentHash, matchesIntent: issues.length === 0, issues,
-    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(estimateConversion ? { estimateConversion } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
-    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), ...(estimateConversion ? { estimateConversionHash: estimateConversion.evidenceHash } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
+    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(estimateConversion ? { estimateConversion } : {}), ...(dropProof ? { estimateLinkDropped: dropProof } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
+    evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), ...(estimateConversion ? { estimateConversionHash: estimateConversion.evidenceHash } : {}), ...(dropProof ? { estimateLinkDropped: dropProof } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
 }
 // Content checks can be computed for a saved child before closing its parent graph.
 // They never mark a step verified. This avoids a circular dependency when an invoice
