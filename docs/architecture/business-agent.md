@@ -60,11 +60,44 @@ The app's job is to run the QuickBooks company like a real business, 24/7, throu
 
 Monitoring is on; the accountant has never been granted authority. The three saved blockers all come from the earlier bulk import: population job `53807d1c…` saved and content-checked 10,359 records through 2026-10-17; the writer is still delegated to that job; the original September 2023 operation `2dbe87a5…` is blocked at step 32 of 198; the calendar has no verified date. Coverage reports 67 of 81 measured features in use.
 
-### Next capability: history adoption
+### Next capability: history adoption (design reviewed 2026-10-28)
 
-Until the accountant can adopt the imported history, it cannot prepare any new period or same-day activity. Proposed design, pending an independent design challenge before any mutation source is written:
+Until the accountant can adopt the imported history, it cannot prepare any new period or same-day activity. An independent design challenge rejected the first draft. The reviewed design:
 
-1. Preconditions from saved evidence only: the population job is `populated` with every required record saved and content-checked, no pending/rejected/unknown rows, no uncertain write, completed relationship verification (or documented limitations), and the blocked original operation's accepted records are among the job's native origins.
-2. A bounded read-only QuickBooks check at the adoption date: balance sheet balances, receivables/payables agree with open documents, and no negative stock quantities. The observed closing stock becomes a new `adopted-history` stock carry.
-3. One app-database transaction (no QuickBooks writes): supersede the original operation while retaining its receipts, release the population delegation and current operation, and record the calendar as adopted (not verified) through the import date with its evidence hash and limitations. The UI and agent must keep "adopted" distinct from "verified".
-4. The accountant then catches up the dated calendar from the day after the import to yesterday and resumes hourly same-day activity, all through the existing governed preparation, native write gate and verification.
+**Why simply clearing the blockers fails.** Future work that settles pre-adoption records (for example, collecting a 2026-10-10 invoice) resolves earlier dependencies only through `OperationStep` (`business-operation-plan-store.js` history, `business-operation-candidate.js`, runner `verifyGraph`). Population records live in `BusinessPopulationRecord`, so that work would fail with missing earlier activity. Carried stock is a list of FIFO lots traced to verified Bills (`business-stock-cost.js`, `business-stock-evidence.js`). Observed quantity on hand cannot stand in for it.
+
+**Cursor.** Set `verifiedThrough` to the import date and add an immutable `calendar.adoption` marker `{version, kind:'adopted-history', jobId, adoptionId, evidenceHash, auditId, through}`, leaving `lastVerifiedOperationId` null. About ten safety checks (writer fence, run state, write gate, authority, policy amendment, period store) compare that cursor exactly, so a separate field would mean changing all of them. A shared `calendarCursor(calendar)` returns `{through, basis:'verified'|'adopted'}`. Period close (which currently fails open) and every owner or agent label must say "adopted, not verified". This tension with plan W02.3 is deliberate and evidence-backed.
+
+**Preconditions, from saved evidence only:**
+- The job is populated with no coverage gaps on any adopted dependency. Gapped records are excluded and listed.
+- Identities recomputed from Steps match both `job.importedHash` and `delegation.importedHash`.
+- No uncertain write, and no possibly-sent or unknown receipt anywhere.
+- No job batch or lease, and no recheck queued or running.
+- `job.fromDate` equals the opening date, and `job.authorityHash` equals the calendar's.
+- The protected-period cutoff and the QuickBooks closing date are before the day after adoption.
+- No QuickBooks transaction is dated after the import date.
+
+**Read-only QuickBooks evidence, using existing readers:**
+- The preparation report reader with `evaluateReportSources`: trial balance, balance sheet, AR/AP ledger vs aging.
+- The record inventory reader, to prove every population ID still exists.
+- The stock reader, compared against a FIFO replay of population Bills and sales from the zero root. The replay becomes the `adopted-history` stock carry.
+- Open invoices and bills mapped to population keys and saved as obligations.
+
+**Transaction (no QuickBooks writes):**
+- Uses review → reviewHash → apply, following `business-operation-retirement.js`, with the governance fence, `fenceAgentAuthority` and the coordination touch.
+- Conditionally updates the run, writer, calendar and job.
+- Retires the original operation as `retired` with `retirement.kind:'superseded-by-population'`. Its receipts are retained, and its steps are excluded from period close.
+- Writes a `BusinessHistoryAdoption` document and an audit row whose ids derive from the review hash, so a retry reuses them.
+
+**Authority.** Adoption changes continuity expectations, so the standing grant alone is not enough (PRD; plan W02.4). The first grant records the adoption terms, the same way it records `activityPolicyHash`: the job, `importedHash`, the original plan hash, and the limitation types with their counts. The accountant re-checks the evidence when it applies adoption. Any new or larger limitation needs the owner again.
+
+**Order of work:**
+1. `calendarCursor`, the period-close refusal for adopted dates, and labels.
+2. Model and calendar field.
+3. Read-only review of saved-evidence preconditions.
+4. QuickBooks evidence.
+5. FIFO replay and the `adopted-history` stock carry.
+6. Population-record history origins in preparation, assembly and the runner.
+7. The adopt transaction and audit.
+8. Grant terms, the agent tool, blockers and the work item.
+9. Docs.
