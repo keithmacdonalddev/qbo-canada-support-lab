@@ -89,3 +89,12 @@ test('owner-reserved states stay with the owner', () => {
   assert.deepEqual(ownerKeys(work), ['calendar-stopped', 'ai-connection']);
   assert.equal(work.headline, '2 things need you.');
 });
+
+test('the calendar cursor distinguishes adopted import history from verified activity', () => {
+  const { calendarCursor } = require('../src/modules/business-calendar');
+  assert.deepEqual(calendarCursor(null), { through: null, basis: null, adoptedThrough: null });
+  assert.deepEqual(calendarCursor({ verifiedThrough: '2026-10-17', adoption: null }), { through: '2026-10-17', basis: 'verified', adoptedThrough: null });
+  const adoption = { kind: 'adopted-history', through: '2026-10-17' };
+  assert.deepEqual(calendarCursor({ verifiedThrough: '2026-10-17', adoption }), { through: '2026-10-17', basis: 'adopted', adoptedThrough: '2026-10-17' });
+  assert.equal(calendarCursor({ verifiedThrough: '2026-10-27', adoption }).basis, 'verified');
+});

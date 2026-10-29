@@ -104,6 +104,8 @@ function createPeriodCloseService(dependencies = {}) {
       if (request.mode==='close') {
         if (before.closedThrough && (request.period.throughDate<=before.closedThrough || request.period.fromDate!==shift(before.closedThrough,1))) blockers.push('The next close must start the day after the existing closed cutoff and advance it.');
         if (current.calendar && (!current.calendar.verifiedThrough || current.calendar.verifiedThrough<request.period.throughDate)) blockers.push('Verify managed business activity through the entire requested close period first.');
+        const adoptedThrough=require('./business-calendar').calendarCursor(current.calendar).adoptedThrough;
+        if (adoptedThrough && request.period.fromDate<=adoptedThrough) blockers.push('Dates through '+adoptedThrough+' are adopted import history, not verified business activity. Close only periods after that date.');
         const required=critical();
         if (!required.length || required.some(definition=>!reports.some(row=>row.key===definition.key))) blockers.push('Keep a matching manual check for every current critical report ('+required.length+' required).');
         if (reports.some(row=>!row.acceptable)) blockers.push('Every selected report level and assertion must pass; only conditional reports may use explained Not applicable outcomes.');

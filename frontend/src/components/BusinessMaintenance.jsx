@@ -98,7 +98,7 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
       </>}
       {view?.published && <>
         <p className="font-medium">Business published · opening {view.calendar.openingDate}</p>
-        <p>{view.calendar.verifiedThrough ? 'Managed activity verified through ' + view.calendar.verifiedThrough + '.' : 'No managed business period has been verified yet.'} {view.calendar.currentOperationId ? 'Continue the current operation in Business operations below.' : 'Prepare the next uninterrupted period.'}</p>
+        <p>{view.calendar.verifiedThrough ? (view.calendar.adoptedThrough && view.calendar.adoptedThrough === view.calendar.verifiedThrough ? 'Imported history adopted (not verified) through ' : 'Managed activity verified through ') + view.calendar.verifiedThrough + '.' : 'No managed business period has been verified yet.'} {view.calendar.currentOperationId ? 'Continue the current operation in Business operations below.' : 'Prepare the next uninterrupted period.'}</p>
         <p className="text-[var(--ink-2)]">{view.limitation}</p>
         {view.published.continuity && <p>New occurrences from {view.published.continuity.effectiveFrom} use the revised business plan. Earlier activity retains its original terms.</p>}
         {view.owner && view.calendar.verifiedThrough && <BusinessContinuity realmId={realmId} environment={environment} connectionId={view.connectionId} published={view.published} calendar={view.calendar} onChanged={async () => { await load(); onChanged?.() }} api={api} />}

@@ -159,7 +159,7 @@ function CompanyContent({ connection }) {
               <p>Activity assessed through {currency.asOf || 'an unknown date'}. A finished generation job does not prove the books are current.</p>
               {(currency.stale || currency.checkFailed || currency.incomplete) && <p role="status" className="mt-2 text-[var(--attention)]">{currency.checkFailed ? 'The latest check failed. Earlier findings are shown below.' : currency.stale ? 'These findings need refreshing.' : 'Some records could not be read completely.'}</p>}
               <ul className="mt-3 list-disc space-y-1 pl-5">
-                <li>Business calendar: {businessState?.calendar?.verifiedThrough ? 'managed records and named accounting checks verified through ' + businessState.calendar.verifiedThrough + '.' : businessState ? 'no managed business period verified yet.' : 'saved calendar has not been confirmed.'}</li>
+                <li>Business calendar: {businessState?.calendar?.verifiedThrough ? (businessState.calendar.adoptedThrough === businessState.calendar.verifiedThrough ? 'imported history adopted (not verified) through ' : 'managed records and named accounting checks verified through ') + businessState.calendar.verifiedThrough + '.' : businessState ? 'no managed business period verified yet.' : 'saved calendar has not been confirmed.'}</li>
                 <li>Report observations and their accounting checks appear in Company progress above; reconciliation is reviewed separately.</li>
                 <li>{currency.unanswered} coverage checks still require evidence or a successful read.</li>
               </ul>

@@ -202,4 +202,13 @@ function compareCalendarPlans(previous, next) {
   const changed = [...after.values()].filter(event => before.has(event.logicalKey) && before.get(event.logicalKey).fingerprint !== event.fingerprint).map(event => ({ before: before.get(event.logicalKey), after: event }));
   return { removed, added, changed, requiresReview: !!(removed.length || added.length || changed.length), executable: false };
 }
-module.exports = { planBusinessCalendar, reconcileCalendarPlan, compareCalendarPlans, validateCalendarDefinition, canonical, hash, date, shift };
+// The calendar cursor and what backs it. History adopted from an earlier bulk
+// import shares the cursor (every write fence compares it exactly) but is never
+// reported or closed as verified business activity.
+function calendarCursor(calendar) {
+  const through = calendar?.verifiedThrough || null;
+  const adopted = Boolean(through && calendar.adoption?.kind === 'adopted-history' && calendar.adoption.through === through);
+  return { through, basis: !through ? null : adopted ? 'adopted' : 'verified', adoptedThrough: calendar?.adoption?.kind === 'adopted-history' ? calendar.adoption.through : null };
+}
+
+module.exports = { calendarCursor, planBusinessCalendar, reconcileCalendarPlan, compareCalendarPlans, validateCalendarDefinition, canonical, hash, date, shift };

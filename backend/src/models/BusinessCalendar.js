@@ -19,6 +19,9 @@ const schema = new mongoose.Schema({
     observedAt: Date,
   },
   verifiedThrough: { type: String, default: null },
+  // Set once, by history adoption: { version, kind:'adopted-history', jobId, adoptionId, evidenceHash, auditId, through }.
+  // Dates through adoption.through are adopted from an import, not verified business activity.
+  adoption: { type: mongoose.Schema.Types.Mixed, default: null },
   revision: { type: Number, required: true, default: 0, min: 0 },
   currentOperationId: { type: mongoose.Schema.Types.ObjectId, default: null },
   stopRequested: { type: Boolean, default: false },
