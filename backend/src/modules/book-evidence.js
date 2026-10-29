@@ -42,10 +42,17 @@ function assertion(key, label, left, right, reason) {
   const difference = left - right;
   return { key, label, status: difference === 0 ? 'passed' : 'failed', left: left / 100, right: right / 100, difference: difference / 100, tolerance: 0 };
 }
+// QuickBooks returns a period with no income or expense as a one-column profit
+// and loss marked NoReportData whose only rows are labels (for example PROFIT).
+function emptyProfitAndLoss(report) {
+  const columns = report?.Columns?.Column;
+  return report?.Header?.ReportName === 'ProfitAndLoss' && (report.Header.Option || []).some(option => option.Name === 'NoReportData' && String(option.Value) === 'true')
+    && Array.isArray(columns) && columns.length === 1 && rowsOf(report).every(row => !row.Header && !row.Summary && Array.isArray(row.ColData) && row.ColData.length === 1 && typeof row.ColData[0]?.value === 'string' && !/\d/.test(row.ColData[0].value));
+}
 function inspectReport(name, report, period, rows = rowsOf(report), strict = false) {
   if (!report?.Header || !report.Columns?.Column || !report.Rows) throw new Error('QuickBooks did not return a complete report.');
   const header = report.Header;
-  if (strict || ['GeneralLedger', 'CashFlow'].includes(name)) {
+  if ((strict || ['GeneralLedger', 'CashFlow'].includes(name)) && !emptyProfitAndLoss(report)) {
     const columns = report.Columns.Column;
     if (['ReportName', 'StartPeriod', 'EndPeriod', 'Currency', 'ReportBasis'].some(key => header[key] !== undefined && header[key] !== null && typeof header[key] !== 'string')) throw new Error('The report header has an unsupported identity or accounting scope.');
     const cellsMatch = (cells, section) => Array.isArray(cells) && cells.length >= 1 && (section ? cells.length <= columns.length : cells.length === columns.length) && cells.every(cell => cell && typeof cell.value === 'string' && (cell.id === undefined || typeof cell.id === 'string'));
@@ -99,6 +106,7 @@ function zeroReportLabels(report) {
   return null;
 }
 function explicitZeroReport(report, sourceVersion = 2) {
+  if (emptyProfitAndLoss(report)) return true;
   if (!report?.Header?.Option?.some(option => option.Name === 'NoReportData' && String(option.Value) === 'true') || !Array.isArray(report.Columns?.Column)) return false;
   const rows = rowsOf(report);
   if (rows.some(row => row.ColData && !row.Header && !row.Summary)) return false;
@@ -192,4 +200,4 @@ async function readBookEvidence(access, scope, { fromDate, throughDate }, { sign
   await access.authorize(scope, 'reports.observe', { signal });
   return { checkedAt: source.observedAt, readAttempts, ...evaluateReportSources(source, { allowExplicitZero: true }) };
 }
-module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport, inspectReport };
+module.exports = { readBookEvidence, evaluateBooks, evaluateReportSources, validDate, money, rowsOf, explicitZeroReport, inspectReport, emptyProfitAndLoss };

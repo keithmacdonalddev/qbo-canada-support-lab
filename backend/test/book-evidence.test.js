@@ -179,3 +179,13 @@ test('v2 report metadata, supported summary shapes and explicit truncation warni
     assert.equal(evaluateBooks(reports, period, {}, accounts, {includeCritical:true}).reportCoverage.complete,false);
   }
 });
+
+test('a one-column profit and loss marked NoReportData is an explicit zero, not a missing report', () => {
+  const { emptyProfitAndLoss, explicitZeroReport } = require('../src/modules/book-evidence');
+  const empty = { Header: { ReportName: 'ProfitAndLoss', Option: [{ Name: 'NoReportData', Value: 'true' }] }, Columns: { Column: [{ ColTitle: '' }] }, Rows: { Row: [{ group: 'NetIncome', ColData: [{ value: 'PROFIT' }] }] } };
+  assert.equal(emptyProfitAndLoss(empty), true);
+  assert.equal(explicitZeroReport(empty, 3), true);
+  assert.equal(emptyProfitAndLoss({ ...empty, Rows: { Row: [{ ColData: [{ value: '12.00' }] }] } }), false);
+  assert.equal(emptyProfitAndLoss({ ...empty, Header: { ReportName: 'ProfitAndLoss', Option: [] } }), false);
+  assert.equal(emptyProfitAndLoss({ ...empty, Header: { ...empty.Header, ReportName: 'BalanceSheet' } }), false);
+});
