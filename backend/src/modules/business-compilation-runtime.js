@@ -6,7 +6,7 @@ const { compileBusinessTransaction } = require('./business-transaction-compiler'
 const { taxExpectation } = require('./business-verification-runtime');
 const { verifyBusinessTaxSources } = require('./business-tax-policy');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
+const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_COMPILATION_UNAVAILABLE' }); }
 // A complete, repeated deposit-link observation is required. No filtered name,

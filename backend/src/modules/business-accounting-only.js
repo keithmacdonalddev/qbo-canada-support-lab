@@ -5,10 +5,14 @@ const FIELDS = Object.freeze({
  SalesReceipt: ['TxnDate','CurrencyRef','PrivateNote','CustomerRef','GlobalTaxCalculation','DepositToAccountRef','Line'],
  Payment: ['TxnDate','CurrencyRef','PrivateNote','CustomerRef','TotalAmt','Line','DepositToAccountRef','ARAccountRef','ProcessPayment'],
  BillPayment: ['TxnDate','CurrencyRef','PrivateNote','VendorRef','TotalAmt','Line','APAccountRef','PayType','CheckPayment'],
+ Purchase: ['TxnDate','CurrencyRef','PrivateNote','PaymentType','AccountRef','EntityRef','GlobalTaxCalculation','Line'],
+ VendorCredit: ['TxnDate','CurrencyRef','PrivateNote','VendorRef','APAccountRef','GlobalTaxCalculation','Line'],
 });
 function accountingOnlyObservation(entity,record) {
  if (!FIELDS[entity]) return true;
  if (!record || ['ProcessPayment','ProcessBillPayment'].some(key=>record[key] !== undefined && record[key] !== false) || ['CreditCardPayment','CreditChargeInfo','CreditChargeResponse'].some(key=>record[key] != null) || record.PaymentType === 'CreditCard') return false;
+ // A business expense is paid from the bank as cash: never a card charge or printed cheque.
+ if (entity === 'Purchase') return record.PaymentType === 'Cash' && record.Credit !== true;
  return entity !== 'BillPayment' || (record.PayType === 'Check' && record.CheckPayment?.PrintStatus === 'NotSet');
 }
 function assertAccountingOnlyRequest(entity,payload) {

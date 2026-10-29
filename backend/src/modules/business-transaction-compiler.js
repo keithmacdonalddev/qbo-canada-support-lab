@@ -8,7 +8,7 @@ const { assertAccountingOnlyRequest } = require('./business-accounting-only');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo']);
+const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit']);
 const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TRANSACTION_UNVERIFIED' }); }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
@@ -114,6 +114,18 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     payload.GlobalTaxCalculation = 'TaxExcluded';
     payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
     payload.Line = [{ Amount: money(lifecycle.expense.amountCents), DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: ref(account(lifecycle.expense.accountMapping, 'Expense').Id), BillableStatus: 'NotBillable', TaxCodeRef: ref(tax.Id) } }];
+  } else if (lifecycle?.mode === 'cash-expense' || lifecycle?.mode === 'supplier-credit') {
+    // One nonbillable operating-expense line with purchase tax. A cash expense is paid
+    // straight from the operating bank; a supplier credit reduces accounts payable.
+    const tax = get('TaxCode', 'purchaseTax'), cash = lifecycle.mode === 'cash-expense', expense = lifecycle.expense;
+    if (step.entity !== (cash ? 'Purchase' : 'VendorCredit') || !payload.VendorRef || payload.CustomerRef || details.taxMapping !== 'purchaseTax' || policy.tax?.calculation !== 'TaxExcluded' || policy.tax.purchaseTax !== tax.Id || details.lines.length !== 1 || details.lines[0].amountCents !== expense.amountCents || details.baseAmountCents !== expense.amountCents) fail('This expense requires its exact supplier, amount and purchase-tax policy.');
+    payload.GlobalTaxCalculation = 'TaxExcluded';
+    payload.Line = [{ Amount: money(expense.amountCents), DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: ref(account(expense.accountMapping, 'Expense').Id), BillableStatus: 'NotBillable', TaxCodeRef: ref(tax.Id) } }];
+    if (cash) {
+      if (details.bankMapping !== 'operatingBank' || details.fundingSource !== 'operating_bank') fail('A cash expense must be paid from the operating bank.');
+      const vendor = payload.VendorRef.value; delete payload.VendorRef;
+      Object.assign(payload, { PaymentType: 'Cash', AccountRef: ref(account(details.bankMapping, 'Bank').Id), EntityRef: { value: vendor, type: 'Vendor' } });
+    } else payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
   } else if (SALES.has(step.entity) || PURCHASES.has(step.entity)) {
     if (details.amountRule !== 'lines_before_tax' || !details.lines.length || policy.tax?.calculation !== 'TaxExcluded') fail('These item transactions require the approved before-tax line policy.');
     const sales = SALES.has(step.entity), party = sales ? 'CustomerRef' : 'VendorRef';

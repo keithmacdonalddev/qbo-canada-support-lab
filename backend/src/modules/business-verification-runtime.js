@@ -7,7 +7,7 @@ const { createBusinessGraphReader } = require('./business-graph-readback');
 const { createBusinessTransactionReader, createBusinessReferenceReader } = require('./business-reference');
 const { accountPostingEvidence, endpointFor } = require('./business-receivables-route');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
-const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
+const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }); }
 const cents = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000000000;

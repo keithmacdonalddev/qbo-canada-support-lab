@@ -2,7 +2,7 @@
 // Business choices only. This module never accepts a QBO payload or performs I/O.
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
-const POLICY = Object.freeze({ version: 2, key: 'business-activity-v2', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill'] });
+const POLICY = Object.freeze({ version: 3, key: 'business-activity-v3', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit'] });
 // Settlements of adopted (imported) obligations name the QuickBooks record and its
 // business party; preparation and compilation prove both against the adoption.
 const PARTY = /^(field-client-0(?:0[1-9]|1[0-5])|care-client-0(?:0[1-9]|1[0-9]|2[0-5]))$/, SUPPLIER = /^(overhead|stock)-supplier-[1-3]$/, QBO_ID = /^\d{1,30}$/;
@@ -10,7 +10,8 @@ const POLICY_HASH = hash(POLICY), HASH = /^[a-f0-9]{64}$/;
 // Earlier policies, kept so batches saved under them can still be read and
 // verified. New batches always use POLICY.
 const POLICY_V1 = Object.freeze({ version: 1, key: 'non-stock-business-activity-v1', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense'] });
-const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [POLICY_HASH, POLICY]]);
+const POLICY_V2 = Object.freeze({ version: 2, key: 'business-activity-v2', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill'] });
+const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [POLICY_HASH, POLICY]]);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_ACTIVITY_UNVERIFIED' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the supported business choices without raw accounting or authority overrides.'); }
 function text(value, min, max) { if (typeof value !== 'string' || value.trim().length < min || value.length > max || /[\u0000-\u001f]/.test(value)) fail('Retain a concise business purpose and unique decision identifier.'); return value.trim(); }
@@ -28,7 +29,9 @@ function validateChoices(input) {
       cents += quantity * unitPriceCents;
       return { type: row.type, customerKey: row.customerKey, itemKey: row.itemKey, quantity, unitPriceCents, purpose: text(row.purpose, 10, 500) };
     }
-    if (row?.type === 'paid-operating-expense') {
+    // A paid operating expense is a supplier bill paid the same day; a cash expense is
+    // paid directly from the bank (Purchase); a supplier credit reduces what is owed.
+    if (['paid-operating-expense', 'paid-cash-expense', 'supplier-credit'].includes(row?.type)) {
       exact(row, ['type', 'vendorKey', 'category', 'amountCents', 'purpose']);
       if (!/^overhead-supplier-[1-3]$/.test(row.vendorKey || '') || !['premises', 'utilities', 'software'].includes(row.category)) fail('Choose a published operating supplier and expense category.');
       const amountCents = integer(row.amountCents, POLICY.maxExpenseCents); cents += amountCents;
@@ -42,7 +45,7 @@ function validateChoices(input) {
       const amountCents = integer(row.amountCents, POLICY.maxSettlementCents); cents += amountCents;
       return { type: row.type, [idKey]: row[idKey], [partyKey]: row[partyKey], amountCents, purpose: text(row.purpose, 10, 500) };
     }
-    fail('Only settled service sales, paid non-stock overhead and settlements of adopted invoices or bills are supported in these additional activity batches.');
+    fail('Only settled service sales, paid non-stock overhead, cash expenses, supplier credits and settlements of adopted invoices or bills are supported in these additional activity batches.');
   });
   if (cents > POLICY.maxBatchCents) fail('This activity batch exceeds its exact-cent capacity.');
   return { decisionKey, purpose, activities };
@@ -82,6 +85,10 @@ function buildBatchActivity(batch, scope, businessKey) {
       add('deposit', 'Deposit', ['payment'], { customerKey: choice.customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
     } else if (choice.type === 'pay-adopted-bill') {
       add('bill-payment', 'BillPayment', [], { vendorKey: choice.vendorKey, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank', amountRule: 'adopted_open_balance', taxStatus: 'included_in_originating_total', adoptedSettlement: { entity: 'Bill', qboId: choice.billId, amountCents: choice.amountCents } });
+    } else if (choice.type === 'paid-cash-expense' || choice.type === 'supplier-credit') {
+      const expense = { vendorKey: choice.vendorKey, expenseCategory: choice.category, lines: [{ key: 'primary', accountMapping: 'operatingExpense', amountCents: choice.amountCents, billableStatus: 'NotBillable' }], baseAmountCents: choice.amountCents, taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' };
+      if (choice.type === 'paid-cash-expense') add('expense', 'Purchase', [], { ...expense, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank' });
+      else add('vendor-credit', 'VendorCredit', [], expense);
     } else {
       add('bill', 'Bill', [], { vendorKey: choice.vendorKey, expenseCategory: choice.category, dueDate: batch.day, lines: [{ key: 'primary', accountMapping: 'operatingExpense', amountCents: choice.amountCents, billableStatus: 'NotBillable' }], baseAmountCents: choice.amountCents, taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' });
       add('bill-payment', 'BillPayment', ['bill'], { vendorKey: choice.vendorKey, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank', amountRule: 'saved_originating_total', amountSourceKey: rows.get('bill').logicalKey, taxStatus: 'included_in_originating_total' });
@@ -108,9 +115,9 @@ function validateActivityBatch(batch, candidate) {
 function batchLifecycle(step) {
   const value = step?.details?.activityBatch, d = step?.details;
   exact(value, ['key', 'index', 'stepKey', 'purpose']);
-  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
+  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
   text(value.purpose, 10, 500); date(step.txnDate);
-  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment' }[value.stepKey];
+  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit' }[value.stepKey];
   if (step.entity !== entity) fail('The additional activity step changed its transaction type.');
   if (d.activityTemplateVersion !== undefined || d.origin !== undefined || d.settlement !== undefined || d.stockQuantityRule !== undefined || d.creditAdjustment !== undefined || d.creditSettlement !== undefined) fail('An additional activity cannot borrow a monthly, stock or credit lifecycle.');
   const contract = { version: 4, activityBatch: structuredClone(value), mode: 'standard' };
@@ -123,6 +130,13 @@ function batchLifecycle(step) {
   } else if (d.amountRule === 'adopted_open_balance') fail('An adopted settlement must name its exact obligation.');
   if (['Invoice', 'Bill'].includes(step.entity)) { if (d.dueDate !== step.txnDate) fail('These settled activities require immediate terms.'); contract.dueDate = d.dueDate; }
   else if (d.dueDate !== undefined) fail('Only an invoice or bill may carry payment terms.');
+  if (['Purchase', 'VendorCredit'].includes(step.entity)) {
+    // One nonbillable operating-expense line with purchase tax; a cash expense is paid
+    // from the operating bank, a supplier credit reduces accounts payable.
+    const line = d.lines?.[0], cash = step.entity === 'Purchase';
+    if (d.lines?.length !== 1 || !/^overhead-supplier-[1-3]$/.test(d.vendorKey || '') || !['premises', 'utilities', 'software'].includes(d.expenseCategory) || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || !Number.isSafeInteger(line.amountCents) || line.amountCents < 1 || line.amountCents > POLICY.maxExpenseCents || line.amountCents !== d.baseAmountCents || d.taxMapping !== 'purchaseTax' || d.amountRule !== 'lines_before_tax' || d.customerKey !== undefined || (step.dependencies || []).length || (cash ? d.bankMapping !== 'operatingBank' || d.fundingSource !== 'operating_bank' : d.bankMapping !== undefined || d.fundingSource !== undefined)) fail('The ' + (cash ? 'cash expense' : 'supplier credit') + ' must remain one nonbillable operating expense from a published supplier.');
+    contract.mode = cash ? 'cash-expense' : 'supplier-credit'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' };
+  }
   if (step.entity === 'Bill') { const line = d.lines?.[0]; if (d.lines.length !== 1 || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || line.amountCents !== d.baseAmountCents) fail('The additional bill must remain a non-stock operating expense.'); contract.mode = 'operating-expense'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' }; }
   return contract;
 }

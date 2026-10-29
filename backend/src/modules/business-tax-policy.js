@@ -1,7 +1,7 @@
 'use strict';
 const { hash, date } = require('./business-calendar');
 const { lifecyclePolicy } = require('./business-lifecycle-policy');
-const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill']);
+const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
 function rateDate(value) {
   if (typeof value !== 'string') fail('A dated tax definition is required.');

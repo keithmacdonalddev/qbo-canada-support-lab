@@ -42,6 +42,15 @@ and the app shows the owner exactly which tools exist and what they reach.
   recovered; re-running the import's relationship recheck on a settled
   obligation reports a false failure (and then excludes it from further
   settlement).
+- Workflows 4 and 5 (code, not yet live): same-day activity policy v3
+  (`business-activity-v3`) adds `paid-cash-expense` (a Purchase paid as cash
+  from the operating bank to the operating-expense account with purchase tax)
+  and `supplier-credit` (a VendorCredit from an operating supplier to the
+  operating-expense account, reducing accounts payable; applying it to a bill
+  is not built). Postings: Purchase bank −gross and expense +net; VendorCredit
+  payables +gross and expense −net. Batches saved under v1 and v2 still
+  rebuild and cannot claim the new workflows. Usable only after the owner
+  approves the updated rules.
 
 ## Constraint that shapes every workflow
 

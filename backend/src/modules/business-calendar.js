@@ -3,7 +3,7 @@
 // Pure planning only. This module cannot authorize writes or certify a business period.
 const crypto = require('node:crypto');
 const DAY = 86400000;
-const ENTITIES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'SalesReceipt', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Deposit', 'JournalEntry', 'TimeActivity']);
+const ENTITIES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'SalesReceipt', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Purchase', 'Deposit', 'JournalEntry', 'TimeActivity']);
 const KEY = /^[a-z0-9][a-z0-9-]{0,79}$/;
 function fail(message) { const error = new Error(message); error.status = 400; throw error; }
 function date(value) {

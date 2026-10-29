@@ -162,11 +162,13 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       if (detail) for (const key of ['CustomerRef', 'ClassRef', 'ProjectRef', 'AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) mismatch('An unplanned line relationship is present.');
       if (!expected.LinkedTxn && linkList(actual.LinkedTxn).length) mismatch('An unplanned line transaction link is present.');
     }
-    if (['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill'].includes(compiled.entity)) {
+    if (['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit'].includes(compiled.entity)) {
       if (!taxMatches(taxPolicy, compiled, record)) mismatch('Approved tax amounts and rates remain unverified.');
       if (cents(record.TotalAmt) !== beforeTax + cents(record.TxnTaxDetail?.TotalTax)) mismatch('The saved total does not equal item amounts plus tax.');
     } else if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== beforeTax) mismatch('The saved deposit total differs from its linked receipt.');
     if (compiled.entity === 'Payment' && cents(record.UnappliedAmt) !== 0) mismatch('The payment is not fully applied to its invoice.');
+    // A new supplier credit is not yet applied to any bill.
+    if (compiled.entity === 'VendorCredit' && (descendants.length || cents(record.Balance) !== cents(record.TotalAmt))) mismatch('The supplier credit is already applied or its remaining credit differs.');
   } else if (Array.isArray(record.Line) && record.Line.length) mismatch('Unexpected financial lines were saved.');
   if (['Invoice', 'Bill'].includes(compiled.entity)) {
     const childType = compiled.entity === 'Invoice' ? 'Payment' : 'BillPayment';

@@ -93,8 +93,8 @@ function validateFinancialExpectation(value, scope, period, entries) {
 // Version3 proves only the selected earnings roles. It does not infer tax or
 // inventory cost from cash, nor use today's mutable item price/account routing.
 function earningsLines(expectation, step, payload, policy, add) {
-  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'CreditMemo', 'Bill'].includes(step.entity)) return;
-  const planned = step.details?.lines, sales = step.entity !== 'Bill';
+  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'CreditMemo', 'Bill', 'Purchase', 'VendorCredit'].includes(step.entity)) return;
+  const planned = step.details?.lines, sales = ['Invoice', 'SalesReceipt', 'CreditMemo'].includes(step.entity);
   if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || !Array.isArray(planned) || !planned.length || !Array.isArray(payload.Line) || payload.Line.length !== planned.length || new Set(payload.Line.map(row => row.DetailType)).size !== 1) fail('Selected earnings require complete original pretax line intent.');
   const selected = new Map(expectation.accounts.map(row => [row.key, row]));
   const binding = (entity, key) => {
@@ -122,7 +122,8 @@ function earningsLines(expectation, step, payload, policy, add) {
       } else if (original.accountMapping !== 'inventoryAsset') fail('A stock purchase cannot be counted as operating expense.');
     } else {
       if (line.DetailType !== 'AccountBasedExpenseLineDetail' || original.accountMapping !== 'operatingExpense' || original.billableStatus !== 'NotBillable' || !exact(detail, ['AccountRef', 'BillableStatus', 'TaxCodeRef']) || detail.AccountRef?.value !== account('operatingExpense') || detail.BillableStatus !== 'NotBillable' || detail.TaxCodeRef?.value !== taxId) fail('The operating expense differs from its original nonbillable account and tax intent.');
-      add('operatingExpense', original.amountCents);
+      // A supplier credit reverses operating expense.
+      add('operatingExpense', (step.entity === 'VendorCredit' ? -1 : 1) * original.amountCents);
     }
   }
 }
@@ -142,6 +143,10 @@ function movementRow(expectation, step, compiled, policy, origin) {
       add(ref('accountsReceivable', payload.ARAccountRef), -gross()); break;
     case 'SalesReceipt': add(ref('operatingBank', payload.DepositToAccountRef), gross()); break;
     case 'Bill': add(ref('accountsPayable', payload.APAccountRef), -gross()); break;
+    case 'VendorCredit': add(ref('accountsPayable', payload.APAccountRef), gross()); break;
+    case 'Purchase':
+      if (payload.PaymentType !== 'Cash' || payload.EntityRef?.type !== 'Vendor') fail('Only the original cash expense paid from the operating bank is supported.');
+      add(ref('operatingBank', payload.AccountRef), -gross()); break;
     case 'Payment': {
       const amount = cents(payload.TotalAmt);
       if (policy.lifecycle?.mode === 'credit-application') {

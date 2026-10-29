@@ -63,3 +63,18 @@ test('a batch saved under the first policy still rebuilds; it cannot claim the n
  assert.throws(()=>buildBatchActivity(settlement,scope,'harbour-pine-v2'),/policy changed/);
  assert.throws(()=>buildBatchActivity({...saved,policyHash:'0'.repeat(64)},scope,'harbour-pine-v2'),/policy changed/);
 });
+test('policy v3 adds cash expenses and supplier credits; a v2 batch rebuilds but cannot claim them',()=>{
+ const v2=hash({version:2,key:'business-activity-v2',maxActivities:12,maxQuantity:8,maxUnitPriceCents:100000,maxExpenseCents:1000000,maxSettlementCents:5000000,maxBatchCents:12000000,workflows:['settled-service-sale','paid-operating-expense','collect-adopted-invoice','pay-adopted-bill']});
+ const input={decisionKey:'cash-expense-decision-001',purpose:'Pay a software charge from the bank and record a landlord credit.',activities:[{type:'paid-cash-expense',vendorKey:'overhead-supplier-3',category:'software',amountCents:4500,purpose:'Monthly software seat paid from the bank.'},{type:'supplier-credit',vendorKey:'overhead-supplier-1',category:'premises',amountCents:2000,purpose:'Landlord credit for an overbilled charge.'}]};
+ const f=prepared(input);assert.equal(f.batch.policyHash,POLICY_HASH);assert.equal(validateActivityBatch(f.batch,f.candidate),f.batch);
+ assert.deepEqual(f.activity.events.map(row=>row.entity),['Purchase','VendorCredit']);
+ const [expense,credit]=f.candidate.entries.map(row=>row.step);
+ assert.deepEqual(batchLifecycle(expense).mode,'cash-expense');assert.deepEqual(batchLifecycle(expense).expense,{category:'software',accountMapping:'operatingExpense',amountCents:4500,billableStatus:'NotBillable'});
+ assert.equal(batchLifecycle(credit).mode,'supplier-credit');assert.equal(expense.details.bankMapping,'operatingBank');assert.equal(credit.details.bankMapping,undefined);
+ for(const mutate of [s=>{s.details.lines[0].billableStatus='Billable';},s=>{s.details.lines[0].amountCents=1;},s=>{s.details.vendorKey='stock-supplier-1';},s=>{s.details.bankMapping='other';},s=>{s.details.lines.push({...s.details.lines[0],key:'second'});},s=>{s.dependencies=[{logicalKey:'f'.repeat(64)}];},s=>{s.details.customerKey='field-client-001';}]){const changed=structuredClone(expense);mutate(changed);assert.throws(()=>batchLifecycle(changed),/cash expense/);}
+ const wrongCredit=structuredClone(credit);wrongCredit.details.bankMapping='operatingBank';assert.throws(()=>batchLifecycle(wrongCredit),/supplier credit/);
+ const old={...prepared().batch,policyHash:v2};assert.equal(buildBatchActivity(old,scope,'harbour-pine-v2').events.length,5);
+ const claimed={...f.batch,policyHash:v2};assert.throws(()=>buildBatchActivity(claimed,scope,'harbour-pine-v2'),/policy changed/);
+ assert.throws(()=>validateChoices({...input,activities:[{...input.activities[0],amountCents:1000001}]}),/capacity/);
+ assert.throws(()=>validateChoices({...input,activities:[{...input.activities[1],vendorKey:'stock-supplier-1'}]}),/published operating supplier/);
+});

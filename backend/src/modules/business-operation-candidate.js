@@ -6,7 +6,7 @@ const { operationHistoryRoots } = require('./business-operation-preview');
 const { validateOperationCandidate, validateOperationEntry } = require('./business-operation-plan-store');
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/, QBO_ID = /^\d{1,30}$/;
 const MAX_BYTES = 8000000, MAX_ENTRIES = 1000;
-const ENTITIES = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo']);
+const ENTITIES = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_CANDIDATE_UNVERIFIED' }); }
 function snapshot(value) {
   let text; try { text = canonical(value); } catch { fail('Operation assembly requires plain JSON.'); }
