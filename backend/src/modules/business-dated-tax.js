@@ -34,8 +34,9 @@ function assertDatedTaxPolicy(step, policy) {
   const context = step.details?.datedTax;
   if (context === undefined) { if (policy?.datedTax !== undefined) fail('A tax transition cannot be added to an original unscheduled activity.'); return null; }
   validateDatedTaxContext(context);
-  if (!CHARGES.has(step.entity)) fail('A collection or credit cannot be retaxed by its later posting date.');
-  const key = ['Estimate', 'Invoice', 'SalesReceipt'].includes(step.entity) ? 'salesTax' : 'purchaseTax', selected = datedTaxChoice(context, key, step.txnDate);
+  // A same-day customer credit or refund is its own taxed sale reversal, dated today.
+  if (!CHARGES.has(step.entity) && !(['CreditMemo', 'RefundReceipt'].includes(step.entity) && step.details?.activityBatch !== undefined)) fail('A collection or credit cannot be retaxed by its later posting date.');
+  const key = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(step.entity) ? 'salesTax' : 'purchaseTax', selected = datedTaxChoice(context, key, step.txnDate);
   if (step.details.taxMapping !== key || step.references.filter(row => row.entity === 'TaxCode' && row.key === key && row.id === selected.id).length !== 1) fail('The activity does not retain its exact dated tax choice.');
   if (policy) {
     const lines = policy.readbackTax?.lines;

@@ -100,6 +100,10 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         if (request.entity === 'creditmemo') {
           const compiled = step.compilation, original = require('./business-readback').validateCompilation(compiled), source = compiled.relationships[0];
           if (compiled.compilationHash !== step.dispatch.compilationHash || compiled.compilationHash !== writer.unresolved.compilationHash || original.requestHash !== request.requestHash || compiled.logicalKey !== step.logicalKey || compiled.intentHash !== step.fingerprint || compiled.entity !== 'CreditMemo') throw denied('The original credit-source compilation changed.');
+        }
+        // A standalone same-day customer credit has no source invoice to protect.
+        if (request.entity === 'creditmemo' && step.compilation.relationships.length) {
+          const compiled = step.compilation, source = compiled.relationships[0];
           if (periodProof.protectedThrough && source.sourceTxnDate <= periodProof.protectedThrough) throw Object.assign(denied(CREDIT_SOURCE_PROTECTED_MESSAGE), { code: CREDIT_SOURCE_PROTECTED_CODE });
           const creditSource = { compilationHash: compiled.compilationHash, requestHash: request.requestHash, logicalKey: source.logicalKey, qboId: source.qboId, syncToken: source.syncToken, sourceTxnDate: source.sourceTxnDate, periodEvidenceHash: periodProof.evidenceHash, protectedThrough: periodProof.protectedThrough };
           periodProof.businessCreditSource = { ...creditSource, evidenceHash: hash(creditSource) };

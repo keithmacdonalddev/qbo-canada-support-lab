@@ -8,8 +8,8 @@ const { assertAccountingOnlyRequest } = require('./business-accounting-only');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit']);
-const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
+const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry']);
+const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TRANSACTION_UNVERIFIED' }); }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
 function fresh(stamp, now) { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= now && now - value <= 300000; }
@@ -96,8 +96,10 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
-  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
-  if (step.entity === 'CreditMemo' && lifecycle?.mode !== 'credit-adjustment') fail('Credit memos require the explicit approved service-credit lifecycle.');
+  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: lifecycle?.mode === 'customer-credit' ? [] : ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
+  if (step.entity === 'CreditMemo' && !['credit-adjustment', 'customer-credit'].includes(lifecycle?.mode)) fail('Credit memos require the explicit approved service-credit lifecycle.');
+  if (step.entity === 'RefundReceipt' && lifecycle?.mode !== 'customer-refund') fail('Refunds require the explicit approved customer-refund lifecycle.');
+  if (['Transfer', 'JournalEntry'].includes(step.entity) && lifecycle?.mode !== (step.entity === 'Transfer' ? 'bank-transfer' : 'journal-entry')) fail('Transfers and journal entries require their explicit approved lifecycle.');
   if (canonical(parentTypes) !== canonical([...expectedParents].sort())) fail('The transaction has unsupported or missing business dependencies.');
   const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey }) };
   if (lifecycle?.dueDate) payload.DueDate = lifecycle.dueDate;
@@ -126,6 +128,16 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       const vendor = payload.VendorRef.value; delete payload.VendorRef;
       Object.assign(payload, { PaymentType: 'Cash', AccountRef: ref(account(details.bankMapping, 'Bank').Id), EntityRef: { value: vendor, type: 'Vendor' } });
     } else payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
+  } else if (lifecycle?.mode === 'bank-transfer') {
+    // Moves an exact amount between two published bank accounts. No party, no tax.
+    const terms = lifecycle.transfer;
+    if (payload.CustomerRef || payload.VendorRef || details.taxMapping !== undefined || details.lines.length || terms.fromKey === terms.toKey || details.bankMapping !== terms.fromKey || details.toBankMapping !== terms.toKey || details.baseAmountCents !== terms.amountCents) fail('A transfer needs its exact two bank accounts and amount.');
+    Object.assign(payload, { FromAccountRef: ref(account(terms.fromKey, 'Bank').Id), ToAccountRef: ref(account(terms.toKey, 'Bank').Id), Amount: money(terms.amountCents) });
+  } else if (lifecycle?.mode === 'journal-entry') {
+    // Balanced lines on published roles only; each role keeps its approved account type.
+    const { MAPPINGS } = require('./blueprint-draft');
+    if (payload.CustomerRef || payload.VendorRef || details.taxMapping !== undefined || canonical(lifecycle.journal) !== canonical(details.lines.map(line => ({ accountMapping: line.accountMapping, postingType: line.postingType, amountCents: line.amountCents })))) fail('A journal entry needs its exact approved balanced lines.');
+    payload.Line = lifecycle.journal.map(line => { const role = MAPPINGS[line.accountMapping]; if (!role || role.entity !== 'Account') fail('A journal line names an unpublished account role.'); return { Amount: money(line.amountCents), DetailType: 'JournalEntryLineDetail', JournalEntryLineDetail: { PostingType: line.postingType, AccountRef: ref(account(line.accountMapping, role.types[0], role.subtypes?.[0]).Id) } }; });
   } else if (SALES.has(step.entity) || PURCHASES.has(step.entity)) {
     if (details.amountRule !== 'lines_before_tax' || !details.lines.length || policy.tax?.calculation !== 'TaxExcluded') fail('These item transactions require the approved before-tax line policy.');
     const sales = SALES.has(step.entity), party = sales ? 'CustomerRef' : 'VendorRef';
@@ -136,6 +148,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (!sales) payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
     if (['Invoice', 'CreditMemo'].includes(step.entity)) payload.ARAccountRef = ref(account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id);
     if (step.entity === 'SalesReceipt') payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id);
+    // QuickBooks names the account a refund is paid from DepositToAccountRef.
+    if (step.entity === 'RefundReceipt') { if (details.bankMapping !== 'operatingBank' || details.fundingSource !== 'operating_bank') fail('A refund must be paid from the operating bank.'); payload.DepositToAccountRef = ref(account(details.bankMapping, 'Bank').Id); }
     const lineKeys = new Set(), stockRequired = new Map();
     payload.Line = details.lines.map(line => {
       if (!line.key || lineKeys.has(line.key) || typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > 1000000 || !Number.isSafeInteger(line.unitPriceCents) || line.unitPriceCents <= 0) fail('A planned item line has invalid quantity, rate or identity.');
@@ -152,7 +166,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       return { Amount: money(line.amountCents), DetailType: detailType, [detailType]: { ItemRef: ref(item.Id), Qty: line.quantity, UnitPrice: money(line.unitPriceCents), TaxCodeRef: ref(tax.Id) } };
     });
     if (details.baseAmountCents !== details.lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The planned transaction subtotal changed.');
-    if (step.entity === 'CreditMemo') {
+    if (step.entity === 'CreditMemo' && lifecycle.mode === 'credit-adjustment') {
       const source = parent('Invoice'), invoice = source.record, original = sourceItemLines(invoice, 'SalesItemLineDetail'), issued = payload.Line[0], originalLine = original[0], taxLines = invoice.TxnTaxDetail?.TaxLine || [], expectedTax = policy.readbackTax;
       if (source.logicalKey !== lifecycle.credit.invoiceKey || invoice.TxnDate !== details.origin.occurrence || invoice.CustomerRef?.value !== payload.CustomerRef.value || receivables(source, payload.ARAccountRef.value) !== payload.ARAccountRef.value || invoice.GlobalTaxCalculation !== 'TaxExcluded' || original.length !== 1 || payload.Line.length !== 1 || originalLine.SalesItemLineDetail?.ItemRef?.value !== issued.SalesItemLineDetail.ItemRef.value || originalLine.SalesItemLineDetail?.Qty !== 1 || originalLine.SalesItemLineDetail?.TaxCodeRef?.value !== issued.SalesItemLineDetail.TaxCodeRef.value || cents(originalLine.Amount) !== cents(originalLine.SalesItemLineDetail.UnitPrice) || cents(originalLine.Amount) !== cents(issued.Amount) * 10 || cents(invoice.Balance) !== cents(invoice.TotalAmt) || links(invoice).length) fail('The original care invoice changed or is no longer wholly unsettled.');
       if (!expectedTax || !Array.isArray(taxLines) || taxLines.length !== expectedTax.lines?.length || taxLines.some(line => line.DetailType !== 'TaxLineDetail') || expectedTax.lines.some(line => taxLines.filter(originalTax => originalTax.TaxLineDetail?.TaxRateRef?.value === line.rateId && originalTax.TaxLineDetail?.TaxPercent === line.percent && originalTax.TaxLineDetail?.PercentBased === true).length !== 1)) fail('The original invoice and credit require the same exact tax-rate identities and percentages.');

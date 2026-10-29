@@ -78,3 +78,23 @@ test('policy v3 adds cash expenses and supplier credits; a v2 batch rebuilds but
  assert.throws(()=>validateChoices({...input,activities:[{...input.activities[0],amountCents:1000001}]}),/capacity/);
  assert.throws(()=>validateChoices({...input,activities:[{...input.activities[1],vendorKey:'stock-supplier-1'}]}),/published operating supplier/);
 });
+test('policy v4 adds customer credits, refunds, transfers and journal entries; a v3 batch rebuilds but cannot claim them',()=>{
+ const v3=hash({version:3,key:'business-activity-v3',maxActivities:12,maxQuantity:8,maxUnitPriceCents:100000,maxExpenseCents:1000000,maxSettlementCents:5000000,maxBatchCents:12000000,workflows:['settled-service-sale','paid-operating-expense','collect-adopted-invoice','pay-adopted-bill','paid-cash-expense','supplier-credit']});
+ const journal=[{accountKey:'operatingExpense',postingType:'Debit',amountCents:3000},{accountKey:'operatingBank',postingType:'Credit',amountCents:3000}];
+ const input={decisionKey:'credit-refund-decision-001',purpose:'Credit and refund a client and record a bank charge from the statement.',activities:[{type:'customer-credit',customerKey:'field-client-001',itemKey:'field-service-hour',quantity:1,unitPriceCents:9000,purpose:'Goodwill credit for a short visit.'},{type:'customer-refund',customerKey:'care-client-002',itemKey:'care-plan-1',quantity:1,unitPriceCents:4500,purpose:'Refund for a cancelled care plan month.'},{type:'journal-entry',lines:journal,purpose:'Bank service charge from the statement.'}]};
+ const f=prepared(input);assert.equal(f.batch.policyHash,POLICY_HASH);assert.equal(validateActivityBatch(f.batch,f.candidate),f.batch);
+ assert.deepEqual(f.activity.events.map(row=>row.entity),['CreditMemo','RefundReceipt','JournalEntry']);
+ const [credit,refund,entry]=f.candidate.entries.map(row=>row.step);
+ assert.equal(batchLifecycle(credit).mode,'customer-credit');assert.equal(batchLifecycle(refund).mode,'customer-refund');assert.equal(refund.details.bankMapping,'operatingBank');assert.equal(credit.details.bankMapping,undefined);
+ assert.deepEqual(batchLifecycle(entry).journal,[{accountMapping:'operatingExpense',postingType:'Debit',amountCents:3000},{accountMapping:'operatingBank',postingType:'Credit',amountCents:3000}]);
+ for(const mutate of [s=>{s.details.lines[0].amountCents=1;},s=>{s.details.customerKey='stock-supplier-1';},s=>{s.details.bankMapping='operatingBank';},s=>{s.details.lines[0].accountMapping='supplyIncome';},s=>{s.dependencies=[{logicalKey:'f'.repeat(64)}];}]){const changed=structuredClone(credit);mutate(changed);assert.throws(()=>batchLifecycle(changed),/customer credit/);}
+ for(const mutate of [s=>{s.details.lines[1].amountCents=2999;s.details.baseAmountCents=3000;},s=>{s.details.lines[0].accountMapping='accountsReceivable';},s=>{s.details.lines.pop();},s=>{s.details.taxMapping='salesTax';}]){const changed=structuredClone(entry);mutate(changed);assert.throws(()=>batchLifecycle(changed),/journal/i);}
+ const old={...prepared().batch,policyHash:v3};assert.equal(buildBatchActivity(old,scope,'harbour-pine-v2').events.length,5);
+ assert.throws(()=>buildBatchActivity({...f.batch,policyHash:v3},scope,'harbour-pine-v2'),/policy changed/);
+ const one=row=>({...input,activities:[row]});
+ assert.throws(()=>validateChoices(one({type:'bank-transfer',fromKey:'operatingBank',toKey:'operatingBank',amountCents:1000,purpose:'Move cash to savings.'})),/two published bank accounts/);
+ assert.throws(()=>validateChoices(one({type:'journal-entry',lines:[{...journal[0]},{...journal[1],amountCents:2000}],purpose:'Unbalanced entry.'})),/must balance/);
+ assert.throws(()=>validateChoices(one({type:'journal-entry',lines:[{...journal[0],accountKey:'accountsPayable'},journal[1]],purpose:'Payables need a party.'})),/published bank, income/);
+ assert.throws(()=>validateChoices(one({type:'journal-entry',lines:[journal[0]],purpose:'One line only.'})),/two to four/);
+ assert.throws(()=>validateChoices(one({type:'customer-refund',customerKey:'field-client-001',itemKey:'workshop-stock-1',quantity:1,unitPriceCents:100,purpose:'Stock is not a service.'})),/observed service/);
+});

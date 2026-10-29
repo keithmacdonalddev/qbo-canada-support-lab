@@ -1,7 +1,7 @@
 'use strict';
 const { hash, date } = require('./business-calendar');
 const { lifecyclePolicy } = require('./business-lifecycle-policy');
-const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit']);
+const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
 function rateDate(value) {
   if (typeof value !== 'string') fail('A dated tax definition is required.');
@@ -54,7 +54,7 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
     const policy = { ...(lifecycle ? { lifecycle } : {}), version: 1, scope: assembly.candidate.scope, status: 'approved', country: 'CA', currency: 'CAD', fromDate: assembly.candidate.fromDate, throughDate: assembly.candidate.throughDate, stepHash: hash(step), authorityHash,
       tax: { calculation: 'TaxExcluded', ...refs } };
     if (TAXED.has(step.entity)) {
-      const sales = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo'].includes(step.entity), codeId = refs[sales ? 'salesTax' : 'purchaseTax'];
+      const sales = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(step.entity), codeId = refs[sales ? 'salesTax' : 'purchaseTax'];
       if (!codeId) fail('The activity has no exact Canadian tax code.');
       const code = await read('TaxCode', codeId), list = code[sales ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail;
       if (code.Active !== true || !Array.isArray(list) || list.length > 5 || (code.Taxable !== false && !list.length)) fail('The selected tax code lacks complete applicable rates.');

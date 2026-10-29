@@ -2,7 +2,7 @@
 // Business choices only. This module never accepts a QBO payload or performs I/O.
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
-const POLICY = Object.freeze({ version: 3, key: 'business-activity-v3', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit'] });
+const POLICY = Object.freeze({ version: 4, key: 'business-activity-v4', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry'] });
 // Settlements of adopted (imported) obligations name the QuickBooks record and its
 // business party; preparation and compilation prove both against the adoption.
 const PARTY = /^(field-client-0(?:0[1-9]|1[0-5])|care-client-0(?:0[1-9]|1[0-9]|2[0-5]))$/, SUPPLIER = /^(overhead|stock)-supplier-[1-3]$/, QBO_ID = /^\d{1,30}$/;
@@ -11,7 +11,25 @@ const POLICY_HASH = hash(POLICY), HASH = /^[a-f0-9]{64}$/;
 // verified. New batches always use POLICY.
 const POLICY_V1 = Object.freeze({ version: 1, key: 'non-stock-business-activity-v1', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense'] });
 const POLICY_V2 = Object.freeze({ version: 2, key: 'business-activity-v2', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill'] });
-const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [POLICY_HASH, POLICY]]);
+const POLICY_V3 = Object.freeze({ version: 3, key: 'business-activity-v3', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit'] });
+const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [hash(POLICY_V3), POLICY_V3], [POLICY_HASH, POLICY]]);
+const SERVICES = ['field-service-hour', 'care-plan-1', 'care-plan-2', 'care-plan-3'];
+// Journal entries may only touch these mapped roles: no receivables or payables (they
+// need a party), no undeposited funds (deposits prove those) and no stock accounts
+// (stock cost is proven by its own FIFO evidence).
+const JOURNAL_ROLES = Object.freeze(['operatingBank', 'serviceIncome', 'supplyIncome', 'careIncome', 'operatingExpense']);
+// Bank roles the business blueprint maps. A transfer needs two of them.
+const bankRoles = () => Object.entries(require('./blueprint-draft').MAPPINGS).filter(([, role]) => role.entity === 'Account' && role.types.includes('Bank')).map(([key]) => key);
+function journalLines(lines, check) {
+  if (!Array.isArray(lines) || lines.length < 2 || lines.length > 4) check('A journal entry needs two to four lines.');
+  let debit = 0, credit = 0;
+  for (const line of lines) {
+    if (!JOURNAL_ROLES.includes(line?.accountKey ?? line?.accountMapping) || !['Debit', 'Credit'].includes(line.postingType) || !Number.isSafeInteger(line.amountCents) || line.amountCents < 1 || line.amountCents > POLICY.maxExpenseCents) check('Journal lines use published bank, income or operating-expense roles with a debit or credit within capacity.');
+    if (line.postingType === 'Debit') debit += line.amountCents; else credit += line.amountCents;
+  }
+  if (!debit || debit !== credit) check('A journal entry must balance: total debits equal total credits.');
+  return debit;
+}
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_ACTIVITY_UNVERIFIED' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the supported business choices without raw accounting or authority overrides.'); }
 function text(value, min, max) { if (typeof value !== 'string' || value.trim().length < min || value.length > max || /[\u0000-\u001f]/.test(value)) fail('Retain a concise business purpose and unique decision identifier.'); return value.trim(); }
@@ -37,6 +55,29 @@ function validateChoices(input) {
       const amountCents = integer(row.amountCents, POLICY.maxExpenseCents); cents += amountCents;
       return { type: row.type, vendorKey: row.vendorKey, category: row.category, amountCents, purpose: text(row.purpose, 10, 500) };
     }
+    // A customer credit (open credit memo) or a refund paid from the operating bank for a
+    // published service, priced like a sale.
+    if (row?.type === 'customer-credit' || row?.type === 'customer-refund') {
+      exact(row, ['type', 'customerKey', 'itemKey', 'quantity', 'unitPriceCents', 'purpose']);
+      if (!PARTY.test(row.customerKey || '') || !SERVICES.includes(row.itemKey)) fail('Choose an observed service and customer role from the published business.');
+      const quantity = integer(row.quantity, POLICY.maxQuantity), unitPriceCents = integer(row.unitPriceCents, POLICY.maxUnitPriceCents);
+      cents += quantity * unitPriceCents;
+      return { type: row.type, customerKey: row.customerKey, itemKey: row.itemKey, quantity, unitPriceCents, purpose: text(row.purpose, 10, 500) };
+    }
+    if (row?.type === 'bank-transfer') {
+      exact(row, ['type', 'fromKey', 'toKey', 'amountCents', 'purpose']);
+      const banks = bankRoles();
+      if (banks.length < 2) fail('Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.');
+      if (!banks.includes(row.fromKey) || !banks.includes(row.toKey) || row.fromKey === row.toKey) fail('Transfer between two different published bank accounts.');
+      const amountCents = integer(row.amountCents, POLICY.maxSettlementCents); cents += amountCents;
+      return { type: row.type, fromKey: row.fromKey, toKey: row.toKey, amountCents, purpose: text(row.purpose, 10, 500) };
+    }
+    if (row?.type === 'journal-entry') {
+      exact(row, ['type', 'lines', 'purpose']);
+      if (Array.isArray(row.lines)) for (const line of row.lines) exact(line, ['accountKey', 'postingType', 'amountCents']);
+      cents += journalLines(row.lines, fail);
+      return { type: row.type, lines: row.lines.map(line => ({ accountKey: line.accountKey, postingType: line.postingType, amountCents: line.amountCents })), purpose: text(row.purpose, 10, 500) };
+    }
     if (row?.type === 'collect-adopted-invoice' || row?.type === 'pay-adopted-bill') {
       const invoice = row.type === 'collect-adopted-invoice', idKey = invoice ? 'invoiceId' : 'billId', partyKey = invoice ? 'customerKey' : 'vendorKey';
       exact(row, ['type', idKey, partyKey, 'amountCents', 'purpose']);
@@ -45,7 +86,7 @@ function validateChoices(input) {
       const amountCents = integer(row.amountCents, POLICY.maxSettlementCents); cents += amountCents;
       return { type: row.type, [idKey]: row[idKey], [partyKey]: row[partyKey], amountCents, purpose: text(row.purpose, 10, 500) };
     }
-    fail('Only settled service sales, paid non-stock overhead, cash expenses, supplier credits and settlements of adopted invoices or bills are supported in these additional activity batches.');
+    fail('Only settled service sales, paid non-stock overhead, cash expenses, supplier credits, customer credits and refunds, bank transfers, journal entries and settlements of adopted invoices or bills are supported in these additional activity batches.');
   });
   if (cents > POLICY.maxBatchCents) fail('This activity batch exceeds its exact-cent capacity.');
   return { decisionKey, purpose, activities };
@@ -85,6 +126,17 @@ function buildBatchActivity(batch, scope, businessKey) {
       add('deposit', 'Deposit', ['payment'], { customerKey: choice.customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
     } else if (choice.type === 'pay-adopted-bill') {
       add('bill-payment', 'BillPayment', [], { vendorKey: choice.vendorKey, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank', amountRule: 'adopted_open_balance', taxStatus: 'included_in_originating_total', adoptedSettlement: { entity: 'Bill', qboId: choice.billId, amountCents: choice.amountCents } });
+    } else if (choice.type === 'customer-credit' || choice.type === 'customer-refund') {
+      const field = choice.itemKey === 'field-service-hour';
+      const line = { key: 'primary', itemKey: choice.itemKey, quantity: choice.quantity, unit: field ? 'hours' : 'month', unitPriceCents: choice.unitPriceCents, amountCents: choice.quantity * choice.unitPriceCents, accountMapping: field ? 'serviceIncome' : 'careIncome' };
+      const credit = { customerKey: choice.customerKey, lines: [line], baseAmountCents: line.amountCents, taxMapping: 'salesTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' };
+      if (choice.type === 'customer-credit') add('credit', 'CreditMemo', [], credit);
+      else add('refund', 'RefundReceipt', [], { ...credit, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank' });
+    } else if (choice.type === 'bank-transfer') {
+      add('transfer', 'Transfer', [], { bankMapping: choice.fromKey, toBankMapping: choice.toKey, cashDirection: 'internal_transfer', baseAmountCents: choice.amountCents, amountRule: 'transfer_amount' });
+    } else if (choice.type === 'journal-entry') {
+      const lines = choice.lines.map((line, n) => ({ key: 'line-' + (n + 1), accountMapping: line.accountKey, postingType: line.postingType, amountCents: line.amountCents }));
+      add('journal', 'JournalEntry', [], { lines, baseAmountCents: journalLines(lines, fail), amountRule: 'balanced_journal' });
     } else if (choice.type === 'paid-cash-expense' || choice.type === 'supplier-credit') {
       const expense = { vendorKey: choice.vendorKey, expenseCategory: choice.category, lines: [{ key: 'primary', accountMapping: 'operatingExpense', amountCents: choice.amountCents, billableStatus: 'NotBillable' }], baseAmountCents: choice.amountCents, taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' };
       if (choice.type === 'paid-cash-expense') add('expense', 'Purchase', [], { ...expense, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank' });
@@ -106,7 +158,7 @@ function validateActivityBatch(batch, candidate) {
     // Dated tax is independently added from the published authority by preparation.
     const { datedTax, ...actual } = entry.step?.details || {};
     if (!event || entry.step.entity !== event.entity || entry.step.txnDate !== batch.day || entry.step.calendarFingerprint !== event.fingerprint || canonical(actual) !== canonical(detail) || canonical((entry.step.dependencies || []).map(row => row.logicalKey).sort()) !== canonical([...event.dependsOn].sort())) fail('Additional activity differs from the retained business choices.');
-    if (entry.step.references?.some(ref => ref.entity === 'Item' && !['field-service-hour', 'care-plan-1', 'care-plan-2', 'care-plan-3'].includes(ref.key))) fail('Additional activity cannot introduce inventory movement.');
+    if (entry.step.references?.some(ref => ref.entity === 'Item' && !SERVICES.includes(ref.key))) fail('Additional activity cannot introduce inventory movement.');
     expectedKeys.delete(event.logicalKey);
   }
   if (expectedKeys.size) fail('Additional activity contains duplicate or missing records.');
@@ -115,9 +167,9 @@ function validateActivityBatch(batch, candidate) {
 function batchLifecycle(step) {
   const value = step?.details?.activityBatch, d = step?.details;
   exact(value, ['key', 'index', 'stepKey', 'purpose']);
-  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
+  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit', 'credit', 'refund', 'transfer', 'journal'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
   text(value.purpose, 10, 500); date(step.txnDate);
-  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit' }[value.stepKey];
+  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit', credit: 'CreditMemo', refund: 'RefundReceipt', transfer: 'Transfer', journal: 'JournalEntry' }[value.stepKey];
   if (step.entity !== entity) fail('The additional activity step changed its transaction type.');
   if (d.activityTemplateVersion !== undefined || d.origin !== undefined || d.settlement !== undefined || d.stockQuantityRule !== undefined || d.creditAdjustment !== undefined || d.creditSettlement !== undefined) fail('An additional activity cannot borrow a monthly, stock or credit lifecycle.');
   const contract = { version: 4, activityBatch: structuredClone(value), mode: 'standard' };
@@ -137,10 +189,27 @@ function batchLifecycle(step) {
     if (d.lines?.length !== 1 || !/^overhead-supplier-[1-3]$/.test(d.vendorKey || '') || !['premises', 'utilities', 'software'].includes(d.expenseCategory) || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || !Number.isSafeInteger(line.amountCents) || line.amountCents < 1 || line.amountCents > POLICY.maxExpenseCents || line.amountCents !== d.baseAmountCents || d.taxMapping !== 'purchaseTax' || d.amountRule !== 'lines_before_tax' || d.customerKey !== undefined || (step.dependencies || []).length || (cash ? d.bankMapping !== 'operatingBank' || d.fundingSource !== 'operating_bank' : d.bankMapping !== undefined || d.fundingSource !== undefined)) fail('The ' + (cash ? 'cash expense' : 'supplier credit') + ' must remain one nonbillable operating expense from a published supplier.');
     contract.mode = cash ? 'cash-expense' : 'supplier-credit'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' };
   }
+  if (['CreditMemo', 'RefundReceipt'].includes(step.entity)) {
+    // One published service line with sales tax for a published customer. A credit
+    // stays open (not applied); a refund is paid from the operating bank.
+    const line = d.lines?.[0], refund = step.entity === 'RefundReceipt', field = line?.itemKey === 'field-service-hour';
+    if (d.lines?.length !== 1 || !PARTY.test(d.customerKey || '') || d.vendorKey !== undefined || !SERVICES.includes(line.itemKey) || line.key !== 'primary' || line.accountMapping !== (field ? 'serviceIncome' : 'careIncome') || line.unit !== (field ? 'hours' : 'month') || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.quantity > POLICY.maxQuantity || !Number.isSafeInteger(line.unitPriceCents) || line.unitPriceCents < 1 || line.unitPriceCents > POLICY.maxUnitPriceCents || line.amountCents !== line.quantity * line.unitPriceCents || d.baseAmountCents !== line.amountCents || d.taxMapping !== 'salesTax' || d.amountRule !== 'lines_before_tax' || (step.dependencies || []).length || (refund ? d.bankMapping !== 'operatingBank' || d.fundingSource !== 'operating_bank' : d.bankMapping !== undefined || d.fundingSource !== undefined)) fail('The ' + (refund ? 'customer refund' : 'customer credit') + ' must remain one taxed published service line for a published customer.');
+    contract.mode = refund ? 'customer-refund' : 'customer-credit';
+  }
+  if (step.entity === 'Transfer') {
+    const banks = bankRoles();
+    if (!banks.includes(d.bankMapping) || !banks.includes(d.toBankMapping) || d.bankMapping === d.toBankMapping || !Number.isSafeInteger(d.baseAmountCents) || d.baseAmountCents < 1 || d.baseAmountCents > POLICY.maxSettlementCents || d.amountRule !== 'transfer_amount' || d.lines?.length || d.taxMapping !== undefined || d.customerKey !== undefined || d.vendorKey !== undefined || (step.dependencies || []).length) fail('A transfer moves an exact amount between two different published bank accounts.');
+    contract.mode = 'bank-transfer'; contract.transfer = { fromKey: d.bankMapping, toKey: d.toBankMapping, amountCents: d.baseAmountCents };
+  } else if (d.toBankMapping !== undefined) fail('Only a transfer names a receiving bank account.');
+  if (step.entity === 'JournalEntry') {
+    const check = message => fail(message);
+    if (!Array.isArray(d.lines) || d.lines.some((line, n) => !line || Object.keys(line).sort().join(',') !== 'accountMapping,amountCents,key,postingType' || line.key !== 'line-' + (n + 1)) || journalLines(d.lines, check) !== d.baseAmountCents || d.amountRule !== 'balanced_journal' || d.taxMapping !== undefined || d.bankMapping !== undefined || d.customerKey !== undefined || d.vendorKey !== undefined || (step.dependencies || []).length) fail('A journal entry must keep its exact balanced lines on published roles.');
+    contract.mode = 'journal-entry'; contract.journal = d.lines.map(line => ({ accountMapping: line.accountMapping, postingType: line.postingType, amountCents: line.amountCents }));
+  }
   if (step.entity === 'Bill') { const line = d.lines?.[0]; if (d.lines.length !== 1 || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || line.amountCents !== d.baseAmountCents) fail('The additional bill must remain a non-stock operating expense.'); contract.mode = 'operating-expense'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' }; }
   return contract;
 }
 function assertBatchPreparation(active, batch, now) {
   if (active.calendar.verifiedThrough === null || batch.day !== businessDate(new Date(now)) || shift(active.calendar.verifiedThrough, 1) !== batch.day) fail('Verify business history through yesterday before preparing today’s additional activity. Keep today open for further hourly work.');
 }
-module.exports = { POLICY, POLICY_HASH, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };
+module.exports = { JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };

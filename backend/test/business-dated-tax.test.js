@@ -126,3 +126,12 @@ test('bank-paid expenses and supplier credits take the dated purchase tax; colle
   assert.throws(() => assertDatedTaxPolicy({ ...step('Purchase'), references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '12' }] }, undefined), /exact dated tax choice/);
   assert.throws(() => assertDatedTaxPolicy(step('Payment'), undefined), /cannot be retaxed/);
 });
+test('a same-day customer credit or refund takes the dated sales tax; an unscheduled credit still cannot be retaxed', () => {
+  const { assertDatedTaxPolicy } = require('../src/modules/business-dated-tax');
+  const datedTax = { version: 1, regime: 'CA-NS-2025-postpaid', openingDate: '2023-09-01', before: { salesTax: '11', purchaseTax: '12' }, after: { salesTax: '15', purchaseTax: '16' } };
+  const step = (entity, extra = {}) => ({ entity, txnDate: '2026-10-29', details: { datedTax, taxMapping: 'salesTax', ...extra }, references: [{ entity: 'TaxCode', key: 'salesTax', id: '15' }] });
+  const batch = { activityBatch: { key: 'a'.repeat(64), index: 0, stepKey: 'credit', purpose: 'Goodwill credit.' } };
+  for (const entity of ['CreditMemo', 'RefundReceipt']) assert.equal(assertDatedTaxPolicy(step(entity, batch), undefined).id, '15');
+  assert.throws(() => assertDatedTaxPolicy(step('CreditMemo'), undefined), /cannot be retaxed/);
+  assert.throws(() => assertDatedTaxPolicy({ ...step('RefundReceipt', batch), references: [{ entity: 'TaxCode', key: 'salesTax', id: '11' }] }, undefined), /exact dated tax choice/);
+});

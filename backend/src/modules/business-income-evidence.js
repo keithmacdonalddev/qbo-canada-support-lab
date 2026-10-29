@@ -10,7 +10,12 @@ function incomeCents(report,period,reportSourceVersion=2){
  if(reportSourceVersion===3&&h.Option?.some(option=>option.Name==='NoReportData'&&String(option.Value)==='true'))fail('A no-data profit and loss report must confirm a supported zero layout.');
  const rows=rowsOf(report).filter(row=>row.group==='Income'&&row.Summary?.ColData);if(rows.length!==1)fail('An unambiguous income total is required.');const value=money(rows[0].Summary.ColData.at(-1)?.value);if(!Number.isSafeInteger(value))fail('The income total is unavailable.');return value;
 }
-function managedIncome(entries){return entries.filter(row=>row.kind==='create'&&['Invoice','SalesReceipt','CreditMemo'].includes(row.step.entity)).reduce((sum,row)=>{const credit=row.step.entity==='CreditMemo';if(credit&&row.step.details.activityTemplateVersion!==3)fail('Credits require the original explicit customer-credit schedule.');return sum+(credit?-1:1)*row.step.details.lines.reduce((value,line)=>value+line.amountCents,0);},0);}
+// Credits and refunds reduce income; a journal entry changes it by its income lines
+// (credit increases, debit decreases).
+const INCOME_ROLES=['serviceIncome','supplyIncome','careIncome'];
+function managedIncome(entries){return entries.filter(row=>row.kind==='create'&&['Invoice','SalesReceipt','CreditMemo','RefundReceipt','JournalEntry'].includes(row.step.entity)).reduce((sum,row)=>{const entity=row.step.entity,sameDay=row.step.details.activityBatch!==undefined;
+ if(entity==='JournalEntry'){if(!sameDay)fail('Journal entries require the explicit same-day journal policy.');return sum+row.step.details.lines.filter(line=>INCOME_ROLES.includes(line.accountMapping)).reduce((value,line)=>value+(line.postingType==='Credit'?1:-1)*line.amountCents,0);}
+ const credit=['CreditMemo','RefundReceipt'].includes(entity);if(credit&&row.step.details.activityTemplateVersion!==3&&!sameDay)fail('Credits require the original explicit customer-credit schedule.');return sum+(credit?-1:1)*row.step.details.lines.reduce((value,line)=>value+line.amountCents,0);},0);}
 function createIncomeExpectation(scope,period,entries,report,observedAt,reportSourceVersion=2){
  if(![1,2,3].includes(reportSourceVersion))fail('Choose an explicit supported starting report version.');
  const openingIncomeCents=incomeCents(report,period,reportSourceVersion),managedIncomeCents=managedIncome(entries);

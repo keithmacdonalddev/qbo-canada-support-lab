@@ -7,6 +7,9 @@ const FIELDS = Object.freeze({
  BillPayment: ['TxnDate','CurrencyRef','PrivateNote','VendorRef','TotalAmt','Line','APAccountRef','PayType','CheckPayment'],
  Purchase: ['TxnDate','CurrencyRef','PrivateNote','PaymentType','AccountRef','EntityRef','GlobalTaxCalculation','Line'],
  VendorCredit: ['TxnDate','CurrencyRef','PrivateNote','VendorRef','APAccountRef','GlobalTaxCalculation','Line'],
+ RefundReceipt: ['TxnDate','CurrencyRef','PrivateNote','CustomerRef','GlobalTaxCalculation','DepositToAccountRef','Line'],
+ Transfer: ['TxnDate','CurrencyRef','PrivateNote','FromAccountRef','ToAccountRef','Amount'],
+ JournalEntry: ['TxnDate','CurrencyRef','PrivateNote','Line'],
 });
 function accountingOnlyObservation(entity,record) {
  if (!FIELDS[entity]) return true;

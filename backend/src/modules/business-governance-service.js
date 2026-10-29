@@ -347,7 +347,9 @@ function createBusinessGovernanceService(dependencies = {}) {
     const vendors = rows.filter(row => row.entity === 'Vendor' && /^overhead-supplier-[1-3]$/.test(row.key));
     const adopted = await adoptedObligations(scope, active);
     await access.authorize(scope, 'operations.preview', { signal });
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...adopted, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    // Transfers need two published bank roles; journal lines use published roles only.
+    const banks = policy.bankRoles(), transfers = banks.length >= 2 ? { bankRoles: banks } : { bankRoles: banks, transferUnavailable: 'Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.' };
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     const choices = require('./business-activity-batch').validateChoices(input);

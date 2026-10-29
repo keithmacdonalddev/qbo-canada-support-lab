@@ -93,8 +93,8 @@ function validateFinancialExpectation(value, scope, period, entries) {
 // Version3 proves only the selected earnings roles. It does not infer tax or
 // inventory cost from cash, nor use today's mutable item price/account routing.
 function earningsLines(expectation, step, payload, policy, add) {
-  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'CreditMemo', 'Bill', 'Purchase', 'VendorCredit'].includes(step.entity)) return;
-  const planned = step.details?.lines, sales = ['Invoice', 'SalesReceipt', 'CreditMemo'].includes(step.entity);
+  if (expectation.version !== 3 || !['Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt', 'Bill', 'Purchase', 'VendorCredit'].includes(step.entity)) return;
+  const planned = step.details?.lines, sales = ['Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(step.entity);
   if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || !Array.isArray(planned) || !planned.length || !Array.isArray(payload.Line) || payload.Line.length !== planned.length || new Set(payload.Line.map(row => row.DetailType)).size !== 1) fail('Selected earnings require complete original pretax line intent.');
   const selected = new Map(expectation.accounts.map(row => [row.key, row]));
   const binding = (entity, key) => {
@@ -118,7 +118,8 @@ function earningsLines(expectation, step, payload, policy, add) {
       if (line.DetailType !== kind || !exact(detail, ['ItemRef', 'Qty', 'UnitPrice', 'TaxCodeRef']) || detail.ItemRef?.value !== binding('Item', original.itemKey).id || detail.TaxCodeRef?.value !== taxId || detail.Qty !== original.quantity || cents(detail.UnitPrice) !== original.unitPriceCents || !Number.isFinite(original.quantity) || original.quantity <= 0 || Math.abs(original.quantity * original.unitPriceCents - original.amountCents) > 0.00001) fail('The posted earnings line differs from its original item, quantity, price or tax intent.');
       if (sales) {
         if (!INCOME_KEYS.includes(original.accountMapping)) fail('The original item line has no supported selected income role.');
-        account(original.accountMapping); add(original.accountMapping, (step.entity === 'CreditMemo' ? 1 : -1) * original.amountCents);
+        // Credits and refunds reverse income (a debit).
+        account(original.accountMapping); add(original.accountMapping, (['CreditMemo', 'RefundReceipt'].includes(step.entity) ? 1 : -1) * original.amountCents);
       } else if (original.accountMapping !== 'inventoryAsset') fail('A stock purchase cannot be counted as operating expense.');
     } else {
       if (line.DetailType !== 'AccountBasedExpenseLineDetail' || original.accountMapping !== 'operatingExpense' || original.billableStatus !== 'NotBillable' || !exact(detail, ['AccountRef', 'BillableStatus', 'TaxCodeRef']) || detail.AccountRef?.value !== account('operatingExpense') || detail.BillableStatus !== 'NotBillable' || detail.TaxCodeRef?.value !== taxId) fail('The operating expense differs from its original nonbillable account and tax intent.');
@@ -139,8 +140,24 @@ function movementRow(expectation, step, compiled, policy, origin) {
   switch (compiled.entity) {
     case 'Invoice': add(ref('accountsReceivable', payload.ARAccountRef), gross()); break;
     case 'CreditMemo':
-      if (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || policy.lifecycle?.mode !== 'credit-adjustment') fail('A credit movement needs its original selected-earnings lifecycle.');
+      // A calendar credit adjustment, or a same-day open customer credit.
+      if (!(policy.lifecycle?.mode === 'customer-credit' && step.details.activityBatch !== undefined) && (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || policy.lifecycle?.mode !== 'credit-adjustment')) fail('A credit movement needs its original selected-earnings lifecycle.');
       add(ref('accountsReceivable', payload.ARAccountRef), -gross()); break;
+    case 'RefundReceipt':
+      if (policy.lifecycle?.mode !== 'customer-refund') fail('Only the original customer refund from the operating bank is supported.');
+      add(ref('operatingBank', payload.DepositToAccountRef), -gross()); break;
+    case 'Transfer': {
+      const terms = policy.lifecycle?.transfer, tracked = keysFor(expectation), amount = cents(payload.Amount);
+      if (policy.lifecycle?.mode !== 'bank-transfer' || !terms || amount !== terms.amountCents || !tracked.includes(terms.fromKey) || !tracked.includes(terms.toKey)) fail('Only the original transfer between two selected bank accounts is supported.');
+      add(ref(terms.fromKey, payload.FromAccountRef), -amount); add(ref(terms.toKey, payload.ToAccountRef), amount); break;
+    }
+    case 'JournalEntry': {
+      // Debit minus credit, for each line on an account this expectation tracks.
+      const journal = policy.lifecycle?.journal, tracked = keysFor(expectation);
+      if (policy.lifecycle?.mode !== 'journal-entry' || !Array.isArray(journal) || !Array.isArray(payload.Line) || payload.Line.length !== journal.length) fail('Only the original balanced journal entry is supported.');
+      journal.forEach((line, n) => { const posted = payload.Line[n], detail = posted?.JournalEntryLineDetail; if (posted?.DetailType !== 'JournalEntryLineDetail' || detail?.PostingType !== line.postingType || cents(posted.Amount) !== line.amountCents) fail('A journal line differs from its original intent.'); if (tracked.includes(line.accountMapping)) add(ref(line.accountMapping, detail.AccountRef), (line.postingType === 'Debit' ? 1 : -1) * line.amountCents); });
+      break;
+    }
     case 'SalesReceipt': add(ref('operatingBank', payload.DepositToAccountRef), gross()); break;
     case 'Bill': add(ref('accountsPayable', payload.APAccountRef), -gross()); break;
     case 'VendorCredit': add(ref('accountsPayable', payload.APAccountRef), gross()); break;

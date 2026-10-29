@@ -16,7 +16,8 @@ test('every live accountant tool has an owner-facing summary and its exact instr
 test('coverage counts what the accountant can and cannot create', () => {
   const { coverage, counts } = agentToolCatalog();
   assert.equal(counts.recordTypes, coverage.length);
-  assert.equal(coverage.find(row => row.entity === 'JournalEntry').create, 'no');
+  assert.equal(coverage.find(row => row.entity === 'JournalEntry').create, 'limited');
+  assert.equal(coverage.find(row => row.entity === 'Customer').create, 'no');
   assert.equal(coverage.find(row => row.entity === 'Invoice').create, 'limited');
   assert.equal(coverage.find(row => row.entity === 'Invoice').read, true);
   assert.equal(coverage.find(row => row.entity === 'BankReconciliation').read, false);

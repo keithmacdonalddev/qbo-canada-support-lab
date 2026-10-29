@@ -11,6 +11,7 @@ const coverage = { asOf: '2026-10-28', areas: [{ key: 'sales', signals: [
   { key: 'estimates', label: 'Estimates', status: 'missing', fill: 'assistant', entity: 'Estimate' },
   { key: 'purchase-orders', label: 'Purchase orders', status: 'stale', fill: 'assistant', entity: 'PurchaseOrder' },
   { key: 'refunds', label: 'Refund receipts', status: 'missing', fill: 'assistant', entity: 'RefundReceipt' },
+  { key: 'new-customers', label: 'New customers', status: 'missing', fill: 'assistant', entity: 'Customer' },
   { key: 'bank-rules', label: 'Bank rules', status: 'missing', fill: 'quickbooks', entity: 'BankRule' },
   { key: 'payroll-run', label: 'Payroll run', status: 'manual', fill: 'quickbooks', entity: null },
 ] }] };
@@ -24,8 +25,8 @@ test('a healthy running business needs nothing from the owner and owns only feat
   assert.equal(work.headline, 'Nothing needs you. The accountant is running the business; some work waits for capabilities still being built.');
   const features = byKey(work, 'use-features');
   assert.equal(features.state, 'working');
-  assert.deepEqual(features.features.map(item => item.key), ['estimates', 'purchase-orders']);
-  assert.deepEqual(byKey(work, 'new-workflows').features.map(item => item.key), ['refunds']);
+  assert.deepEqual(features.features.map(item => item.key), ['estimates', 'purchase-orders', 'refunds']);
+  assert.deepEqual(byKey(work, 'new-workflows').features.map(item => item.key), ['new-customers']);
   assert.equal(byKey(work, 'new-workflows').state, 'blocked');
   const manual = byKey(work, 'manual-features');
   assert.equal(manual.state, 'optional');

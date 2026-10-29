@@ -51,6 +51,21 @@ and the app shows the owner exactly which tools exist and what they reach.
   payables +gross and expense −net. Batches saved under v1 and v2 still
   rebuild and cannot claim the new workflows. Usable only after the owner
   approves the updated rules.
+- Workflows 3 and 6 (code, not yet live): same-day activity policy v4
+  (`business-activity-v4`) adds `customer-credit` (an open CreditMemo for a
+  published service, sales tax, not applied), `customer-refund` (a
+  RefundReceipt paid from the operating bank), `bank-transfer` (a Transfer
+  between two published bank roles) and `journal-entry` (2–4 balanced lines on
+  operating bank, income or operating-expense roles; never receivables,
+  payables, undeposited funds or stock). Postings: credit AR −gross and income
+  +net; refund bank −gross and income +net; transfer from −amount, to +amount;
+  journal debit minus credit per tracked line. Income evidence counts credits,
+  refunds and journal income lines. QuickBooks omits a credit memo's
+  receivables account, so read-back proves it from the General Ledger
+  ("Credit Memo" rows), as for invoices. Only one bank role is published, so
+  no transfer can be prepared yet; choices say so. The scheduled
+  credit-and-application cycle stays gated on Production. Batches saved under
+  v1–v3 still rebuild and cannot claim the new workflows.
 
 ## Constraint that shapes every workflow
 

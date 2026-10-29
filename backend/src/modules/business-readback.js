@@ -22,7 +22,11 @@ function validateCompilation(compiled) {
     if (!HASH.test(link.logicalKey || '') || keys.has(link.logicalKey) || !SUPPORTED.has(link.entity) || typeof link.qboId !== 'string' || !QBO_ID.test(link.qboId) || typeof link.syncToken !== 'string' || !VERSION.test(link.syncToken) || !HASH.test(link.fingerprint || '') || !['linked', 'prerequisite'].includes(link.kind) || !Array.isArray(link.links) || link.links.length > 101) invalid('The original relationship contract is invalid.');
     keys.add(link.logicalKey);
   }
-  if (compiled.entity === 'CreditMemo') {
+  // A same-day customer credit stands alone: no invoice and no links (it stays open).
+  if (compiled.entity === 'CreditMemo' && compiled.relationships.length === 0) {
+    const payload = JSON.parse(request.body);
+    if (payload.LinkedTxn !== undefined || (payload.Line || []).some(line => line.LinkedTxn !== undefined)) invalid('A standalone customer credit cannot link another transaction.');
+  } else if (compiled.entity === 'CreditMemo') {
     const source = compiled.relationships[0], payload = JSON.parse(request.body);
     if (compiled.relationships.length !== 1 || source.entity !== 'Invoice' || source.kind !== 'prerequisite' || source.links.length) invalid('A service credit needs its exact invoice prerequisite.');
     try { date(source.sourceTxnDate); date(payload.TxnDate); } catch { invalid('The original credit source accounting date is unavailable.'); }
@@ -134,7 +138,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   }
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
   const postingAccount = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
-  if (['Invoice', 'Payment', 'BillPayment'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {
+  if (['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {
     if (verifyAccountPosting({ observed, compiled, receipt, now }) !== payload[postingAccount].value) invalid('The transaction posted to a different approved account.');
     delete expectedHeader[postingAccount];
   }
@@ -147,7 +151,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (!Array.isArray(record.Line) || record.Line.length > 101) invalid('Saved transaction lines are unavailable.');
     const expectedLines = payload.Line, actualLines = record.Line.filter(line => line.DetailType !== 'SubTotalLineDetail'), subtotals = record.Line.filter(line => line.DetailType === 'SubTotalLineDetail');
     const beforeTax = expectedLines.reduce((sum, line) => sum + cents(line.Amount), 0);
-    if (subtotals.length > 1 || subtotals.some(line => record.Line.at(-1) !== line || cents(line.Amount) !== beforeTax || !['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo'].includes(compiled.entity))) mismatch('Unexpected subtotal lines were saved.');
+    if (subtotals.length > 1 || subtotals.some(line => record.Line.at(-1) !== line || cents(line.Amount) !== beforeTax || !['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(compiled.entity))) mismatch('Unexpected subtotal lines were saved.');
     const used = new Set();
     if (actualLines.length !== expectedLines.length) mismatch('The saved financial line count differs.');
     for (const originalExpected of expectedLines) {
@@ -162,7 +166,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       if (detail) for (const key of ['CustomerRef', 'ClassRef', 'ProjectRef', 'AccountRef']) if (!expected[expected.DetailType]?.[key] && detail[key]?.value) mismatch('An unplanned line relationship is present.');
       if (!expected.LinkedTxn && linkList(actual.LinkedTxn).length) mismatch('An unplanned line transaction link is present.');
     }
-    if (['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit'].includes(compiled.entity)) {
+    if (['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt'].includes(compiled.entity)) {
       if (!taxMatches(taxPolicy, compiled, record)) mismatch('Approved tax amounts and rates remain unverified.');
       if (cents(record.TotalAmt) !== beforeTax + cents(record.TxnTaxDetail?.TotalTax)) mismatch('The saved total does not equal item amounts plus tax.');
     } else if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== beforeTax) mismatch('The saved deposit total differs from its linked receipt.');

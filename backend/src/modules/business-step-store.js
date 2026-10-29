@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { hash, canonical } = require('./business-calendar');
 const { validateCompilation } = require('./business-readback');
 const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const ENTITIES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'SalesReceipt', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Purchase', 'Deposit', 'JournalEntry', 'TimeActivity']);
+const ENTITIES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'SalesReceipt', 'Bill', 'Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Purchase', 'RefundReceipt', 'Transfer', 'Deposit', 'JournalEntry', 'TimeActivity']);
 const MAX_ATTEMPTS = 20, FRESH_MS = 300000;
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status }); }
 function validHash(value) { return typeof value === 'string' && HASH.test(value); }
