@@ -3,7 +3,7 @@ const { hash, canonical, date, shift } = require('./business-calendar');
 const CHANGE_ON = '2025-04-01', REGIME = 'CA-NS-2025-postpaid';
 const SOURCE = 'https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/notice342/nova-scotia-hst-rate-decrease-questions-answers-general-transitional-rules-personal-property-services.html';
 const QID = /^\d{1,30}$/;
-const CHARGES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'Bill', 'SalesReceipt']);
+const CHARGES = new Set(['Estimate', 'PurchaseOrder', 'Invoice', 'Bill', 'SalesReceipt', 'Purchase', 'VendorCredit']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_DATED_TAX_UNVERIFIED' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the complete supported Nova Scotia tax transition.'); }
 function pair(value) { exact(value, ['salesTax', 'purchaseTax']); if (!Object.values(value).every(id => typeof id === 'string' && QID.test(id))) fail('Both tax directions need exact existing code IDs.'); }

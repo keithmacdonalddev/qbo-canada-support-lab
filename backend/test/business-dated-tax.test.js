@@ -118,3 +118,11 @@ test('link repairs preserve distinct approved March and April taxes and reject s
  assert.equal(conversion.verifyDroppedEstimateLink(args),null,'a linked conversion is not reported as dropped');
  for(const change of [a=>{a.observed.record.TotalAmt++;},a=>{a.parents[0].record.TxnStatus='Closed';},a=>{a.parents[1].record.BillableStatus='Billable';}]){const altered=structuredClone(dropped);change(altered);for(const value of [altered.observed,...altered.parents])value.recordHash=hash(value.record);assert.equal(conversion.verifyDroppedEstimateLink(altered),null);}
 });
+test('bank-paid expenses and supplier credits take the dated purchase tax; collections still cannot be retaxed', () => {
+  const { assertDatedTaxPolicy } = require('../src/modules/business-dated-tax');
+  const datedTax = { version: 1, regime: 'CA-NS-2025-postpaid', openingDate: '2023-09-01', before: { salesTax: '12', purchaseTax: '12' }, after: { salesTax: '16', purchaseTax: '16' } };
+  const step = entity => ({ entity, txnDate: '2026-10-29', details: { datedTax, taxMapping: 'purchaseTax' }, references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '16' }] });
+  for (const entity of ['Purchase', 'VendorCredit']) assert.doesNotThrow(() => assertDatedTaxPolicy(step(entity), undefined));
+  assert.throws(() => assertDatedTaxPolicy({ ...step('Purchase'), references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '12' }] }, undefined), /exact dated tax choice/);
+  assert.throws(() => assertDatedTaxPolicy(step('Payment'), undefined), /cannot be retaxed/);
+});
