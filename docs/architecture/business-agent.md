@@ -101,3 +101,11 @@ Until the accountant can adopt the imported history, it cannot prepare any new p
 7. The adopt transaction and audit.
 8. Grant terms, the agent tool, blockers and the work item.
 9. Docs.
+
+**Progress (2026-10-29):**
+- **Step 1 is done** (`36106e7`).
+- **Step 2:** the calendar field exists; the adoption document model is still pending.
+- **Steps 3 and 4 are done** in `business-history-adoption.js`: `review` checks saved evidence and `observe` reads QuickBooks evidence. Both are read-only.
+- **A read-only run of `review` against the Production company's saved state was ready:** 10,359 records through 2026-10-17, no limitations, and an original operation with 177 saved records.
+- **`observe` has not been run live.**
+- **Next: step 5.** Replay FIFO lots from population Bills and sales into an `adopted-history` stock carry, following `business-stock-history.js`.
