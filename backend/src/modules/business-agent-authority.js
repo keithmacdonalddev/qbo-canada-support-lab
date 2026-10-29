@@ -22,8 +22,10 @@ async function fenceAgentAuthority({ authority, run, scope, ownerId, actorId, Ag
   const origin = agentAuthority(value);
   if (!session?.inTransaction?.()) fail('Agent authorization requires the accounting transaction.');
   if (origin.ownerId !== String(ownerId) || String(actorId) !== origin.ownerId || (run && (run.authorityHash !== origin.authorityHash || String(run.createdBy) !== origin.ownerId))) fail('Agent work belongs to a different owner or published business.');
+  const batchPolicy = run?.activityBatch?.policyHash;
+  if (run?.activityBatch && batchPolicy !== require('./business-activity-batch').POLICY_HASH) fail('The additional business activity policy changed.');
   const Model = Agents || require('../models/BusinessAgent');
-  const current = await Model.findOneAndUpdate({ _id: origin.agentId, environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, ownerId: origin.ownerId, 'settings.monitoring': true, 'settings.autonomous': true, 'grant.id': origin.grantId, 'grant.authorityHash': origin.authorityHash, 'grant.ownerId': origin.ownerId }, { $inc: { dispatchRevision: 1 } }, { new: true, session }).lean();
+  const current = await Model.findOneAndUpdate({ _id: origin.agentId, environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, ownerId: origin.ownerId, 'settings.monitoring': true, 'settings.autonomous': true, 'grant.id': origin.grantId, 'grant.authorityHash': origin.authorityHash, 'grant.ownerId': origin.ownerId, ...(batchPolicy ? { 'grant.activityPolicyHash': batchPolicy } : {}) }, { $inc: { dispatchRevision: 1 } }, { new: true, session }).lean();
   if (!current) fail('The business agent is paused or its company authorization changed. No new accounting request was admitted.');
   return origin;
 }

@@ -8,7 +8,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
   if ([state?.inspect, state?.claim, state?.renew, state?.advance, state?.release, plans?.page, steps?.verifyGraph, dispatch, periods?.reserve, periods?.finish, periods?.repair, prepareEvidence].some(value => typeof value !== 'function')) throw new TypeError('Operation runner requires durable runtime and evidence adapters');
   return async function run(scope, operationId, { signal } = {}) {
     scope = scoped(scope); if (!ID.test(operationId || '')) fail('Choose an exact saved operation.');
-    const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.nextOrdinal, recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash } : {}) });
+    const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.nextOrdinal, recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash, ...(value.completion.kind === 'additional-activity' ? { kind: value.completion.kind, verifiedThrough: value.completion.verifiedThrough } : {}) } : {}) });
     let current = await state.inspect(scope, operationId), leaseToken;
     if (current.status === 'verified' && current.completion) return result(current, 'verified');
     if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }

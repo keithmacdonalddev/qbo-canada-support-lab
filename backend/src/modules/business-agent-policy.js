@@ -29,7 +29,7 @@ function reduceControl(row, input, business, clock, ownerId) {
     case 'enable-autonomy':
       if (!settings.monitoring) fail('Enable company monitoring before autonomous operation.');
       if (!HASH.test(business.authorityHash || '')) fail('Publish the business policy before granting autonomous accounting authority.');
-      settings.autonomous=true; changes.grant={id:hash({agentId:row._id,ownerId,authorityHash:business.authorityHash,requestKey:input.requestKey}),authorityHash:business.authorityHash,ownerId,issuedAt:now.toISOString()}; changes.nextDecisionAt=now; changes.status='ready'; break;
+      settings.autonomous=true; changes.grant={id:hash({agentId:row._id,ownerId,authorityHash:business.authorityHash,requestKey:input.requestKey}),authorityHash:business.authorityHash,activityPolicyHash:require('./business-activity-batch').POLICY_HASH,ownerId,issuedAt:now.toISOString()}; changes.nextDecisionAt=now; changes.status='ready'; break;
     case 'resume': if (!settings.monitoring || !row?.grant || row.grant.authorityHash!==business.authorityHash) fail('Enable monitoring and renew the current published-business authority before resuming.'); settings.autonomous=true; changes.nextDecisionAt=now; changes.status='ready'; break;
     case 'pause': settings.autonomous=false; changes.status=settings.monitoring?'paused':'stopped'; break;
     case 'stop-monitoring': settings.monitoring=false; settings.autonomous=false; changes.status='stopped'; break;

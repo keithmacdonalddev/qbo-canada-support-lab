@@ -14,7 +14,7 @@ test('control schema refuses company, authority and nested unknown overrides',()
 test('standing authority is company-policy bound, explicit in Production and has no expiry or lifetime record quota',()=>{
   assert.throws(()=>reduceControl(row,command('enable-autonomy',{confirmProduction:false}),business,clock,ownerId),/Production/);
   const granted=reduceControl(row,command('enable-autonomy',{confirmProduction:true}),business,clock,ownerId);
-  assert.equal(granted.settings.autonomous,true);assert.equal(granted.grant.authorityHash,authorityHash);assert.equal(granted.grant.ownerId,ownerId);assert.match(granted.grant.id,/^[a-f0-9]{64}$/);
+  assert.equal(granted.settings.autonomous,true);assert.equal(granted.grant.authorityHash,authorityHash);assert.equal(granted.grant.ownerId,ownerId);assert.equal(granted.grant.activityPolicyHash,require('../src/modules/business-activity-batch').POLICY_HASH);assert.match(granted.grant.id,/^[a-f0-9]{64}$/);
   assert.equal('expiresAt' in granted.grant,false);assert.equal('maxTransactions' in granted.settings,false);
 });
 test('pause keeps monitoring, while stopping monitoring also revokes autonomous dispatch',()=>{

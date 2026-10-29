@@ -90,12 +90,14 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
     require('./business-financial-movements').assertMovementCapacity(manifest);
   }
   if (copy.continuity !== undefined) manifest.continuity = require('./business-continuity-plan').validateOperationContinuity(copy.continuity, copy);
+  if (copy.activityBatch !== undefined) manifest.activityBatch = require('./business-activity-batch').validateActivityBatch(copy.activityBatch, copy);
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };
 }
 function runFields(manifest, planId, actorId) {
   return { contractVersion: 1, ...manifest.scope, ...(manifest.authorityHash ? { authorityHash: manifest.authorityHash } : {}), ...(manifest.continuity ? { continuity: manifest.continuity } : {}), businessKey: manifest.businessKey, blueprintId: manifest.blueprintId, blueprintHash: manifest.blueprintHash, planId, planHash: hash(manifest),
+    ...(manifest.activityBatch ? { activityBatch: manifest.activityBatch } : {}),
     fromDate: manifest.fromDate, throughDate: manifest.throughDate, expectedCursor: manifest.expectedCursor, expectedRevision: manifest.expectedRevision, baselineHash: manifest.baselineHash,
     expectedRecordSetHash: manifest.expectedRecordSetHash, requiredAssertions: manifest.requiredAssertions, recordCount: manifest.recordCount, createdBy: actorId };
 }
@@ -154,7 +156,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const prepared = validateOperationCandidate(candidate, scope, now());
       if (agentAuthority) {
         if (prepared.manifest.authorityHash !== agentAuthority.authorityHash) fail('The agent grant belongs to a different published business.');
-        await fenceAgentAuthority({ authority: agentAuthority, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
+        await fenceAgentAuthority({ authority: agentAuthority, run: { ...prepared.manifest, createdBy: actorId }, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
       }
       const auditId = await audit(scope, actorId, operationId, prepared.planHash, 'prepared', session);
       await Plans.create([{ _id: planId, contractVersion: 1, ...scope, operationId, createdBy: actorId, requestKey: request.requestKey, candidateHash: request.candidateHash, manifest: prepared.manifest, planHash: prepared.planHash, auditId, ...(agentAuthority ? { agentAuthority } : {}) }], { session });

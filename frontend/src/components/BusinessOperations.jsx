@@ -127,9 +127,9 @@ export function BusinessOperationsPanel({ realmId, environment, enabled, api = c
         {page && !page.operations.length && <p>{after ? 'No more operations on this page.' : 'No saved business operations yet. Prepare and approve the business activity before running it.'}</p>}
         {page?.operations.length > 0 && <div className="overflow-x-auto"><table className="w-full text-left text-[13px]">
           <caption className="sr-only">Saved operations for this company</caption>
-          <thead className="border-b border-[var(--line)] text-[11px] uppercase tracking-wide text-[var(--ink-3)]"><tr><th scope="col" className="py-2 pr-4">Business period</th><th scope="col" className="p-2">Progress</th><th scope="col" className="p-2">State</th><th scope="col" className="py-2 pl-2"><span className="sr-only">Inspect</span></th></tr></thead>
+          <thead className="border-b border-[var(--line)] text-[11px] uppercase tracking-wide text-[var(--ink-3)]"><tr><th scope="col" className="py-2 pr-4">Business activity</th><th scope="col" className="p-2">Progress</th><th scope="col" className="p-2">State</th><th scope="col" className="py-2 pl-2"><span className="sr-only">Inspect</span></th></tr></thead>
           <tbody>{page.operations.map(operation => <tr key={operation.operationId} className="border-b border-[var(--line)] last:border-0">
-            <td className="py-3 pr-4 text-[var(--ink)]">{date(operation.fromDate)} – {date(operation.throughDate)}</td>
+            <td className="py-3 pr-4 text-[var(--ink)]">{operation.activityBatch ? 'Additional activity · ' + date(operation.activityBatch.day) : date(operation.fromDate) + ' – ' + date(operation.throughDate)}</td>
             <td className="p-2 tabular">{operation.completedRecords} / {operation.recordCount} records checked</td>
             <td className="p-2">{operationStatus(operation)}</td>
             <td className="py-2 pl-2 text-right"><Button size="sm" variant="ghost" disabled={busy} aria-expanded={selected === operation.operationId} aria-controls="business-operation-detail" onClick={event => select(operation.operationId, event.currentTarget)} aria-label={'Inspect operation ' + operation.operationId.slice(-6)}>Inspect</Button></td>
@@ -143,7 +143,8 @@ export function BusinessOperationsPanel({ realmId, environment, enabled, api = c
           {detail && <>
             <p className="font-medium text-[var(--ink)]">{operationStatus(detail)}</p>
             <p>{detail.nextOrdinal} of {detail.recordCount} records checked. A business period is complete only after its required records and reports are verified.</p>
-            {detail.completion && <p className={detail.financialMovements?.status === 'integrity-unavailable' ? 'text-[var(--attention)]' : 'text-[var(--ok)]'}>{detail.financialMovements?.status === 'integrity-unavailable' ? 'The calendar was advanced through ' + date(detail.completion.throughDate) + '. Saved financial evidence needs inspection.' : 'This operation has verified evidence through ' + date(detail.completion.throughDate) + '.'}</p>}
+            {detail.activityBatch && <p><strong>Additional activity:</strong> {detail.activityBatch.purpose} Calendar coverage remains separate.</p>}
+            {detail.completion && <p className={detail.financialMovements?.status === 'integrity-unavailable' ? 'text-[var(--attention)]' : 'text-[var(--ok)]'}>{detail.completion.kind === 'additional-activity' ? 'This additional activity has verified records and reports. Calendar coverage remains through ' + date(detail.completion.verifiedThrough) + '.' : detail.financialMovements?.status === 'integrity-unavailable' ? 'The calendar was advanced through ' + date(detail.completion.throughDate) + '. Saved financial evidence needs inspection.' : 'This operation has verified evidence through ' + date(detail.completion.throughDate) + '.'}</p>}
             <BusinessFinancialMovements evidence={detail.financialMovements} />
             <BusinessStockCosts evidence={detail.financialMovements?.stockCosts} required={detail.stockCostRequired} unavailable={detail.financialMovements?.status === 'integrity-unavailable'} />
             {detail.unresolved && <p className="text-[var(--attention)]">A QuickBooks request still needs its outcome checked. The app must account for that request before creating another record.</p>}

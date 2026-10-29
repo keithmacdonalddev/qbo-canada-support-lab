@@ -221,3 +221,21 @@ test('operation-bound completion recovery cannot repair another operation pendin
  await assert.rejects(h.store.repair(scope,'f'.repeat(24)),/different operation/);assert.deepEqual(h.Calendars.value,before);assert.deepEqual(h.Runs.value,run);assert.equal(h.audits.size,audits);
  await h.store.repair(scope,id);assert.equal(h.Runs.value.status,'verified');
 });
+
+function supplementalHarness() {
+ const h=harness(),batch=require('../src/modules/business-activity-batch').makeActivityBatch({scope,businessKey:h.Runs.value.businessKey,day:'2026-10-06',choices:{decisionKey:'supplemental-period-fixture',purpose:'A small maintenance job completed and collected on the same business day.',activities:[{type:'settled-service-sale',customerKey:'care-client-001',itemKey:'care-plan-1',quantity:1,unitPriceCents:14900,purpose:'Additional care-service visit completed and collected today.'}]}});
+ h.Runs.value.activityBatch=batch;h.Runs.value.fromDate='2026-10-06';h.Runs.value.expectedCursor='2026-10-05';h.Calendars.value.verifiedThrough='2026-10-05';h.Calendars.value.lastVerifiedOperationId='e'.repeat(24);
+ const activity=require('../src/modules/business-activity-batch').buildBatchActivity(batch,scope,h.Runs.value.businessKey);
+ h.data.proof.records=activity.events.map((event,index)=>({...h.data.proof.records[0],logicalKey:event.logicalKey,entity:event.entity,qboId:String(100+index),fingerprint:hash(event)}));
+ h.Runs.value.recordCount=activity.events.length;h.Runs.value.expectedRecordSetHash=hash(h.data.proof.records.map(record=>({logicalKey:record.logicalKey,entity:record.entity,fingerprint:record.fingerprint,relationships:[]})).sort((a,b)=>a.logicalKey.localeCompare(b.logicalKey)));
+ h.data.proof.expectedRecordSetHash=h.Runs.value.expectedRecordSetHash;h.data.proof.assertions[0].recordSetHash=hash([...h.data.proof.records].sort((a,b)=>a.logicalKey.localeCompare(b.logicalKey)));h.data.proof.fromDate='2026-10-06';h.data.proof.assertions[0].fromDate='2026-10-06';h.Runs.value.verificationCandidateHash=hash(h.data.proof);return h;
+}
+test('supplemental completion releases ownership and records evidence without advancing verified history',async()=>{
+ const h=supplementalHarness();await h.store.finish(id,scope);
+ assert.equal(h.Calendars.value.verifiedThrough,'2026-10-05');assert.equal(h.Calendars.value.lastVerifiedOperationId,'e'.repeat(24));assert.equal(h.Calendars.value.lastActivityOperationId,id);assert.equal(h.Calendars.value.currentOperationId,null);assert.equal(h.Calendars.value.pendingCommit,null);assert.equal(h.Runs.value.status,'verified');assert.equal(h.Calendars.value.revision,4);
+ await h.store.finish(id,scope);assert.equal(h.Calendars.value.revision,4);
+});
+test('supplemental interrupted completion repairs its original receipt without turning the day into verified history',async()=>{
+ const h=supplementalHarness();h.Runs.failStatus='verified';await assert.rejects(h.store.finish(id,scope),/interrupted/);
+ assert.equal(h.Calendars.value.verifiedThrough,'2026-10-05');assert.ok(h.Calendars.value.pendingCommit);assert.equal(h.Runs.value.status,'committing');await h.store.repair(scope,id);assert.equal(h.Calendars.value.revision,4);assert.equal(h.Calendars.value.verifiedThrough,'2026-10-05');assert.equal(h.Calendars.value.lastVerifiedOperationId,'e'.repeat(24));assert.equal(h.Calendars.value.lastActivityOperationId,id);
+});

@@ -7,6 +7,7 @@ function exact(value, keys) { return value && Object.getPrototypeOf(value) === O
 // define version2 meaning and are independently retained in its approved policy.
 function lifecyclePolicy(step) {
   const d = step?.details;
+  if (d?.activityBatch !== undefined) return require('./business-activity-batch').batchLifecycle(step);
   if (d?.activityTemplateVersion === undefined) {
     if (d && ['origin', 'settlement', 'stockQuantityRule', 'expenseCategory', 'dueDate', 'creditAdjustment', 'creditSettlement'].some(key => d[key] !== undefined)) fail('Lifecycle terms require the explicit version2 business schedule.');
     return null;

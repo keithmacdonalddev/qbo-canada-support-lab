@@ -121,10 +121,10 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
   async function list(user, { after, limit = 50 } = {}) {
     if ((after !== undefined && !ID.test(after)) || !Number.isInteger(limit) || limit < 1 || limit > 100) fail('Use a valid bounded operation page.', 400);
     const selected = await context(user, 'operations.read'); await assertReady();
-    const rows = await Runs.find({ ...selected.scope, ...(after ? { _id: { $lt: after } } : {}) }).select('_id planHash status fromDate throughDate recordCount nextOrdinal executionRequest').sort({ _id: -1 }).limit(limit + 1).maxTimeMS(3000).lean();
+    const rows = await Runs.find({ ...selected.scope, ...(after ? { _id: { $lt: after } } : {}) }).select('_id planHash status fromDate throughDate recordCount nextOrdinal executionRequest activityBatch').sort({ _id: -1 }).limit(limit + 1).maxTimeMS(3000).lean();
     const allowed = await permissions(selected);
     await selected.access.authorize(selected.scope, 'operations.read');
-    return { scope: selected.scope, permissions: allowed, operations: rows.slice(0, limit).map(row => ({ operationId: String(row._id), planHash: row.planHash, status: row.status, fromDate: row.fromDate, throughDate: row.throughDate, recordCount: row.recordCount, completedRecords: row.nextOrdinal || 0, execution: publicRequest(row.executionRequest) })), next: rows.length > limit ? String(rows[limit - 1]._id) : null };
+    return { scope: selected.scope, permissions: allowed, operations: rows.slice(0, limit).map(row => ({ operationId: String(row._id), planHash: row.planHash, status: row.status, ...(row.activityBatch ? { activityBatch: { decisionKey: row.activityBatch.decisionKey, purpose: row.activityBatch.purpose, day: row.activityBatch.day } } : {}), fromDate: row.fromDate, throughDate: row.throughDate, recordCount: row.recordCount, completedRecords: row.nextOrdinal || 0, execution: publicRequest(row.executionRequest) })), next: rows.length > limit ? String(rows[limit - 1]._id) : null };
   }
   async function stop(user, operationId) {
     if (!ID.test(operationId || '')) fail('Choose an exact operation.', 400);

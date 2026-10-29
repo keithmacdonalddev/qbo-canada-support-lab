@@ -36,6 +36,15 @@ The practical mental model is:
 - Separate what exists now from what is missing or optional, and say whether the user needs to do anything.
 - The user is a self-taught solo developer. Technical language is useful when it teaches; unexplained jargon and long abstract framing are not.
 
+## User experience comes first
+
+Owner direction, 2026-10-23: every frontend and backend change must serve the user's experience first. Visitors have already arrived at Test Data Lab; the page must put useful content and obvious next actions in front of them, rather than make them search, decode terminology, or scroll past introductory chrome to receive value.
+
+- Design the complete journey: arrival, each navigation choice, useful results, next actions, return paths, loading, empty states, failure and recovery. Make interactions understandable without prior knowledge of the implementation.
+- Judge each screen at the actual desktop viewport. Titles, explanations, statistics, tabs and filters must not displace the content the user came for. Search is an optional shortcut, not a prerequisite for usefulness.
+- Backend responses must support truthful, useful user actions. Do not confuse implementation status or counts with the user's completed outcome.
+- Finish and inspect a stable review slice before inviting owner feedback. Do not edit the serving source or operate the owner's review tab while they are reviewing it; use a separate verification tab.
+
 ## Full-goal execution
 
 For the owner’s full product/company request, follow [the execution contract and current handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md). Keep the complete outcome as the finish line and continue the next authorized step after each verified milestone. An unanswered decision blocks only its dependent actions; check independent branches before calling the whole job blocked. Reuse valid target-specific authorization while respecting explicit budgets and factual/destructive boundaries. Status questions and frustration do not cancel the goal or justify an acknowledgement-only final response.

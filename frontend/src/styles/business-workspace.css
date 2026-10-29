@@ -125,10 +125,13 @@
 .bw-form { padding: 17px; display: flex; flex-direction: column; gap: 9px; }
 .bw-form > label { font-size: 12px; font-weight: 550; }
 .bw-form > p { font-size: 11.5px; color: var(--ink-3); margin: 0 0 4px; line-height: 1.6; }
-.bw-form textarea, .bw-form select { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px; font-size: 12px; line-height: 1.65; }
+.bw-form textarea, .bw-form select, .bw-form input[type="number"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px; font-size: 12px; line-height: 1.65; }
 .bw-form textarea { resize: vertical; min-height: 150px; }
 .bw-form textarea::placeholder { color: var(--ink-3); }
-.bw-form textarea:disabled { opacity: .65; }
+.bw-form textarea:disabled, .bw-form select:disabled, .bw-form input:disabled { opacity: .65; }
+.bw-form > small { color: var(--ink-3); font-size: 10.5px; line-height: 1.6; }
+.bw-form > p[role="status"] { display: flex; align-items: center; gap: 7px; }
+.bw-form > p[role="status"] svg { width: 14px; height: 14px; }
 .bw-form select { min-height: 36px; padding: 6px 9px; margin-bottom: 4px; }
 .bw-form > button { align-self: flex-start; margin-top: 4px; }
 .bw-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }

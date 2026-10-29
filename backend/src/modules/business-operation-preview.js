@@ -10,14 +10,14 @@ function validateOperationRequest(input) {
   if (date(input.throughDate) - date(input.fromDate) >= MAX_DAYS * 86400000) throw problem('Prepare at most 31 calendar days in one operation.');
   return input;
 }
-function prepareBusinessOperation(view, input, setup, masters, now = new Date()) {
+function prepareBusinessOperation(view, input, setup, masters, now = new Date(), serverActivity = null) {
   validateOperationRequest(input);
   const observedNow = now.getTime();
   for (const source of [setup, masters]) {
     const stamp = Date.parse(source.observedAt);
     if (!Number.isFinite(stamp) || stamp > observedNow || observedNow - stamp > 300000 || !/^[a-f0-9]{64}$/.test(source.sourceHash || '')) throw problem('Company observations are missing or stale. Read the company again.', 409);
   }
-  const activity = previewBusinessActivity(view, input, businessDate(now));
+  const activity = serverActivity || previewBusinessActivity(view, input, businessDate(now));
   if (activity.events.length > MAX_STEPS) throw problem('This operation exceeds 500 steps. Shorten the period.');
   const mappingInput = { connectionId: input.connectionId, baseHash: input.baseHash };
   const accounts = checkBlueprintMappings(view, setup, mappingInput), masterCheck = inspectBusinessMasters(view, masters);

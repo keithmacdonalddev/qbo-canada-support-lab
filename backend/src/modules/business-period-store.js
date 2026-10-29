@@ -16,6 +16,12 @@ function assertRun(run, scope) {
   if (run.fromDate > run.throughDate || !validHash(run.planHash) || !validHash(run.blueprintHash) || !validHash(run.baselineHash) || !validHash(run.expectedRecordSetHash)) throw problem('Operation has invalid immutable evidence');
   if (!Number.isSafeInteger(run.expectedRevision) || run.expectedRevision < 0 || !Number.isSafeInteger(run.recordCount) || run.recordCount < 0 || run.recordCount > 10000) throw problem('Operation has invalid progress bounds');
   if (!Array.isArray(run.requiredAssertions) || !run.requiredAssertions.length || run.requiredAssertions.length > 100 || run.requiredAssertions.some(check => !check || typeof check.key !== 'string' || !check.key || check.key.length > 100 || !['accrual-ledger', 'open-balances-at-date', 'manual-confirmation', 'record-readback'].includes(check.evidenceType) || check.currency !== 'CAD' || (check.evidenceType === 'accrual-ledger' && check.basis !== 'Accrual')) || new Set(run.requiredAssertions.map(check => check.key)).size !== run.requiredAssertions.length) throw problem('Operation needs exact named verification requirements');
+  if (run.activityBatch !== undefined) {
+    const batch = run.activityBatch;
+    const activity = require('./business-activity-batch').buildBatchActivity(batch, filter, run.businessKey);
+    if (run.recordCount !== activity.events.length) throw problem('Additional activity lost its complete self-contained record set');
+    if (run.expectedCursor === null || run.fromDate !== batch.day || run.throughDate !== batch.day) throw problem('Additional activity needs verified preceding history and one exact open business day');
+  }
   if (run.expectedCursor !== null) {
     requireDate(run.expectedCursor);
     if (shift(run.expectedCursor, 1) !== run.fromDate) throw problem('Business period must immediately follow the verified cursor');
@@ -99,7 +105,7 @@ function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authori
     const commit = calendar.pendingCommit;
     if (expectedOperationId && !same(commit.operationId, expectedOperationId)) throw problem('The pending calendar commit belongs to a different operation.');
     const run = await readRun(String(commit.operationId), scope);
-    if (typeof commit.actorId !== 'string' || !commit.actorId || !validHash(commit.recordSetHash) || !validHash(commit.evidenceHash) || calendar.businessKey !== run.businessKey || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.evidenceHash !== run.baselineHash || commit.planHash !== run.planHash || commit.blueprintHash !== run.blueprintHash || calendar.verifiedThrough !== run.throughDate || calendar.revision !== run.expectedRevision + 1 || !same(calendar.currentOperationId, run._id)) throw problem('Calendar commit requires evidence recovery before more activity');
+    if (typeof commit.actorId !== 'string' || !commit.actorId || !validHash(commit.recordSetHash) || !validHash(commit.evidenceHash) || calendar.businessKey !== run.businessKey || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.evidenceHash !== run.baselineHash || commit.planHash !== run.planHash || commit.blueprintHash !== run.blueprintHash || calendar.verifiedThrough !== (run.activityBatch ? run.expectedCursor : run.throughDate) || calendar.revision !== run.expectedRevision + 1 || !same(calendar.currentOperationId, run._id)) throw problem('Calendar commit requires evidence recovery before more activity');
     const auditId = await audit('business-period:' + run._id + ':committed', { ...scope, actorId: commit.actorId, action: 'Business period verified', operationId: String(run._id), evidenceHash: commit.evidenceHash, throughDate: run.throughDate });
     const repaired = await Runs.findOneAndUpdate({ _id: run._id, ...scopeFilter(scope), planHash: commit.planHash, blueprintHash: commit.blueprintHash, status: { $in: ['committing', 'verified'] }, evidenceRevision: commit.evidenceRevision, verificationCandidateHash: commit.evidenceHash, $or: [{ verification: null }, { 'verification.evidenceHash': commit.evidenceHash }] }, { $set: { status: 'verified', leaseToken: null, leaseExpiresAt: null, verification: { ...commit, completionAuditId: auditId } } }, { new: true }).lean();
     if (!repaired) throw problem('Operation receipt changed during calendar recovery');
@@ -108,7 +114,7 @@ function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authori
       const attemptActor = await authority(scope, 'operations.recover');
       if (attemptActor.actorId !== actor.actorId) throw problem('Recovery actor changed before writer release', 403);
       await Writer.release(run, scope, session);
-      const cleared = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scopeFilter(scope), revision: calendar.revision, 'pendingCommit.operationId': commit.operationId, 'pendingCommit.evidenceHash': commit.evidenceHash, currentOperationId: run._id }, { $set: { pendingCommit: null, currentOperationId: null, lastVerifiedOperationId: run._id } }, { new: true, session }).lean();
+      const cleared = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scopeFilter(scope), revision: calendar.revision, 'pendingCommit.operationId': commit.operationId, 'pendingCommit.evidenceHash': commit.evidenceHash, currentOperationId: run._id }, { $set: { pendingCommit: null, currentOperationId: null, ...(run.activityBatch ? { lastActivityOperationId: run._id, lastActivityAt: new Date(commit.committedAt) } : { lastVerifiedOperationId: run._id }) } }, { new: true, session }).lean();
       if (!cleared) throw problem('Calendar changed during receipt recovery');
       return cleared;
     });
@@ -169,7 +175,7 @@ function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authori
       await Writer.assertSettled(run, scope, session);
       const claimed = await Runs.findOneAndUpdate({ _id: run._id, ...scopeFilter(scope), status: 'awaiting-evidence', planHash: run.planHash, blueprintHash: run.blueprintHash, evidenceRevision: validation.evidenceRevision, verificationCandidateHash: validation.evidenceHash, ...(currentRun?.leaseToken ? { leaseToken, leaseExpiresAt: currentRun.leaseExpiresAt } : {}) }, { $set: { status: 'committing' } }, { new: true, session }).lean();
       if (!claimed) throw problem('Operation state or evidence changed before calendar commit');
-      const saved = await Calendars.findOneAndUpdate({ ...matchingCalendar(run, scope), currentOperationId: run._id, pendingCommit: null }, { $set: { verifiedThrough: run.throughDate, pendingCommit: commit }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const saved = await Calendars.findOneAndUpdate({ ...matchingCalendar(run, scope), currentOperationId: run._id, pendingCommit: null }, { $set: { ...(run.activityBatch ? {} : { verifiedThrough: run.throughDate }), pendingCommit: commit }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!saved) throw problem('Calendar changed or stopped; no business date was advanced');
     });
     return repair(scope);
