@@ -17,7 +17,9 @@ const SERVICES = ['field-service-hour', 'care-plan-1', 'care-plan-2', 'care-plan
 // Journal entries may only touch these mapped roles: no receivables or payables (they
 // need a party), no undeposited funds (deposits prove those) and no stock accounts
 // (stock cost is proven by its own FIFO evidence).
-const JOURNAL_ROLES = Object.freeze(['operatingBank', 'serviceIncome', 'supplyIncome', 'careIncome', 'operatingExpense']);
+// Reclassifications only: no bank line, so a journal entry can never create
+// income, spending or cash without a customer, supplier and tax.
+const JOURNAL_ROLES = Object.freeze(['serviceIncome', 'supplyIncome', 'careIncome', 'operatingExpense']);
 // Bank roles the business blueprint maps. A transfer needs two of them.
 const bankRoles = () => Object.entries(require('./blueprint-draft').MAPPINGS).filter(([, role]) => role.entity === 'Account' && role.types.includes('Bank')).map(([key]) => key);
 function journalLines(lines, check) {
