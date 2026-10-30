@@ -48,7 +48,8 @@ Copy this checklist into the task and tick items as they finish:
 
 ## Fallbacks
 
-- **Sol unavailable** (companion missing, plan limit reached, job fails twice): run the plan and code reviews with a fresh read-only Claude reviewer (`implementation-reviewer` or `harness-reviewer`, `model: opus`) given the same brief. Label it to the owner as a same-vendor review, which is less independent than Sol.
+- **Sol temporarily failing** ("model is at capacity" or similar transient errors): keep retrying Sol; the owner prefers waiting for Sol over a substitute. Retry every few minutes and tell the owner it is retrying.
+- **Sol unavailable** (companion missing, or the ChatGPT plan limit reached until a stated reset): run the plan and code reviews with a fresh read-only Claude reviewer (`implementation-reviewer` or `harness-reviewer`, `model: opus`) given the same brief. Label it to the owner as a same-vendor review, which is less independent than Sol.
 - **test-runner unavailable:** run the checks directly and keep only failures in context (`docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md`). Never commit a write-path change on unrun tests.
 - **agent-browser unavailable:** skip the screenshot, say the UI is unverified, and keep the change uncommitted if it is a material visual change.
 
