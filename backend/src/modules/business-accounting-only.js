@@ -10,6 +10,10 @@ const FIELDS = Object.freeze({
  RefundReceipt: ['TxnDate','CurrencyRef','PrivateNote','CustomerRef','GlobalTaxCalculation','DepositToAccountRef','Line'],
  Transfer: ['TxnDate','CurrencyRef','PrivateNote','FromAccountRef','ToAccountRef','Amount'],
  JournalEntry: ['TxnDate','CurrencyRef','PrivateNote','Line'],
+ // Accountant-added list records: definition fields only, never balances or hierarchy.
+ Customer: ['DisplayName','CurrencyRef','Notes','PrimaryEmailAddr','PrimaryPhone'],
+ Vendor: ['DisplayName','CurrencyRef','PrimaryEmailAddr','PrimaryPhone'],
+ Item: ['Name','Type','IncomeAccountRef','UnitPrice','Description'],
 });
 function accountingOnlyObservation(entity,record) {
  if (!FIELDS[entity]) return true;

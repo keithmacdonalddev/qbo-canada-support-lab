@@ -136,7 +136,7 @@ function movementRow(expectation, step, compiled, policy, origin) {
   const add = (key, amount) => { postings[key] = sum([postings[key], amount]); };
   const net = () => sum((payload.Line || []).map(line => cents(line.Amount)));
   const gross = () => { const tax = taxExpectation(policy, compiled); if (!tax) fail('Original approved tax is required for financial movements.'); return sum([net(), tax.totalTaxCents]); };
-  if (payload.CurrencyRef?.value !== 'CAD' && compiled.entity !== 'TimeActivity') fail('Financial basis requires CAD transaction intent.');
+  if (payload.CurrencyRef?.value !== 'CAD' && !['TimeActivity', 'Item'].includes(compiled.entity)) fail('Financial basis requires CAD transaction intent.');
   switch (compiled.entity) {
     case 'Invoice': add(ref('accountsReceivable', payload.ARAccountRef), gross()); break;
     case 'CreditMemo':
@@ -187,6 +187,8 @@ function movementRow(expectation, step, compiled, policy, origin) {
       const amount = net(); add('undepositedFunds', -amount); add(ref('operatingBank', payload.DepositToAccountRef), amount); break;
     }
     case 'Estimate': case 'PurchaseOrder': case 'TimeActivity': break;
+    // Accountant-added customers, suppliers and service items post nothing.
+    case 'Customer': case 'Vendor': case 'Item': if (step.details?.listRole === undefined || payload.Line !== undefined || payload.TxnDate !== undefined) fail('An added list record cannot carry postings.'); break;
     default: fail('Unsupported financial record.');
   }
   earningsLines(expectation, step, payload, policy, add);

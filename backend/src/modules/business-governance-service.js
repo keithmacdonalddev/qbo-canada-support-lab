@@ -232,8 +232,13 @@ function createBusinessGovernanceService(dependencies = {}) {
       if (receiving.length && !active.value.stockRoot) fail('Receiving needs the published FIFO stock-cost evidence.');
       const receiptReader = require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, history: planStore(bound).history, readRecord: async (scope, entity, id) => { const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity]; return { scope, entity, record, recordHash: hash(record), observedAt: new Date(now()).toISOString() }; }, now });
       for (const choice of receiving) require('./business-purchase-order-receipt').assertChoice(choice, await receiptReader(scope, choice, { signal }), active.view.masterBindings);
+      // Accountant-added roles: new names must be free; roles used must be verified,
+      // unchanged since creation, and created by an earlier (verified) batch.
+      const addedRoles = require('./business-added-roles'), roles = await addedRoles.listAddedRoles(models, scope);
+      await addedRoles.assertNamesAvailable({ batch, roles, query: text => client.query(text) });
+      const usedRoles = await addedRoles.resolveBatchRoles({ roles, batch, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
-      prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity);
+      prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity, usedRoles);
       prepared.activityBatch = batch;
       if (active.lineage) {
         const segment = active.lineage.segments.filter(row => row.effectiveFrom <= batch.day).at(-1);
@@ -373,7 +378,8 @@ function createBusinessGovernanceService(dependencies = {}) {
     await access.authorize(scope, 'operations.preview', { signal });
     // Transfers need two published bank roles; journal lines use published roles only.
     const banks = policy.bankRoles(), transfers = banks.length >= 2 ? { bankRoles: banks } : { bankRoles: banks, transferUnavailable: 'Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.' };
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    const added = require('./business-added-roles').choiceRoles(await require('./business-added-roles').listAddedRoles(models, scope));
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     const choices = require('./business-activity-batch').validateChoices(input);

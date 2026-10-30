@@ -8,7 +8,8 @@ const { assertAccountingOnlyRequest } = require('./business-accounting-only');
 const { scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { validateLifecyclePolicy, installmentCents } = require('./business-lifecycle-policy');
 const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry']);
+const SUPPORTED = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry', 'Customer', 'Vendor', 'Item']);
+const LISTS = new Set(['Customer', 'Vendor', 'Item']);
 const SALES = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt']), PURCHASES = new Set(['PurchaseOrder', 'Bill']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TRANSACTION_UNVERIFIED' }); }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
@@ -102,6 +103,27 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   if (step.entity === 'RefundReceipt' && lifecycle?.mode !== 'customer-refund') fail('Refunds require the explicit approved customer-refund lifecycle.');
   if (['Transfer', 'JournalEntry'].includes(step.entity) && lifecycle?.mode !== (step.entity === 'Transfer' ? 'bank-transfer' : 'journal-entry')) fail('Transfers and journal entries require their explicit approved lifecycle.');
   if (canonical(parentTypes) !== canonical([...expectedParents].sort())) fail('The transaction has unsupported or missing business dependencies.');
+  if (LISTS.has(step.entity) !== (lifecycle?.mode === 'list-record')) fail('Customers, suppliers and items are created only through their exact list lifecycle.');
+  if (LISTS.has(step.entity)) {
+    // List records carry no date or posting. Only allowlisted definition fields are sent;
+    // no opening balance, parent, project, quantity or arbitrary account/tax ID.
+    const role = lifecycle.listRole, list = {};
+    if (step.entity === 'Item') {
+      const income = get('Account', role.incomeRole);
+      if (income.AccountType !== 'Income' || refs.size !== 1) fail('An added service item needs its exact published income account only.');
+      Object.assign(list, { Name: role.name, Type: 'Service', IncomeAccountRef: ref(income.Id), UnitPrice: money(role.unitPriceCents), Description: 'Test Data Lab activity ' + step.logicalKey });
+    } else {
+      if (refs.size) fail('An added customer or supplier references no other record.');
+      Object.assign(list, { DisplayName: role.name, CurrencyRef: { value: 'CAD' }, ...(step.entity === 'Customer' ? { Notes: 'Test Data Lab activity ' + step.logicalKey } : {}), ...(role.email ? { PrimaryEmailAddr: { Address: role.email } } : {}), ...(role.phone ? { PrimaryPhone: { FreeFormNumber: role.phone } } : {}) });
+    }
+    assertAccountingOnlyRequest(step.entity, list);
+    const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), list);
+    const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })) });
+    const observedAt = [...referenceEvidence, observationFence].map(value => value.observedAt).sort()[0];
+    const artifact = { version: 1, logicalKey: step.logicalKey, entity: step.entity, intentHash: hash(step), request, evidenceHash, relationships: [] };
+    const compilationHash = hash(artifact);
+    return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
+  }
   const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey }) };
   if (lifecycle?.dueDate) payload.DueDate = lifecycle.dueDate;
   if (details.customerKey) payload.CustomerRef = ref(get('Customer', details.customerKey).Id);
@@ -303,4 +325,4 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
 }
-module.exports = { compileBusinessTransaction, SUPPORTED, canonicalTxnType };
+module.exports = { compileBusinessTransaction, SUPPORTED, LISTS, canonicalTxnType };

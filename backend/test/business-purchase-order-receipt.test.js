@@ -30,7 +30,7 @@ test('receiving refuses changed parties, over-quantity, partial receipts, costs,
 });
 test('v1–v4 batches rebuild and none may claim receiving; duplicate orders and quantity overrides are refused', () => {
   const base = { decisionKey: 'receive-order-unit-test', purpose: 'Receive a complete stock purchase order today.', activities: [{ type: 'receive-purchase-order', purchaseOrderId: '11046', vendorKey: 'stock-supplier-1', source: { kind: 'adopted', logicalKey: hash('adopted PO'), txnDate: '2026-10-05' }, lines: [{ lineId: '1', itemKey: 'workshop-stock-1', quantity: 30, unitPriceCents: 2300 }], purpose: 'Stock delivered with the supplier invoice today.' }] };
-  assert.equal(POLICY.version, 5);
+  assert.ok(POLICY.version >= 5);
   const batch = makeActivityBatch({ scope, businessKey: 'test', day: '2026-10-06', choices: base }); assert.equal(buildBatchActivity(batch, scope, 'test').events.length, 1);
   const workflows = ['settled-service-sale','paid-operating-expense'];
   for (let version = 1; version <= 4; version++) {

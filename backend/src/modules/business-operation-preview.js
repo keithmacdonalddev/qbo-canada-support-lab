@@ -10,7 +10,9 @@ function validateOperationRequest(input) {
   if (date(input.throughDate) - date(input.fromDate) >= MAX_DAYS * 86400000) throw problem('Prepare at most 31 calendar days in one operation.');
   return input;
 }
-function prepareBusinessOperation(view, input, setup, masters, now = new Date(), serverActivity = null) {
+// addedRoles: verified accountant-added customers, suppliers and items (business-added-roles.js),
+// resolved alongside the published roles without changing the published definition.
+function prepareBusinessOperation(view, input, setup, masters, now = new Date(), serverActivity = null, addedRoles = []) {
   validateOperationRequest(input);
   const observedNow = now.getTime();
   for (const source of [setup, masters]) {
@@ -24,6 +26,14 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date(),
   const selectedBusiness = view.draft || view.proposal, dated = require('./business-dated-tax'), datedTax = dated.bindDatedTax(selectedBusiness.business, selectedBusiness.mappings), datedRows = new Map();
   const mappingRows = new Map(accounts.rows.map(row => [row.key, row]));
   const masterRows = new Map(masterCheck.rows.map(row => [row.key, row]));
+  if (addedRoles.length) {
+    masters = { ...masters, options: { ...masters.options } };
+    for (const role of addedRoles) {
+      if (masterRows.has(role.key)) throw problem('An added role collides with a published role.', 409);
+      masterRows.set(role.key, { key: role.key, entity: role.entity, id: role.id, status: 'compatible', ...(role.entity === 'Item' ? { accountMappings: { IncomeAccountRef: role.incomeRole } } : {}) });
+      masters.options[role.entity] = [...(masters.options[role.entity] || []).filter(row => row.id !== role.id), { id: role.id, syncToken: role.syncToken }];
+    }
+  }
   const eventByKey = new Map([...activity.prerequisites, ...activity.events, ...activity.future].map(event => [event.logicalKey, event]));
   const currentKeys = new Set(activity.events.map(event => event.logicalKey));
   const earlier = new Map();
@@ -46,7 +56,7 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date(),
     const master = (key, entity) => { if (key) references.set(entity + ':' + key, bind(key, entity, masterRows, masters.options[entity])); };
     master(details.customerKey, 'Customer'); master(details.vendorKey, 'Vendor'); master(details.workerKey, 'Employee'); master(details.itemKey, 'Item');
     for (const line of details.lines) master(line.itemKey, 'Item');
-    const accountKeys = new Set([details.bankMapping, details.toBankMapping, ...details.lines.map(line => line.accountMapping)].filter(Boolean));
+    const accountKeys = new Set([details.bankMapping, details.toBankMapping, details.incomeMapping, ...details.lines.map(line => line.accountMapping)].filter(Boolean));
     // Product account dependencies matter even where QBO obtains them through the item.
     for (const line of details.lines) for (const key of Object.values(masterRows.get(line.itemKey)?.accountMappings || {})) accountKeys.add(key);
     if (['Invoice', 'CreditMemo', 'Payment'].includes(event.entity)) accountKeys.add('accountsReceivable');

@@ -90,6 +90,21 @@ and the app shows the owner exactly which tools exist and what they reach.
   The final check request is artifacts/luna/receive-po-final-request.json. Git
   staging is blocked by read-only .git/index.lock permissions; changes are local
   and uncommitted. No live QBO write or report acceptance is claimed.
+- Workflow 7 (code, not yet live): same-day activity policy v6 adds `add-customer`,
+  `add-supplier` and `add-item` (Service items only), following GPT-6.1 Sol's plan
+  review. List records are explicit zero-movement steps with allowlisted fields
+  (no opening balances, parents, quantities or arbitrary account/tax IDs). The
+  role registry is derived, append-only evidence (`business-added-roles.js`): a
+  role exists only when its list step verified and its whole operation verified,
+  so additions are usable only in a later batch. Names must be free across the
+  shared customer/supplier/employee namespace (and items), checked at preparation
+  and again before dispatch. A role is refused if its QuickBooks record drifted
+  from the creating request. Added customers and items are usable in
+  `settled-service-sale` (the item's retained income role and unit drive the
+  income mapping); added suppliers in `paid-operating-expense`. Batches under
+  v1–v5 rebuild with their exact original rules. Known limits: NonInventory
+  items, added roles in credits/refunds/cash expenses, and automatic recovery of
+  an unknown list write (it stays unresolved; never resent) are not built.
 
 ## Constraint that shapes every workflow
 

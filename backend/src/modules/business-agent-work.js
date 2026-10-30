@@ -6,7 +6,7 @@
 const ACCOUNTANT='accountant', OWNER='owner';
 // Record types the accountant's governed workflows (dated calendar templates and
 // same-day activity batches) can create today.
-const ACCOUNTANT_ENTITIES=new Set(['Estimate','TimeActivity','Invoice','Payment','Deposit','Bill','BillPayment','PurchaseOrder','SalesReceipt','Purchase','VendorCredit','CreditMemo','RefundReceipt','Transfer','JournalEntry']);
+const ACCOUNTANT_ENTITIES=new Set(['Estimate','TimeActivity','Invoice','Payment','Deposit','Bill','BillPayment','PurchaseOrder','SalesReceipt','Purchase','VendorCredit','CreditMemo','RefundReceipt','Transfer','JournalEntry','Customer','Vendor','Item']);
 const RESUMABLE=new Set(['stopped','approved','reserved','running','blocked','awaiting-evidence']);
 const KNOWN=new Set(['not-published','calendar-stopped','completion-pending','uncertain-write','population-owned','current-operation','history-uncommitted','coordination-paused']);
 const AI_ERROR=/AI connection/i;

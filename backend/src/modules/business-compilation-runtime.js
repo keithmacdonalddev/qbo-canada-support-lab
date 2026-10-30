@@ -72,6 +72,11 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       if (!ID.test(actor?.actorId || '') || !ID.test(actor?.ownerId || '')) fail('Current business execution authority is required.');
       const intent = structuredClone(await call(() => loadIntent(scope, operationId, logicalKey))); check();
       if (!intent || intent.version !== 1 || intent.kind !== 'create' || !sameScope(intent.scope, scope) || intent.operationId !== operationId || intent.planHash !== planHash || intent.logicalKey !== logicalKey || intent.step?.logicalKey !== logicalKey || intent.fingerprint !== hash(intent.step) || canonical(intent) !== canonical(supplied) || !Array.isArray(intent.step.references) || intent.step.references.length > 100 || !Array.isArray(intent.dependencies) || intent.dependencies.length > 20 || !Array.isArray(intent.step.dependencies) || canonical(intent.dependencies) !== canonical(intent.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })))) fail('The original approved creation intent changed.');
+      if (['Customer', 'Vendor', 'Item'].includes(intent.entity)) {
+        const role = intent.step.details?.listRole, nameClient = await call(() => resolveClient(scope, { signal: controller.signal })); check();
+        if (!role?.name || await call(() => require('./business-added-roles').nameTaken(text => nameClient.query(text), intent.entity, role.name))) fail('The name of this added customer, supplier or item is already used in QuickBooks.');
+        check();
+      }
       const roots = intent.dependencies.map(value => value.logicalKey);
       if (roots.length) {
         const graph = await call(() => steps.verifyGraph(scope, operationId, roots, { signal: controller.signal })); check();

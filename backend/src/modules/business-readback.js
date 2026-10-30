@@ -143,6 +143,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     delete expectedHeader[postingAccount];
   }
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
+  if (require('./business-transaction-compiler').LISTS.has(compiled.entity) && record.Active !== true) mismatch('The added customer, supplier or item is not active.');
   for (const key of ['ClassRef', 'DepartmentRef', 'ProjectRef']) if (!payload[key] && record[key]?.value) mismatch('An unplanned transaction dimension is present.');
   const permittedTop = [...linkList(payload.LinkedTxn), ...childLinks], actualTop = linkList(record.LinkedTxn);
   for (const expected of linkList(payload.LinkedTxn)) if (!(estimateLinkDropped && expected.TxnType === 'Estimate' && expected.TxnId === estimateLinkDropped.estimateId) && !actualTop.some(value => canonical(value) === canonical(expected))) mismatch('An originating transaction link is missing.');

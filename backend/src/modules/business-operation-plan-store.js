@@ -4,7 +4,7 @@ const { validateReferenceBinding } = require('./business-reference');
 const { businessDate } = require('./business-activity-preview');
 const { assertRun, assertRunApproval } = require('./business-period-store');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-const ENTITIES = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry']);
+const ENTITIES = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry', 'Customer', 'Vendor', 'Item']);
 const REFS = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']);
 const MAX_RECORDS = 1000, MAX_CREATES = 500, MAX_BYTES = 8000000;
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_PLAN_UNVERIFIED' }); }
