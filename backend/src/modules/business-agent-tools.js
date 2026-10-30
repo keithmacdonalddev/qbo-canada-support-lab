@@ -67,7 +67,12 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       const today=businessDate(new Date(now())),entity=input.area==='receivables'?'Invoice':'Bill';
       const rows=await store.models.Records.find({...scope,entity,deleted:false,'summary.balanceCents':{$gt:0},...(input.overdueOnly?{'summary.dueDate':{$lt:today}}:{})}).select('entity qboId summary lastObservedAt').sort({'summary.dueDate':1,_id:1}).limit(input.limit||20).maxTimeMS(3000).lean();
       result={success:true,data:{asOf:row.syncView?.lastSuccessAt||null,provisional:row.syncView?.status!=='current',records:rows.map(item=>({entity:item.entity,id:item.qboId,...item.summary,observedAt:item.lastObservedAt})),mayHaveMore:rows.length===(input.limit||20)}};
-    }else if(name==='inspectBusinessOperation')result={success:true,data:await governanceFor(null).reviewOperation(user,input.operationId,input.offset||0)};
+    }else if(name==='inspectBusinessOperation'){
+      // An identifier that names no saved operation (often a decision or event id) must not
+      // read as an unrecoverable plan: say plainly that nothing is waiting under it.
+      if(!await store.models.Runs.exists({_id:input.operationId,...scope}).maxTimeMS(3000))result={success:false,notFound:true,error:'No saved accounting operation has this identifier (it may be a decision or event id). Nothing is waiting to be recovered under it. Use getBusinessState: when the calendar has no current operation, continue normally by preparing the next business period.'};
+      else result={success:true,data:await governanceFor(null).reviewOperation(user,input.operationId,input.offset||0)};
+    }
     else if(name==='getBusinessActivityChoices')result={success:true,data:await governanceFor(null).activityOptions(user,{signal})};
     else if(name==='prepareBusinessActivity'){
       const batch = require('./business-activity-batch'); batch.validateChoices(input);

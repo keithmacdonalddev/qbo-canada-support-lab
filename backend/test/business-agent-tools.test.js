@@ -45,3 +45,11 @@ test('getBusinessState exposes usage read-only without any control tool',async()
  const tools=createBusinessAgentTools({row:{settings:{}},scope,store:{business:async()=>({}),decisions:async()=>[]},guard:async()=>{},readTools:{toolDefinitions:[]},usageFor:async()=>usage});
  const result=await tools.execute('getBusinessState',{});assert.deepEqual(result.data.usage,usage);assert.equal(tools.definitions.some(tool=>/configure-usage|retry-plan-limit/.test(tool.name)),false);
 });
+test('inspecting an identifier with no saved operation says nothing is waiting to be recovered',async()=>{
+ const h=fixture();let reviewed=0;const lookups=[];
+ h.tools=createBusinessAgentTools({row:h.row,passId:'fixture-pass',scope,user:{id:ownerId},signal:new AbortController().signal,store:{models:{Runs:{exists:query=>{lookups.push(query);return {maxTimeMS:async()=>query._id===operationId?{_id:operationId}:null};}}}},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},governanceFor:()=>({reviewOperation:async()=>{reviewed++;return {entries:[]};}})});
+ const missing=await h.tools.execute('inspectBusinessOperation',{operationId:'9'.repeat(24)});
+ assert.equal(missing.success,false);assert.equal(missing.notFound,true);assert.match(missing.error,/Nothing is waiting to be recovered/);assert.equal(reviewed,0);
+ assert.deepEqual(lookups[0],{_id:'9'.repeat(24),...scope});
+ const found=await h.tools.execute('inspectBusinessOperation',{operationId});assert.equal(found.success,true);assert.equal(reviewed,1);
+});
