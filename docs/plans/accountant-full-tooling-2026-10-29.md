@@ -96,15 +96,40 @@ and the app shows the owner exactly which tools exist and what they reach.
   (no opening balances, parents, quantities or arbitrary account/tax IDs). The
   role registry is derived, append-only evidence (`business-added-roles.js`): a
   role exists only when its list step verified and its whole operation verified,
-  so additions are usable only in a later batch. Names must be free across the
-  shared customer/supplier/employee namespace (and items), checked at preparation
-  and again before dispatch. A role is refused if its QuickBooks record drifted
-  from the creating request. Added customers and items are usable in
-  `settled-service-sale` (the item's retained income role and unit drive the
-  income mapping); added suppliers in `paid-operating-expense`. Batches under
-  v1–v5 rebuild with their exact original rules. Known limits: NonInventory
-  items, added roles in credits/refunds/cash expenses, and automatic recovery of
-  an unknown list write (it stays unresolved; never resent) are not built.
+  so additions are usable only in a later batch. Membership also re-checks the
+  creation evidence (company-scoped compiled request, dispatch, the receipt rebuilt
+  from its transport receipt row and audits, and a read-back evidence hash
+  recomputed from that receipt and the observed record), the step's own
+  verification audit, and the operation's committed period evidence through the
+  same proof stock carries use (`committedReceipt`: proof hash recomputed, period
+  proof revalidated, completion and evidence audits present). Names must be free across
+  the shared customer/supplier/employee namespace (and items), checked at
+  preparation and again before dispatch. Read-back retains the verified full
+  definition hash of each added record (the shared reference-definition contract:
+  all fields except version metadata and balances); a role whose current
+  definition differs (for example a new parent, job, contact or account) is
+  refused. A role verified before definition hashes were retained stays unusable
+  by design; none exist (Production had no list steps or add-* runs when this
+  rule landed), so there is no migration. Additions go in their own batch (add-*
+  activities only), so an unrelated sale or expense cannot fail the batch after
+  a record was created. Anomalous registry entries (incomplete evidence,
+  duplicates, over the 1,000-record capacity, unverified batches) are listed as
+  `unusableAddedRecords` with a reason instead of blocking other activity. The
+  own-batch rule is enforced at preparation, at approval (including an already
+  approved operation) and when a saved operation starts; capacity at preparation,
+  at approval and immediately before each list record is sent (counting every
+  created or possibly created list record, while the operation holds the company
+  writer), so a saved or approved batch can never create a record past capacity
+  or inside a mixed batch. Added customers and
+  items are usable in `settled-service-sale` (the item's retained income role and
+  unit drive the income mapping); added suppliers in `paid-operating-expense`.
+  Batches under v1–v5 rebuild with their exact original rules. A lost response
+  follows the same recovery as transactions: a recorded transport response is
+  recovered automatically (request-correlated read-back), and an unknown outcome
+  is never resent and waits for the owner-reviewed attribution in
+  `business-unknown-recovery.js` (entity-generic; not yet covered by a list-specific
+  test). Known limits: NonInventory items and added roles in
+  credits/refunds/cash expenses are not built.
 
 ## Constraint that shapes every workflow
 

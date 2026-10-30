@@ -98,4 +98,4 @@ async function readCommittedStockOpening(models,active,session) {
   const state = stock.calculation.closing, carry = {kind:'committed-period',rootHash:root.rootHash,throughDate:run.throughDate,stateHash:state.stateHash,costCents:stock.checks.find(row => row.key === 'costOfGoods').actualCents,operationId,planHash:run.planHash,evidenceHash:evidence.evidenceHash,evidenceRevision:evidence.evidenceRevision,completionAuditId:String(run.verification.completionAuditId)};
   return {state,carry};
 }
-module.exports = {readSameDayStockRows,readCommittedStockOpening,assertFrozenStockOpening};
+module.exports = {committedReceipt,readSameDayStockRows,readCommittedStockOpening,assertFrozenStockOpening};

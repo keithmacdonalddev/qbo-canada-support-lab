@@ -108,10 +108,13 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     // List records carry no date or posting. Only allowlisted definition fields are sent;
     // no opening balance, parent, project, quantity or arbitrary account/tax ID.
     const role = lifecycle.listRole, list = {};
+    // An item description can print on customer invoice lines, so it carries the
+    // business purpose (bounded); traceability stays in the step, compilation and receipt.
+    const itemDescription = value => { const text = String(value?.activityBatch?.purpose || '').trim().slice(0, 500); if (text.length < 10) fail('An added service item needs its retained business purpose.'); return text; };
     if (step.entity === 'Item') {
       const income = get('Account', role.incomeRole);
       if (income.AccountType !== 'Income' || refs.size !== 1) fail('An added service item needs its exact published income account only.');
-      Object.assign(list, { Name: role.name, Type: 'Service', IncomeAccountRef: ref(income.Id), UnitPrice: money(role.unitPriceCents), Description: 'Test Data Lab activity ' + step.logicalKey });
+      Object.assign(list, { Name: role.name, Type: 'Service', IncomeAccountRef: ref(income.Id), UnitPrice: money(role.unitPriceCents), Description: itemDescription(lifecycle) });
     } else {
       if (refs.size) fail('An added customer or supplier references no other record.');
       Object.assign(list, { DisplayName: role.name, CurrencyRef: { value: 'CAD' }, ...(step.entity === 'Customer' ? { Notes: 'Test Data Lab activity ' + step.logicalKey } : {}), ...(role.email ? { PrimaryEmailAddr: { Address: role.email } } : {}), ...(role.phone ? { PrimaryPhone: { FreeFormNumber: role.phone } } : {}) });

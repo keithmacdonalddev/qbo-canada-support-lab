@@ -234,9 +234,11 @@ function createBusinessGovernanceService(dependencies = {}) {
       for (const choice of receiving) require('./business-purchase-order-receipt').assertChoice(choice, await receiptReader(scope, choice, { signal }), active.view.masterBindings);
       // Accountant-added roles: new names must be free; roles used must be verified,
       // unchanged since creation, and created by an earlier (verified) batch.
-      const addedRoles = require('./business-added-roles'), roles = await addedRoles.listAddedRoles(models, scope);
-      await addedRoles.assertNamesAvailable({ batch, roles, query: text => client.query(text) });
-      const usedRoles = await addedRoles.resolveBatchRoles({ roles, batch, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
+      // Additions go in their own batch, within the registry's remaining capacity.
+      const addedRoles = require('./business-added-roles'); addedRoles.assertListOnlyBatch(batch);
+      const registry = await addedRoles.listAddedRoles(models, scope, ownerId); addedRoles.assertCapacity(registry, batch);
+      await addedRoles.assertNamesAvailable({ batch, registry, query: text => client.query(text) });
+      const usedRoles = await addedRoles.resolveBatchRoles({ registry, batch, scope, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
       prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity, usedRoles);
       prepared.activityBatch = batch;
@@ -378,7 +380,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     await access.authorize(scope, 'operations.preview', { signal });
     // Transfers need two published bank roles; journal lines use published roles only.
     const banks = policy.bankRoles(), transfers = banks.length >= 2 ? { bankRoles: banks } : { bankRoles: banks, transferUnavailable: 'Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.' };
-    const added = require('./business-added-roles').choiceRoles(await require('./business-added-roles').listAddedRoles(models, scope));
+    const added = require('./business-added-roles').choiceRoles(await require('./business-added-roles').listAddedRoles(models, scope, bound.ownerId));
     return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
@@ -402,9 +404,14 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (!run || run.planHash !== input.planHash) fail('The exact reviewed operation is unavailable.');
     // Exact acknowledgement recovery reuses the already saved approval. Fresh
     // provider reads belong outside Mongo transactions and only precede a new grant.
+    // Additions sit in their own batch: refused for saved and already approved
+    // operations too (dispatch re-checks this and capacity before each write).
+    const plan = await read(models.Plans, { _id: run.planId, ...scope, planHash: run.planHash }), addedRoles = require('./business-added-roles');
+    if (plan?.manifest?.activityBatch) addedRoles.assertListOnlyBatch(plan.manifest.activityBatch);
     if (run.status !== 'previewed') return planStore(bound).approve(scope, operationId, input.planHash, { confirmProduction: input.confirmProduction === true });
-    const plan = await read(models.Plans, { _id: run.planId, ...scope, planHash: run.planHash });
     if (!plan || hash(plan.manifest) !== input.planHash) fail('The immutable reviewed operation changed.');
+    // Additions prepared earlier must still fit the registry when the writer is claimed.
+    if (plan.manifest.activityBatch) addedRoles.assertCapacity(await addedRoles.countAddedRecords(models, scope), plan.manifest.activityBatch);
     const active = await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: plan.manifest }), current = await coordination(bound);
     const period = { fromDate: run.fromDate, throughDate: run.throughDate };
     const reports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, period);

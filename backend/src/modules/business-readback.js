@@ -9,6 +9,14 @@ const HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,6
 function invalid(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_READBACK_UNVERIFIED' }); }
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]);
 function fresh(stamp, now) { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= now && now - value <= 300000; }
+function listDefinitionHash(scope, entity, record) { try { return require('./business-reference').referenceDefinition(scope, entity, record).hash; } catch { return null; } }
+// The read-back evidence hash of a standalone added list record (no tax policy,
+// parents, descendants, routing or conversions), exactly as verifyBusinessContent and
+// verifyBusinessReadback compute it. The added-role registry recomputes it from the
+// retained receipt hash and observed record hash; keep the two in step.
+function listReadbackEvidenceHash({ requestHash, compilationHash, receiptHash, recordHash }) {
+  return hash({ content: hash({ requestHash, compilationHash, taxPolicy: null, receipt: receiptHash, recordHash, parents: [], descendants: [] }), parents: [] });
+}
 function cents(value) { if (typeof value !== 'number' || !Number.isFinite(value)) invalid('A saved monetary value is missing.'); const number = Math.round(value * 100); if (!Number.isSafeInteger(number) || number < 0 || Math.abs(value * 100 - number) > Number.EPSILON * Math.max(1, Math.abs(value * 100)) * 4) invalid('A saved monetary value is invalid.'); return number; }
 function validateCompilation(compiled) {
   if (!compiled || compiled.version !== 1 || !SUPPORTED.has(compiled.entity) || !HASH.test(compiled.logicalKey || '') || !HASH.test(compiled.intentHash || '') || !HASH.test(compiled.evidenceHash || '') || !Array.isArray(compiled.relationships) || compiled.relationships.length > 20) invalid('The original compiled transaction is unavailable.');
@@ -143,7 +151,11 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     delete expectedHeader[postingAccount];
   }
   if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
-  if (require('./business-transaction-compiler').LISTS.has(compiled.entity) && record.Active !== true) mismatch('The added customer, supplier or item is not active.');
+  const listRecord = require('./business-transaction-compiler').LISTS.has(compiled.entity);
+  if (listRecord && record.Active !== true) mismatch('The added customer, supplier or item is not active.');
+  // An added list record is standalone: no parent, sub-customer/project, billing
+  // through a parent, sub-item or quantity tracking (the request sends none of them).
+  if (listRecord && (record.ParentRef?.value || [record.Job, record.BillWithParent, record.IsProject, record.SubItem, record.TrackQtyOnHand].some(value => value === true || value === 'true') || (compiled.entity === 'Item' && record.Type !== 'Service'))) mismatch('The added customer, supplier or item gained a parent, project, sub-item or stock setting.');
   for (const key of ['ClassRef', 'DepartmentRef', 'ProjectRef']) if (!payload[key] && record[key]?.value) mismatch('An unplanned transaction dimension is present.');
   const permittedTop = [...linkList(payload.LinkedTxn), ...childLinks], actualTop = linkList(record.LinkedTxn);
   for (const expected of linkList(payload.LinkedTxn)) if (!(estimateLinkDropped && expected.TxnType === 'Estimate' && expected.TxnId === estimateLinkDropped.estimateId) && !actualTop.some(value => canonical(value) === canonical(expected))) mismatch('An originating transaction link is missing.');
@@ -238,8 +250,12 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   }
   const dropProof = estimateLinkDropped || droppedChild?.verification.estimateLinkDropped || null;
   const oldest = [observed, ...(taxPolicy?.purchaseOrderReceipt ? [taxPolicy.purchaseOrderReceipt.observed] : []), ...(observed.accountRouting ? [observed.accountRouting] : []), ...(estimateConversion ? [estimateConversion] : []), ...parents, ...descendants, ...descendants.map(value => value.verification)].map(value => value.observedAt).sort()[0];
+  // The verified full definition of an added list record (the shared reference
+  // definition contract: everything except version metadata and balances). Later use
+  // of the record is refused unless its current definition still has this hash.
+  const listDefinition = listRecord && record.Active === true ? listDefinitionHash(scope, compiled.entity, record) : null;
   return { version: 1, kind: 'business-content', compilationHash: compiled.compilationHash, scope, logicalKey: compiled.logicalKey, entity: compiled.entity, qboId: record.Id, fingerprint: compiled.intentHash, matchesIntent: issues.length === 0, issues,
-    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(estimateConversion ? { estimateConversion } : {}), ...(dropProof ? { estimateLinkDropped: dropProof } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
+    syncToken: record.SyncToken, observedAt: oldest, observedHash: observed.recordHash, ...(listDefinition ? { listDefinitionHash: listDefinition } : {}), ...(observed.accountRouting ? { accountRouting: observed.accountRouting } : {}), ...(estimateConversion ? { estimateConversion } : {}), ...(dropProof ? { estimateLinkDropped: dropProof } : {}), ...(purchaseOrderConsumption ? { purchaseOrderConsumption } : {}),
     evidenceHash: hash({ requestHash: request.requestHash, compilationHash: compiled.compilationHash, taxPolicy: taxPolicy?.evidenceHash || null, ...(taxPolicy?.purchaseOrderReceipt ? { purchaseOrderReceipt: hash(JSON.parse(JSON.stringify(taxPolicy.purchaseOrderReceipt))) } : {}), receipt: receipt.evidenceHash, recordHash: observed.recordHash, ...(purchaseOrderConsumption ? { purchaseOrderConsumptionHash: purchaseOrderConsumption.evidenceHash } : {}), ...(observed.accountRouting ? { accountRoutingHash: observed.accountRouting.evidenceHash } : {}), ...(estimateConversion ? { estimateConversionHash: estimateConversion.evidenceHash } : {}), ...(dropProof ? { estimateLinkDropped: dropProof } : {}), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)), descendants: descendants.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }), relationships };
 }
 // Content checks can be computed for a saved child before closing its parent graph.
@@ -363,4 +379,4 @@ function verifyPopulationFinancialParent(value, now = Date.now()) {
   return proof;
 }
 
-module.exports = { validateCompilation, verifyBusinessContent, verifyBusinessReadback, createBusinessReadbackAdapter, verifyPopulationFinancialContent, verifyPopulationFinancialParent };
+module.exports = { validateCompilation, verifyBusinessContent, verifyBusinessReadback, listReadbackEvidenceHash, createBusinessReadbackAdapter, verifyPopulationFinancialContent, verifyPopulationFinancialParent };

@@ -72,11 +72,15 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   };
   const evidence = createBusinessPeriodEvidence({ ...models, transaction, access, assertReady, writerFence, steps, readStock: require('./business-stock-source').createBusinessStockReader({ access, now }), readReports: createBusinessReportReader({ access, now }), writeAudit, now });
   const periods = createBusinessPeriodStore({ ...models, Writer: writerFence, transaction, authorize, assertReady, writeAudit, loadProof: evidence.loadProof, now });
-  async function validateOpening({ signal }) {
+  // Runs when the operation starts and immediately before each write (beforeDispatch
+  // passes the step's logicalKey), while this operation holds the company writer.
+  async function validateOpening({ signal, logicalKey = null }) {
     const run = await models.Runs.findOne({ _id: operationId, ...scope }).maxTimeMS(3000).lean();
     const plan = await models.Plans.findOne({ _id: run.planId, ...scope, operationId, planHash: boundPlanHash }).maxTimeMS(3000).lean();
     if (!plan?.manifest || require('./business-calendar').hash(plan.manifest) !== run.planHash) fail('The exact saved business plan is unavailable.');
     require('./business-financial-movements').assertMovementCapacity(plan.manifest);
+    // Saved or already approved additions: own batch only, and room in the registry.
+    if (plan.manifest.activityBatch) await require('./business-added-roles').assertDispatchable(models, scope, plan.manifest.activityBatch, operationId, logicalKey);
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
     const before = await verification.readFence(scope, { signal });
     let stockSource = null;
