@@ -131,8 +131,10 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function current(row,token){const value=await Agents.findOne({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}}).maxTimeMS(3000).lean();if(!value)fail('The business worker was paused, changed or lost its lease.');return value;}
   async function update(row,token,changes){const saved=await Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}},{$set:changes},{new:true}).lean();if(!saved)fail('The business worker changed before its progress was saved.');return saved;}
   async function release(row,token,changes){return Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token},{$set:{...changes,leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true}).lean();}
+  // Best-effort live review steps: fenced to the live lease and its exact pass, never bumps the owner revision.
+  async function progress(row,token,passId,steps){return Agents.updateOne({_id:row._id,...scopeOf(row),leaseToken:token,'reviewProgress.passId':passId,leaseExpiresAt:{$gt:new Date(now())}},{$set:{'reviewProgress.steps':require('./business-agent-progress').cleanSteps(steps)}}).maxTimeMS(2000);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,events,decisions,decision,event,due,claim,current,update,release,run,ownedRuns,scopeOf};
+  return {models,get,setup,control,business,workFacts,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

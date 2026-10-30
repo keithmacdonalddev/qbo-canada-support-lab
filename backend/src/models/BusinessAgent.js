@@ -17,6 +17,8 @@ const schema = new mongoose.Schema({
   memory: { type: String, default: '' },
   currentWork: { type: String, default: '' },
   activePass: { type: mongoose.Schema.Types.Mixed, default: null },
+  // { passId, role, startedAt, steps: [{ at, label, status }] } for the latest review attempt; labels only.
+  reviewProgress: { type: mongoose.Schema.Types.Mixed, default: null },
   specialists: { type: mongoose.Schema.Types.Mixed, default: {} },
   sync: { type: mongoose.Schema.Types.Mixed, default: null },
   syncView: { type: mongoose.Schema.Types.Mixed, default: null },

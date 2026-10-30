@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { businessWork } = require('../src/modules/business-agent-work');
+const { businessWork, rightNow, oneLine } = require('../src/modules/business-agent-work');
 
 const POLICY = 'a'.repeat(64), AUTH = 'c'.repeat(64);
 const grant = { id: 'g'.repeat(64), authorityHash: AUTH, activityPolicyHash: POLICY };
@@ -133,9 +133,7 @@ test('standing duties are on duty, not spinning, while nothing is happening', ()
 
 test('the spinner appears only while a review or a matching operation is in progress', () => {
   const reviewing = businessWork({ ...running, agent: { ...running.agent, reviewing: true, currentWork: 'Main accountant is reviewing and managing the business' }, business: adopted, coverage });
-  const review = byKey(reviewing, 'reviewing');
-  assert.equal(review.state, 'working');
-  assert.equal(review.detail, 'Main accountant is reviewing and managing the business.');
+  assert.equal(byKey(reviewing, 'reviewing'), undefined, 'a review in progress is shown by rightNow, not as a list row');
   for (const key of DUTIES) assert.equal(byKey(reviewing, key).state, 'on-duty', 'a review alone does not mean every duty is in progress');
   const batch = status => ({ ...adopted, currentOperation: { operationId: 'o', status, activityBatch: { day: '2026-10-29', types: ['receive-purchase-order', 'pay-adopted-bill'] } } });
   const sending = businessWork({ ...running, business: batch('running'), coverage });
@@ -170,4 +168,57 @@ test('each standing duty states what it has done from verified records', () => {
   const renew = businessWork({ ...running, business: { ...adopted, authorityHash: 'e'.repeat(64) }, coverage: null, facts });
   assert.equal(byKey(renew, 'receive-purchase-orders').state, 'waiting');
   assert.equal(byKey(renew, 'receive-purchase-orders').facts, 'Received 3 purchase orders · last Oct 29', 'facts stay visible while waiting');
+});
+
+const pass = { id: 'pass-1', role: 'accountant', startedAt: '2026-10-30T18:20:00.000Z' };
+const live = { configured: true, settings: { monitoring: true, autonomous: true }, sync: { status: 'current' }, nextDecisionAt: '2026-10-30T19:22:00.000Z', lastDecisionAt: '2026-10-30T18:21:00.000Z' };
+const completed = [
+  { kind: 'review-completed', at: '2026-10-30T17:21:00.000Z', detail: 'Older review.' },
+  { kind: 'plan-decision', at: '2026-10-30T18:22:00.000Z', detail: 'Not a review.' },
+  { kind: 'review-completed', at: '2026-10-30T18:21:00.000Z', detail: '## Summary\n**Confirmed** $399 still due; nothing posted.\nMore detail.' },
+];
+
+test('rightNow is idle between reviews with the next review time and a one-line result of the last one', () => {
+  const view = rightNow({ ...live, events: completed });
+  assert.equal(view.state, 'idle');
+  assert.equal(view.nextReviewAt, '2026-10-30T19:22:00.000Z');
+  assert.equal(view.lastReviewAt, '2026-10-30T18:21:00.000Z');
+  assert.equal(view.lastSummary, 'Summary', 'first non-empty line, markdown removed');
+  assert.deepEqual(view.steps, []);
+  assert.equal(rightNow({ ...live, events: [{ kind: 'review-completed', at: completed[2].at, detail: '\n**Confirmed** $399 still due; nothing posted.\nMore.' }] }).lastSummary, 'Confirmed $399 still due; nothing posted.');
+  const none = rightNow({ ...live, events: [] });
+  assert.equal(none.lastReviewAt, '2026-10-30T18:21:00.000Z');
+  assert.equal(none.lastSummary, '');
+  assert.equal(oneLine('x'.repeat(400)).length, 220);
+});
+
+test('rightNow states pauses, stops and catch-up plainly instead of a next review', () => {
+  assert.equal(rightNow({ ...live, configured: false }).state, 'not-configured');
+  assert.equal(rightNow({ ...live, settings: { monitoring: false, autonomous: true } }).state, 'stopped');
+  const paused = rightNow({ ...live, settings: { monitoring: true, autonomous: false } });
+  assert.equal(paused.state, 'paused');
+  assert.equal(paused.nextReviewAt, null);
+  const limited = rightNow({ ...live, usage: { pause: { title: 'Monthly cap reached', resetAt: '2026-11-01T00:00:00.000Z', detail: 'x' } } });
+  assert.equal(limited.state, 'usage-paused');
+  assert.deepEqual(limited.pause, { title: 'Monthly cap reached', resetAt: '2026-11-01T00:00:00.000Z' });
+  assert.equal(limited.nextReviewAt, '2026-11-01T00:00:00.000Z');
+  assert.equal(rightNow({ ...live, recovering: true }).state, 'recovering');
+  assert.equal(rightNow({ ...live, sync: { status: 'catching-up' } }).state, 'catching-up');
+});
+
+test('rightNow shows the live review with its latest steps, newest first, only for the active pass', () => {
+  const steps = Array.from({ length: 11 }, (_, index) => ({ at: new Date(Date.parse(pass.startedAt) + index * 1000).toISOString(), label: 'Step ' + index, status: index === 10 ? 'running' : 'done', input: { secret: 'never shown' } }));
+  const view = rightNow({ ...live, reviewing: true, activePass: pass, progress: { passId: 'pass-1', startedAt: '2026-10-30T18:20:05.000Z', steps }, events: completed });
+  assert.equal(view.state, 'reviewing');
+  assert.equal(view.role, 'accountant');
+  assert.equal(view.startedAt, '2026-10-30T18:20:05.000Z');
+  assert.equal(view.steps.length, 8);
+  assert.equal(view.steps[0].label, 'Step 10');
+  assert.equal(view.steps[0].status, 'running');
+  assert.equal(view.earlierSteps, 3);
+  assert.deepEqual(Object.keys(view.steps[0]).sort(), ['at', 'label', 'status'], 'labels, status and time only');
+  const stale = rightNow({ ...live, reviewing: true, activePass: pass, progress: { passId: 'older-pass', steps } });
+  assert.deepEqual(stale.steps, [], 'steps from another pass are never shown');
+  assert.equal(stale.startedAt, pass.startedAt);
+  assert.equal(rightNow({ ...live, reviewing: true, activePass: pass, settings: { monitoring: true, autonomous: false } }).state, 'reviewing', 'a review already running is shown as running');
 });

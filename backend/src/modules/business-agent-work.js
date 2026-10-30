@@ -75,9 +75,8 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
 
   // The accountant's own work.
   const running=Boolean(settings.monitoring&&settings.autonomous&&grant&&!stale&&!usage?.pause);
-  // The only spinner states: a review holding the worker right now, sync not yet current, or
-  // an operation that is executing. Duties that are merely enabled are 'on-duty' (no animation).
-  if(agent.reviewing)add({key:'reviewing',owner:ACCOUNTANT,state:'working',title:'Reviewing the business now',detail:agent.currentWork?String(agent.currentWork).replace(/\.?$/,'.'):'',next:'Decides what to do next; anything it does appears in its activity.'});
+  // The only spinner states: sync not yet current, or an operation that is executing. A review in
+  // progress is shown by rightNow() above this list. Enabled duties are 'on-duty' (no animation).
   if(settings.monitoring&&sync.status&&sync.status!=='current')add({key:'catch-up',owner:ACCOUNTANT,state:'working',title:'Catching up with QuickBooks',detail:'Reading the latest company changes. Accounting work waits until every record type is current.',next:'Continues automatically.'});
   const resumable=codes.has('current-operation')&&ownOperation(operation,agent);
   if(codes.has('population-owned')||codes.has('history-uncommitted')||(codes.has('current-operation')&&!resumable)){
@@ -120,4 +119,30 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   return {headline,needsOwner:needsOwner.length,items};
 }
 
-module.exports={businessWork,dutyFacts,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};
+// The first non-empty line of a review summary, without markdown markers, for a one-line recap.
+function oneLine(text,max=220){
+  const line=String(text||'').split(/\r?\n+/).map(part=>part.replace(/^(?:[\s#>*\-•]+|\d+[.)]\s+)+/,'').replace(/[*_`]+/g,'').trim()).find(Boolean)||'';
+  return line.length>max?line.slice(0,max-1).trimEnd()+'…':line;
+}
+const SHOWN_STEPS=8;
+// What the accountant is doing at this moment. Times are ISO strings; the page words them.
+// state: not-configured | stopped | paused | usage-paused | reviewing | recovering | catching-up | idle
+function rightNow({configured=false,settings={},usage=null,reviewing=false,recovering=false,activePass=null,progress=null,nextDecisionAt=null,lastDecisionAt=null,events=[],sync={}}={}){
+  settings=settings||{};
+  const last=(Array.isArray(events)?events:[]).filter(event=>event&&event.kind==='review-completed').sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0]||null;
+  const base={state:'idle',role:null,startedAt:null,nextReviewAt:nextDecisionAt||null,lastReviewAt:last?.at||lastDecisionAt||null,lastSummary:last?oneLine(last.detail):'',steps:[],earlierSteps:0,pause:null};
+  if(!configured)return {...base,state:'not-configured',nextReviewAt:null};
+  if(!settings.monitoring)return {...base,state:'stopped',nextReviewAt:null};
+  if(reviewing&&activePass){
+    const own=Boolean(progress&&progress.passId===activePass.id);
+    const steps=own?require('./business-agent-progress').cleanSteps(progress.steps):[];
+    return {...base,state:'reviewing',role:activePass.role||'accountant',startedAt:(own&&progress.startedAt)||activePass.startedAt||null,steps:steps.slice(-SHOWN_STEPS).reverse(),earlierSteps:Math.max(0,steps.length-SHOWN_STEPS)};
+  }
+  if(!settings.autonomous)return {...base,state:'paused',nextReviewAt:null};
+  if(usage?.pause)return {...base,state:'usage-paused',nextReviewAt:usage.pause.resetAt||null,pause:{title:String(usage.pause.title||''),resetAt:usage.pause.resetAt||null}};
+  if(recovering)return {...base,state:'recovering'};
+  if(sync?.status&&sync.status!=='current')return {...base,state:'catching-up'};
+  return base;
+}
+
+module.exports={businessWork,rightNow,oneLine,dutyFacts,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};
