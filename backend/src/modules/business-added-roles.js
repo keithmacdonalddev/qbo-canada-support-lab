@@ -202,4 +202,5 @@ function choiceRoles(registry) {
   return { addedCustomers: roles.filter(role => role.kind === 'customer').map(view), addedSuppliers: roles.filter(role => role.kind === 'supplier').map(view), addedItems: roles.filter(role => role.kind === 'item').map(view),
     unusableAddedRecords: registry.unusable.slice(0, 50).map(row => ({ key: row.key, kind: row.kind, name: row.name, qboId: row.id, reason: row.reason })), addedRecordCapacity: { used: registry.count, limit: MAX_ROLES } };
 }
-module.exports = { listAddedRoles, countAddedRecords, assertDispatchable, resolveBatchRoles, assertNamesAvailable, assertCapacity, assertListOnlyBatch, nameTaken, choiceRoles, ENTITY, LIST_TYPES, MAX_ROLES };
+// receiptProblem is shared with the correction ownership proof (business-correction.js).
+module.exports = { listAddedRoles, countAddedRecords, assertDispatchable, resolveBatchRoles, assertNamesAvailable, assertCapacity, assertListOnlyBatch, nameTaken, choiceRoles, receiptProblem, ENTITY, LIST_TYPES, MAX_ROLES };

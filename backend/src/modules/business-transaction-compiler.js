@@ -27,6 +27,56 @@ function sourceItemLines(record, detailType) {
 }
 function canonicalTxnType(type) { return type === 'BillPaymentCheck' ? 'BillPayment' : type; }
 function links(record) { return [...(record.LinkedTxn || []), ...(record.Line || []).flatMap(line => line.LinkedTxn || [])].map(link => ({ ...link, TxnType: canonicalTxnType(link.TxnType) })); }
+// Policy v7 corrections: the fresh original must still carry exactly the tax the
+// reversal repeats (rate identity, percentage, taxable base and cents).
+function originalTaxMatches(record, tax) {
+  try {
+    const detail = record.TxnTaxDetail, actual = detail?.TaxLine, used = new Set();
+    if (!tax || !Array.isArray(actual) || actual.length !== tax.lines.length || cents(detail.TotalTax) !== tax.totalTaxCents) return false;
+    return tax.lines.every(line => {
+      const index = actual.findIndex((saved, i) => !used.has(i) && saved?.DetailType === 'TaxLineDetail' && saved.TaxLineDetail?.TaxRateRef?.value === line.rateId && saved.TaxLineDetail.PercentBased === true && saved.TaxLineDetail.TaxPercent === line.percent && cents(saved.Amount) === line.amountCents && cents(saved.TaxLineDetail.NetAmountTaxable) === line.taxableCents);
+      if (index < 0) return false; used.add(index); return true;
+    });
+  } catch { return false; }
+}
+// The reversal mirrors the freshly verified original exactly (party, lines, tax and
+// total), and the original is still in the state its kind reverses: wholly unpaid with
+// no credits, or fully collected by its own payments. Checked inside the writer fence.
+function assertCorrectionSource({ lifecycle, payload, source, receivables, relationships }) {
+  const mode = lifecycle.mode, terms = lifecycle.correction.original, record = source.record;
+  const wrong = message => fail(message || 'The original record changed since it was chosen for correction; nothing was sent.');
+  if (source.logicalKey !== terms.logicalKey || source.qboId !== terms.qboId || source.fingerprint !== terms.fingerprint || record.Id !== terms.qboId || record.TxnDate !== terms.txnDate) wrong();
+  if (mode === 'correction-journal') {
+    // Exact opposite lines: same accounts and amounts, debit and credit exchanged.
+    const shape = (line, flip) => { const detail = line?.JournalEntryLineDetail; if (line?.DetailType !== 'JournalEntryLineDetail' || !detail || !['Debit', 'Credit'].includes(detail.PostingType)) wrong(); return canonical({ posting: flip ? (detail.PostingType === 'Debit' ? 'Credit' : 'Debit') : detail.PostingType, account: detail.AccountRef?.value, cents: cents(line.Amount), entity: detail.Entity?.EntityRef?.value || null, classRef: detail.ClassRef?.value || null }); };
+    if (!Array.isArray(record.Line) || canonical(record.Line.map(line => shape(line, false)).sort()) !== canonical(payload.Line.map(line => shape(line, true)).sort())) wrong('The original journal entry changed; its exact reversal could not be confirmed and nothing was sent.');
+    return;
+  }
+  const sales = mode !== 'correction-supplier-credit', party = sales ? 'CustomerRef' : 'VendorRef', tax = lifecycle.originalTax, detailType = sales ? 'SalesItemLineDetail' : 'AccountBasedExpenseLineDetail';
+  if (record.GlobalTaxCalculation !== 'TaxExcluded' || record.CurrencyRef?.value !== 'CAD' || !payload[party] || record[party]?.value !== payload[party].value) wrong();
+  const key = line => { const d = line?.[detailType]; return canonical(sales ? { item: d?.ItemRef?.value, quantity: d?.Qty, price: cents(d?.UnitPrice), amount: cents(line.Amount), tax: d?.TaxCodeRef?.value } : { account: d?.AccountRef?.value, amount: cents(line.Amount), tax: d?.TaxCodeRef?.value, billable: d?.BillableStatus }); };
+  const lines = sourceItemLines(record, detailType), base = payload.Line.reduce((sum, line) => sum + cents(line.Amount), 0);
+  if (lines.length !== payload.Line.length || canonical(lines.map(key).sort()) !== canonical(payload.Line.map(key).sort())) wrong('The original lines changed; their exact reversal could not be confirmed and nothing was sent.');
+  if (payload.Line.some(line => line[detailType]?.TaxCodeRef?.value !== tax.codeId) || !originalTaxMatches(record, tax) || cents(record.TotalAmt) !== base + tax.totalTaxCents) wrong('The original tax or total changed; its reversal at the original rate could not be confirmed and nothing was sent.');
+  const allowed = sales ? ['Estimate', 'TimeActivity'] : [], linked = links(record);
+  if (mode === 'correction-refund') {
+    const collected = source.entity === 'Invoice' ? cents(record.Balance) === 0 && linked.some(link => link.TxnType === 'Payment') && linked.every(link => [...allowed, 'Payment'].includes(link.TxnType)) : !linked.length;
+    if (!collected) wrong('The original sale is no longer fully collected by its own payments, or it already has a credit; nothing was refunded.');
+    return;
+  }
+  if (cents(record.Balance) !== cents(record.TotalAmt) || linked.some(link => !allowed.includes(link.TxnType))) wrong('The original is no longer wholly unpaid and free of credits; nothing was sent.');
+  if (mode === 'correction-credit') {
+    if (receivables(source, payload.ARAccountRef.value) !== payload.ARAccountRef.value) wrong();
+  } else if (record.APAccountRef?.value !== payload.APAccountRef?.value) wrong();
+  // The original's accounting date, and the earliest date across it and its source
+  // records (estimate, time…) that its zero-funds application also links: the write
+  // gate refuses this reversal while that earliest date is protected, so no credit is
+  // left open when its application would be refused.
+  const earliest = lifecycle.correction.earliestSourceTxnDate;
+  if (typeof earliest !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(earliest) || earliest > record.TxnDate) wrong('The correction lost the dates of its original source records; nothing was sent.');
+  const relationship = relationships.find(row => row.logicalKey === source.logicalKey);
+  relationship.sourceTxnDate = record.TxnDate; relationship.earliestSourceTxnDate = earliest;
+}
 // Pure compiler only. All inputs must come from server-owned approved intent and
 // fresh verified company evidence. A compiled request grants no write authority.
 function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], adopted = null, purchaseOrder = null, observationFence, now = Date.now() }) {
@@ -98,10 +148,13 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
-  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' || (lifecycle?.mode === 'purchase-order-receipt' && purchaseOrder) ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: lifecycle?.mode === 'customer-credit' ? [] : ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
-  if (step.entity === 'CreditMemo' && !['credit-adjustment', 'customer-credit'].includes(lifecycle?.mode)) fail('Credit memos require the explicit approved service-credit lifecycle.');
-  if (step.entity === 'RefundReceipt' && lifecycle?.mode !== 'customer-refund') fail('Refunds require the explicit approved customer-refund lifecycle.');
-  if (['Transfer', 'JournalEntry'].includes(step.entity) && lifecycle?.mode !== (step.entity === 'Transfer' ? 'bank-transfer' : 'journal-entry')) fail('Transfers and journal entries require their explicit approved lifecycle.');
+  // A correction (policy v7) depends on its own verified original, plus its reversal
+  // for a zero-funds application.
+  const correctionOf = lifecycle?.correction?.original?.entity;
+  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' || (lifecycle?.mode === 'purchase-order-receipt' && purchaseOrder) ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : ['credit-application', 'correction-application'].includes(lifecycle?.mode) ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: lifecycle?.mode === 'customer-credit' ? [] : ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'correction-bill-application' ? ['Bill', 'VendorCredit'] : ['Bill'], Deposit: ['Payment'], RefundReceipt: lifecycle?.mode === 'correction-refund' ? [correctionOf] : [], VendorCredit: lifecycle?.mode === 'correction-supplier-credit' ? ['Bill'] : [], JournalEntry: lifecycle?.mode === 'correction-journal' ? ['JournalEntry'] : [] }[step.entity] || []);
+  if (step.entity === 'CreditMemo' && !['credit-adjustment', 'customer-credit', 'correction-credit'].includes(lifecycle?.mode)) fail('Credit memos require the explicit approved service-credit lifecycle.');
+  if (step.entity === 'RefundReceipt' && !['customer-refund', 'correction-refund'].includes(lifecycle?.mode)) fail('Refunds require the explicit approved customer-refund lifecycle.');
+  if (['Transfer', 'JournalEntry'].includes(step.entity) && !(step.entity === 'Transfer' ? ['bank-transfer'] : ['journal-entry', 'correction-journal']).includes(lifecycle?.mode)) fail('Transfers and journal entries require their explicit approved lifecycle.');
   if (canonical(parentTypes) !== canonical([...expectedParents].sort())) fail('The transaction has unsupported or missing business dependencies.');
   if (LISTS.has(step.entity) !== (lifecycle?.mode === 'list-record')) fail('Customers, suppliers and items are created only through their exact list lifecycle.');
   if (LISTS.has(step.entity)) {
@@ -127,7 +180,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     const compilationHash = hash(artifact);
     return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
   }
-  const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey }) };
+  // A correction names the record it reverses, readably, in its private note.
+  const payload = { TxnDate: step.txnDate, ...(step.entity === 'TimeActivity' ? {} : { CurrencyRef: { value: 'CAD' }, PrivateNote: 'Test Data Lab activity ' + step.logicalKey + (lifecycle?.correction ? ' · correction of ' + lifecycle.correction.original.entity + ' ' + lifecycle.correction.original.qboId + ' dated ' + lifecycle.correction.original.txnDate : '') }) };
   if (lifecycle?.dueDate) payload.DueDate = lifecycle.dueDate;
   if (details.customerKey) payload.CustomerRef = ref(get('Customer', details.customerKey).Id);
   if (details.vendorKey) payload.VendorRef = ref(get('Vendor', details.vendorKey).Id);
@@ -142,7 +196,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     payload.GlobalTaxCalculation = 'TaxExcluded';
     payload.APAccountRef = ref(account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id);
     payload.Line = [{ Amount: money(lifecycle.expense.amountCents), DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: ref(account(lifecycle.expense.accountMapping, 'Expense').Id), BillableStatus: 'NotBillable', TaxCodeRef: ref(tax.Id) } }];
-  } else if (lifecycle?.mode === 'cash-expense' || lifecycle?.mode === 'supplier-credit') {
+  } else if (['cash-expense', 'supplier-credit', 'correction-supplier-credit'].includes(lifecycle?.mode)) {
     // One nonbillable operating-expense line with purchase tax. A cash expense is paid
     // straight from the operating bank; a supplier credit reduces accounts payable.
     const tax = get('TaxCode', 'purchaseTax'), cash = lifecycle.mode === 'cash-expense', expense = lifecycle.expense;
@@ -159,7 +213,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     const terms = lifecycle.transfer;
     if (payload.CustomerRef || payload.VendorRef || details.taxMapping !== undefined || details.lines.length || terms.fromKey === terms.toKey || details.bankMapping !== terms.fromKey || details.toBankMapping !== terms.toKey || details.baseAmountCents !== terms.amountCents) fail('A transfer needs its exact two bank accounts and amount.');
     Object.assign(payload, { FromAccountRef: ref(account(terms.fromKey, 'Bank').Id), ToAccountRef: ref(account(terms.toKey, 'Bank').Id), Amount: money(terms.amountCents) });
-  } else if (lifecycle?.mode === 'journal-entry') {
+  } else if (['journal-entry', 'correction-journal'].includes(lifecycle?.mode)) {
     // Balanced lines on published roles only; each role keeps its approved account type.
     const { MAPPINGS } = require('./blueprint-draft');
     if (payload.CustomerRef || payload.VendorRef || details.taxMapping !== undefined || canonical(lifecycle.journal) !== canonical(details.lines.map(line => ({ accountMapping: line.accountMapping, postingType: line.postingType, amountCents: line.amountCents })))) fail('A journal entry needs its exact approved balanced lines.');
@@ -264,7 +318,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (invoice) Object.assign(payload, { DepositToAccountRef: ref(account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id), ARAccountRef: ref(control), ProcessPayment: false });
     else Object.assign(payload, { APAccountRef: ref(control), PayType: 'Check', CheckPayment: { BankAccountRef: ref(account(details.bankMapping, 'Bank').Id), PrintStatus: 'NotSet' } });
   } else {
-    if ((!lifecycle?.settlement && !['credit-application', 'credit-remainder'].includes(lifecycle?.mode) && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
+    if ((!lifecycle?.settlement && !['credit-application', 'credit-remainder', 'correction-application', 'correction-bill-application'].includes(lifecycle?.mode) && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
     const source = parent({ Payment: 'Invoice', BillPayment: 'Bill', Deposit: 'Payment' }[step.entity]);
     if (details.amountSourceKey !== source.logicalKey) fail('Settlement names another originating transaction.');
     const original = cents(source.record.TotalAmt); let amount = original; if (!amount) fail('Settlement requires a positive saved total.');
@@ -295,10 +349,18 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
         if (prior.logicalKey !== lifecycle.settlement.priorPaymentKey || prior.record.CustomerRef?.value !== payload.CustomerRef?.value || priorReceivables(prior,account('accountsReceivable','Accounts Receivable','AccountsReceivable').Id) !== receivables(source, account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id) || prior.record.DepositToAccountRef?.value !== account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id || cents(prior.record.UnappliedAmt) !== 0 || cents(prior.record.TotalAmt) !== first || prior.record.Line?.length !== 1 || cents(prior.record.Line[0].Amount) !== first || (!Array.isArray(prior.record.Line[0].LinkedTxn) || prior.record.Line[0].LinkedTxn.length !== 1 || prior.record.Line[0].LinkedTxn[0].TxnId !== source.qboId || prior.record.Line[0].LinkedTxn[0].TxnType !== 'Invoice' || ![undefined, '0'].includes(prior.record.Line[0].LinkedTxn[0].TxnLineId)) || invoiceLinks.length !== 1 || invoiceLinks[0].TxnType !== 'Payment' || invoiceLinks[0].TxnId !== prior.qboId || cents(source.record.Balance) !== original - first) fail('The prior managed installment and exact remaining invoice balance no longer agree.');
         amount = original - first;
       }
+    } else if (['correction-application', 'correction-bill-application'].includes(lifecycle?.mode)) {
+      // Zero-funds application of today's full reversal to its wholly unsettled
+      // original, re-proved inside this writer fence: nothing else has touched either.
+      const payment = step.entity === 'Payment', credit = parent(payment ? 'CreditMemo' : 'VendorCredit'), record = credit.record, credited = cents(record.TotalAmt), terms = lifecycle.correction.original;
+      const control = payment ? account('accountsReceivable', 'Accounts Receivable', 'AccountsReceivable').Id : account('accountsPayable', 'Accounts Payable', 'AccountsPayable').Id;
+      const creditControl = payment ? (record.ARAccountRef !== undefined ? record.ARAccountRef?.value : require('./business-receivables-route').verifyAccountPosting({ observed: credit, operationId: observationFence.operationId, writerRevision: observationFence.writerRevision, now })) : record.APAccountRef?.value;
+      if (step.entity !== (lifecycle.mode === 'correction-application' ? 'Payment' : 'BillPayment') || source.logicalKey !== terms.logicalKey || source.qboId !== terms.qboId || record[party]?.value !== payload[party].value || creditControl !== control || (payment ? receivables(source, control) !== control : source.record.APAccountRef?.value !== control) || credited !== original || cents(source.record.Balance) !== original || cents(payment ? record.RemainingCredit : record.Balance) !== credited || links(record).length || links(source.record).some(link => !['Estimate', 'TimeActivity'].includes(link.TxnType))) fail('The original and its reversal no longer form one wholly unsettled pair; nothing was applied.');
+      amount = 0;
     } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
     payload.TotalAmt = money(amount); payload.Line = [{ Amount: money(amount), LinkedTxn: [relate(source, 'Line.0.LinkedTxn')] }];
-    if (lifecycle?.mode === 'credit-application') {
-      const credit = parent('CreditMemo'), amount = cents(credit.record.TotalAmt);
+    if (['credit-application', 'correction-application', 'correction-bill-application'].includes(lifecycle?.mode)) {
+      const credit = parent(step.entity === 'BillPayment' ? 'VendorCredit' : 'CreditMemo'), amount = cents(credit.record.TotalAmt);
       payload.Line = [{ Amount: money(amount), LinkedTxn: payload.Line[0].LinkedTxn }, { Amount: money(amount), LinkedTxn: [relate(credit, 'Line.1.LinkedTxn')] }];
     }
     if (step.entity === 'Payment') {
@@ -320,6 +382,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       for(const line of payload.Line)for(const link of line.LinkedTxn)link.TxnLineId='0';
     }
   }
+  if (['correction-credit', 'correction-refund', 'correction-supplier-credit', 'correction-journal'].includes(lifecycle?.mode)) assertCorrectionSource({ lifecycle, payload, source: parent(lifecycle.correction.original.entity), receivables, relationships });
   assertAccountingOnlyRequest(step.entity, payload);
   const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), payload);
   const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, ...(purchaseOrder ? { purchaseOrder: { recordHash: purchaseOrder.recordHash, logicalKey: purchaseOrder.logicalKey, proofHash: purchaseOrder.financialProof.evidenceHash } } : {}), ...(adopted ? { adopted: { entity: adopted.entity, id: adopted.record.Id, recordHash: adopted.recordHash, logicalKey: adopted.population.logicalKey, adoptionId: adopted.population.adoptionId } } : {}), references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.verification?.purchaseOrderConsumption ? { purchaseOrderConsumptionHash: value.verification.purchaseOrderConsumption.evidenceHash, purchaseOrderVerificationHash: value.verification.evidenceHash } : {}), ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
@@ -328,4 +391,4 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
 }
-module.exports = { compileBusinessTransaction, SUPPORTED, LISTS, canonicalTxnType };
+module.exports = { compileBusinessTransaction, originalTaxMatches, SUPPORTED, LISTS, canonicalTxnType };

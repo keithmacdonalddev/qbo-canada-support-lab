@@ -6,6 +6,10 @@ const LISTS = new Map(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Cla
 const ID = /^\d{1,30}$/, HASH = /^[a-f0-9]{64}$/;
 const CREDIT_SOURCE_PROTECTED_CODE = 'BUSINESS_CREDIT_SOURCE_PROTECTED';
 const CREDIT_SOURCE_PROTECTED_MESSAGE = 'The original care invoice is in a closed or reconciled period, so its credit application cannot run. This credit was not sent. Review protected dates on the Company page, then explicitly continue the saved work.';
+const CORRECTION_SOURCE_PROTECTED_CODE = 'BUSINESS_CORRECTION_SOURCE_PROTECTED';
+const CORRECTION_SOURCE_PROTECTED_MESSAGE = 'The original bill is in a closed or reconciled period, so its correction cannot be applied. The supplier credit was not sent. Review protected dates on the Company page, then retire this saved correction.';
+const CORRECTION_INVOICE_SOURCE_PROTECTED_CODE = 'BUSINESS_CORRECTION_INVOICE_SOURCE_PROTECTED';
+const CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE = 'The original invoice, or one of its source records (estimate or time entry), is in a closed or reconciled period, so its correction cannot be applied. The customer credit was not sent. Review protected dates on the Company page, then retire this saved correction.';
 const AUTOMATIC_CREDITS_CODE = 'BUSINESS_AUTOMATIC_CREDITS_BLOCKED';
 const AUTOMATIC_CREDITS_MESSAGE = 'QuickBooks must have Automatically apply credits switched off before this request. Check Settings → Account and settings → Advanced → Automation, then explicitly continue the saved work. This request was not sent.';
 const plain = value => Boolean(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -125,4 +129,4 @@ function assertWritePeriod(request, evidence, controls, now = Date.now(), ownerI
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { evidenceHash, controlHash: controls.contentHash, protectedThrough: cutoff, affectedDates: [...source.affectedDates], evidence, controls: JSON.parse(canonical(controls)) };
 }
-module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE };
+module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE };

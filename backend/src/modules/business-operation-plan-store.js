@@ -102,6 +102,12 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
     if (!value || value.version !== 1 || !/^[a-f0-9]{24}$/.test(value.adoptionId || '') || !/^\d{4}-\d{2}-\d{2}$/.test(value.through || '') || !Array.isArray(keys) || !keys.length || keys.length > 1000 || keys.some(key => !validHash(key)) || new Set(keys).size !== keys.length || records.some(row => keys.includes(row.logicalKey))) fail('The excluded follow-ups of adopted history are malformed.');
     manifest.inheritedFollowUps = { version: 1, adoptionId: value.adoptionId, through: value.through, excluded: [...keys].sort() };
   }
+  if (copy.correctedFollowUps !== undefined) {
+    // Scheduled follow-ups of originals the accountant reversed (policy v7 corrections).
+    const value = copy.correctedFollowUps, keys = value?.excluded, originals = value?.originals;
+    if (!value || value.version !== 1 || Object.keys(value).sort().join(',') !== 'excluded,originals,version' || ![keys, originals].every(list => Array.isArray(list) && list.length && list.length <= 1000 && list.every(validHash) && new Set(list).size === list.length) || records.some(row => keys.includes(row.logicalKey))) fail('The excluded follow-ups of corrected records are malformed.');
+    manifest.correctedFollowUps = { version: 1, originals: [...originals].sort(), excluded: [...keys].sort() };
+  }
   const planHash = hash(manifest);
   assertRun({ ...scope, ...manifest, contractVersion: 1, planHash }, scope);
   return { manifest, planHash, entries: ordered.map(logicalKey => byKey.get(logicalKey)) };

@@ -51,7 +51,9 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date(),
       reason: structurallyValid ? null : checked?.status === 'compatible' ? 'A valid current record version is unavailable.' : checked?.reason || 'A saved choice is required.' };
   };
   const steps = activity.events.map(event => {
-    const proposed = activity.detailProposal.byLogicalKey[event.logicalKey], details = datedTax && proposed.details.taxMapping ? { ...proposed.details, datedTax } : proposed.details, detailsHash = details === proposed.details ? proposed.detailsHash : hash({ calendarFingerprint: event.fingerprint, details });
+    // A correction (policy v7) repeats its original supply's tax code, never today's
+    // dated choice; tax policy derivation then proves the original rate still applies.
+    const proposed = activity.detailProposal.byLogicalKey[event.logicalKey], originalTax = proposed.details.originalTax, details = datedTax && proposed.details.taxMapping && !originalTax ? { ...proposed.details, datedTax } : proposed.details, detailsHash = details === proposed.details ? proposed.detailsHash : hash({ calendarFingerprint: event.fingerprint, details });
     const references = new Map();
     const master = (key, entity) => { if (key) references.set(entity + ':' + key, bind(key, entity, masterRows, masters.options[entity])); };
     master(details.customerKey, 'Customer'); master(details.vendorKey, 'Vendor'); master(details.workerKey, 'Employee'); master(details.itemKey, 'Item');
@@ -65,8 +67,8 @@ function prepareBusinessOperation(view, input, setup, masters, now = new Date(),
     for (const key of accountKeys) references.set('Account:' + key, bind(key, 'Account', mappingRows, setup.options.accounts));
     if (details.taxMapping) {
       let rows = mappingRows;
-      if (datedTax) {
-        const key = details.taxMapping, choice = dated.datedTaxChoice(datedTax, key, event.txnDate), cacheKey = key + ':' + choice.id;
+      if (originalTax || datedTax) {
+        const key = details.taxMapping, choice = originalTax ? { id: originalTax.codeId } : dated.datedTaxChoice(datedTax, key, event.txnDate), cacheKey = key + ':' + choice.id;
         if (!datedRows.has(cacheKey)) { const which = view.draft ? 'draft' : 'proposal', selected = { ...view, [which]: { ...selectedBusiness, mappings: { ...selectedBusiness.mappings, [key]: choice.id } } }; datedRows.set(cacheKey, checkBlueprintMappings(selected, setup, mappingInput).rows.find(row => row.key === key)); }
         rows = new Map([[key, datedRows.get(cacheKey)]]);
       }

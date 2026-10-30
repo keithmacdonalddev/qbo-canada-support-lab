@@ -54,6 +54,9 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   const accountRead = async (value, entity, qboId, { signal } = {}) => {
     const observed = await rawRecord(value, entity, qboId, { signal });
     if (!['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(entity) || observed.record[entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef'] !== undefined) return observed;
+    // A zero-funds application posts nothing a ledger could show. Read-back proves it
+    // from its exact application pair instead, or refuses it (no evidence is added here).
+    if (['Payment', 'BillPayment'].includes(entity) && observed.record.TotalAmt === 0) return observed;
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const compiled = row?.compilation;

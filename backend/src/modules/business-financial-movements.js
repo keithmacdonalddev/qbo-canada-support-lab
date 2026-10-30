@@ -128,6 +128,12 @@ function earningsLines(expectation, step, payload, policy, add) {
     }
   }
 }
+// A correction's zero-funds application: two equal single links (the original and its
+// reversal) and no money. It posts nothing, so the reversal is counted exactly once.
+function zeroFunds(payload, types) {
+  const lines = payload.Line || [];
+  if (cents(payload.TotalAmt) !== 0 || lines.length !== 2 || lines.some(line => line.LinkedTxn?.length !== 1) || !equal(lines.map(line => line.LinkedTxn[0].TxnType).sort(), [...types].sort()) || cents(lines[0].Amount) <= 0 || cents(lines[0].Amount) !== cents(lines[1].Amount)) fail('The correction application must have two exact equal links and zero funds.');
+}
 function movementRow(expectation, step, compiled, policy, origin) {
   const request = validateCompilation(compiled);
   if (!equal(request.scope, expectation.scope) || compiled.intentHash !== hash(step) || compiled.logicalKey !== step.logicalKey || compiled.entity !== step.entity || policy.stepHash !== compiled.intentHash || hash(policy) !== origin.policyHash) fail('Financial basis differs from the original managed intent or dispatch policy.');
@@ -141,10 +147,11 @@ function movementRow(expectation, step, compiled, policy, origin) {
     case 'Invoice': add(ref('accountsReceivable', payload.ARAccountRef), gross()); break;
     case 'CreditMemo':
       // A calendar credit adjustment, or a same-day open customer credit.
-      if (!(policy.lifecycle?.mode === 'customer-credit' && step.details.activityBatch !== undefined) && (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || policy.lifecycle?.mode !== 'credit-adjustment')) fail('A credit movement needs its original selected-earnings lifecycle.');
+      // A correction's full credit reverses the original's receivable at its original tax.
+      if (!(['customer-credit', 'correction-credit'].includes(policy.lifecycle?.mode) && step.details.activityBatch !== undefined) && (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || policy.lifecycle?.mode !== 'credit-adjustment')) fail('A credit movement needs its original selected-earnings lifecycle.');
       add(ref('accountsReceivable', payload.ARAccountRef), -gross()); break;
     case 'RefundReceipt':
-      if (policy.lifecycle?.mode !== 'customer-refund') fail('Only the original customer refund from the operating bank is supported.');
+      if (!['customer-refund', 'correction-refund'].includes(policy.lifecycle?.mode)) fail('Only the original customer refund from the operating bank is supported.');
       add(ref('operatingBank', payload.DepositToAccountRef), -gross()); break;
     case 'Transfer': {
       const terms = policy.lifecycle?.transfer, tracked = keysFor(expectation), amount = cents(payload.Amount);
@@ -154,7 +161,7 @@ function movementRow(expectation, step, compiled, policy, origin) {
     case 'JournalEntry': {
       // Debit minus credit, for each line on an account this expectation tracks.
       const journal = policy.lifecycle?.journal, tracked = keysFor(expectation);
-      if (policy.lifecycle?.mode !== 'journal-entry' || !Array.isArray(journal) || !Array.isArray(payload.Line) || payload.Line.length !== journal.length) fail('Only the original balanced journal entry is supported.');
+      if (!['journal-entry', 'correction-journal'].includes(policy.lifecycle?.mode) || !Array.isArray(journal) || !Array.isArray(payload.Line) || payload.Line.length !== journal.length) fail('Only the original balanced journal entry is supported.');
       journal.forEach((line, n) => { const posted = payload.Line[n], detail = posted?.JournalEntryLineDetail; if (posted?.DetailType !== 'JournalEntryLineDetail' || detail?.PostingType !== line.postingType || cents(posted.Amount) !== line.amountCents) fail('A journal line differs from its original intent.'); if (tracked.includes(line.accountMapping)) add(ref(line.accountMapping, detail.AccountRef), (line.postingType === 'Debit' ? 1 : -1) * line.amountCents); });
       break;
     }
@@ -171,6 +178,7 @@ function movementRow(expectation, step, compiled, policy, origin) {
         if (expectation.version !== 3 || step.details.activityTemplateVersion !== 3 || amount !== 0 || lines.length !== 2 || !equal(types, ['CreditMemo', 'Invoice']) || lines.some(line => line.LinkedTxn?.length !== 1) || cents(lines[0].Amount) <= 0 || cents(lines[0].Amount) !== cents(lines[1].Amount)) fail('The original credit application must have two exact equal links and zero funds.');
         ref('accountsReceivable', payload.ARAccountRef); ref('operatingBank', payload.DepositToAccountRef); break;
       }
+      if (policy.lifecycle?.mode === 'correction-application') { zeroFunds(payload, ['CreditMemo', 'Invoice']); ref('accountsReceivable', payload.ARAccountRef); ref('operatingBank', payload.DepositToAccountRef); break; }
       if (net() !== amount || payload.Line.length !== 1 || payload.Line[0].LinkedTxn?.length !== 1 || payload.Line[0].LinkedTxn[0].TxnType !== 'Invoice') fail('Only the original exact invoice settlement is supported.');
       add(ref('accountsReceivable', payload.ARAccountRef), -amount);
       const key = payload.DepositToAccountRef?.value === selected.operatingBank ? 'operatingBank' : 'undepositedFunds';
@@ -178,6 +186,8 @@ function movementRow(expectation, step, compiled, policy, origin) {
     }
     case 'BillPayment': {
       const amount = cents(payload.TotalAmt);
+      // A correction's zero-funds application posts nothing: payables net to zero.
+      if (policy.lifecycle?.mode === 'correction-bill-application') { zeroFunds(payload, ['Bill', 'VendorCredit']); ref('accountsPayable', payload.APAccountRef); ref('operatingBank', payload.CheckPayment?.BankAccountRef); break; }
       if (net() !== amount || payload.PayType !== 'Check' || payload.Line.length !== 1 || payload.Line[0].LinkedTxn?.length !== 1 || payload.Line[0].LinkedTxn[0].TxnType !== 'Bill') fail('Only the original exact supplier settlement is supported.');
       add(ref('accountsPayable', payload.APAccountRef), amount); add(ref('operatingBank', payload.CheckPayment?.BankAccountRef), -amount); break;
     }

@@ -239,16 +239,29 @@ function createBusinessGovernanceService(dependencies = {}) {
       const registry = await addedRoles.listAddedRoles(models, scope, ownerId); addedRoles.assertCapacity(registry, batch);
       await addedRoles.assertNamesAvailable({ batch, registry, query: text => client.query(text) });
       const usedRoles = await addedRoles.resolveBatchRoles({ registry, batch, scope, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
+      // Corrections (policy v7): every term re-derived from the accountant's own original
+      // and every eligibility rule proved before a plan is saved (business-correction.js).
+      if (batch.activities.some(row => row.type === 'correct-own-record')) {
+        const cutoff = [current.policy.periodControl.closedThrough, current.policy.periodControl.reconciledThrough, setup.observations?.closedThrough].filter(Boolean).sort().at(-1) || null;
+        await require('./business-correction').assertCorrectionsEligible({ models, scope, ownerId, businessKey: active.value.businessKey, batch, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], cutoff, setup });
+      }
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
       prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity, usedRoles);
       prepared.activityBatch = batch;
       if (active.lineage) {
         const segment = active.lineage.segments.filter(row => row.effectiveFrom <= batch.day).at(-1);
         if (segment?.authorityHash !== active.authority.contentHash) fail('Additional activity must use the business revision already in effect today.');
-        prepared.continuity = { version: 1, authorityHash: active.authority.contentHash, lineageHash: active.lineage.lineageHash, segments: active.lineage.segments, origins: activity.events.map(event => ({ logicalKey: event.logicalKey, authorityHash: segment.authorityHash, blueprintId: segment.blueprintId, blueprintHash: segment.blueprintHash, occurrence: event.occurrence, ruleKey: event.ruleKey, stepKey: event.stepKey })).sort((a,b) => a.logicalKey.localeCompare(b.logicalKey)) };
+        // Each origin names the revision in effect at its occurrence: today for new
+        // activity, the original's date for a correction (whose identity it keeps).
+        const segmentOf = occurrence => active.lineage.segments.filter(row => row.effectiveFrom <= occurrence).at(-1);
+        if (activity.events.some(event => !segmentOf(event.occurrence))) fail('A correction names a record from before the business revision history.');
+        prepared.continuity = { version: 1, authorityHash: active.authority.contentHash, lineageHash: active.lineage.lineageHash, segments: active.lineage.segments, origins: activity.events.map(event => ({ logicalKey: event.logicalKey, authorityHash: segmentOf(event.occurrence).authorityHash, blueprintId: segmentOf(event.occurrence).blueprintId, blueprintHash: segmentOf(event.occurrence).blueprintHash, occurrence: event.occurrence, ruleKey: event.ruleKey, stepKey: event.stepKey })).sort((a,b) => a.logicalKey.localeCompare(b.logicalKey)) };
       }
     } else prepared = active.lineage ? require('./business-continuity-plan').prepareContinuingBusiness(active, scope, request, setup, masters, new Date(now())) : prepareBusinessOperation(view, request, setup, masters, new Date(now()));
     if (!batchChoices) prepared = await require('./business-received-order-calendar').replaceReceivedOrderBills({ models, scope, prepared, activity: require('./business-activity-preview').previewBusinessActivity(view, request, businessDate(new Date(now()))), history: planStore(bound).history });
+    // A corrected original is no longer collected or paid: its unsent scheduled
+    // follow-ups are not prepared (derived from durable step evidence each time).
+    if (!batchChoices) prepared = await require('./business-correction').suppressCorrectedFollowUps({ models, scope, businessKey: active.value.businessKey, prepared });
     // Forward cutover after adopted import history: scheduled follow-ups of
     // imported (adopted) occurrences are not managed calendar work. They and
     // anything depending on them are excluded and retained as inherited, so no
@@ -381,13 +394,38 @@ function createBusinessGovernanceService(dependencies = {}) {
     // Transfers need two published bank roles; journal lines use published roles only.
     const banks = policy.bankRoles(), transfers = banks.length >= 2 ? { bankRoles: banks } : { bankRoles: banks, transferUnavailable: 'Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.' };
     const added = require('./business-added-roles').choiceRoles(await require('./business-added-roles').listAddedRoles(models, scope, bound.ownerId));
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    // Own records the accountant may correct today, each with its eligibility.
+    let correctableRecords = [], correctionUnavailable = null;
+    try {
+      const control = (await read(models.Policies, { environment: scope.environment, realmId: scope.realmId }))?.periodControl;
+      const setup = await (dependencies.readSetup || readDraftSetup)(client, scope, now);
+      const cutoff = [control?.closedThrough, control?.reconciledThrough, setup.observations?.closedThrough].filter(Boolean).sort().at(-1) || null;
+      correctableRecords = await require('./business-correction').correctableRecords({ models, scope, ownerId: bound.ownerId, businessKey: active.value.businessKey, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], day, cutoff, setup, signal });
+    } catch (error) { if (signal?.aborted) throw error; correctionUnavailable = 'Correction choices could not be read: ' + error.message; }
+    await access.authorize(scope, 'operations.preview', { signal });
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, correctableRecords, correctionLimitation: correctionUnavailable || 'Corrections reverse your own verified records from earlier days, dated today: a wholly unpaid service invoice gets a full credit applied to it, a fully collected service sale gets a refund from the operating bank, a wholly unpaid operating bill gets a full supplier credit applied to it, and a journal entry gets its exact reverse. The original tax rate is repeated. Paid bills, partly paid records, records with credits, stock, imported records, corrections of corrections and voids are unavailable. Each record can be corrected once.', receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
-    const choices = require('./business-activity-batch').validateChoices(input);
+    let choices = require('./business-activity-batch').validateChoices(input);
     const bound = await bind(user, 'operations.preview', true);
     const requestKey = hash({ scope: bound.scope, ownerId: bound.ownerId, kind: 'business-activity-batch', decisionKey: choices.decisionKey });
+    if (choices.activities.some(row => row.type === 'correct-own-record')) choices = await correctionChoices(bound, requestKey, choices, signal);
     return prepare(user, { requestKey, throughDate: businessDate(new Date(now())) }, { signal, batchChoices: choices });
+  }
+  // The agent names a correction's target and reason; the server derives its terms.
+  // A lost-response retry returns the original saved terms, never re-derived ones (the
+  // original's balance has changed once the correction ran).
+  async function correctionChoices(bound, requestKey, choices, signal) {
+    const { scope, actorId, access } = bound, operationId = hash({ scope, actorId, requestKey }).slice(0, 24);
+    const minimal = activities => activities.map(row => row.type === 'correct-own-record' ? { type: row.type, target: row.target, purpose: row.purpose } : row);
+    const existing = await read(models.Runs, { _id: operationId, ...scope });
+    if (existing) {
+      const saved = (await read(models.Plans, { _id: existing.planId, ...scope }))?.manifest?.activityBatch;
+      if (!saved || saved.decisionKey !== choices.decisionKey || saved.purpose !== choices.purpose || canonical(minimal(saved.activities)) !== canonical(minimal(choices.activities))) fail('This request identifier belongs to different work.');
+      return { decisionKey: saved.decisionKey, purpose: saved.purpose, activities: saved.activities };
+    }
+    const client = await access.resolveClient(scope, { signal });
+    return require('./business-correction').expandCorrections({ choices, models, scope, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
   }
   function reportObservation(scope, period, value) {
     const { sourceHash, evaluation: ignored, ...source } = value || {}, startedAt = Date.parse(source.startedAt), observedAt = Date.parse(source.observedAt);

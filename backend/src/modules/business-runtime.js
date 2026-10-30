@@ -81,6 +81,8 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     require('./business-financial-movements').assertMovementCapacity(plan.manifest);
     // Saved or already approved additions: own batch only, and room in the registry.
     if (plan.manifest.activityBatch) await require('./business-added-roles').assertDispatchable(models, scope, plan.manifest.activityBatch, operationId, logicalKey);
+    // A correction is sent only while no other operation holds any reversal of its original.
+    if (plan.manifest.activityBatch) await require('./business-correction').assertCorrectionsDispatchable(models, scope, plan.manifest, operationId, async (entity, id) => (await verification.rawRecord(scope, entity, id, { signal })).record);
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
     const before = await verification.readFence(scope, { signal });
     let stockSource = null;

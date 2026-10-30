@@ -5,7 +5,7 @@ const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
 const { denied, scoped, classifyWriteResponse } = require('./qbo-write-contract');
 const { normalizePermissions } = require('./rebuild-permissions');
-const { readWritePeriodEvidence, assertWritePeriod, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
+const { readWritePeriodEvidence, assertWritePeriod, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
 const { normalizeWorkflow } = require('./qbo-write-workflow');
 const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
@@ -97,15 +97,24 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         const run = await read(Runs, { _id: permit.operationId, ...scope, planHash: writer.planHash, status: { $in: ['reserved', 'running'] } }, session);
         const calendar = await read(Calendars, { ...scope, currentOperationId: permit.operationId, stopRequested: false, pendingCommit: null }, session);
         if (!step || step.revision !== permit.dispatchRevision || step.leaseToken !== permit.stepLeaseToken || writer.unresolved?.stepRevision !== permit.dispatchRevision || !run || !calendar || !fresh(step.dispatch?.observedAt, now()) || !HASH.test(step.dispatch?.compilationHash || '') || step.dispatch?.compilationHash !== writer.unresolved?.compilationHash || !HASH.test(step.dispatch?.evidenceHash || '') || step.dispatch?.evidenceHash !== writer.unresolved?.evidenceHash || !validRevision(step.dispatch?.observationWriterRevision) || writer.revision !== step.dispatch.observationWriterRevision + 1 || step.entity.toLowerCase() !== request.entity || step.planHash !== run.planHash || step.dispatch?.key !== dispatchKey || step.dispatch?.requestHash !== request.requestHash || calendar.blueprintHash !== run.blueprintHash || calendar.baseline?.status !== 'verified' || calendar.baseline.evidenceHash !== run.baselineHash || calendar.verifiedThrough !== run.expectedCursor || calendar.revision !== run.expectedRevision || !validRevision(run.writerRevision) || !validRevision(run.evidenceRevision) || !validRevision(calendar.writerRevision)) throw denied('Business step, stop state or calendar changed before sending.');
-        if (request.entity === 'creditmemo') {
+        // A source-bound credit (a service credit, or a policy v7 correcting customer or
+        // supplier credit) is refused while its original's accounting date is protected:
+        // its application would be refused, leaving the credit open.
+        const creditEntity = { creditmemo: 'CreditMemo', vendorcredit: 'VendorCredit' }[request.entity];
+        if (creditEntity) {
           const compiled = step.compilation, original = require('./business-readback').validateCompilation(compiled), source = compiled.relationships[0];
-          if (compiled.compilationHash !== step.dispatch.compilationHash || compiled.compilationHash !== writer.unresolved.compilationHash || original.requestHash !== request.requestHash || compiled.logicalKey !== step.logicalKey || compiled.intentHash !== step.fingerprint || compiled.entity !== 'CreditMemo') throw denied('The original credit-source compilation changed.');
+          if (compiled.compilationHash !== step.dispatch.compilationHash || compiled.compilationHash !== writer.unresolved.compilationHash || original.requestHash !== request.requestHash || compiled.logicalKey !== step.logicalKey || compiled.intentHash !== step.fingerprint || compiled.entity !== creditEntity) throw denied('The original credit-source compilation changed.');
         }
-        // A standalone same-day customer credit has no source invoice to protect.
-        if (request.entity === 'creditmemo' && step.compilation.relationships.length) {
-          const compiled = step.compilation, source = compiled.relationships[0];
-          if (periodProof.protectedThrough && source.sourceTxnDate <= periodProof.protectedThrough) throw Object.assign(denied(CREDIT_SOURCE_PROTECTED_MESSAGE), { code: CREDIT_SOURCE_PROTECTED_CODE });
-          const creditSource = { compilationHash: compiled.compilationHash, requestHash: request.requestHash, logicalKey: source.logicalKey, qboId: source.qboId, syncToken: source.syncToken, sourceTxnDate: source.sourceTxnDate, periodEvidenceHash: periodProof.evidenceHash, protectedThrough: periodProof.protectedThrough };
+        // A standalone same-day customer or supplier credit has no source to protect.
+        // A correction credit (policy v7) binds the earliest date across its original and
+        // the original's source records (estimate, time…), because its zero-funds
+        // application links them all; the same fresh combined cutoff (owner-recorded
+        // dates and QuickBooks' own closing date) must clear that earliest date.
+        if (creditEntity && step.compilation.relationships.length) {
+          const compiled = step.compilation, source = compiled.relationships[0], correction = source.earliestSourceTxnDate !== undefined;
+          const earliest = correction ? source.earliestSourceTxnDate : source.sourceTxnDate;
+          if (periodProof.protectedThrough && earliest <= periodProof.protectedThrough) throw creditEntity === 'VendorCredit' ? Object.assign(denied(CORRECTION_SOURCE_PROTECTED_MESSAGE), { code: CORRECTION_SOURCE_PROTECTED_CODE }) : correction ? Object.assign(denied(CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE), { code: CORRECTION_INVOICE_SOURCE_PROTECTED_CODE }) : Object.assign(denied(CREDIT_SOURCE_PROTECTED_MESSAGE), { code: CREDIT_SOURCE_PROTECTED_CODE });
+          const creditSource = { compilationHash: compiled.compilationHash, requestHash: request.requestHash, logicalKey: source.logicalKey, qboId: source.qboId, syncToken: source.syncToken, sourceTxnDate: source.sourceTxnDate, ...(correction ? { earliestSourceTxnDate: source.earliestSourceTxnDate } : {}), periodEvidenceHash: periodProof.evidenceHash, protectedThrough: periodProof.protectedThrough };
           periodProof.businessCreditSource = { ...creditSource, evidenceHash: hash(creditSource) };
         }
         assertRunApproval(run);

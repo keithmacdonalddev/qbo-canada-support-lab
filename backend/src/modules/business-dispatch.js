@@ -3,8 +3,8 @@ const { hash } = require('./business-calendar');
 const { scoped, withBusinessWritePermit } = require('./qbo-write-contract');
 const { compileBusinessTransaction } = require('./business-transaction-compiler');
 const { runAsActor } = require('./actor-context');
-const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
-const ADMISSION_REASONS = new Map([[AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE], [CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE]]);
+const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
+const ADMISSION_REASONS = new Map([[AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE], [CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE], [CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE], [CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE]]);
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_DISPATCH_BLOCKED' }); }

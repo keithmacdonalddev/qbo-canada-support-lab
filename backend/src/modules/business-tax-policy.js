@@ -58,14 +58,25 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
       if (!codeId) fail('The activity has no exact Canadian tax code.');
       const code = await read('TaxCode', codeId), list = code[sales ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail;
       if (code.Active !== true || !Array.isArray(list) || list.length > 5 || (code.Taxable !== false && !list.length)) fail('The selected tax code lacks complete applicable rates.');
-      const lines = [], ids = new Set(), base = step.details.lines.reduce((sum, line) => sum + line.amountCents, 0);
+      const lines = [], ids = new Set(), base = step.details.lines.reduce((sum, line) => sum + line.amountCents, 0), original = step.details.originalTax;
+      // A correction (policy v7) repeats its original supply's tax. QuickBooks computes
+      // tax from the code and today's date, so the original code must still produce the
+      // original rate today; otherwise the correction is refused before anything is sent.
+      const unreproducible = () => fail('This correction must repeat the original ' + (original.lines.map(line => line.percent + '%').join(' + ')) + ' tax exactly, but its tax code no longer produces that rate on a record dated ' + step.txnDate + '. Nothing was prepared; the correction is unavailable for this record.');
+      if (original !== undefined && codeId !== original.codeId) unreproducible();
       for (const detail of list) {
         const id = detail.TaxRateRef?.value;
         if (typeof id !== 'string' || !/^\d{1,30}$/.test(id) || ids.has(id) || detail.TaxTypeApplicable !== 'TaxOnAmount' || (detail.TaxOnTaxOrder != null && detail.TaxOnTaxOrder !== 0)) fail('Compound or ambiguous tax rules require a reviewed policy.');
-        ids.add(id); const rate = await read('TaxRate', id), percent = applicableRate(rate, step.txnDate);
+        ids.add(id); const rate = await read('TaxRate', id);
+        let percent;
+        try { percent = applicableRate(rate, step.txnDate); } catch (error) { if (original === undefined) throw error; unreproducible(); }
         lines.push({ rateId: id, percent, taxableCents: base, amountCents: taxCents(base, percent) });
       }
       policy.readbackTax = { version: 1, totalTaxCents: lines.reduce((sum, line) => sum + line.amountCents, 0), lines };
+      if (original !== undefined) {
+        const sorted = rows => rows.map(line => ({ rateId: line.rateId, percent: line.percent, taxableCents: line.taxableCents, amountCents: line.amountCents })).sort((a, b) => a.rateId.localeCompare(b.rateId));
+        if (JSON.stringify(sorted(lines)) !== JSON.stringify(sorted(original.lines)) || policy.readbackTax.totalTaxCents !== original.totalTaxCents) unreproducible();
+      }
       policy.taxSources = sources.filter(source => (source.entity === 'TaxCode' && source.id === codeId) || (source.entity === 'TaxRate' && ids.has(source.id))).map(source => ({ ...source }));
     }
     if (step.details.datedTax !== undefined) { policy.datedTax = structuredClone(step.details.datedTax); require('./business-dated-tax').assertDatedTaxPolicy(step, policy); }

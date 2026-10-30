@@ -39,6 +39,18 @@ function validateCompilation(compiled) {
     if (compiled.relationships.length !== 1 || source.entity !== 'Invoice' || source.kind !== 'prerequisite' || source.links.length) invalid('A service credit needs its exact invoice prerequisite.');
     try { date(source.sourceTxnDate); date(payload.TxnDate); } catch { invalid('The original credit source accounting date is unavailable.'); }
     if (source.sourceTxnDate > payload.TxnDate) invalid('The credit cannot precede its original invoice.');
+    // A correcting customer credit (policy v7) also binds the earliest date across its
+    // original invoice and that invoice's sources; a care credit has none.
+    if (source.earliestSourceTxnDate !== undefined) { try { date(source.earliestSourceTxnDate); } catch { invalid('The original source accounting dates are unavailable.'); } if (source.earliestSourceTxnDate > source.sourceTxnDate) invalid('The correction source dates are inconsistent.'); }
+  } else if (compiled.entity === 'VendorCredit' && compiled.relationships.length) {
+    // A correcting supplier credit (policy v7) is bound to its one original bill and
+    // that bill's accounting date, which the write gate protects before sending.
+    const source = compiled.relationships[0], payload = JSON.parse(request.body);
+    if (compiled.relationships.length !== 1 || source.entity !== 'Bill' || source.kind !== 'prerequisite' || source.links.length || payload.LinkedTxn !== undefined || (payload.Line || []).some(line => line.LinkedTxn !== undefined)) invalid('A correcting supplier credit needs its exact original bill prerequisite.');
+    try { date(source.sourceTxnDate); date(payload.TxnDate); } catch { invalid('The original bill accounting date is unavailable.'); }
+    if (source.sourceTxnDate > payload.TxnDate) invalid('The supplier credit cannot precede its original bill.');
+    try { date(source.earliestSourceTxnDate); } catch { invalid('The original bill source accounting dates are unavailable.'); }
+    if (source.earliestSourceTxnDate > source.sourceTxnDate) invalid('The correction source dates are inconsistent.');
   }
   return request;
 }
@@ -93,6 +105,39 @@ function taxMatches(policy, compiled, record) {
   }
   return total === policy.totalTaxCents;
 }
+// Policy v7 correction: a zero-funds Payment or BillPayment that applies a FULL
+// reversal (CreditMemo or VendorCredit) to its original. QuickBooks may omit the
+// control account (and a zero-total bill payment's bank account) on such a record,
+// and a ledger cannot show a zero posting, so the exact application pair proves it:
+// exactly two lines linking exactly the original and the reversal for one amount equal
+// to both totals; fresh reads of both show their open balances reduced by exactly that
+// amount, by this record alone; the same party and the same approved control account.
+// Returns null for any other record (other zero-funds applications keep their rules).
+function correctionApplicationPair({ compiled, record, payload, parents, scope, now }) {
+  const payable = compiled.entity === 'BillPayment';
+  if (!['Payment', 'BillPayment'].includes(compiled.entity) || payload.TotalAmt !== 0 || !Array.isArray(payload.Line) || payload.Line.length !== 2 || compiled.relationships.length !== 2) return null;
+  const [originalType, reversalType] = payable ? ['Bill', 'VendorCredit'] : ['Invoice', 'CreditMemo'];
+  const relation = type => compiled.relationships.filter(link => link.entity === type);
+  if (relation(originalType).length !== 1 || relation(reversalType).length !== 1) return null;
+  const observe = type => {
+    const link = relation(type)[0], found = parents.filter(value => value.logicalKey === link.logicalKey);
+    if (found.length !== 1) invalid('An originating activity is not freshly verified.');
+    return { observed: found[0], record: checkedObservation(found[0], scope, type, link.qboId, now) };
+  };
+  const original = observe(originalType), reversal = observe(reversalType), amount = cents(payload.Line[0].Amount);
+  if (amount <= 0 || cents(payload.Line[1].Amount) !== amount || cents(original.record.TotalAmt) !== amount || cents(reversal.record.TotalAmt) !== amount) return null;
+  const party = payable ? 'VendorRef' : 'CustomerRef', control = payable ? 'APAccountRef' : 'ARAccountRef', approved = payload[control]?.value;
+  // A sales-side source with an omitted account keeps its own retained ledger proof;
+  // a payables-side source must show its account (no ledger fallback exists for it).
+  const accountOf = side => side.record[control] !== undefined ? side.record[control]?.value : payable ? null : verifyAccountPosting({ observed: side.observed, now });
+  const remaining = side => cents(side === reversal && !payable ? side.record.RemainingCredit : side.record.Balance);
+  const lines = (record.Line || []).filter(line => line.DetailType !== 'SubTotalLineDetail');
+  const applied = (type, id) => lines.filter(line => { const linked = linkList(line.LinkedTxn); return linked.length === 1 && linked[0].TxnType === type && linked[0].TxnId === id && cents(line.Amount) === amount; }).length === 1;
+  const onlyThis = side => { const linked = [...linkList(side.record.LinkedTxn), ...(side.record.Line || []).flatMap(line => linkList(line.LinkedTxn))].filter(link => !['Estimate', 'TimeActivity'].includes(link.TxnType)); return linked.length === 1 && linked[0].TxnType === compiled.entity && linked[0].TxnId === record.Id; };
+  if (typeof approved !== 'string' || !QBO_ID.test(approved) || cents(record.TotalAmt) !== 0 || lines.length !== 2 || !applied(originalType, original.record.Id) || !applied(reversalType, reversal.record.Id) || (record[control] !== undefined && record[control]?.value !== approved)
+    || [original, reversal].some(side => side.record.CurrencyRef?.value !== 'CAD' || side.record[party]?.value !== payload[party]?.value || remaining(side) !== cents(side.record.TotalAmt) - amount || !onlyThis(side) || accountOf(side) !== approved)) invalid('The zero-funds correction application does not exactly settle its original and its reversal.');
+  return { originalId: original.record.Id, reversalId: reversal.record.Id, amountCents: amount };
+}
 // All receipt/compilation/neighbor inputs are loaded by trusted server adapters.
 // This function checks observed content; it does not identify ownership by notes.
 function verifyBusinessContent({ compiled, receipt, observed, parents = [], descendants = [], taxPolicy = null, now = Date.now() }) {
@@ -146,7 +191,14 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   }
   if (compiled.entity === 'TimeActivity' && record.BillableStatus === 'HasBeenBilled' && descendants.some(value => value.entity === 'Invoice')) expectedHeader.BillableStatus = 'HasBeenBilled';
   const postingAccount = compiled.entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef';
-  if (['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {
+  const applicationPair = correctionApplicationPair({ compiled, record, payload, parents, scope, now });
+  if (applicationPair) {
+    // Proved by the exact application pair, never by a zero ledger posting. A zero
+    // bill payment moves no money, so an omitted bank account is not a mismatch; a
+    // present one must still equal the request.
+    if (record[postingAccount] === undefined) delete expectedHeader[postingAccount];
+    if (compiled.entity === 'BillPayment' && record.CheckPayment && record.CheckPayment.BankAccountRef === undefined && expectedHeader.CheckPayment) { expectedHeader.CheckPayment = { ...expectedHeader.CheckPayment }; delete expectedHeader.CheckPayment.BankAccountRef; }
+  } else if (['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(compiled.entity) && record[postingAccount] === undefined && payload[postingAccount]) {
     if (verifyAccountPosting({ observed, compiled, receipt, now }) !== payload[postingAccount].value) invalid('The transaction posted to a different approved account.');
     delete expectedHeader[postingAccount];
   }
@@ -184,8 +236,23 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       if (cents(record.TotalAmt) !== beforeTax + cents(record.TxnTaxDetail?.TotalTax)) mismatch('The saved total does not equal item amounts plus tax.');
     } else if (compiled.entity === 'Deposit' && cents(record.TotalAmt) !== beforeTax) mismatch('The saved deposit total differs from its linked receipt.');
     if (compiled.entity === 'Payment' && cents(record.UnappliedAmt) !== 0) mismatch('The payment is not fully applied to its invoice.');
-    // A new supplier credit is not yet applied to any bill.
-    if (compiled.entity === 'VendorCredit' && (descendants.length || cents(record.Balance) !== cents(record.TotalAmt))) mismatch('The supplier credit is already applied or its remaining credit differs.');
+    // A new supplier credit is not yet applied to any bill. A correcting credit (policy
+    // v7, bound to its original bill) is consumed only by its verified zero-funds
+    // bill payments.
+    if (compiled.entity === 'VendorCredit' && !compiled.relationships.length && (descendants.length || cents(record.Balance) !== cents(record.TotalAmt))) mismatch('The supplier credit is already applied or its remaining credit differs.');
+    if (compiled.entity === 'VendorCredit' && compiled.relationships.length) {
+      let consumed = 0;
+      for (const child of descendants) {
+        if (child.entity !== 'BillPayment') { mismatch('An unsupported settlement affects this supplier credit.'); continue; }
+        for (const line of child.record.Line || []) {
+          const linked = linkList(line.LinkedTxn);
+          if (!linked.some(link => link.TxnType === 'VendorCredit' && link.TxnId === record.Id)) continue;
+          if (linked.length !== 1) { mismatch('A supplier credit application has ambiguous transaction links.'); continue; }
+          consumed += cents(line.Amount);
+        }
+      }
+      if (compiled.relationships.length !== 1 || compiled.relationships[0].entity !== 'Bill' || compiled.relationships[0].kind !== 'prerequisite' || consumed > cents(record.TotalAmt) || cents(record.Balance) !== cents(record.TotalAmt) - consumed) mismatch('The remaining supplier credit does not reconcile to its verified applications.');
+    }
   } else if (Array.isArray(record.Line) && record.Line.length) mismatch('Unexpected financial lines were saved.');
   if (['Invoice', 'Bill'].includes(compiled.entity)) {
     const childType = compiled.entity === 'Invoice' ? 'Payment' : 'BillPayment';

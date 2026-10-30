@@ -130,6 +130,58 @@ and the app shows the owner exactly which tools exist and what they reach.
   `business-unknown-recovery.js` (entity-generic; not yet covered by a list-specific
   test). Known limits: NonInventory items and added roles in
   credits/refunds/cash expenses are not built.
+- Workflow 8 (code, not yet live, tests not yet run): same-day activity policy v7
+  (`business-activity-v7`) adds `correct-own-record`, following GPT-6.1 Sol's plan
+  review (artifacts/luna/tmp/sol-plan-w8-result.md, "recommended first build"). The
+  accountant corrects its OWN earlier record by a full reversal dated today; the
+  original is never edited or voided. The agent sends only the target
+  (`entity`, `qboId`) and a reason; `business-correction.js` derives the party,
+  original lines, accounts and tax from the original's immutable creation intent and
+  approved policy, and the current balance decides the kind:
+  wholly unpaid service Invoice → CreditMemo + zero-funds Payment applying it;
+  fully collected service Invoice/SalesReceipt → RefundReceipt from the operating
+  bank (never also a credit); wholly unpaid operating Bill → VendorCredit +
+  zero-funds BillPayment applying it; accountant JournalEntry → exact reversing
+  JournalEntry. The original and its saved dependency closure are existing
+  prerequisites of the batch.
+  Tax repeats the ORIGINAL supply (CRA Notice 342): the original tax code is reused
+  (not today's dated choice) and policy derivation must reproduce the original
+  rate, taxable base and cents on a record dated today, else the correction is
+  refused before anything is sent (for example a 15% original whose code now yields
+  14%). The compiler re-checks, inside the writer fence, that the fresh original
+  still carries that exact tax, lines, party and total, and is still wholly unpaid
+  with no credits (or fully collected by its own payments).
+  Ownership needs the complete chain: managed step for this company (imported,
+  adopted and unmanaged records refused explicitly), immutable create intent via the
+  plan store's validated history, compilation/dispatch, receipt rebuilt from its
+  transport row and audits (or owner attribution), current verification and audit,
+  and the creating operation's committed period evidence (`committedReceipt`)
+  containing this record with its original verification audit.
+  One correction per original, ever: correction step identities derive from the
+  original (rule key + original date), not the batch or decision key, so any other
+  attempt collides on the unique step identity; preparation also refuses any
+  existing reversal step (any state, including unknown) and any other unsent
+  prepared batch for it, and the runtime re-checks before every write.
+  Refused before any write: voids, paid bills, bank-expense refunds, partial
+  settlements, prior credits or unexpected links, stock/inventory targets,
+  corrections of corrections, records from today, records using accountant-added
+  customers/suppliers/items, and applications that would touch a closed or
+  reconciled period (protection is not weakened). Durable "corrected" disposition:
+  calendar preparation drops unsent scheduled follow-ups (collections, payments,
+  credits) that depend on an original whose reversal was sent, recorded as
+  `correctedFollowUps` in the new manifest; saved plans are not rewritten.
+  Postings: the reversal counts once (credit AR −gross, income +net; refund bank
+  −gross, income +net; supplier credit AP +gross, expense −net; journal lines
+  reversed); zero-funds applications post nothing. Old saved evidence is untouched.
+  `getBusinessActivityChoices` lists `correctableRecords` with eligibility or the
+  reason. v6 is frozen in `SAVED_POLICIES` (hash unchanged); v1–v6 batches cannot
+  claim corrections. Lost-response retries return the originally saved terms.
+  Known limits: tax-control posting is proved by record read-back and report checks,
+  not by a separate tax-account comparison; a credit saved before its application
+  failed leaves an open credit until the operation is recovered (never resent);
+  QuickBooks' Canadian acceptance of zero-funds bill payments applying a supplier
+  credit, and of zero-amount payments without an omitted receivables field, is
+  unverified on Production.
 
 ## Constraint that shapes every workflow
 
@@ -163,7 +215,7 @@ workflows together under one policy version so the owner approves once.
 | 5 | Cash expense | Purchase | New compiler + postings. |
 | 6 | Journal entry, bank transfer | JournalEntry, Transfer | Account selection must be governed; postings are explicit. |
 | 7 | New customer, supplier, item | Customer, Vendor, Item | Lists, not postings; business blueprint must accept new roles. |
-| 8 | Correct own records | void/update of records it created | Voids change verified periods; needs a correction period model. |
+| 8 | Correct own records | Reversals dated today (CreditMemo/RefundReceipt/VendorCredit/JournalEntry + zero-funds applications) | Built as policy v7 reversals; voids, paid bills, expense refunds, partial settlements and stock deferred. |
 
 Not reachable through the API (shown as "QuickBooks only"): bank
 reconciliation, bank feeds, company settings, sales tax setup.
