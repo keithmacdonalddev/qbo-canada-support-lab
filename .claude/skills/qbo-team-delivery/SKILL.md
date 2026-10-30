@@ -1,52 +1,51 @@
 ---
 name: qbo-team-delivery
-description: Team delivery workflow for building a new capability in C:\Projects\qbo (e.g. a new accountant workflow) with Claude Opus 5.5 implementing, GPT-6.1 Sol (xhigh, via the Codex companion) doing read-only plan and implementation reviews, the qbo-safety-reviewer on QuickBooks write paths, and gpt-6-luna running every test. Use whenever the owner asks to build, extend or "keep going" on accountant tools or other multi-file backend/UI features in this repo.
+description: Multi-agent delivery workflow for building a new accountant workflow or other multi-file backend/UI feature in the Test Data Lab repo (C:/Projects/qbo). Claude Opus implements, GPT-6.1 Sol reviews the plan and the code read-only through the Codex companion, the qbo-safety-reviewer checks QuickBooks write paths, and gpt-6-luna runs every test. Use when the owner asks to build or extend accountant tools, same-day activity workflows, or another feature that needs a plan, implementation, independent review, tests and a commit. Do NOT use for questions, status reports, single-file fixes, documentation-only edits, or reviews the owner asked for without implementation.
 ---
 
-# QBO team delivery
+# QBO Team Delivery
 
-Owner direction (2026-10-29): **Opus builds (backend and all UI/UX), Sol reviews, Luna tests, the lead verifies and commits.** The owner gets a short brief at every checkpoint. The connected QBO company is a test account simulating a business; keep data-integrity checks, but do not add owner approvals for new workflows.
+Builds a feature through plan → Sol plan review → Opus implementation → Sol and safety review → Luna tests → commit, with a short owner brief at each checkpoint. Shared repo rules (branch, secrets, services, QBO safety) live in `AGENTS.md` and `.claude/rules/` and are not repeated here. Roles, tool limits and pitfalls are in [references/roles-and-limits.md](references/roles-and-limits.md).
 
-## Roles
+## Workflow
 
-| Role | Who | Notes |
-| --- | --- | --- |
-| Lead | main Claude session | Writes the plan, verifies reviews against code, runs Luna, commits, briefs the owner. |
-| Implementer | Claude Opus 5.5 fork (`Agent`, `subagent_type: fork`, background) | Builds backend and UI. One implementer per set of files at a time. |
-| Plan and code reviewer | GPT-6.1 Sol, xhigh, read-only | Codex companion `task` **without** `--write`. Its sandbox cannot run Luna or git. |
-| Safety reviewer | `qbo-safety-reviewer` subagent | Required for anything that writes to QuickBooks or changes operation state. |
-| Test runner | `gpt-6-luna` via the Luna bridge | The only executor of tests, lint and build. |
+Copy this checklist into the task and tick items as they finish:
 
-## Steps
+```
+- [ ] 0. Preflight passes
+- [ ] 1. Plan written
+- [ ] 2. Sol plan review fetched (watcher armed when started)
+- [ ] 3. Findings verified against code; owner briefed
+- [ ] 4. Opus implementation committed or ready
+- [ ] 5. Sol code review + safety review done; fixes verified (≤3 rounds); owner briefed
+- [ ] 6. Luna tests pass (all affected files; frontend lint/build if UI changed)
+- [ ] 7. UI checked in a browser (visible changes only)
+- [ ] 8. Committed and pushed (own hunks only, secret scan clean)
+- [ ] 9. Live result confirmed read-only when the capability first runs
+- [ ] 10. Final owner brief
+```
 
-1. **Plan.** Write the design (goal, files, invariants, tests) to `artifacts/luna/tmp/<topic>-plan.txt` (gitignored). Update the relevant `docs/plans/*.md` when scope changes.
-2. **Sol plan review.** Start it and arm the watcher **in the same step** (Codex jobs never notify Claude):
-   ```bash
-   node "$CODEX/scripts/codex-companion.mjs" task --background --model gpt-6.1-sol --effort xhigh "$(cat artifacts/luna/tmp/<topic>-plan.txt)"
-   ```
-   Then a `Monitor` that loops `codex-companion.mjs status <job-id> --json` every 60s and exits on completed/failed/cancelled/error. Fetch with `codex-companion.mjs result <job-id> > artifacts/luna/tmp/<topic>-review.md`. (`$CODEX` = `C:/Users/NewAdmin/.claude/plugins/cache/openai-codex/codex/<version>`.)
-3. **Verify, then brief.** Spot-check the top findings against the cited file:line before accepting them. Never pass a review on as a spec unverified. Brief the owner: top findings, accepted/rejected with reason, what changes.
-4. **Implement (Opus fork).** Give the fork the reviewed spec path and these rules:
-   - main branch only; no live QBO writes; no service start/stop; never print secrets;
-   - the backend runs under nodemon and reloads on every save, so every saved file must stay syntactically valid (`node --check` after each edit). A broken file crashes the live backend;
-   - tests only through the Luna bridge; commit and push only its own files.
-   Never run two implementers that touch the same files: concurrent writes once corrupted a file and took the backend down.
-5. **Reviews of the code.** In parallel, read-only:
-   - Sol implementation review of the commit or diff (same command, no `--write`, with a watcher);
-   - `qbo-safety-reviewer` when the change writes to QuickBooks or changes operation state.
-   Verify each finding against the code, fix confirmed ones (small fixes by the lead, larger by a fork), and brief the owner. If a fix is more than a few lines or touches a write path, send just that fix back to Sol for a focused re-review; repeat until no blocking finding remains. Record deferred findings in the plan doc.
-6. **Tests (Luna).**
-   - Single-file commands, about 14 per request. Every run needs **new** receipt file names; the bridge refuses to overwrite, and old receipts would be misread as results.
-   - Files that take longer than about 2 minutes get killed (exit -1) and leave later commands unrun: rerun those files one per request.
-   - "command-evidence-failed" with nothing run is bridge flakiness: retry up to three times.
-   - For broad changes run every `backend/test/business-*.test.js` plus `npm run lint --workspace=frontend` and `npm run build --workspace=frontend`.
-7. **UI check.** For visible changes, open the page in a named `agent-browser` session at desktop width (owner token placed into localStorage without printing it), screenshot, inspect, then close the session.
-8. **Commit and push.** `git status --short --branch`, stage only owned paths/hunks (filter shared files by hunk if another job's edits are mixed in), scan the staged diff for secrets, commit with the attribution trailer, push to `origin/main`.
-9. **Live check when the capability runs.** Read-only confirmation in QuickBooks of what the accountant actually saved (`qbo_query`-style scripts through the app client, never printing tokens). Report it plainly.
-10. **Brief the owner** at the end: what shipped (commit), proof (tests, review outcome, live evidence), limits, and whether they need to do anything.
+0. **Preflight.** Run `bash .claude/skills/qbo-team-delivery/scripts/preflight.sh`. If the Codex companion or Luna bridge is missing, say which and stop the steps that need it; do not substitute another reviewer or runner silently.
+1. **Plan.** Write goal, files, invariants and tests to `artifacts/luna/tmp/<topic>-plan.txt` (gitignored). Update the matching `docs/plans/*.md`.
+2. **Sol plan review.** Run `bash .claude/skills/qbo-team-delivery/scripts/codex.sh task --background --model gpt-6.1-sol --effort xhigh "$(cat artifacts/luna/tmp/<topic>-plan.txt)"`. In the same response, start a `Monitor` running `bash .claude/skills/qbo-team-delivery/scripts/codex-watch.sh <job-id>`. Codex jobs never notify Claude on their own. When it ends, run `codex.sh result <job-id> > artifacts/luna/tmp/<topic>-review.md`.
+3. **Verify, then brief.** Open the cited file:line for each top finding before accepting it. Brief the owner: findings, accepted or rejected with reason, what changes. A review is never passed on as a spec unverified.
+4. **Implement.** Start one background **fresh** subagent (`subagent_type: worker` or `general-purpose`, `model: opus`) with a self-contained brief: goal, spec path, files to read first, rules and the report wanted. Do not use `fork`: a fork inherits the whole conversation and burns hundreds of thousands of tokens of context on every step. Tell it:
+   - every saved file must stay syntactically valid, because the backend reloads live;
+   - tests run only through Luna;
+   - commit only its own files.
+   Never run two implementers on the same files.
+5. **Code reviews.** Run read-only, in parallel:
+   - Sol on the commit or diff (as in step 2, no `--write`);
+   - `qbo-safety-reviewer` when QuickBooks writes or operation state change.
+   Verify the findings and fix the confirmed ones. Send fixes larger than a few lines, or on a write path, back to Sol. Stop after 3 rounds and report what remains to the owner. Record deferred findings in the plan doc.
+6. **Tests.** Follow the Luna rules in the reference file. Broad changes run every `backend/test/business-*.test.js`, plus frontend lint and build when UI changed.
+7. **UI check.** For visible changes, screenshot the page in a named `agent-browser` session at desktop width, inspect it, then close the session.
+8. **Commit.** Run `bash .claude/skills/qbo-team-delivery/scripts/check-changed-syntax.sh`, stage only owned paths or hunks, run `bash .claude/skills/qbo-team-delivery/scripts/staged-secret-scan.sh`, then commit and push to `origin/main`.
+9. **Live check.** When the accountant first uses the capability, confirm in QuickBooks, read-only, what it saved.
+10. **Final brief.** Commit, proof (tests, reviews, live evidence), limits, and any owner action.
 
-## Gotchas
+## Reference
 
-- Changing the same-day activity `POLICY` adds a version. Keep every earlier policy in `SAVED_POLICIES`, each limited to its own workflows, so saved batches still rebuild and finish.
-- Keep the owner-facing text current: `businessAgentCapabilities()`, the approval dialog in `BusinessWorkspace.jsx`, catalog rows in `business-agent-catalog.js` and work-list items. A catalog test fails when a tool lacks a description.
-- After any batch of edits, check backend health (`curl http://127.0.0.1:3001/api/health`) and `node --check` the changed files. Never restart services; nodemon reloads by itself.
+- [references/roles-and-limits.md](references/roles-and-limits.md): who does what, Luna bridge limits, the Codex companion, accountant policy conventions, pitfalls.
+- [evals/scenarios.md](evals/scenarios.md): trigger and behaviour scenarios for checking this skill.
+- Model choices: `docs/agent-harness/MODEL_SELECTION.md`. Test execution contract: `docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md`.
