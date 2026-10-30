@@ -9,6 +9,8 @@ Builds a feature through plan → Sol plan review → Opus implementation → So
 
 ## Workflow
 
+First tell the owner in one line that the qbo-team-delivery workflow is being used and for what. Repeat that line in each brief.
+
 Copy this checklist into the task and tick items as they finish:
 
 ```
@@ -25,7 +27,7 @@ Copy this checklist into the task and tick items as they finish:
 - [ ] 10. Final owner brief
 ```
 
-0. **Preflight.** Run `bash .claude/skills/qbo-team-delivery/scripts/preflight.sh`. If the Codex companion or Luna bridge is missing, say which and stop the steps that need it; do not substitute another reviewer or runner silently.
+0. **Preflight.** Run `bash .claude/skills/qbo-team-delivery/scripts/preflight.sh`. If something is missing, use the fallback below and tell the owner which fallback is in use.
 1. **Plan.** Write goal, files, invariants and tests to `artifacts/luna/tmp/<topic>-plan.txt` (gitignored). Update the matching `docs/plans/*.md`.
 2. **Sol plan review.** Run `bash .claude/skills/qbo-team-delivery/scripts/codex.sh task --background --model gpt-6.1-sol --effort xhigh "$(cat artifacts/luna/tmp/<topic>-plan.txt)"`. In the same response, start a `Monitor` running `bash .claude/skills/qbo-team-delivery/scripts/codex-watch.sh <job-id>`. Codex jobs never notify Claude on their own. When it ends, run `codex.sh result <job-id> > artifacts/luna/tmp/<topic>-review.md`.
 3. **Verify, then brief.** Open the cited file:line for each top finding before accepting it. Brief the owner: findings, accepted or rejected with reason, what changes. A review is never passed on as a spec unverified.
@@ -43,6 +45,12 @@ Copy this checklist into the task and tick items as they finish:
 8. **Commit.** Run `bash .claude/skills/qbo-team-delivery/scripts/check-changed-syntax.sh`, stage only owned paths or hunks, run `bash .claude/skills/qbo-team-delivery/scripts/staged-secret-scan.sh`, then commit and push to `origin/main`.
 9. **Live check.** When the accountant first uses the capability, confirm in QuickBooks, read-only, what it saved.
 10. **Final brief.** Commit, proof (tests, reviews, live evidence), limits, and any owner action.
+
+## Fallbacks
+
+- **Sol unavailable** (companion missing, plan limit reached, job fails twice): run the plan and code reviews with a fresh read-only Claude reviewer (`implementation-reviewer` or `harness-reviewer`, `model: opus`) given the same brief. Label it to the owner as a same-vendor review, which is less independent than Sol.
+- **Luna unavailable** (the bridge fails 3 times with nothing run): the project contract (`AGENTS.md`, `docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md`) says to report the checks as blocked and not substitute another model. Do not commit a write-path change on unrun tests. Report what is blocked and keep other work moving.
+- **agent-browser unavailable:** skip the screenshot, say the UI is unverified, and keep the change uncommitted if it is a material visual change.
 
 ## Reference
 
