@@ -3,8 +3,9 @@ import { Button } from './ui/button'
 import { dateTime } from '../lib/format'
 const number = value => Number(value || 0).toLocaleString('en-CA')
 const cost = value => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value || 0)
+const dollars = value => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0)
 // What the same usage would cost at pay-per-use API prices; a range when older Codex reviews lack the cached-input split.
-const atApiPrices = value => value ? '≈ ' + cost(value.lowUsd) + (value.legacyReviews > 0 && cost(value.highUsd) !== cost(value.lowUsd) ? '–' + cost(value.highUsd) : '') + ' at API prices' + (value.unpricedReviews > 0 ? ' + unpriced usage' : '') : ''
+const atApiPrices = value => value ? '≈ ' + dollars(value.lowUsd) + (value.legacyReviews > 0 && dollars(value.highUsd) !== dollars(value.lowUsd) ? '–' + dollars(value.highUsd) : '') + ' at API prices' + (value.unpricedReviews > 0 ? ' + unpriced usage' : '') : ''
 
 export default function BusinessAgentUsage({ usage, disabled, configured, onCommand }) {
   const [editing, setEditing] = useState(false)
