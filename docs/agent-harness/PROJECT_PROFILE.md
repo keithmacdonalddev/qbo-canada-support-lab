@@ -33,7 +33,7 @@ Codex must explicitly read applicable `.agents/rules/` or scoped `CLAUDE.md` doc
 
 ## Commands and evidence
 
-Only a verified `gpt-6-luna` runner executes the deterministic test, build, lint, syntax, formatting-check and validator commands below, including reruns. Use low reasoning for exact execution and results. See [the execution contract](DETERMINISTIC_TEST_EXECUTION.md). Source and Git inspection remain with the main agent.
+The low-cost Claude `test-runner` subagent (Haiku) runs the deterministic test, build, lint, syntax, formatting-check and validator commands below, including reruns; Codex sessions run them directly. See [the execution contract](DETERMINISTIC_TEST_EXECUTION.md). Source and Git inspection remain with the main agent.
 
 Verify the current manifest or build configuration before running a command. Placeholders identify a choice to make from the current source. Commands separated by `/` are alternatives, not a single shell command.
 

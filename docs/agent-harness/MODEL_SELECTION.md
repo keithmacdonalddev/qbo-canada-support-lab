@@ -9,7 +9,7 @@ This policy covers Codex and Claude Code work on Test Data Lab. It does not sele
 | Substantial routine coding and tool use in Codex | `gpt-6-sol`, medium | Strong coding and agentic workflow capability with a lower per-token cost than Astra. |
 | Difficult architecture, security boundaries, or unresolved cross-cutting diagnosis in Codex | `gpt-6-astra`, high when justified | More reasoning capacity for consequential, ambiguous work. |
 | Demanding Claude Code implementation or review | `claude-opus-5-5`, medium initially | Current Opus choice for long-running coding and knowledge work. |
-| Existing deterministic tests, builds, lint/type/syntax/format checks and validators | `gpt-6-luna`, low | Required by the [Luna execution contract](DETERMINISTIC_TEST_EXECUTION.md), including reruns. |
+| Existing deterministic tests, builds, lint/type/syntax/format checks and validators | Claude Haiku `test-runner` subagent (Codex: direct) | Per the [execution contract](DETERMINISTIC_TEST_EXECUTION.md), including reruns. Luna bridge optional. |
 
 Choose based on task difficulty, failure consequences, expected retries and available capabilities. Raise effort only for a concrete need; effort labels are not equivalent across providers. Preserve explicit user choices. Check the effective model and effort at invocation: an inherited role or model name in a file does not prove what ran. If a required model or independent role is unavailable, report that limit. Do not change personal account settings or pin the three core role files to a dated model.
 

@@ -1,16 +1,14 @@
-# Deterministic checks: Luna-only execution
+# Deterministic checks: low-cost runner
 
-Standing user direction, recorded for this project on 2026-09-24. It applies to Codex and Claude Code coding-agent work; later explicit user restrictions and project safety rules still apply.
+Owner direction, 2026-10-29, replacing the Luna-only rule recorded on 2026-09-24. Luna used tens of millions of tokens a day, often failed to run requested commands, and was killed at about two minutes per command, while saving little Claude context.
 
-Only `gpt-6-luna` executes existing deterministic tests, build/compile, lint/type/syntax, formatting-check and validator commands, including reruns. Use low reasoning for exact execution and pass/fail reporting. Medium is reserved for test selection or ambiguous-output triage. A main agent already on Luna may execute directly. Otherwise use a narrow Luna runner even when no other subagent is needed. If the client cannot select and verify Luna through an authorized route, report the check as blocked; do not substitute another model.
+Existing deterministic tests, build/compile, lint/type/syntax, formatting-check and validator commands, including reruns, run through the low-cost Claude `test-runner` subagent (`.claude/agents/test-runner.md`, Claude Haiku). Codex sessions run them directly. If the runner is unavailable, the main agent may run the checks itself and keep only failures in context.
 
-The builder or parent selects the smallest relevant commands, designs tests, inspects source, diagnoses failures and makes fixes. Ordinary source/Git inspection, exploratory browser checks, specialist visual/security judgment, human-run checks and unattended CI are outside this reassignment. The execution rule does not authorize live QBO calls, MongoDB mutation, OAuth, service control or broader delegation.
+The builder or parent selects the smallest relevant commands, designs tests, inspects source, diagnoses failures and makes fixes. The rule does not authorize live QBO calls, MongoDB mutation, OAuth, service control or broader delegation.
 
-Give the runner the exact working directory, commands, affected paths and side-effect boundaries. Verify its effective model and effort from the invocation rather than inheritance or self-description. Reuse a runner when practical. Workers unable to delegate return exact commands to their parent.
+The runner returns each command, exit code and concise failures. It must not fix code, weaken assertions, update snapshots, install dependencies, call live providers or change persistent services. A passing check proves only its own layer.
 
-The runner returns each command, working directory, exit code, concise failures and cleanup evidence. It must not fix code, weaken assertions, update snapshots, install dependencies, call live providers or change persistent services without separate authority. If a check fails, the builder repairs the cause and sends the rerun to Luna. A passing check proves only its own layer.
-
-## Provider-neutral execution bridge
+## Provider-neutral execution bridge (optional)
 
 When a Claude Code or other coding session cannot select Luna directly, use the checked-in script at scripts/agent-harness/luna-exec.mjs. It starts one short-lived Codex CLI session with fixed gpt-6-luna and low-effort settings, then checks the new session transcript for the effective model, exact commands, working directory, exit codes, unrequested actions, and process cleanup. It does not change the current chat's provider or start an app service. Prefer a direct verified Luna subagent when one is available.
 

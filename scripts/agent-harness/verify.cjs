@@ -23,7 +23,7 @@ check(read('AGENT_WORKFLOW.md').includes('coding requests authorize committing a
 check(read('CLAUDE.md').includes('@AGENT_WORKFLOW.md'),'Claude import');
 check(read('AGENTS.md').includes('AGENT_WORKFLOW.md'),'Codex route');
 check(read('AGENTS.md').includes('ACCEPTANCE_AND_REVIEW.md'),'Outcome and review route');
-check(read('AGENTS.md').includes('gpt-6-luna'),'Luna-only root rule');
+check(read('AGENTS.md').includes('test-runner'),'low-cost test-runner root rule');
 check(read('docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md').includes('luna-exec.mjs'),'Luna bridge route');
 check(fs.existsSync(path.join(root,'scripts/agent-harness/luna-exec.mjs')),'Luna bridge present');
 const policy=JSON.parse(read('scripts/agent-harness/project-policy.json'));

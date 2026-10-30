@@ -4,7 +4,7 @@ Version: 2026-10-09. Both Codex and Claude use the same core behavior, with the 
 
 ## Model selection and check execution
 
-Use [MODEL_SELECTION.md](MODEL_SELECTION.md) for task-specific coding-agent model and effort choices. Existing deterministic tests, builds, syntax/lint/format checks and validators run only through a verified `gpt-6-luna` runner under [DETERMINISTIC_TEST_EXECUTION.md](DETERMINISTIC_TEST_EXECUTION.md). This narrow standing exception applies even when other delegation is optional. It changes neither hook enforcement nor the application's AI models.
+Use [MODEL_SELECTION.md](MODEL_SELECTION.md) for task-specific coding-agent model and effort choices. Existing deterministic tests, builds, syntax/lint/format checks and validators run through the low-cost Claude `test-runner` subagent (Codex: directly) under [DETERMINISTIC_TEST_EXECUTION.md](DETERMINISTIC_TEST_EXECUTION.md). It changes neither hook enforcement nor the application's AI models.
 
 Use [ACCEPTANCE_AND_REVIEW.md](ACCEPTANCE_AND_REVIEW.md) for direct QBO outcome proof, independent sensitive-path reviews and proportionate rendered UI checks. These are coding-agent work requirements; they do not authorize live QBO or database operations.
 
@@ -18,7 +18,7 @@ Before editing and at closeout, inspect full status, branch and upstream. Stage 
 
 Both clients define `harness-worker`, `harness-reviewer`, and `harness-security-reviewer`. They inherit the selected model rather than pinning a dated one. The implementation worker follows the default closeout policy for its assigned changes; reviewers remain read-only. The worker inherits the parent permission boundary; Codex reviewers use a read-only sandbox, and Claude reviewers have only Read/Glob/Grep tools. Native tool availability still needs verification in the loaded client. Codex parent runtime overrides can supersede a role sandbox default; check effective permissions before relying on read-only enforcement. Existing domain and design specialists remain available.
 
-Use these roles for bounded authorized work or required independent review. Their availability does not mandate delegation beyond the Luna check exception. Give the child the parent outcome, exclusions, assigned scope and evidence requirements; the parent verifies the integrated result. QBO company and database safeguards remain in force.
+Use these roles for bounded authorized work or required independent review. Their availability does not mandate delegation beyond the test-runner rule. Give the child the parent outcome, exclusions, assigned scope and evidence requirements; the parent verifies the integrated result. QBO company and database safeguards remain in force.
 
 ## Shared executable hooks
 

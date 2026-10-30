@@ -6,7 +6,7 @@ State the observable result, allowed scope, and smallest direct proof before edi
 
 Work in the main conversation unless the user or an applicable instruction calls for delegation. Core specialists are available, not mandatory: harness-worker, harness-reviewer, harness-security-reviewer. Preserve required independent project reviews. The parent verifies the integrated result using fresh evidence.
 
-Only verified `gpt-6-luna` executes existing deterministic test, build, lint, syntax, formatting-check and validator commands, including reruns. This narrow test-runner exception applies even when other delegation is optional. See the project execution contract; do not substitute another model if Luna is unavailable.
+Deterministic test, build, lint, syntax, formatting-check and validator commands, including reruns, run through the low-cost Claude `test-runner` subagent (Haiku); Codex sessions run them directly. The Luna bridge is optional. See the project execution contract.
 
 For substantial QBO outcomes, use direct company/report/audit evidence where authorized; mark unavailable live proof unverified. Obtain independent implementation and safety review for sensitive paths, and inspect rendered material UI changes under the project outcome and review gates.
 

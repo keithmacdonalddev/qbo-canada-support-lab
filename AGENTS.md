@@ -12,7 +12,7 @@ Read [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) at task start. It defines the common
 
 Select the coding-agent model for the task under [MODEL_SELECTION.md](docs/agent-harness/MODEL_SELECTION.md). GPT-6 Sol is the starting choice for substantial routine coding, GPT-6 Astra for the hardest cross-cutting reasoning, and Claude Opus 5.5 for demanding Claude Code work when available. These are starting choices, not repository model pins; respect an explicit user choice and verify the effective model and effort. This policy does not change the application's AI provider settings.
 
-Only `gpt-6-luna` executes existing deterministic test, build/compile, lint/type/syntax, formatting-check and validator commands, including reruns. Use low reasoning for exact execution and results; medium only for test selection or ambiguous-output triage. This standing direction authorizes a narrow Luna test subagent even when the plan otherwise uses main-thread work. A main agent already on Luna may run directly. Builders may design tests, inspect source, diagnose failures and make fixes; execution goes to Luna. If Luna or an authorized route is unavailable, report the blocked check without substituting another model. Follow [the execution contract](docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md); later explicit user restrictions and project safety boundaries still apply.
+Existing deterministic test, build/compile, lint/type/syntax, formatting-check and validator commands, including reruns, run through the low-cost Claude `test-runner` subagent (`.claude/agents/test-runner.md`, Claude Haiku) in Claude Code, or directly in a Codex session. Owner direction 2026-10-29, replacing the earlier Luna-only rule: Luna cost more time and plan quota than it saved. The `luna-exec.mjs` bridge remains available but is optional. Builders design tests, inspect source, diagnose failures and make fixes; the runner only executes and reports. If the runner is unavailable, the main agent may run the checks directly and keep only failures in context. Follow [the execution contract](docs/agent-harness/DETERMINISTIC_TEST_EXECUTION.md); later explicit user restrictions and project safety boundaries still apply.
 
 
 For substantial rebuild outcomes and high-risk code changes, follow [the outcome and review gates](docs/agent-harness/ACCEPTANCE_AND_REVIEW.md). They require direct QBO/report evidence when that is part of the requested outcome, independent implementation and safety review for sensitive paths, and rendered inspection for material UI changes. They do not authorize live verification.
@@ -166,7 +166,7 @@ Backend:
 - `npm run dev --workspace=backend` - starts nodemon. Explicit request only.
 - `npm run start --workspace=backend` - starts server. Explicit request only.
 - `npm run test --workspace=backend` - safe non-live backend unit/contract tests.
-- Safe default syntax check: `node scripts/agent-harness/check-backend-syntax.mjs` (also supported by the Luna bridge).
+- Safe default syntax check: `node scripts/agent-harness/check-backend-syntax.mjs` (also run by the test-runner subagent).
 
 Frontend:
 
@@ -231,9 +231,9 @@ These instructions apply to Codex in this project. More specific current project
 - A question does not authorize changes; carry clearly authorized work through without repeated permission requests. Keep implementation scoped to the requested outcome, and prefer current project instructions and explicit user directions over historical notes.
 - Distinguish configured behavior, observed results, and anything unverified when reporting rendered app behavior.
 
-### Deterministic checks — Luna only
+### Deterministic checks — low-cost runner
 
-- For Luna checks, verify effective model and effort. Supply exact commands, working directory, and boundaries; require exit codes, concise failures, and cleanup evidence. The runner does not make code fixes, weaken assertions, update snapshots, install dependencies, call live providers, or change persistent services without separate authority. Ordinary source/Git inspection, human testing, unattended CI, and specialist visual/security judgment remain with their usual owners.
+- Use the `test-runner` subagent (Claude Haiku). Supply exact commands, working directory, and boundaries; require exit codes, concise failures, and cleanup evidence. The runner does not make code fixes, weaken assertions, update snapshots, install dependencies, call live providers, or change persistent services without separate authority. Ordinary source/Git inspection, human testing, unattended CI, and specialist visual/security judgment remain with their usual owners.
 
 ### Selective memory and evidence
 

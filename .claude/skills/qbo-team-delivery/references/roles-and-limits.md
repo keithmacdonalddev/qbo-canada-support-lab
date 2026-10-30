@@ -3,7 +3,7 @@
 ## Contents
 - Roles
 - Codex companion (Sol)
-- Luna bridge
+- Test runner
 - Accountant workflow conventions
 - Pitfalls
 
@@ -11,11 +11,11 @@
 
 | Role | Who | Notes |
 | --- | --- | --- |
-| Lead | main Claude session | Plans, verifies review claims against code, runs Luna, commits, briefs the owner. |
+| Lead | main Claude session | Plans, verifies review claims against code, sends checks to the test-runner, commits, briefs the owner. |
 | Implementer | fresh Claude Opus subagent (`Agent`, `subagent_type: worker`, `model: opus`, background) | Backend and all UI/UX. One implementer per set of files. Never `fork`: it copies the whole conversation into its context. |
 | Plan and code reviewer | GPT-6.1 Sol at xhigh effort | Read-only: Codex companion `task` without `--write`. |
 | Safety reviewer | `qbo-safety-reviewer` subagent | Required when QuickBooks writes or operation state change. |
-| Test runner | `gpt-6-luna` via the Luna bridge | The only executor of tests, lint and build. |
+| Test runner | `test-runner` subagent (Claude Haiku, `.claude/agents/test-runner.md`) | Runs tests, lint and build; reports exit codes and failures only. |
 
 The owner set this split. The connected QuickBooks company is a test account simulating a business: keep data-integrity checks, but new accountant workflows do not need fresh owner approval.
 
@@ -23,17 +23,14 @@ The owner set this split. The connected QuickBooks company is a test account sim
 
 - `scripts/codex.sh` resolves the newest installed companion under `~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` and forwards its arguments.
 - Status: `codex.sh status <job> --json`. Result: `codex.sh result <job>`. Resume a finished job with `task --resume-last`.
-- Sol's sandbox cannot run the Luna bridge or `git commit` (`.git/index.lock` is denied). Plan for the lead to do both.
+- Sol's sandbox cannot run tests or `git commit` (`.git/index.lock` is denied). Plan for the lead to do both.
 - Several fresh `task` jobs can run at once. Only one can be resumed at a time.
 
-## Luna bridge
+## Test runner
 
-- Command: `node scripts/agent-harness/luna-exec.mjs --request artifacts/luna/<req>.json --receipt artifacts/luna/<new-receipt>.json`.
-- Allowed commands: `node --test backend/test/<file>.test.js` (one file per command), `npm run test|lint|build --workspace=...`, `node --check backend/src/...`.
-- Every run needs a **new** receipt path. The bridge refuses to overwrite one, and the leftover file would be misread as fresh results.
-- About 14 commands per request work well. A command running longer than about 2 minutes is killed with exit -1, and the commands after it don't run. Rerun those one per request.
-- "command-evidence-failed" with no commands run is bridge flakiness. Retry up to 3 times.
-- Read failures from the transcript at `receipt.runner.transcript.path` (`aggregated_output` of the failed `CommandExecution`).
+- Send the exact commands to the `test-runner` subagent (`model: haiku`, background for long sweeps). One `node --test` file per command; it runs each in its own call with a 10-minute timeout, so slow files don't hide others.
+- Broad backend changes: every `backend/test/business-*.test.js`; UI changes: `npm run lint --workspace=frontend` and `npm run build --workspace=frontend`.
+- The old Luna bridge (`scripts/agent-harness/luna-exec.mjs`) is optional. If used: new receipt path every run, about 2-minute command limit, retry "command-evidence-failed" up to 3 times.
 
 ## Accountant workflow conventions
 
