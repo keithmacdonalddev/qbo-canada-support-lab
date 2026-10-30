@@ -27,6 +27,8 @@ const schema = new mongoose.Schema({
   leaseToken: { type: String, default: null },
   leaseExpiresAt: { type: Date, default: null },
   lastError: { type: String, default: null },
+  codexQuotaClearedAt: { type: Date, default: null },
+  codexQuota: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1 }, { unique: true });
 schema.index({ 'settings.monitoring': 1, nextWakeAt: 1, _id: 1 });

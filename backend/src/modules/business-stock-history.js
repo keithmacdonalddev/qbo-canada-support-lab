@@ -24,6 +24,24 @@ async function committedReceipt(models,scope,ownerId,operationId,session) {
   if (String(evidence.auditId) !== hash({scope,actorId,ownerId,eventKey}).slice(0,24) || !observed || String(observed.actorUserId || observed.userId) !== actorId || !equal(observed.inputParams,{eventKey,...scope,details})) fail('The original stock observation audit is unavailable or changed.');
   return {run,evidence};
 }
+// Accepted same-day stock stays outside yesterday's carry until the day closes.
+async function readSameDayStockRows(models, active, session) {
+  if (active.calendar.verifiedThrough === null) return [];
+  const scope = active.value.scope, day = shift(active.calendar.verifiedThrough, 1), rows = [];
+  const runs = await models.Runs.find({ ...scope, status: 'verified', fromDate: day, throughDate: day, activityBatch: { $exists: true } }).sort({ _id: 1 }).limit(101).session(session).maxTimeMS(3000).lean();
+  if (runs.length > 100) fail('Same-day stock activity exceeds its retained evidence budget.');
+  for (const saved of runs) {
+    const { run, evidence } = await committedReceipt(models, scope, active.value.ownerId, String(saved._id), session);
+    const plan = await read(models.Plans, { ...scope, _id: run.planId, planHash: run.planHash }, session), manifest = plan?.manifest;
+    if (!manifest || hash(manifest) !== run.planHash || run.businessKey !== active.value.businessKey || run.baselineHash !== active.value.baselineHash) fail('Same-day stock lost its published business plan.');
+    if (!manifest.stockCostExpectation) continue;
+    const keys = manifest.records.map(row => row.logicalKey), steps = await models.Steps.find({ ...scope, logicalKey: { $in: keys } }).limit(1001).session(session).maxTimeMS(3000).lean();
+    const basis = await loadStockBasis(models, scope, run, manifest, steps, session);
+    if (!equal(basis, evidence.proof.stockBasis) || evidence.proof.assertions.find(row => row.key === 'stock-costs')?.stockCosts.status !== 'passed') fail('Same-day stock differs from its accepted original evidence.');
+    rows.push(...basis);
+  }
+  return rows.sort((a,b) => a.source.logicalKey.localeCompare(b.source.logicalKey) || a.source.lineIndex - b.source.lineIndex);
+}
 // Adopted import history has no committed period: its carry is the FIFO replay of
 // the imported stock lines, re-derived and matched to the hashes recorded at adoption.
 function adoptedCalendar(calendar) { const adoption = calendar?.adoption; return Boolean(adoption?.kind === 'adopted-history' && calendar.verifiedThrough === adoption.through && !calendar.lastVerifiedOperationId); }
@@ -36,6 +54,7 @@ async function adoptedOpening(models,active,root,session) {
 async function assertFrozenStockOpening(models,active,expectation,session) {
   const {scope} = expectation, root = validateStockRoot(active.value.stockRoot,scope,active.view);
   validateStockExpectation(expectation,scope,expectation.period);
+  if (!equal(expectation.priorActivityRows || [], await readSameDayStockRows(models, active, session))) fail('The accepted same-day stock receipt set changed.');
   if (expectation.rootHash !== root.rootHash || expectation.policyHash !== root.policyHash || active.calendar.pendingCommit || expectation.opening.throughDate !== (active.calendar.verifiedThrough || shift(root.openingDate,-1))) fail('Stock work must follow its exact accepted business calendar.');
   if (active.calendar.verifiedThrough === null) {
     const opening = emptyStockState({scope,rootHash:root.rootHash,throughDate:shift(root.openingDate,-1),items:root.items});
@@ -69,7 +88,7 @@ async function readCommittedStockOpening(models,active,session) {
   const keys = manifest.records.filter(row => row.kind === 'create').map(row => row.logicalKey), stepRows = [];
   for (let offset=0;offset<keys.length;offset+=100) stepRows.push(...await models.Steps.find({...scope,logicalKey:{$in:keys.slice(offset,offset+100)}},null,{singleBatch:true,batchSize:101}).limit(101).session(session).maxTimeMS(3000).lean());
   if (stepRows.length !== keys.length || new Set(stepRows.map(row => row.logicalKey)).size !== keys.length || stepRows.some(row => !evidence.proof.records.some(original => original.logicalKey === row.logicalKey && original.entity === row.entity && original.qboId === row.qboId && original.fingerprint === row.fingerprint))) fail('The original completed stock record set changed.');
-  const financialBasis = await loadMovementBasis(models,scope,run,manifest,stepRows,session), stockBasis = await loadStockBasis(models,scope,run,manifest,stepRows,session), purchases = await loadPurchaseOrigins(models,expectation.opening,session);
+  const financialBasis = await loadMovementBasis(models,scope,run,manifest,stepRows,session), stockBasis = await loadStockBasis(models,scope,run,manifest,stepRows,session), purchases = await loadPurchaseOrigins(models,require('./business-stock-evidence').startingStockState(expectation),session);
   if (!equal(financialBasis,evidence.proof.financialBasis) || !equal(stockBasis,evidence.proof.stockBasis) || !equal(purchases,expectation.purchaseOrigins)) fail('The previous stock proof differs from its original accepted sources.');
   const {sourceHash,...source} = evidence.sources || {}, evaluation = evaluateReportSources(source,{allowExplicitZero:true});
   if (hash(source) !== sourceHash || !equal(source.scope,scope) || !equal(source.period,expectation.period) || evaluation.status !== 'checks-passed' || !reportComplete(evaluation,source) || evidence.proof.assertions.some(row => row.sourceHash !== (row.evidenceType === 'record-readback'?hash(evidence.proof.records):sourceHash))) fail('The previous stock report sources are unavailable or changed.');
@@ -79,4 +98,4 @@ async function readCommittedStockOpening(models,active,session) {
   const state = stock.calculation.closing, carry = {kind:'committed-period',rootHash:root.rootHash,throughDate:run.throughDate,stateHash:state.stateHash,costCents:stock.checks.find(row => row.key === 'costOfGoods').actualCents,operationId,planHash:run.planHash,evidenceHash:evidence.evidenceHash,evidenceRevision:evidence.evidenceRevision,completionAuditId:String(run.verification.completionAuditId)};
   return {state,carry};
 }
-module.exports = {readCommittedStockOpening,assertFrozenStockOpening};
+module.exports = {readSameDayStockRows,readCommittedStockOpening,assertFrozenStockOpening};

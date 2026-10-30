@@ -28,7 +28,7 @@ function canonicalTxnType(type) { return type === 'BillPaymentCheck' ? 'BillPaym
 function links(record) { return [...(record.LinkedTxn || []), ...(record.Line || []).flatMap(line => line.LinkedTxn || [])].map(link => ({ ...link, TxnType: canonicalTxnType(link.TxnType) })); }
 // Pure compiler only. All inputs must come from server-owned approved intent and
 // fresh verified company evidence. A compiled request grants no write authority.
-function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], adopted = null, observationFence, now = Date.now() }) {
+function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], adopted = null, purchaseOrder = null, observationFence, now = Date.now() }) {
   scope = scoped(scope);
   if (!observationFence || !sameScope(observationFence.scope, scope) || !/^[a-f0-9]{24}$/.test(observationFence.operationId || '') || !Number.isSafeInteger(observationFence.writerRevision) || observationFence.writerRevision < 0 || observationFence.writerRevision >= Number.MAX_SAFE_INTEGER || !fresh(observationFence.observedAt, now)) fail('A current operation writer observation is required.');
   const currentObservation = value => value?.operationId === observationFence.operationId && value?.writerRevision === observationFence.writerRevision;
@@ -39,6 +39,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== hash(step) || !HASH.test(policy.evidenceHash || '')) fail('An exact approved Canadian transaction policy is required.');
   const lifecycle = validateLifecyclePolicy(step, policy);
   if ((lifecycle?.mode === 'adopted-settlement') !== (adopted !== null)) fail('Adopted obligation evidence belongs only to an adopted settlement.');
+  if ((lifecycle?.mode === 'purchase-order-receipt' && details.purchaseOrderReceipt.source.kind === 'adopted') !== (purchaseOrder !== null)) fail('Imported purchase-order evidence belongs only to its receiving bill.');
   require('./business-dated-tax').assertDatedTaxPolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || step.txnDate > businessDate(new Date(now))) fail('The transaction is outside its approved elapsed period.');
@@ -96,7 +97,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const parent = entity => { const values = [...parentMap.values()].filter(value => value.entity === entity); if (values.length !== 1) fail('Exactly one originating ' + entity + ' is required.'); return values[0]; };
   if (canonical((details.references || []).map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey))) !== canonical(step.dependencies.map(value => ({ logicalKey: value.logicalKey, entity: value.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)))) fail('Transaction detail dependencies changed.');
   const parentTypes = [...parentMap.values()].map(value => value.entity).sort();
-  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: lifecycle?.mode === 'customer-credit' ? [] : ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
+  const expectedParents = step.entity === 'Invoice' ? (details.lines.some(line => line.itemKey === 'field-service-hour') ? ['Estimate', 'TimeActivity'] : []) : ({ TimeActivity: ['Estimate'], Bill: lifecycle?.mode === 'operating-expense' || (lifecycle?.mode === 'purchase-order-receipt' && purchaseOrder) ? [] : ['PurchaseOrder'], SalesReceipt: ['Bill'], Payment: lifecycle?.mode === 'adopted-settlement' ? [] : lifecycle?.mode === 'credit-application' ? ['Invoice', 'CreditMemo'] : lifecycle?.mode === 'credit-remainder' ? ['Invoice', 'CreditMemo', 'Payment'] : lifecycle?.settlement?.stage === 'remainder' ? ['Invoice', 'Payment'] : ['Invoice'], CreditMemo: lifecycle?.mode === 'customer-credit' ? [] : ['Invoice'], BillPayment: lifecycle?.mode === 'adopted-settlement' ? [] : ['Bill'], Deposit: ['Payment'] }[step.entity] || []);
   if (step.entity === 'CreditMemo' && !['credit-adjustment', 'customer-credit'].includes(lifecycle?.mode)) fail('Credit memos require the explicit approved service-credit lifecycle.');
   if (step.entity === 'RefundReceipt' && lifecycle?.mode !== 'customer-refund') fail('Refunds require the explicit approved customer-refund lifecycle.');
   if (['Transfer', 'JournalEntry'].includes(step.entity) && lifecycle?.mode !== (step.entity === 'Transfer' ? 'bank-transfer' : 'journal-entry')) fail('Transfers and journal entries require their explicit approved lifecycle.');
@@ -173,20 +174,30 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       const relationship = relationships.find(row => row.logicalKey === source.logicalKey); relationship.sourceTxnDate = invoice.TxnDate;
     }
     if (step.entity === 'Bill' || (step.entity === 'Invoice' && parentTypes.length)) {
-      const source = parent(step.entity === 'Bill' ? 'PurchaseOrder' : 'Estimate');
+      const source = purchaseOrder || parent(step.entity === 'Bill' ? 'PurchaseOrder' : 'Estimate');
+      if (lifecycle?.mode === 'purchase-order-receipt') {
+        const selected = details.purchaseOrderReceipt;
+        if (source.qboId !== selected.purchaseOrderId || source.logicalKey !== selected.source.logicalKey || source.record.TxnDate !== selected.source.txnDate || source.entity !== 'PurchaseOrder') fail('The receiving bill changed its original purchase order.');
+        if (purchaseOrder) {
+          if (!currentObservation(source) || !sameScope(source.scope, scope) || !fresh(source.observedAt, now) || source.recordHash !== hash(source.record)) fail('The imported purchase order is not freshly observed inside this writer fence.');
+          require('./business-readback').verifyPopulationFinancialParent(source, now);
+        }
+        require('./business-purchase-order-receipt').unreceived(source.record);
+      }
       if (source.record[party]?.value !== payload[party].value || source.record.GlobalTaxCalculation !== 'TaxExcluded') fail('The source party or tax calculation changed.');
       if (source.entity === 'PurchaseOrder' && (source.record.POStatus !== 'Open' || links(source.record).some(link => link.TxnType === 'Bill'))) fail('The purchase order is no longer wholly unbilled.');
       if (source.entity === 'Estimate' && (!['Pending', 'Accepted'].includes(source.record.TxnStatus) || links(source.record).some(link => link.TxnType === 'Invoice'))) fail('The estimate is no longer available for this invoice.');
       const detailType = source.entity === 'PurchaseOrder' ? 'ItemBasedExpenseLineDetail' : 'SalesItemLineDetail';
       const sourceLines = sourceItemLines(source.record, detailType), used = new Set();
       if (sourceLines.length !== payload.Line.length) fail('The source item lines do not match the approved complete conversion.');
-      payload.LinkedTxn = [relate(source, 'LinkedTxn')];
+      payload.LinkedTxn = [purchaseOrder ? { TxnId: source.qboId, TxnType: 'PurchaseOrder' } : relate(source, 'LinkedTxn')];
       payload.Line.forEach((line, index) => {
         const wanted = line[line.DetailType], found = sourceLines.filter(value => value[detailType]?.ItemRef?.value === wanted.ItemRef.value && value[detailType]?.Qty === wanted.Qty && cents(value[detailType]?.UnitPrice) === cents(wanted.UnitPrice) && cents(value.Amount) === cents(line.Amount) && (value[detailType]?.TaxCodeRef?.value === wanted.TaxCodeRef.value || require('./business-dated-tax').permitsDatedConversion(step, policy, source, value[detailType]?.TaxCodeRef?.value, wanted.TaxCodeRef.value)));
         if (found.length !== 1 || used.has(found[0].Id)) fail('The originating line cannot be matched unambiguously.');
         const sourceLine = found[0]; id(sourceLine.Id); used.add(sourceLine.Id);
+        if (lifecycle?.mode === 'purchase-order-receipt' && sourceLine.Id !== details.lines[index].key) fail('The receiving bill changed its exact purchase-order line.');
         if (source.entity === 'PurchaseOrder' && sourceLine.Received !== 0 && !(sourceLine.Received === undefined && (source.state === 'financially-verified' ? require('./business-population-proof').assertUnreceivedParent(source, now) : verifyUnreceivedProof(source, now)))) fail('The originating purchase-order line is already consumed or its consumed quantity is unknown.');
-        if (source.entity === 'PurchaseOrder') line.LinkedTxn = [relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
+        if (source.entity === 'PurchaseOrder') line.LinkedTxn = [purchaseOrder ? { TxnId: source.qboId, TxnType: 'PurchaseOrder', TxnLineId: sourceLine.Id } : relate(source, 'Line.' + index + '.LinkedTxn', sourceLine.Id)];
         else {
           // A complete Estimate converts at document level; retain its exact
           // sole source line internally without requesting a progress line.
@@ -286,8 +297,8 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   }
   assertAccountingOnlyRequest(step.entity, payload);
   const request = freezeWriteRequest(scope, 'POST', step.entity.toLowerCase(), payload);
-  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, ...(adopted ? { adopted: { entity: adopted.entity, id: adopted.record.Id, recordHash: adopted.recordHash, logicalKey: adopted.population.logicalKey, adoptionId: adopted.population.adoptionId } } : {}), references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.verification?.purchaseOrderConsumption ? { purchaseOrderConsumptionHash: value.verification.purchaseOrderConsumption.evidenceHash, purchaseOrderVerificationHash: value.verification.evidenceHash } : {}), ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
-  const observedAt = [...referenceEvidence, ...parents, ...(adopted ? [adopted] : []), ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), ...parents.filter(value => value.verification?.purchaseOrderConsumption).map(value => value.verification), observationFence].map(value => value.observedAt).sort()[0];
+  const evidenceHash = hash({ observationFence, policy: policy.evidenceHash, ...(purchaseOrder ? { purchaseOrder: { recordHash: purchaseOrder.recordHash, logicalKey: purchaseOrder.logicalKey, proofHash: purchaseOrder.financialProof.evidenceHash } } : {}), ...(adopted ? { adopted: { entity: adopted.entity, id: adopted.record.Id, recordHash: adopted.recordHash, logicalKey: adopted.population.logicalKey, adoptionId: adopted.population.adoptionId } } : {}), references: referenceEvidence.map(value => ({ entity: value.entity, id: value.record.Id, recordHash: value.recordHash })).sort((a, b) => (a.entity + a.id).localeCompare(b.entity + b.id)), parents: parents.map(value => ({ logicalKey: value.logicalKey, recordHash: value.recordHash, availabilityHash: value.availability?.evidenceHash || null, ...(value.verification?.purchaseOrderConsumption ? { purchaseOrderConsumptionHash: value.verification.purchaseOrderConsumption.evidenceHash, purchaseOrderVerificationHash: value.verification.evidenceHash } : {}), ...(value.accountRouting ? { accountRoutingHash: value.accountRouting.evidenceHash, verificationHash: value.verification?.evidenceHash || null } : {}) })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) });
+  const observedAt = [...referenceEvidence, ...parents, ...(purchaseOrder ? [purchaseOrder] : []), ...(adopted ? [adopted] : []), ...parents.filter(value => value.availability).map(value => value.availability), ...parents.filter(value => value.accountRouting).map(value => value.accountRouting), ...parents.filter(value => value.verification?.purchaseOrderConsumption).map(value => value.verification), observationFence].map(value => value.observedAt).sort()[0];
   const artifact = { version: 1, logicalKey: step.logicalKey, entity: step.entity, intentHash: hash(step), request, evidenceHash, relationships };
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };

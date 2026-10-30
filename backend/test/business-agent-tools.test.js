@@ -39,3 +39,9 @@ test('financial report tools enforce reports permission before any SDK request',
  const tools=createBusinessAgentTools({row,scope,passId:'report-pass',store:{},guard:async()=>{},access:{authorize:async(scope,action)=>{assert.equal(action,'reports.observe');throw Object.assign(new Error('reports denied'),{code:'BUSINESS_ACCESS_DENIED'});}},readTools:{toolDefinitions:[{name:'runReport',input_schema:{type:'object',properties:{report:{type:'string'}},required:['report']}}],toolHandlers:{runReport:async(input,context)=>context.qbo.apiCall('GET','reports/BalanceSheet')}},clientFor:async()=>({apiCall:async()=>{sdk++;return {};}}),signal:new AbortController().signal});
  await assert.rejects(tools.execute('runReport',{report:'BalanceSheet'}),/reports denied/);assert.equal(sdk,0);
 });
+
+test('getBusinessState exposes usage read-only without any control tool',async()=>{
+ const usage={month:{totalTokens:42},caps:{tokens:100},planLimit:{resetAt:null}};
+ const tools=createBusinessAgentTools({row:{settings:{}},scope,store:{business:async()=>({}),decisions:async()=>[]},guard:async()=>{},readTools:{toolDefinitions:[]},usageFor:async()=>usage});
+ const result=await tools.execute('getBusinessState',{});assert.deepEqual(result.data.usage,usage);assert.equal(tools.definitions.some(tool=>/configure-usage|retry-plan-limit/.test(tool.name)),false);
+});

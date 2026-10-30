@@ -231,3 +231,14 @@
 .bwk-feature--missing { border: 1px dashed var(--line-strong, var(--line)); background: transparent; }
 .bwk-optional { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 12px; }
 .bwk-body small a { color: var(--bw-accent); font-weight: 600; }
+
+.bw-usage { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem; scroll-margin-top: 2rem; }
+.bw-usage h3 { margin: 0; font-size: .95rem; }
+.bw-usage p { font-size: .8rem; line-height: 1.5; }
+.bw-usage-periods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: .75rem 0; }
+.bw-usage-periods > div { display: flex; flex-direction: column; gap: .2rem; padding: .65rem; background: var(--muted); border-radius: .4rem; }
+.bw-usage-periods span, .bw-usage-periods small, .bw-usage-models span { font-size: .75rem; }
+.bw-usage-periods strong { font-size: .95rem; }
+.bw-usage-models { list-style: none; margin: .75rem 0; padding: 0; display: grid; gap: .5rem; }
+.bw-usage-models li { display: flex; flex-direction: column; gap: .15rem; overflow-wrap: anywhere; font-size: .8rem; }
+.bw-usage .bw-notice { margin: .75rem 0; }

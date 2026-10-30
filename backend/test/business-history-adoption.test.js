@@ -17,7 +17,7 @@ const matches = (row, query) => Object.entries(query).every(([key, want]) => {
   return String(value) === String(want);
 });
 function model(rows) {
-  const chain = list => { const api = { session: () => api, maxTimeMS: () => api, select: () => api, sort: () => api, limit: () => api, lean: () => api, then: (ok, ko) => Promise.resolve(list).then(ok, ko), cursor: () => list }; return api; };
+  const chain = list => { const api = { session: () => api, maxTimeMS: () => api, select: () => api, sort: () => api, limit: () => api, batchSize: () => api, lean: () => api, [Symbol.asyncIterator]: async function* () { yield* list; }, then: (ok, ko) => Promise.resolve(list).then(ok, ko), cursor: () => list }; return api; };
   return {
     rows,
     findOne: query => { const found = rows.find(row => matches(row, query)) || null; const api = { session: () => api, maxTimeMS: () => api, lean: () => Promise.resolve(found) }; return api; },

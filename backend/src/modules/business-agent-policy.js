@@ -1,8 +1,8 @@
 'use strict';
 const { hash } = require('./business-calendar');
 const SPECIALISTS = Object.freeze(['receivables', 'payables', 'inventory']);
-const DEFAULT_SETTINGS = Object.freeze({ monitoring: false, autonomous: false, syncIntervalSeconds: 30, decisionIntervalMinutes: 60, instructions: '', specialists: [] });
-const COMMANDS = Object.freeze(['enable-monitoring','enable-autonomy','pause','resume','stop-monitoring','run-now','sync-now','save-instructions','configure-specialists','configure','respond-decision']);
+const DEFAULT_SETTINGS = Object.freeze({ monitoring: false, autonomous: false, syncIntervalSeconds: 30, decisionIntervalMinutes: 60, instructions: '', specialists: [], monthlyCaps: { apiUsd: null, tokens: null } });
+const COMMANDS = Object.freeze(['enable-monitoring','enable-autonomy','pause','resume','stop-monitoring','run-now','sync-now','save-instructions','configure-specialists','configure','respond-decision','configure-usage','retry-plan-limit']);
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_AGENT_UNAVAILABLE' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the exact business-agent control without company or authority overrides.', 400); }
@@ -10,7 +10,7 @@ function validateControl(input) {
   if (!input || !COMMANDS.includes(input.command)) fail('Choose a supported business-agent control.', 400);
   const keys = ['command','expectedRevision','requestKey'];
   if (['enable-monitoring','enable-autonomy'].includes(input.command)) keys.push('confirmProduction');
-  if (['save-instructions','configure-specialists','configure'].includes(input.command)) keys.push('settings');
+  if (['save-instructions','configure-specialists','configure','configure-usage'].includes(input.command)) keys.push('settings');
   if (input.command === 'respond-decision') keys.push('decisionId','choice','note');
   exact(input, keys);
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || typeof input.requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestKey)) fail('Refresh the current control version and retain its request identifier.', 400);
@@ -18,6 +18,11 @@ function validateControl(input) {
   if (input.command === 'save-instructions') { exact(input.settings,['instructions']); if (typeof input.settings.instructions !== 'string' || input.settings.instructions.length > 6000) fail('Keep the owner instructions within 6000 characters.',400); }
   if (input.command === 'configure-specialists') { exact(input.settings,['specialists']); const roles=input.settings.specialists; if (!Array.isArray(roles) || roles.length > 3 || new Set(roles).size !== roles.length || roles.some(role=>!SPECIALISTS.includes(role))) fail('Select each supported specialist at most once.',400); }
   if (input.command === 'configure') { exact(input.settings,['syncIntervalSeconds','decisionIntervalMinutes']); if (!Number.isInteger(input.settings.syncIntervalSeconds) || input.settings.syncIntervalSeconds<15 || input.settings.syncIntervalSeconds>300 || !Number.isInteger(input.settings.decisionIntervalMinutes) || input.settings.decisionIntervalMinutes<5 || input.settings.decisionIntervalMinutes>1440) fail('Use a monitoring interval of 15–300 seconds and a decision interval of 5–1440 minutes.',400); }
+  if (input.command === 'configure-usage') {
+    exact(input.settings,['apiUsd','tokens']);
+    if (input.settings.apiUsd !== null && (typeof input.settings.apiUsd !== 'number' || !Number.isFinite(input.settings.apiUsd) || input.settings.apiUsd < 0 || input.settings.apiUsd > 100000 || Math.abs(input.settings.apiUsd * 100 - Math.round(input.settings.apiUsd * 100)) > 1e-7)) fail('Use a USD limit from 0 to 100,000 with at most two decimal places, or leave it blank.',400);
+    if (input.settings.tokens !== null && (!Number.isSafeInteger(input.settings.tokens) || input.settings.tokens < 0 || input.settings.tokens > 1000000000000)) fail('Use a whole-token limit from 0 to 1,000,000,000,000, or leave it blank.',400);
+  }
   if (input.command === 'respond-decision' && (!ID.test(input.decisionId || '') || !['accept','decline'].includes(input.choice) || typeof input.note !== 'string' || input.note.trim().length < 1 || input.note.length > 3000)) fail('Choose a saved decision and record the owner response.',400);
   return input;
 }
@@ -37,6 +42,10 @@ function reduceControl(row, input, business, clock, ownerId) {
     case 'run-now': if (!settings.autonomous || !settings.monitoring) fail('Enable autonomous operation before requesting a business review.'); changes.nextDecisionAt=now; break;
     case 'save-instructions': settings.instructions=input.settings.instructions.trim(); if(settings.autonomous) changes.nextDecisionAt=now; break;
     case 'configure-specialists': settings.specialists=[...input.settings.specialists]; break;
+    case 'configure-usage': settings.monthlyCaps={...input.settings}; if(settings.autonomous)changes.nextDecisionAt=now; break;
+    case 'retry-plan-limit':
+      if(row.codexQuota?.resetAt && Date.parse(row.codexQuota.resetAt)>clock)fail('Wait until the reset time supplied by Codex.');
+      changes.codexQuota=null; changes.codexQuotaClearedAt=now; if(settings.autonomous)changes.nextDecisionAt=now; break;
     case 'configure': Object.assign(settings,input.settings); changes.nextSyncAt=now; if(settings.autonomous)changes.nextDecisionAt=now; break;
     case 'respond-decision': if(settings.autonomous)changes.nextDecisionAt=now; break;
     default: fail('Unsupported business control.',400);

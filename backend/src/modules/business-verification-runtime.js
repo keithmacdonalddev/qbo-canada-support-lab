@@ -32,7 +32,7 @@ function taxExpectation(policy, compiled) {
 // Internal composition only: no routes, startup, storage preparation or activation.
 // All models/adapters come from server code; the bound scope and operation cannot
 // be overridden by a tool/request payload passed to the returned graph reader.
-function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, Receipts, Authorities, Audits, Writers, transaction, assertReady, access, writerFence, plans, retainSources = false, now = () => Date.now() }) {
+function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, PopulationRecords, Receipts, Authorities, Audits, Writers, transaction, assertReady, access, writerFence, plans, retainSources = false, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || !Steps || [transaction, assertReady, access?.authorize, access?.resolveClient, writerFence?.graphSnapshot, plans?.loadIntent, now].some(value => typeof value !== 'function')) throw new TypeError('Verification needs an exact operation and concrete runtime adapters');
   const { authorize, resolveClient } = access, { graphSnapshot } = writerFence, { loadIntent } = plans;
@@ -124,9 +124,17 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (originalStep?.dispatch?.policyHash && originalStep.dispatch.policyHash !== hash(policy)) fail('The policy differs from the expectation bound at the original dispatch.');
     if (!policy || policy.version !== 1 || policy.status !== 'approved' || !sameScope(policy.scope, scope) || policy.country !== 'CA' || policy.currency !== 'CAD' || policy.stepHash !== compiled.intentHash || !HASH.test(policy.evidenceHash || '')) fail('The original approved Canadian policy is unavailable.');
     const expectation = taxExpectation(policy, compiled);
+    let purchaseOrderReceipt = null;
+    if (intent.step.details?.purchaseOrderReceipt?.source.kind === 'adopted') {
+      const selected = intent.step.details.purchaseOrderReceipt;
+      const original = await (PopulationRecords || require('../models/BusinessPopulationRecord')).findOne({ ...scope, entity: 'PurchaseOrder', qboId: selected.purchaseOrderId, logicalKey: selected.source.logicalKey }).maxTimeMS(3000).lean(); checkSignal(signal);
+      if (!original || original.financialProof?.matchesFinancialIntent !== true || original.compilation?.intentHash !== hash(original.step)) fail('The imported purchase-order creation evidence is unavailable.');
+      // Plain JSON only: the lean row carries Date timestamps that hashing refuses.
+      purchaseOrderReceipt = { original: JSON.parse(JSON.stringify(original)), observed: await rawRecord(scope, 'PurchaseOrder', selected.purchaseOrderId, { signal }) }; checkSignal(signal);
+    }
     const current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);
     if (current?.actorId !== actor?.actorId || current?.ownerId !== actor?.ownerId) fail('The graph reader changed.');
-    return expectation ? { ...expectation,...(intent.step.details?.datedTax?{originalStep:intent.step,originalPolicy:policy}:{}), status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
+    return expectation ? { ...expectation,...(purchaseOrderReceipt ? { purchaseOrderReceipt } : {}),...(intent.step.details?.datedTax?{originalStep:intent.step,originalPolicy:policy}:{}), status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
   };
   const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, loadTaxPolicy, retainSources, now });
   const loadGraphReadback = input => { checkScope(input?.scope); return reader(input); };

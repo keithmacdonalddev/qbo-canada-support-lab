@@ -24,7 +24,7 @@ function validateEntry(entry, scope, fromDate, throughDate) {
   const step = entry?.step, policy = entry?.policy;
   if (!['create', 'existing'].includes(entry?.kind) || !step || !validHash(step.logicalKey) || !ENTITIES.has(step.entity) || !validHash(step.calendarFingerprint) || !validHash(step.detailsHash)) fail('A saved activity needs its exact supported intent');
   date(step.txnDate);
-  if (step.txnDate > throughDate || (entry.kind === 'create' && step.txnDate < fromDate) || (entry.kind === 'existing' && step.txnDate >= fromDate)) fail('An activity is outside its declared new or earlier period');
+  if (step.txnDate > throughDate || (entry.kind === 'create' && step.txnDate < fromDate) || (entry.kind === 'existing' && step.txnDate >= fromDate && !(step.txnDate === fromDate && step.entity === 'Bill' && step.details?.activityBatch?.stepKey === 'receive-bill' && policy?.lifecycle?.mode === 'purchase-order-receipt'))) fail('An activity is outside its declared new or earlier period');
   if (step.details?.version !== 1 || step.details.currency !== 'CAD' || hash({ calendarFingerprint: step.calendarFingerprint, details: step.details }) !== step.detailsHash || !Array.isArray(step.details.lines) || step.details.lines.length > 100) fail('Saved business quantities or amounts changed');
   if (!Array.isArray(step.references) || step.references.length > 100 || new Set(step.references.map(ref => ref.entity + ':' + ref.key)).size !== step.references.length || step.references.some(ref => !REFS.has(ref.entity) || typeof ref.key !== 'string' || !ref.key || ref.key.length > 100 || typeof ref.id !== 'string' || !QBO_ID.test(ref.id) || typeof ref.syncToken !== 'string' || !VERSION.test(ref.syncToken) || ref.status !== 'resolved')) fail('Every activity needs exact resolved company record choices');
   for (const binding of step.references) validateReferenceBinding(binding);
@@ -91,6 +91,11 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   }
   if (copy.continuity !== undefined) manifest.continuity = require('./business-continuity-plan').validateOperationContinuity(copy.continuity, copy);
   if (copy.activityBatch !== undefined) manifest.activityBatch = require('./business-activity-batch').validateActivityBatch(copy.activityBatch, copy);
+  if (copy.receivedOrderReplacements !== undefined) {
+    const rows = copy.receivedOrderReplacements;
+    if (!Array.isArray(rows) || !rows.length || rows.length > 500 || new Set(rows.map(row => row.scheduledKey)).size !== rows.length || rows.some(row => Object.keys(row).sort().join(',') !== 'logicalKey,qboId,scheduledKey' || !validHash(row.scheduledKey) || !validHash(row.logicalKey) || !/^\d{1,30}$/.test(row.qboId || '') || records.some(value => value.logicalKey === row.scheduledKey))) fail('The received-order calendar replacements changed.');
+    manifest.receivedOrderReplacements = rows;
+  }
   if (copy.inheritedFollowUps !== undefined) {
     // Scheduled follow-ups of adopted import history that this period deliberately does not create.
     const value = copy.inheritedFollowUps, keys = value?.excluded;

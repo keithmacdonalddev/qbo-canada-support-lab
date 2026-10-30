@@ -228,6 +228,10 @@ function createBusinessGovernanceService(dependencies = {}) {
       const batch = batchTools.makeActivityBatch({ scope, businessKey: active.value.businessKey, day: input.throughDate, choices: batchChoices });
       batchTools.assertBatchPreparation(active, batch, now());
       await checkAdoptedSettlements(scope, active, batch, client);
+      const receiving = batch.activities.filter(row => row.type === 'receive-purchase-order');
+      if (receiving.length && !active.value.stockRoot) fail('Receiving needs the published FIFO stock-cost evidence.');
+      const receiptReader = require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, history: planStore(bound).history, readRecord: async (scope, entity, id) => { const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity]; return { scope, entity, record, recordHash: hash(record), observedAt: new Date(now()).toISOString() }; }, now });
+      for (const choice of receiving) require('./business-purchase-order-receipt').assertChoice(choice, await receiptReader(scope, choice, { signal }), active.view.masterBindings);
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
       prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity);
       prepared.activityBatch = batch;
@@ -237,6 +241,7 @@ function createBusinessGovernanceService(dependencies = {}) {
         prepared.continuity = { version: 1, authorityHash: active.authority.contentHash, lineageHash: active.lineage.lineageHash, segments: active.lineage.segments, origins: activity.events.map(event => ({ logicalKey: event.logicalKey, authorityHash: segment.authorityHash, blueprintId: segment.blueprintId, blueprintHash: segment.blueprintHash, occurrence: event.occurrence, ruleKey: event.ruleKey, stepKey: event.stepKey })).sort((a,b) => a.logicalKey.localeCompare(b.logicalKey)) };
       }
     } else prepared = active.lineage ? require('./business-continuity-plan').prepareContinuingBusiness(active, scope, request, setup, masters, new Date(now())) : prepareBusinessOperation(view, request, setup, masters, new Date(now()));
+    if (!batchChoices) prepared = await require('./business-received-order-calendar').replaceReceivedOrderBills({ models, scope, prepared, activity: require('./business-activity-preview').previewBusinessActivity(view, request, businessDate(new Date(now()))), history: planStore(bound).history });
     // Forward cutover after adopted import history: scheduled follow-ups of
     // imported (adopted) occurrences are not managed calendar work. They and
     // anything depending on them are excluded and retained as inherited, so no
@@ -280,9 +285,13 @@ function createBusinessGovernanceService(dependencies = {}) {
     let stockPreparation = null;
     if (active.value.stockRoot) {
       const { state, carry } = await require('./business-stock-history').readCommittedStockOpening(models, active);
-      const purchaseOrigins = await require('./business-stock-evidence').loadPurchaseOrigins(models, state);
-      const stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now, purpose: 'operations.preview' })(scope, state, { signal });
-      stockPreparation = { opening: state, carry, purchaseOrigins, stockSource };
+      const priorActivityRows = await require('./business-stock-history').readSameDayStockRows(models, active);
+      const startingState = require('./business-stock-cost').calculateStockCost(state, priorActivityRows, { fromDate, throughDate: input.throughDate }).closing;
+      const receipts = batchChoices?.activities.filter(row => row.type === 'receive-purchase-order') || [];
+      if (receipts.length) require('./business-received-order-calendar').assertReceiptSaleCosts({ receipts, day: input.throughDate, adoptedThrough, activity: require('./business-activity-preview').previewBusinessActivity(view, request, businessDate(new Date(now()))), opening: startingState });
+      const purchaseOrigins = await require('./business-stock-evidence').loadPurchaseOrigins(models, startingState);
+      const stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now, purpose: 'operations.preview' })(scope, startingState, { signal });
+      stockPreparation = { opening: state, carry, purchaseOrigins, stockSource, priorActivityRows };
     }
     const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation' }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
     reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports);
@@ -346,10 +355,25 @@ function createBusinessGovernanceService(dependencies = {}) {
     const services = rows.filter(row => row.entity === 'Item' && ['field-service-hour','care-plan-1','care-plan-2','care-plan-3'].includes(row.key));
     const vendors = rows.filter(row => row.entity === 'Vendor' && /^overhead-supplier-[1-3]$/.test(row.key));
     const adopted = await adoptedObligations(scope, active);
+    const receivablePurchaseOrders = [];
+    if (active.value.stockRoot) {
+      const reader = require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, history: planStore(bound).history, readRecord: async (scope, entity, id) => { const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity]; return { scope, entity, record, recordHash: hash(record), observedAt: new Date(now()).toISOString() }; }, now });
+      const owned = await models.Steps.find({ ...scope, entity: 'PurchaseOrder', state: 'verified' }).select('qboId').sort({ txnDate: -1, _id: 1 }).limit(60).maxTimeMS(3000).lean();
+      const adoption = active.calendar.adoption;
+      if (adoption?.kind === 'adopted-history') {
+        const job = await require('./business-adopted-settlement').adoptedJob(models.PopulationJobs, adoption);
+        if (job?.status === 'adopted') owned.push(...await (models.PopulationRecords || require('../models/BusinessPopulationRecord')).find({ ...scope, entity: 'PurchaseOrder', authorityHash: job.authorityHash, state: 'saved', 'financialProof.matchesFinancialIntent': true, 'relationshipCheck.outcome': { $ne: 'error' } }).select('qboId').sort({ txnDate: -1, _id: 1 }).limit(60).maxTimeMS(3000).lean());
+      }
+      for (const row of owned) {
+        if (signal?.aborted) fail('Receiving choices were cancelled.');
+        try { const source = await reader(scope, { purchaseOrderId: row.qboId }, { signal }); if (source.record.TxnDate < day) receivablePurchaseOrders.push({ ...require('./business-purchase-order-receipt').receiptChoice(source, active.view.masterBindings), docNumber: source.record.DocNumber || null, remainingQuantity: source.record.Line.reduce((sum,line) => sum + line.ItemBasedExpenseLineDetail.Qty, 0) }); }
+        catch (error) { if (!['BUSINESS_PO_RECEIPT_UNVERIFIED', 'BUSINESS_READBACK_UNVERIFIED'].includes(error.code)) throw error; }
+      }
+    }
     await access.authorize(scope, 'operations.preview', { signal });
     // Transfers need two published bank roles; journal lines use published roles only.
     const banks = policy.bankRoles(), transfers = banks.length >= 2 ? { bankRoles: banks } : { bankRoles: banks, transferUnavailable: 'Transfers need two published bank accounts; this business publishes only ' + banks.join(', ') + '.' };
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     const choices = require('./business-activity-batch').validateChoices(input);

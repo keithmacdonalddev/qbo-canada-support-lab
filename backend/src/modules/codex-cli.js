@@ -17,6 +17,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, execFile } = require('child_process');
 const config = require('../config');
+const { codexSubscriptionQuota } = require('./codex-subscription-quota');
 const { providerTimeout } = require('./ai-provider-timeout');
 
 const WORK_DIR = path.join(os.tmpdir(), 'test-data-lab-codex');
@@ -373,18 +374,25 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
     const usage = { inputTokens: 0, outputTokens: 0 };
     let toolCalls = 0;
     let settled = false;
+    let quota = null, usageObserved = false;
 
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       cleanup();
+      if (fn === reject && value && typeof value === 'object') {
+        if (quota) value = Object.assign(providerError('The ChatGPT plan usage limit was reached.', 429), { code: quota.code, quota });
+        value.usage = usageObserved ? { ...usage } : undefined;
+      }
       fn(value);
     };
 
     const handleLine = (line) => {
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      const detected = codexSubscriptionQuota([event]);
+      if (detected) quota = { ...detected, resetAt: [quota?.resetAt, detected.resetAt].filter(Boolean).sort().at(-1) || null };
       const item = event.item;
       // Fail closed if Codex ever runs anything other than talking and this
       // app's tools (e.g. a shell command or file change after an upgrade).
@@ -398,6 +406,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
       }
       if (event.type === 'item.completed' && item?.type === 'mcp_tool_call') toolCalls += 1;
       if (event.type === 'turn.completed' && event.usage) {
+        usageObserved = true;
         usage.inputTokens += event.usage.input_tokens || 0;
         usage.outputTokens += event.usage.output_tokens || 0;
       }
@@ -423,6 +432,10 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
     child.on('close', (code) => {
       if (buffer.trim()) handleLine(buffer.trim());
       if (settled) return;
+      if (quota) {
+        finish(reject, Object.assign(providerError('The ChatGPT plan usage limit was reached.', 429), { code: quota.code, quota }));
+        return;
+      }
       if (code !== 0) {
         const preview = errorPreview(stdout, stderr);
         const notSignedIn = /not logged in|log ?in required|codex login|401|unauthorized/i.test(preview);
@@ -441,10 +454,10 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
       }
       if (bridgeStats) {
         const after = bridgeStats();
-        finish(resolve, { text, usage, toolsListed: after.listed > statsBefore.listed, toolCalls: after.calls - statsBefore.calls });
+        finish(resolve, { text, usage: usageObserved ? usage : undefined, toolsListed: after.listed > statsBefore.listed, toolCalls: after.calls - statsBefore.calls });
         return;
       }
-      finish(resolve, { text, usage, toolCalls, toolsListed: false });
+      finish(resolve, { text, usage: usageObserved ? usage : undefined, toolCalls, toolsListed: false });
     });
 
     // Codex can exit before reading stdin (e.g. a rejected flag); without a

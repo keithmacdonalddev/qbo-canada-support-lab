@@ -2,7 +2,7 @@
 // Business choices only. This module never accepts a QBO payload or performs I/O.
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
-const POLICY = Object.freeze({ version: 4, key: 'business-activity-v4', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry'] });
+const POLICY = Object.freeze({ version: 5, key: 'business-activity-v5', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order'] });
 // Settlements of adopted (imported) obligations name the QuickBooks record and its
 // business party; preparation and compilation prove both against the adoption.
 const PARTY = /^(field-client-0(?:0[1-9]|1[0-5])|care-client-0(?:0[1-9]|1[0-9]|2[0-5]))$/, SUPPLIER = /^(overhead|stock)-supplier-[1-3]$/, QBO_ID = /^\d{1,30}$/;
@@ -12,7 +12,8 @@ const POLICY_HASH = hash(POLICY), HASH = /^[a-f0-9]{64}$/;
 const POLICY_V1 = Object.freeze({ version: 1, key: 'non-stock-business-activity-v1', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense'] });
 const POLICY_V2 = Object.freeze({ version: 2, key: 'business-activity-v2', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill'] });
 const POLICY_V3 = Object.freeze({ version: 3, key: 'business-activity-v3', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit'] });
-const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [hash(POLICY_V3), POLICY_V3], [POLICY_HASH, POLICY]]);
+const POLICY_V4 = Object.freeze({ version: 4, key: 'business-activity-v4', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry'] });
+const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [hash(POLICY_V3), POLICY_V3], [hash(POLICY_V4), POLICY_V4], [POLICY_HASH, POLICY]]);
 const SERVICES = ['field-service-hour', 'care-plan-1', 'care-plan-2', 'care-plan-3'];
 // Journal entries may only touch these mapped roles: no receivables or payables (they
 // need a party), no undeposited funds (deposits prove those) and no stock accounts
@@ -66,6 +67,19 @@ function validateChoices(input) {
       cents += quantity * unitPriceCents;
       return { type: row.type, customerKey: row.customerKey, itemKey: row.itemKey, quantity, unitPriceCents, purpose: text(row.purpose, 10, 500) };
     }
+    if (row?.type === 'receive-purchase-order') {
+      exact(row, ['type', 'purchaseOrderId', 'vendorKey', 'source', 'lines', 'purpose']);
+      exact(row.source, ['kind', 'logicalKey', 'txnDate']); date(row.source.txnDate);
+      if (!QBO_ID.test(row.purchaseOrderId || '') || !/^stock-supplier-[1-3]$/.test(row.vendorKey || '') || !['managed', 'adopted'].includes(row.source.kind) || !HASH.test(row.source.logicalKey || '') || !Array.isArray(row.lines) || !row.lines.length || row.lines.length > 20) fail('Choose one owned, wholly unreceived purchase order from the receiving choices.');
+      if (settled.has('PurchaseOrder:' + row.purchaseOrderId)) fail('Receive each purchase order once per batch.'); settled.add('PurchaseOrder:' + row.purchaseOrderId);
+      const seen = new Set(), lines = row.lines.map(line => {
+        exact(line, ['lineId', 'itemKey', 'quantity', 'unitPriceCents']);
+        if (!QBO_ID.test(line.lineId || '') || seen.has(line.lineId) || !/^workshop-stock-[1-5]$/.test(line.itemKey || '')) fail('Use the exact published purchase-order lines.'); seen.add(line.lineId);
+        const quantity = integer(line.quantity, 1000000), unitPriceCents = integer(line.unitPriceCents, POLICY.maxUnitPriceCents); cents += quantity * unitPriceCents;
+        return { lineId: line.lineId, itemKey: line.itemKey, quantity, unitPriceCents };
+      });
+      return { type: row.type, purchaseOrderId: row.purchaseOrderId, vendorKey: row.vendorKey, source: { ...row.source }, lines, purpose: text(row.purpose, 10, 500) };
+    }
     if (row?.type === 'bank-transfer') {
       exact(row, ['type', 'fromKey', 'toKey', 'amountCents', 'purpose']);
       const banks = bankRoles();
@@ -104,7 +118,7 @@ function buildBatchActivity(batch, scope, businessKey) {
   if (!saved || batch.activities?.some?.(row => !saved.workflows.includes(row?.type))) fail('The exact additional activity decision or policy changed.');
   const expected = { ...makeActivityBatch({ scope, businessKey, day: batch.day, choices: { decisionKey: batch.decisionKey, purpose: batch.purpose, activities: batch.activities } }), policyHash: batch.policyHash };
   if (canonical(batch) !== canonical(expected)) fail('The exact additional activity decision or policy changed.');
-  const events = [], byLogicalKey = {};
+  const events = [], byLogicalKey = {}, prerequisites = [];
   for (const [index, choice] of batch.activities.entries()) {
     const ruleKey = 'activity-' + batch.key.slice(0, 20) + '-' + String(index + 1).padStart(3, '0');
     const rows = new Map();
@@ -123,6 +137,14 @@ function buildBatchActivity(batch, scope, businessKey) {
       add('invoice', 'Invoice', field ? ['estimate', 'time'] : [], { ...sale, dueDate: batch.day });
       add('payment', 'Payment', ['invoice'], { customerKey, bankMapping: null, cashDirection: 'inflow', destination: 'undeposited_funds', amountRule: 'saved_originating_total', amountSourceKey: rows.get('invoice').logicalKey, taxStatus: 'included_in_originating_total' });
       add('deposit', 'Deposit', ['payment'], { customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
+    } else if (choice.type === 'receive-purchase-order') {
+      if (choice.source.txnDate >= batch.day) fail('Receive a purchase order from verified preceding history.');
+      const lines = choice.lines.map(line => ({ key: line.lineId, itemKey: line.itemKey, quantity: line.quantity, unit: 'each', unitPriceCents: line.unitPriceCents, amountCents: line.quantity * line.unitPriceCents, accountMapping: 'inventoryAsset' }));
+      add('receive-bill', 'Bill', [], { vendorKey: choice.vendorKey, dueDate: batch.day, lines, baseAmountCents: lines.reduce((sum, line) => sum + line.amountCents, 0), taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax', purchaseOrderReceipt: { purchaseOrderId: choice.purchaseOrderId, source: choice.source } });
+      if (choice.source.kind === 'managed') {
+        prerequisites.push({ logicalKey: choice.source.logicalKey, entity: 'PurchaseOrder', txnDate: choice.source.txnDate, dependsOn: [] });
+        const event = rows.get('receive-bill'), detail = byLogicalKey[event.logicalKey]; event.dependsOn = [choice.source.logicalKey]; detail.details.references = [{ logicalKey: choice.source.logicalKey, entity: 'PurchaseOrder' }]; detail.detailsHash = hash({ calendarFingerprint: event.fingerprint, details: detail.details });
+      }
     } else if (choice.type === 'collect-adopted-invoice') {
       add('payment', 'Payment', [], { customerKey: choice.customerKey, bankMapping: null, cashDirection: 'inflow', destination: 'undeposited_funds', amountRule: 'adopted_open_balance', taxStatus: 'included_in_originating_total', adoptedSettlement: { entity: 'Invoice', qboId: choice.invoiceId, amountCents: choice.amountCents } });
       add('deposit', 'Deposit', ['payment'], { customerKey: choice.customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
@@ -148,11 +170,13 @@ function buildBatchActivity(batch, scope, businessKey) {
       add('bill-payment', 'BillPayment', ['bill'], { vendorKey: choice.vendorKey, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank', amountRule: 'saved_originating_total', amountSourceKey: rows.get('bill').logicalKey, taxStatus: 'included_in_originating_total' });
     }
   }
-  return { businessKey, planHash: hash(batch), events, prerequisites: [], future: [], detailProposal: { byLogicalKey, fingerprint: hash(byLogicalKey) } };
+  return { businessKey, planHash: hash(batch), events, prerequisites, future: [], detailProposal: { byLogicalKey, fingerprint: hash(byLogicalKey) } };
 }
 function validateActivityBatch(batch, candidate) {
   if (!HASH.test(batch?.key || '') || candidate.expectedCursor === null || candidate.fromDate !== batch.day || candidate.throughDate !== batch.day || shift(candidate.expectedCursor, 1) !== batch.day) fail('Additional activity requires the next open business day after verified history.');
-  const activity = buildBatchActivity(batch, candidate.scope, candidate.businessKey), proposed = candidate.entries || candidate.steps?.map(step => ({ kind: 'create', step }));
+  const activity = buildBatchActivity(batch, candidate.scope, candidate.businessKey), entries = candidate.entries || candidate.steps?.map(step => ({ kind: 'create', step })), proposed = entries?.filter(entry => entry.kind === 'create');
+  const required = activity.prerequisites;
+  if (entries?.some(entry => entry.kind !== 'create' && (entry.kind !== 'existing' || !required.some(row => row.logicalKey === entry.step.logicalKey && row.entity === entry.step.entity && row.txnDate === entry.step.txnDate))) || entries?.filter(entry => entry.kind === 'existing').length !== required.length) fail('Receiving retains only its exact original purchase order.');
   if (!Array.isArray(proposed) || proposed.length !== activity.events.length || proposed.some(entry => entry.kind !== 'create')) fail('Additional activity must contain its exact self-contained new records.');
   const expectedKeys = new Set(activity.events.map(event => event.logicalKey));
   for (const entry of proposed) {
@@ -160,7 +184,7 @@ function validateActivityBatch(batch, candidate) {
     // Dated tax is independently added from the published authority by preparation.
     const { datedTax, ...actual } = entry.step?.details || {};
     if (!event || entry.step.entity !== event.entity || entry.step.txnDate !== batch.day || entry.step.calendarFingerprint !== event.fingerprint || canonical(actual) !== canonical(detail) || canonical((entry.step.dependencies || []).map(row => row.logicalKey).sort()) !== canonical([...event.dependsOn].sort())) fail('Additional activity differs from the retained business choices.');
-    if (entry.step.references?.some(ref => ref.entity === 'Item' && !SERVICES.includes(ref.key))) fail('Additional activity cannot introduce inventory movement.');
+    if (!detail.purchaseOrderReceipt && entry.step.references?.some(ref => ref.entity === 'Item' && !SERVICES.includes(ref.key))) fail('Additional activity cannot introduce inventory movement.');
     expectedKeys.delete(event.logicalKey);
   }
   if (expectedKeys.size) fail('Additional activity contains duplicate or missing records.');
@@ -169,9 +193,9 @@ function validateActivityBatch(batch, candidate) {
 function batchLifecycle(step) {
   const value = step?.details?.activityBatch, d = step?.details;
   exact(value, ['key', 'index', 'stepKey', 'purpose']);
-  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit', 'credit', 'refund', 'transfer', 'journal'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
+  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit', 'credit', 'refund', 'transfer', 'journal', 'receive-bill'].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
   text(value.purpose, 10, 500); date(step.txnDate);
-  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit', credit: 'CreditMemo', refund: 'RefundReceipt', transfer: 'Transfer', journal: 'JournalEntry' }[value.stepKey];
+  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit', credit: 'CreditMemo', refund: 'RefundReceipt', transfer: 'Transfer', journal: 'JournalEntry', 'receive-bill': 'Bill' }[value.stepKey];
   if (step.entity !== entity) fail('The additional activity step changed its transaction type.');
   if (d.activityTemplateVersion !== undefined || d.origin !== undefined || d.settlement !== undefined || d.stockQuantityRule !== undefined || d.creditAdjustment !== undefined || d.creditSettlement !== undefined) fail('An additional activity cannot borrow a monthly, stock or credit lifecycle.');
   const contract = { version: 4, activityBatch: structuredClone(value), mode: 'standard' };
@@ -208,10 +232,16 @@ function batchLifecycle(step) {
     if (!Array.isArray(d.lines) || d.lines.some((line, n) => !line || Object.keys(line).sort().join(',') !== 'accountMapping,amountCents,key,postingType' || line.key !== 'line-' + (n + 1)) || journalLines(d.lines, check) !== d.baseAmountCents || d.amountRule !== 'balanced_journal' || d.taxMapping !== undefined || d.bankMapping !== undefined || d.customerKey !== undefined || d.vendorKey !== undefined || (step.dependencies || []).length) fail('A journal entry must keep its exact balanced lines on published roles.');
     contract.mode = 'journal-entry'; contract.journal = d.lines.map(line => ({ accountMapping: line.accountMapping, postingType: line.postingType, amountCents: line.amountCents }));
   }
-  if (step.entity === 'Bill') { const line = d.lines?.[0]; if (d.lines.length !== 1 || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || line.amountCents !== d.baseAmountCents) fail('The additional bill must remain a non-stock operating expense.'); contract.mode = 'operating-expense'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' }; }
+  if (value.stepKey === 'receive-bill') {
+    const receipt = d.purchaseOrderReceipt; exact(receipt, ['purchaseOrderId', 'source']); exact(receipt.source, ['kind', 'logicalKey', 'txnDate']);
+    const choice = validateChoices({ decisionKey: 'validate-receipt', purpose: 'Validate the exact stock receipt lifecycle.', activities: [{ type: 'receive-purchase-order', purchaseOrderId: receipt.purchaseOrderId, vendorKey: d.vendorKey, source: receipt.source, lines: d.lines.map(line => ({ lineId: line.key, itemKey: line.itemKey, quantity: line.quantity, unitPriceCents: line.unitPriceCents })), purpose: value.purpose }] }).activities[0];
+    if (receipt.source.txnDate >= step.txnDate || d.lines.some(line => line.accountMapping !== 'inventoryAsset' || line.unit !== 'each' || line.amountCents !== line.quantity * line.unitPriceCents) || d.baseAmountCents !== d.lines.reduce((n,line) => n + line.amountCents, 0) || d.taxMapping !== 'purchaseTax' || d.amountRule !== 'lines_before_tax' || d.customerKey !== undefined || d.bankMapping !== undefined || canonical((step.dependencies || []).map(link => ({ logicalKey: link.logicalKey, entity: link.entity }))) !== canonical(choice.source.kind === 'managed' ? [{ logicalKey: choice.source.logicalKey, entity: 'PurchaseOrder' }] : [])) fail('Keep the exact whole stock receipt and originating purchase order.');
+    contract.mode = 'purchase-order-receipt'; contract.purchaseOrderReceipt = structuredClone(receipt);
+  } else if (d.purchaseOrderReceipt !== undefined) fail('Only a receiving bill may name a purchase-order receipt.');
+  if (step.entity === 'Bill' && value.stepKey !== 'receive-bill') { const line = d.lines?.[0]; if (d.lines.length !== 1 || line.itemKey !== undefined || line.accountMapping !== 'operatingExpense' || line.billableStatus !== 'NotBillable' || line.amountCents !== d.baseAmountCents) fail('The additional bill must remain a non-stock operating expense.'); contract.mode = 'operating-expense'; contract.expense = { category: d.expenseCategory, accountMapping: 'operatingExpense', amountCents: line.amountCents, billableStatus: 'NotBillable' }; }
   return contract;
 }
 function assertBatchPreparation(active, batch, now) {
   if (active.calendar.verifiedThrough === null || batch.day !== businessDate(new Date(now)) || shift(active.calendar.verifiedThrough, 1) !== batch.day) fail('Verify business history through yesterday before preparing today’s additional activity. Keep today open for further hourly work.');
 }
-module.exports = { JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };
+module.exports = { SAVED_POLICIES, JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };

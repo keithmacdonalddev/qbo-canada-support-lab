@@ -106,13 +106,14 @@ function validateStockExpectation(value,scope,period,entries) {
   if (body.opening.rootHash !== body.rootHash || body.opening.items.some(item => item.assetAccountId !== body.accounts[0].id || item.costAccountId !== body.accounts[1].id) || body.carry?.stateHash !== body.opening.stateHash || body.carry.rootHash !== body.rootHash || body.carry.throughDate !== body.opening.throughDate || !['zero-root','committed-period','adopted-history'].includes(body.carry.kind) || !Number.isSafeInteger(body.carry.costCents) || body.openingCostCents !== (fiscalYear(body.carry.throughDate,body.fiscalYearStartMonth) === fiscalYear(period.throughDate,body.fiscalYearStartMonth)?body.carry.costCents:0)) fail('The stock opening differs from its exact carried period or fiscal calendar.');
   if (body.carry.kind === 'adopted-history' && (!ID.test(body.carry.jobId || '') || !HASH.test(body.carry.replayHash || ''))) fail('The carried stock state needs its adopted-history replay receipt.');
   if (body.carry.kind === 'committed-period' && (!ID.test(body.carry.operationId || '') || ![body.carry.planHash,body.carry.evidenceHash].every(value => HASH.test(value || '')) || !Number.isSafeInteger(body.carry.evidenceRevision) || body.carry.evidenceRevision < 1 || !body.carry.completionAuditId)) fail('The carried stock state needs its original committed evidence receipt.');
-  validateStockSource(body.startingStockSource,scope,body.opening.items,stockBillIds(body.opening));
-  if (body.startingStockSource.fiscalYearStartMonth !== body.fiscalYearStartMonth || !equal(body.purchaseOrigins.map(row => row.qboId),stockBillIds(body.opening))) fail('The original purchase-source set or company fiscal calendar changed.');
+  const prior = body.priorActivityRows || [], starting = calculateStockCost(body.opening, prior, period), startState = starting.closing;
+  validateStockSource(body.startingStockSource,scope,startState.items,stockBillIds(startState));
+  if (body.startingStockSource.fiscalYearStartMonth !== body.fiscalYearStartMonth || !equal(body.purchaseOrigins.map(row => row.qboId),stockBillIds(startState))) fail('The original purchase-source set or company fiscal calendar changed.');
   const stockStart = Date.parse(body.startingStockSource.startedAt), stockEnd = Date.parse(body.startingStockSource.observedAt), reportStart = Date.parse(body.startingReports?.startedAt), reportEnd = Date.parse(body.startingReports?.observedAt);
   if (![stockStart,stockEnd,reportStart,reportEnd].every(Number.isFinite) || stockEnd > reportStart || reportStart > reportEnd || reportEnd-stockStart > 300000) fail('Starting reports must follow the same bounded stock observation.');
   assertPurchaseContent(body.purchaseOrigins,body.startingStockSource);
-  if (!equal(reportBalances(body,body.startingReports),{inventoryAsset:summarizeStockState(body.opening).valueCents,costOfGoods:body.openingCostCents})) fail('Starting stock balances differ from carried purchase costs.');
-  assertQuantities(body.opening,body.startingStockSource);
+  if (!equal(reportBalances(body,body.startingReports),{inventoryAsset:summarizeStockState(startState).valueCents,costOfGoods:body.openingCostCents + starting.costOfSalesCents})) fail('Starting stock balances differ from carried purchase costs.');
+  assertQuantities(startState,body.startingStockSource);
   for (const entry of entries || []) for (const ref of entry.step.references.filter(ref => ref.entity === 'Account' && KEYS.includes(ref.key))) { const selected = body.accounts.find(row => row.key === ref.key); if (ref.id !== selected.id || ref.definition?.hash !== selected.definitionHash) fail('A stock activity changed its exact approved stock account.'); }
   if (entries) {
     const planned = [];
@@ -121,7 +122,7 @@ function validateStockExpectation(value,scope,period,entries) {
       if (!item) continue;
       planned.push({entity:entry.step.entity,txnDate:entry.step.txnDate,itemId:item.itemId,quantity:line.quantity,...(entry.step.entity === 'Bill'?{unitCostCents:line.unitPriceCents}:{}),source:{operationId:'0'.repeat(24),scopeHash:hash(scope),logicalKey:entry.step.logicalKey,qboId:'9'+String(ordinal+1).padStart(29,'0'),lineIndex,compilationHash:hash(entry.step),requestHash:hash({step:entry.step,kind:'capacity'}),receiptHash:hash({ordinal,lineIndex,kind:'capacity'}),receiptSource:'request-correlated-readback'}});
     }
-    calculateStockCost(body.opening,planned,period);
+    calculateStockCost(body.opening,[...prior,...planned],period);
   }
   if (Buffer.byteLength(canonical(value)) > 8000000) fail('The stock expectation exceeds its storage budget.');
   return value;
@@ -129,30 +130,31 @@ function validateStockExpectation(value,scope,period,entries) {
 function assertQuantities(state,source) {
   for (const expected of summarizeStockState(state).items) { const item = state.items.find(row => row.itemId === expected.itemId), actual = source.items.find(row => row.Id === expected.itemId); if (!actual || actual.Type !== 'Inventory' || actual.Active !== true || actual.TrackQtyOnHand !== true || actual.QtyOnHand !== expected.quantity || actual.AssetAccountRef?.value !== item.assetAccountId || actual.ExpenseAccountRef?.value !== item.costAccountId || (typeof actual.InvStartDate !== 'string' || actual.InvStartDate > shift(state.throughDate,1))) fail('Current stock quantity or account routing differs from its carried purchase layers.'); }
 }
-function createStockExpectation({scope,period,root,opening,carry,stockSource,reports,purchaseOrigins}) {
+function createStockExpectation({scope,period,root,opening,carry,stockSource,reports,purchaseOrigins,priorActivityRows = []}) {
   validateStockRoot(root,scope);
   const openingCostCents = fiscalYear(carry.throughDate,root.fiscalYearStartMonth) === fiscalYear(period.throughDate,root.fiscalYearStartMonth)?carry.costCents:0;
   for (const item of stockSource.items) if (item.InvStartDate !== root.zeroSource.items.find(row => row.Id === item.Id)?.InvStartDate) fail('A stock Item changed its original accepted starting date.');
   const retainedReports = Object.fromEntries(['version','scope','period','startedAt','observedAt','accounts'].map(key => [key,reports[key]]));
   retainedReports.reports = {TrialBalance:reports.reports.TrialBalance}; retainedReports.observationHash = reports.sourceHash;
   const startingReports = {...retainedReports,sourceHash:hash(retainedReports)};
-  const body = {version:1,scope,period,rootHash:root.rootHash,policyHash:root.policyHash,fiscalYearStartMonth:root.fiscalYearStartMonth,accounts:root.accounts,opening,carry,openingCostCents,purchaseOrigins,startingStockSource:stockSource,startingReports};
+  const body = {version:1,scope,period,rootHash:root.rootHash,policyHash:root.policyHash,fiscalYearStartMonth:root.fiscalYearStartMonth,accounts:root.accounts,opening,carry,openingCostCents,purchaseOrigins,...(priorActivityRows.length ? {priorActivityRows} : {}),startingStockSource:stockSource,startingReports};
   return validateStockExpectation({...body,expectationHash:hash(body)},scope,period);
 }
+function startingStockState(expectation) { return calculateStockCost(expectation.opening, expectation.priorActivityRows || [], expectation.period).closing; }
 function compareStockCosts(expectation,basis,observation,stockSource,{openingOnly=false} = {}) {
   validateStockExpectation(expectation,expectation.scope,expectation.period);
-  const calculation = calculateStockCost(expectation.opening,openingOnly?[]:basis,expectation.period), state = openingOnly?expectation.opening:calculation.closing;
+  const calculation = calculateStockCost(expectation.opening,[...(expectation.priorActivityRows || []), ...(openingOnly?[]:basis)],expectation.period), state = calculation.closing;
   let actual = null, reason = null, quantities = [];
   try {
-    validateStockSource(stockSource,expectation.scope,state.items,stockBillIds(expectation.opening));
+    validateStockSource(stockSource,expectation.scope,state.items,stockBillIds(calculateStockCost(expectation.opening,expectation.priorActivityRows || [],expectation.period).closing));
     if (stockSource.fiscalYearStartMonth !== expectation.fiscalYearStartMonth) fail('The observed company fiscal calendar changed.');
     assertPurchaseContent(expectation.purchaseOrigins,stockSource); actual = reportBalances(expectation,observation);
     quantities = summarizeStockState(state).items.map(expected => { const item = stockSource.items.find(row => row.Id === expected.itemId), identity = state.items.find(row => row.itemId === expected.itemId), available = item?.Type === 'Inventory' && item.Active === true && item.TrackQtyOnHand === true && Number.isSafeInteger(item.QtyOnHand) && item.QtyOnHand >= 0 && item.AssetAccountRef?.value === identity.assetAccountId && item.ExpenseAccountRef?.value === identity.costAccountId && typeof item.InvStartDate === 'string' && item.InvStartDate === expectation.startingStockSource.items.find(row => row.Id === item.Id)?.InvStartDate; return {...expected,actualQuantity:available?item.QtyOnHand:null,status:!available?'unavailable':item.QtyOnHand === expected.quantity?'passed':'failed'}; });
   } catch (error) { if (!['BUSINESS_STOCK_COST_UNVERIFIED','BUSINESS_FINANCIAL_MOVEMENTS_UNVERIFIED'].includes(error.code)) throw error; reason = error.message; }
-  const closingValue = summarizeStockState(state).valueCents, expectedCost = expectation.openingCostCents + (openingOnly?0:calculation.costOfSalesCents);
+  const closingValue = summarizeStockState(state).valueCents, expectedCost = expectation.openingCostCents + calculation.costOfSalesCents;
   const checks = [['inventoryAsset',closingValue],['costOfGoods',expectedCost]].map(([key,expectedCents]) => { const actualCents = actual?.[key] ?? null; return {key,accountId:expectation.accounts.find(row => row.key === key).id,expectedCents,actualCents,differenceCents:actualCents === null?null:actualCents-expectedCents,status:actualCents === null?'unavailable':actualCents === expectedCents?'passed':'failed'}; });
   const status = reason || quantities.some(row => row.status === 'unavailable')?'unavailable':[...checks,...quantities].every(row => row.status === 'passed')?'passed':'failed';
   const attributed = new Set([...expectation.opening.items.flatMap(item => item.lots.map(lot => lot.source)), ...basis.map(row => row.source)].filter(source => source.receiptSource === 'owner-attributed-readback').map(source => source.logicalKey + ':' + source.lineIndex)).size;
   return {version:1,status,ownerAttributedSourceLines:attributed,method:'FIFO',policyTrust:'retained-method-and-tax-policy-evidence',policyHash:expectation.policyHash,rootHash:expectation.rootHash,openingHash:expectation.opening.stateHash,stockSourceHash:stockSource?.sourceHash || null,checks,quantities,...(!openingOnly?{calculation}:{}),...(reason?{reason}:{}),limitation:'Managed original purchase layers and the selected inventory-asset/COGS accounts only. Method and fully recoverable purchase tax rely on the retained policy evidence, which may explicitly be a documented inference and selected test-business treatment. This comparison does not establish that the company setting was directly observed. Unsupported adjustments, returns, independent QuickBooks per-item valuation, physical counts and bank reconciliation are not certified.'};
 }
-module.exports = {fiscalYear,loadStockBasis,loadPurchaseOrigins,validateStockExpectation,createStockExpectation,compareStockCosts,assertQuantities};
+module.exports = {startingStockState,fiscalYear,loadStockBasis,loadPurchaseOrigins,validateStockExpectation,createStockExpectation,compareStockCosts,assertQuantities};

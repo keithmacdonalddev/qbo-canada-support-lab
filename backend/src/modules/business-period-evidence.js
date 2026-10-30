@@ -51,7 +51,7 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
     }).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
     const financialBasis = manifest.financialExpectation ? await loadMovementBasis(movementModels, scope, run, manifest, [...found.values()], session) : null;
     const stockBasis = manifest.stockCostExpectation ? await require('./business-stock-evidence').loadStockBasis(movementModels, scope, run, manifest, [...found.values()], session) : null;
-    if (manifest.stockCostExpectation && canonical(await require('./business-stock-evidence').loadPurchaseOrigins({ ...movementModels, Runs, Plans, Steps }, manifest.stockCostExpectation.opening, session)) !== canonical(manifest.stockCostExpectation.purchaseOrigins)) fail('Original remaining purchase costs changed.');
+    if (manifest.stockCostExpectation && canonical(await require('./business-stock-evidence').loadPurchaseOrigins({ ...movementModels, Runs, Plans, Steps }, require('./business-stock-evidence').startingStockState(manifest.stockCostExpectation), session)) !== canonical(manifest.stockCostExpectation.purchaseOrigins)) fail('Original remaining purchase costs changed.');
     return { run, manifest, fence, records: observed, ...(financialBasis ? { financialBasis } : {}), ...(stockBasis ? { stockBasis } : {}) };
   }
   async function prepareEvidence({ scope, operationId, leaseToken, signal }) {
@@ -67,7 +67,7 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
       for (const row of graph.records) if (keys.includes(row.logicalKey)) covered.add(row.logicalKey);
     }
     const observed = await transaction(session => snapshot(scope, operationId, leaseToken, actor, session, true)); check();
-    const stockSource = observed.manifest.stockCostExpectation ? (typeof readStock === 'function' ? await readStock(scope, observed.manifest.stockCostExpectation.opening, { signal }) : fail('Current stock observation is unavailable.')) : null; check();
+    const stockSource = observed.manifest.stockCostExpectation ? (typeof readStock === 'function' ? await readStock(scope, require('./business-stock-evidence').startingStockState(observed.manifest.stockCostExpectation), { signal }) : fail('Current stock observation is unavailable.')) : null; check();
     const run = observed.run, recordSetHash = hash(observed.records), sources = await readReports(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal }); check();
     const { sourceHash, evaluation: ignored, ...source } = sources || {};
     const start = Date.parse(source.startedAt), end = Date.parse(source.observedAt);
@@ -160,7 +160,7 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
     for (let offset = 0; offset < keys.length; offset += 100) rows.push(...await Steps.find({ ...scope, logicalKey: { $in: keys.slice(offset, offset + 100) } }, null, { singleBatch: true, batchSize: 101 }).limit(101).session(session).maxTimeMS(3000).lean());
     if (rows.length !== keys.length || new Set(rows.map(row => row.logicalKey)).size !== keys.length) fail('The complete original stock record set is required.');
     const basis = await require('./business-stock-evidence').loadStockBasis(movementModels, scope, run, manifest, rows, session);
-    const purchases = await require('./business-stock-evidence').loadPurchaseOrigins(movementModels, manifest.stockCostExpectation.opening, session);
+    const purchases = await require('./business-stock-evidence').loadPurchaseOrigins(movementModels, require('./business-stock-evidence').startingStockState(manifest.stockCostExpectation), session);
     if (canonical(basis) !== canonical(proof.stockBasis) || canonical(purchases) !== canonical(manifest.stockCostExpectation.purchaseOrigins)) fail('Stock cost differs from its original accepted dispatches.');
     const result = require('./business-stock-evidence').compareStockCosts(manifest.stockCostExpectation, basis, sources, proof.stockSource);
     if (canonical(result) !== canonical(proof.assertions.find(row => row.key === 'stock-costs')?.stockCosts)) fail('The retained stock comparison differs from its original sources.');

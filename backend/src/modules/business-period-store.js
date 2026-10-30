@@ -19,7 +19,7 @@ function assertRun(run, scope) {
   if (run.activityBatch !== undefined) {
     const batch = run.activityBatch;
     const activity = require('./business-activity-batch').buildBatchActivity(batch, filter, run.businessKey);
-    if (run.recordCount !== activity.events.length) throw problem('Additional activity lost its complete self-contained record set');
+    if (run.recordCount !== activity.events.length + activity.prerequisites.length) throw problem('Additional activity lost its complete self-contained record set');
     if (run.expectedCursor === null || run.fromDate !== batch.day || run.throughDate !== batch.day) throw problem('Additional activity needs verified preceding history and one exact open business day');
   }
   if (run.expectedCursor !== null) {

@@ -82,9 +82,12 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     let stockSource = null;
     if (plan.manifest.stockCostExpectation) {
       const expected = plan.manifest.stockCostExpectation;
-      const origins = await require('./business-stock-evidence').loadPurchaseOrigins(models, expected.opening);
+      // Preparation includes already verified receipts from the still-open day.
+      // Re-read that same projected opening, including its original purchase lots.
+      const stockEvidence = require('./business-stock-evidence'), startingState = stockEvidence.startingStockState(expected);
+      const origins = await stockEvidence.loadPurchaseOrigins(models, startingState);
       if (require('./business-calendar').canonical(origins) !== require('./business-calendar').canonical(expected.purchaseOrigins)) fail('Original stock purchase costs changed before the first write.');
-      stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now })(scope, expected.opening, { signal });
+      stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now })(scope, startingState, { signal });
     }
     const source = await createBusinessReportReader({ access, now, purpose: 'operation' })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
     require('./business-financial-movements').assertMovementCapacity(plan.manifest, source);
@@ -105,7 +108,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   }
   async function execute({ signal } = {}) {
     await bind();
-    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, adoptedSources: require('./business-adopted-settlement').createAdoptedSettlementReader({ Calendars: models.Calendars, PopulationRecords: models.PopulationRecords || require('../models/BusinessPopulationRecord'), readRecord: verification.rawRecord }), now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
+    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, purchaseOrderSources: require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, readRecord: verification.rawRecord, history: plans.history, now }), adoptedSources: require('./business-adopted-settlement').createAdoptedSettlementReader({ Calendars: models.Calendars, PopulationRecords: models.PopulationRecords || require('../models/BusinessPopulationRecord'), readRecord: verification.rawRecord }), now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
     return createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence: evidence.prepareEvidence, validateOpening })(scope, operationId, { signal });
   }
   return Object.freeze({ execute, settleStop: async () => {

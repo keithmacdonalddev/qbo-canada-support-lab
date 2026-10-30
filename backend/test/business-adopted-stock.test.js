@@ -18,7 +18,7 @@ function record(entity, txnDate, qty, price) {
 const rows = [record('Bill', '2026-08-03', 10, 2), record('SalesReceipt', '2026-08-20', 4), record('Bill', '2026-09-02', 5, 3), record('SalesReceipt', '2026-09-10', 8), record('SalesReceipt', '2026-10-01', 1)];
 function model(list) {
   const match = (row, q) => row.environment === q.environment && row.realmId === q.realmId && (!q.entity || (q.entity.$in ? q.entity.$in.includes(row.entity) : row.entity === q.entity)) && (!q.state || row.state === q.state) && (!q.txnDate || (row.txnDate >= q.txnDate.$gte && row.txnDate <= q.txnDate.$lte)) && (!q.qboId || row.qboId === q.qboId) && (!q.logicalKey || row.logicalKey === q.logicalKey);
-  const chain = found => { const api = { select: () => api, sort: () => api, session: () => api, maxTimeMS: () => api, lean: () => api, cursor: () => found, then: (ok, ko) => Promise.resolve(found).then(ok, ko) }; return api; };
+  const chain = found => { const api = { select: () => api, sort: () => api, limit: () => api, batchSize: () => api, session: () => api, maxTimeMS: () => api, lean: () => api, cursor: () => found, [Symbol.asyncIterator]: async function* () { yield* (Array.isArray(found) ? found : []); }, then: (ok, ko) => Promise.resolve(found).then(ok, ko) }; return api; };
   return { find: q => chain(list.filter(row => match(row, q))), findOne: q => chain(list.find(row => match(row, q)) || null) };
 }
 

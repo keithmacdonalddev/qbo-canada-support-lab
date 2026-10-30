@@ -24,13 +24,16 @@ function ownOperation(operation,agent){
   return Boolean(origin&&grant&&origin.agentId===agent.id&&origin.grantId===grant.id&&origin.authorityHash===grant.authorityHash&&RESUMABLE.has(operation.status));
 }
 
-function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null}={}){
+function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null}={}){
   settings=settings||{};agent=agent||{};business=business||{};sync=sync||{};
   const items=[],blockers=Array.isArray(business.blockers)?business.blockers:[],codes=new Set(blockers.map(item=>item.code));
   const add=item=>items.push({detail:'',next:'',...item});
   const operation=business.currentOperation,grant=agent.grant,published=!codes.has('not-published');
-  const stale=grant&&((business.authorityHash&&grant.authorityHash!==business.authorityHash)||(activityPolicyHash&&grant.activityPolicyHash!==activityPolicyHash));
+  // Only a changed published business needs the owner again; new accountant
+  // workflows are covered by the standing grant (owner direction 2026-10-29).
+  const stale=grant&&business.authorityHash&&grant.authorityHash!==business.authorityHash;
 
+  if(usage?.pause)add({key:'ai-usage-limit',owner:OWNER,state:'needs-owner',title:usage.pause.title,detail:usage.pause.detail+(usage.pause.resetAt?' Reset: '+usage.pause.resetAt+'.':''),action:{kind:'link',href:'/company#ai-usage',label:'View AI usage & limits'}});
   // Things only the owner can do.
   if(!settings.monitoring)add({key:'enable-monitoring',owner:OWNER,state:'needs-owner',title:'Turn on company monitoring',detail:'The app keeps a live copy of the company so the accountant can see what is happening.',action:{kind:'enable-monitoring',label:'Start monitoring'}});
   if(!published)add({key:'publish-business',owner:OWNER,state:'needs-owner',title:'Choose and publish the business',detail:'The accountant needs a published business definition before it can run anything.',action:{kind:'link',href:'/company/manage',label:'Open business setup'}});
@@ -41,7 +44,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   if(AI_ERROR.test(agent.lastError||''))add({key:'ai-connection',owner:OWNER,state:'needs-owner',title:'Fix the AI connection',detail:'The accountant could not reach its AI model on its last review.',action:{kind:'link',href:'/settings',label:'Open settings'}});
 
   // The accountant's own work.
-  const running=Boolean(settings.monitoring&&settings.autonomous&&grant&&!stale);
+  const running=Boolean(settings.monitoring&&settings.autonomous&&grant&&!stale&&!usage?.pause);
   if(settings.monitoring&&sync.status&&sync.status!=='current')add({key:'catch-up',owner:ACCOUNTANT,state:'working',title:'Catching up with QuickBooks',detail:'Reading the latest company changes. Accounting work waits until every record type is current.',next:'Continues automatically.'});
   const resumable=codes.has('current-operation')&&ownOperation(operation,agent);
   if(codes.has('population-owned')||codes.has('history-uncommitted')||(codes.has('current-operation')&&!resumable)){
@@ -58,6 +61,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   for(const [code,[title,detail,capability]] of Object.entries(recovery))if(codes.has(code))add({key:code,owner:ACCOUNTANT,state:'blocked',title,detail,next:'Needs a recovery capability that is being built.',capability,href:'/company/manage'});
   // Same-day activity collects and pays adopted obligations once the owner has approved
   // the activity rules that include them.
+  if(published)add({key:'receive-purchase-orders',owner:ACCOUNTANT,state:stale||!running?'waiting':'working',title:'Receive open purchase orders into supplier bills',detail:'Receives wholly unreceived purchase orders created by its own workflows or adopted import, in full at their original inventory cost. Partially received orders are unavailable.',next:stale?'Starts after you approve the accountant’s updated business rules.':running?'Checks open receiving choices as stock arrives.':'Starts once the accountant is running.',capability:'purchase-order-receiving'});
   if(business.adoptedThrough)add({key:'inherited-obligations',owner:ACCOUNTANT,state:stale||!running?'waiting':'working',title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',next:stale?'Starts after you approve the accountant’s updated business rules.':running?'Collects and pays them as customers pay and bills fall due.':'Starts once the accountant is running.',capability:'adopted-obligations'});
   for(const blocker of blockers)if(!KNOWN.has(blocker.code))add({key:'blocker-'+(blocker.code||'unknown'),owner:ACCOUNTANT,state:'blocked',title:blocker.title||'Business work is held',detail:blocker.detail||'',next:'Retried on the next review.',href:blocker.href||'/company/manage'});
 

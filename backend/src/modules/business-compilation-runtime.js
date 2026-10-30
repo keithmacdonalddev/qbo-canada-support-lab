@@ -48,7 +48,7 @@ async function depositSet(client, paymentId, call, check) {
   }
   fail('Deposit observation exceeds the supported record budget.');
 }
-function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, now = () => Date.now() }) {
+function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, purchaseOrderSources = null, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || [access?.authorize, access?.resolveClient, plans?.loadIntent, steps?.verifyGraph, steps?.evidence, verification?.readRecord, verification?.readFence, assertReady, now].some(value => typeof value !== 'function')) throw new TypeError('Compilation needs an exact operation and concrete observation adapters');
   const { authorize, resolveClient } = access, { loadIntent } = plans;
@@ -110,6 +110,12 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         const value = await call(() => adoptedSources(scope, settlement, { signal: controller.signal })); check();
         adopted = { ...value, ...tag };
       });
+      let purchaseOrder = null;
+      const receipt = intent.step.details?.purchaseOrderReceipt;
+      if (receipt?.source.kind === 'adopted') jobs.push(async () => {
+        if (typeof purchaseOrderSources !== 'function' || intent.dependencies.length) fail('Imported purchase-order evidence is unavailable.');
+        purchaseOrder = { ...await call(() => purchaseOrderSources(scope, receipt, { signal: controller.signal })), ...tag }; check();
+      });
       let next = 0, error;
       await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, async () => {
         while (!error && next < jobs.length) { const job = jobs[next++]; try { check(); await job(); } catch (cause) { error ||= cause; controller.abort(); } }
@@ -136,7 +142,7 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       const current = await call(() => authorize(scope, 'operations.execute', { signal: controller.signal })); check();
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The operation actor changed during observations.');
       referenceEvidence.sort((a, b) => (a.entity + ':' + a.record.Id).localeCompare(b.entity + ':' + b.record.Id)); parents.sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
-      const evidence = { referenceEvidence, parents, adopted, observationFence: { scope, ...tag, observedAt: new Date(started).toISOString() } };
+      const evidence = { referenceEvidence, parents, adopted, purchaseOrder, observationFence: { scope, ...tag, observedAt: new Date(started).toISOString() } };
       // Preflight all business constraints, including independent tax expectations,
       // before handing any observations to durable dispatch. This creates nothing.
       const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, ...evidence, now: now() });

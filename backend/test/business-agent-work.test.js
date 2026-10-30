@@ -39,7 +39,7 @@ test('only the one-time grant or a genuine renewal is asked of the owner', () =>
   const ungranted = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, agent: { grant: null }, coverage });
   assert.deepEqual(ownerKeys(ungranted), ['grant-authority']);
   assert.equal(byKey(ungranted, 'use-features').state, 'waiting');
-  assert.deepEqual(ownerKeys(businessWork({ ...running, agent: { id: 'agent', grant: { ...grant, activityPolicyHash: 'b'.repeat(64) } }, coverage })), ['renew-authority']);
+  assert.deepEqual(ownerKeys(businessWork({ ...running, agent: { id: 'agent', grant: { ...grant, activityPolicyHash: 'b'.repeat(64) } }, coverage })), [], 'new accountant workflows do not ask the owner again');
   const republished = { ...running, business: { blockers: [], authorityHash: 'd'.repeat(64) } };
   assert.deepEqual(ownerKeys(businessWork({ ...republished, coverage })), ['renew-authority']);
   assert.deepEqual(ownerKeys(businessWork({ ...republished, settings: { monitoring: true, autonomous: false }, coverage })), ['renew-authority']);
@@ -107,7 +107,7 @@ test('adopted history keeps its open balances as accountant work', () => {
   const item = work.items.find(row => row.key === 'inherited-obligations');
   assert.equal(item.owner, 'accountant');
   assert.equal(item.state, 'working', 'daily activity settles them under the approved rules');
-  const renew = businessWork({ ...running, activityPolicyHash: 'b'.repeat(64), business: { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' }, coverage: null });
+  const renew = businessWork({ ...running, business: { blockers: [], authorityHash: 'e'.repeat(64), adoptedThrough: '2026-10-20' }, coverage: null });
   assert.equal(byKey(renew, 'inherited-obligations').state, 'waiting');
   assert.match(byKey(renew, 'inherited-obligations').next, /approve/);
   assert.ok(ownerKeys(renew).includes('renew-authority'));

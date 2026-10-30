@@ -35,3 +35,39 @@ test('legal full decision history is summarized without stopping future reviews'
   const result=await createBusinessAgentEngine({provider}).run({context:{decisions,specialistReports:Array.from({length:8},()=>({detail:'s'.repeat(6000)}))},tools:[],execute:async()=>({})});
   assert.equal(result.complete,true);assert.ok(size<60000);
 });
+
+test('records every API round and final outcome without response content or keys',async()=>{
+ const saves=[],starts=[];let chats=0;
+ const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({model:'claude-sonnet-5-5',usage:{input_tokens:10,output_tokens:3,cache_read_input_tokens:4},stop_reason:++chats===1?'tool_use':'end_turn',content:chats===1?[{type:'tool_use',id:'one',name:'getBusinessState',input:{}}]:[{type:'text',text:'private summary'}]})};
+ const result=await createBusinessAgentEngine({provider}).run({role:'inventory',context:{ownerInstructions:'private prompt'},userApiKey:'private-key',tools:[],execute:async()=>({}),usage:{begin:async value=>{starts.push(value);return {_id:'fixture'};},save:async(row,value)=>saves.push(value)}});
+ assert.equal(result.complete,true);assert.equal(starts[0].role,'inventory');assert.equal(saves.at(-1).inputTokens,20);assert.equal(saves.at(-1).cacheReadTokens,8);assert.equal(saves.at(-1).outcome,'completed');assert.equal(saves.at(-1).totalTokens,34);assert.ok(!JSON.stringify({starts,saves}).includes('private'));
+});
+test('Codex quota failures record reset and partial usage even when review fails',async()=>{
+ const saves=[];const quota={resetAt:'2026-11-01T00:00:00Z'};
+ const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},createBridge:()=>({bridge:{},close:async()=>{}}),codex:{run:async()=>{throw Object.assign(new Error('limit'),{code:'CODEX_SUBSCRIPTION_LIMIT',quota,usage:{inputTokens:4,outputTokens:2}});}}});
+ await assert.rejects(engine.run({context:{},tools:[],execute:async()=>({}),usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}}),/limit/);
+ assert.equal(saves.at(-1).outcome,'plan-limit');assert.equal(saves.at(-1).resetAt,quota.resetAt);assert.equal(saves.at(-1).totalTokens,6);assert.equal(saves.at(-1).estimatedCostUsd,null);
+});
+test('usage write failure stops before model tools can execute',async()=>{
+ let executed=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({usage:{input_tokens:2,output_tokens:1},content:[{type:'tool_use',id:'one',name:'write',input:{}}]})};
+ await assert.rejects(createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>executed++,usage:{begin:async()=>({_id:'fixture'}),save:async()=>{throw new Error('storage unavailable');}}}),/storage unavailable/);assert.equal(executed,0);
+});
+
+test('a real capped tool loop starts and pauses only the next model call after spend reaches its limit',async()=>{
+ const {reviewPause}=require('../src/modules/business-agent-usage');let chats=0,record;const cap={monthlyCaps:{apiUsd:0.01}};
+ const provider={resolveProvider:async()=> 'anthropic',chat:async()=>{chats++;return {model:'claude-sonnet-5-5',usage:{input_tokens:10000,output_tokens:10},stop_reason:'tool_use',content:[{type:'tool_use',id:'one',name:'read',input:{}}]};}};
+ const usage={begin:async value=>(record={...value,outcome:'running',estimatedCostUsd:null}),save:async(row,value)=>Object.assign(record,value)};
+ const beforeModel=async()=>{const state={month:{estimatedCostUsd:record?.estimatedCostUsd||0,unpricedReviews:record?.outcome!=='running'&&record?.estimatedCostUsd===null?1:0}};if(reviewPause(state,cap))throw Object.assign(new Error('cap reached'),{code:'BUSINESS_REVIEW_PAUSED'});};
+ await assert.rejects(createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),usage,beforeModel}),/cap reached/);assert.equal(chats,1);assert.equal(record.outcome,'cap-reached');assert.ok(record.estimatedCostUsd>=0.01);
+});
+
+test('unpriced API response retains an unknown state before the next capped call',async()=>{
+ let record,chats=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>{chats++;return {model:'unpriced-model',usage:{input_tokens:10,output_tokens:1},stop_reason:'tool_use',content:[{type:'tool_use',id:'one',name:'read',input:{}}]};}};
+ await assert.rejects(createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),usage:{begin:async value=>(record={...value,outcome:'running'}),save:async(row,value)=>Object.assign(record,value)},beforeModel:async()=>{if(record?.outcome==='usage-unknown')throw new Error('unknown API price');}}),/unknown API price/);assert.equal(chats,1);assert.equal(record.estimatedCostUsd,null);
+});
+
+test('a review stopped before dispatch retains known zero usage instead of blocking future capped reviews',async()=>{
+ let guards=0,record,chats=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>chats++};
+ await assert.rejects(createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),beforeModel:async()=>{if(++guards===2)throw new Error('owner paused before dispatch');},usage:{begin:async value=>(record={...value}),save:async(row,value)=>Object.assign(record,value)}}),/owner paused/);
+ assert.equal(chats,0);assert.equal(record.usageMissing,false);assert.equal(record.totalTokens,0);assert.equal(record.estimatedCostUsd,0);
+});

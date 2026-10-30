@@ -67,6 +67,30 @@ and the app shows the owner exactly which tools exist and what they reach.
   credit-and-application cycle stays gated on Production. Batches saved under
   v1–v3 still rebuild and cannot claim the new workflows.
 
+- Workflow 2 (code, not yet live): same-day activity policy v5
+  (`business-activity-v5`) adds `receive-purchase-order`. Choices list only
+  wholly unreceived open inventory POs created by managed workflows or the
+  financially verified adopted import; unmanaged and partially received orders
+  are unavailable. The full order becomes an unpaid Bill dated today at original
+  quantities and costs, linked by PO header and line, with dated purchase tax.
+  Fresh source checks run before preparation and inside the writer fence.
+  Managed orders stay in the normal verification graph; imported orders get
+  fresh financial-content and post-save PO closure checks.
+  Same-day receipts replay alongside yesterday’s FIFO carry for later batches
+  and day close. An early managed receipt replaces its unsaved scheduled Bill;
+  later scheduled sales and payments use the actual receiving Bill. A receipt
+  is refused during preparation if a same-item sale is scheduled that day and
+  its original purchase cost, carried FIFO costs or incoming receipt costs differ.
+  The existing FIFO guard also remains in place.
+  Requires published stock-cost evidence and renewed owner policy approval.
+  Batches under v1–v4 still rebuild and cannot claim receiving. Independent
+  implementation and safety reviews found no unresolved source findings. Checks
+  remain unexecuted: the verified Luna bridge failed workspace routing before any
+  command ran, including retries (local receipts receive-po-4/5/6-receipt.json).
+  The final check request is artifacts/luna/receive-po-final-request.json. Git
+  staging is blocked by read-only .git/index.lock permissions; changes are local
+  and uncommitted. No live QBO write or report acceptance is claimed.
+
 ## Constraint that shapes every workflow
 
 Every write must stay inside the governed operation pipeline. Period

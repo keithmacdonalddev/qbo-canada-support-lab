@@ -63,7 +63,7 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       // claim can be replaced by the store; a possibly-sent request cannot.
       const handle = await steps.claim(scope, operationId, logicalKey, 300000, { runLeaseToken: leaseToken }); check();
       const observations = await loadCompilationEvidence({ scope, operationId, logicalKey, intent: structuredClone(intent), signal }); check();
-      const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, adopted: observations?.adopted ?? null, observationFence: observations?.observationFence, now: now() });
+      const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, adopted: observations?.adopted ?? null, purchaseOrder: observations?.purchaseOrder ?? null, observationFence: observations?.observationFence, now: now() });
       if (compiled.dispatchEvidence.operationId !== operationId || compiled.intentHash !== intent.fingerprint) fail('Compiled observations belong to another operation.');
       await authority('operations.execute'); check(); checkClient();
       await beforeDispatch({ scope, operationId, logicalKey, signal }); check();

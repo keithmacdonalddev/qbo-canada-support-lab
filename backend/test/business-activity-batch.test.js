@@ -33,11 +33,12 @@ test('operating overhead retains exact supplier, expense and payment without sto
  const f=prepared(input);assert.deepEqual(f.activity.events.map(row=>row.entity),['Bill','BillPayment']);validateActivityBatch(f.batch,f.candidate);
  const contract=batchLifecycle(f.candidate.entries[0].step);assert.equal(contract.mode,'operating-expense');assert.equal(contract.expense.amountCents,5900);assert.equal(f.candidate.entries.some(row=>row.step.details.lines.some(line=>line.itemKey)),false);
 });
-test('native accounting admission requires the renewed activity policy and keeps pause transaction fencing',async()=>{
+test('native accounting admission keeps pause fencing; the standing grant covers known policies, never an unknown one',async()=>{
  const authority={version:1,agentId:'b'.repeat(24),grantId:'c'.repeat(64),authorityHash:'d'.repeat(64),ownerId:'e'.repeat(24)},batch=prepared().batch;
  let filter;const Agents={findOneAndUpdate(value){filter=value;return{lean:async()=>null};}};
  await assert.rejects(fenceAgentAuthority({authority,run:{createdBy:authority.ownerId,authorityHash:authority.authorityHash,activityBatch:batch},scope,ownerId:authority.ownerId,actorId:authority.ownerId,Agents,session:{inTransaction:()=>true}}),/paused|authorization changed/);
- assert.equal(filter['grant.activityPolicyHash'],POLICY_HASH);assert.equal(filter['settings.autonomous'],true);assert.equal(filter['grant.id'],authority.grantId);
+ assert.equal(filter['grant.activityPolicyHash'],undefined);assert.equal(filter['settings.autonomous'],true);assert.equal(filter['grant.id'],authority.grantId);
+ await assert.rejects(fenceAgentAuthority({authority,run:{createdBy:authority.ownerId,authorityHash:authority.authorityHash,activityBatch:{...batch,policyHash:'0'.repeat(64)}},scope,ownerId:authority.ownerId,actorId:authority.ownerId,Agents,session:{inTransaction:()=>true}}),/unknown/);
 });
 const settle = () => ({ decisionKey:'adopted-settlement-decision-001', purpose:'Collect a customer payment received today and pay a supplier bill now due.', activities:[{type:'collect-adopted-invoice',invoiceId:'10720',customerKey:'care-client-021',amountCents:28386,purpose:'Customer paid the September care invoice in full.'},{type:'pay-adopted-bill',billId:'10655',vendorKey:'stock-supplier-2',amountCents:69768,purpose:'Pay the stock supplier bill that falls due today.'}] });
 test('adopted obligations settle as a standalone payment with its deposit, and a standalone bill payment',()=>{
