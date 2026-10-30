@@ -1,8 +1,11 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { ArrowRight, Bot, CheckCircle2, CircleDashed, Hand, LoaderCircle, OctagonPause } from 'lucide-react'
+import { ArrowRight, Bot, CheckCircle2, CircleDashed, Hand, LoaderCircle, OctagonPause, ShieldCheck } from 'lucide-react'
 import { Button } from './ui/button'
 
-const STATES = { working: ['Working', LoaderCircle], waiting: ['Up next', CircleDashed], blocked: ['Blocked', OctagonPause], done: ['Done', CheckCircle2] }
+// Only 'working' animates: the server sends it solely while something is happening now
+// (a review in progress, catching up with QuickBooks, or an operation sending records).
+// 'on-duty' is a standing responsibility that is enabled but idle until its next review.
+const STATES = { working: ['Working', LoaderCircle], 'on-duty': ['On duty', ShieldCheck], waiting: ['Up next', CircleDashed], blocked: ['Blocked', OctagonPause], done: ['Done', CheckCircle2] }
 
 // The business work list from the server: the owner sees only what needs a
 // person; everything else is the accountant's job, shown with its status.
@@ -26,10 +29,12 @@ export default function BusinessWork({ work, disabled, onAction }) {
     <ol className="bwk-list">
       {theirs.map(item => {
         const [label, Icon] = STATES[item.state] || STATES.waiting
+        const animate = item.state === 'working'
         return <li key={item.key} className={'bwk-item bwk-item--' + item.state}>
-          <span className="bwk-state"><Icon aria-hidden="true" className={item.state === 'working' ? 'animate-spin' : ''} />{label}</span>
+          <span className="bwk-state"><Icon aria-hidden="true" className={animate ? 'animate-spin' : ''} />{label}</span>
           <div className="bwk-body">
             <h3>{item.title}</h3>
+            {item.facts && <p className="bwk-facts">{item.facts}</p>}
             {item.detail && <p>{item.detail}</p>}
             {item.features?.length > 0 && <ul className="bwk-features" aria-label="Features to use">{item.features.slice(0, 8).map(feature => <li key={feature.key} className={'bwk-feature bwk-feature--' + feature.status}>{feature.name}</li>)}{item.features.length > 8 && <li className="bwk-feature">+{item.features.length - 8} more</li>}</ul>}
             {(item.next || item.href) && <small>{item.next}{item.href && <> <Link to={item.href}>Inspect</Link></>}</small>}

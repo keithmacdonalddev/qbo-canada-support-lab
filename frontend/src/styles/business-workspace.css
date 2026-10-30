@@ -223,7 +223,9 @@
 .bwk-item--working .bwk-state { color: var(--bw-good); }
 .bwk-item--blocked .bwk-state { color: var(--bw-warn); }
 .bwk-item--done .bwk-state { color: var(--bw-good); }
+.bwk-item--on-duty .bwk-state { color: var(--ink-2); }
 .bwk-body h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.bwk-facts { margin: 4px 0 0; color: var(--ink); font-size: 12.5px; font-weight: 550; font-variant-numeric: tabular-nums; }
 .bwk-body p { margin: 3px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
 .bwk-body small { display: block; margin-top: 5px; color: var(--ink-3); font-size: 12px; }
 .bwk-features { list-style: none; display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 0; padding: 0; }

@@ -24,7 +24,7 @@ test('a healthy running business needs nothing from the owner and owns only feat
   assert.equal(work.needsOwner, 0);
   assert.equal(work.headline, 'Nothing needs you. The accountant is running the business; some work waits for capabilities still being built.');
   const features = byKey(work, 'use-features');
-  assert.equal(features.state, 'working');
+  assert.equal(features.state, 'on-duty', 'an enabled duty is not shown as work in progress');
   assert.deepEqual(features.features.map(item => item.key), ['estimates', 'purchase-orders', 'refunds']);
   assert.deepEqual(byKey(work, 'new-workflows').features.map(item => item.key), ['new-employees']);
   assert.equal(byKey(work, 'new-workflows').state, 'blocked');
@@ -67,6 +67,9 @@ test('imported history and its blocked operation become one accountant-owned ite
 test('the accountant continues only an operation its current grant can resume', () => {
   const resumable = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
   assert.equal(byKey(resumable, 'continue-operation').state, 'working');
+  const idle = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'stopped' }) }, coverage });
+  assert.equal(byKey(idle, 'continue-operation').state, 'waiting', 'a stopped operation is not being worked on right now');
+  assert.match(byKey(idle, 'continue-operation').next, /next review/);
   const stuck = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation() }, coverage });
   assert.equal(byKey(stuck, 'continue-operation').state, 'blocked', 'a blocked operation is not shown as progressing');
   const paused = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
@@ -106,9 +109,65 @@ test('adopted history keeps its open balances as accountant work', () => {
   const work = businessWork({ ...running, business: { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' }, coverage: null });
   const item = work.items.find(row => row.key === 'inherited-obligations');
   assert.equal(item.owner, 'accountant');
-  assert.equal(item.state, 'working', 'daily activity settles them under the approved rules');
+  assert.equal(item.state, 'on-duty', 'daily activity settles them under the approved rules; idle until then');
   const renew = businessWork({ ...running, business: { blockers: [], authorityHash: 'e'.repeat(64), adoptedThrough: '2026-10-20' }, coverage: null });
   assert.equal(byKey(renew, 'inherited-obligations').state, 'waiting');
   assert.match(byKey(renew, 'inherited-obligations').next, /approve/);
   assert.ok(ownerKeys(renew).includes('renew-authority'));
+});
+
+const DUTIES = ['receive-purchase-orders', 'correct-own-records', 'inherited-obligations'];
+const adopted = { blockers: [], authorityHash: AUTH, adoptedThrough: '2026-10-20' };
+
+test('standing duties are on duty, not spinning, while nothing is happening', () => {
+  const work = businessWork({ ...running, business: adopted, coverage });
+  for (const key of DUTIES) {
+    assert.equal(byKey(work, key).state, 'on-duty', key + ' is enabled but idle');
+    assert.equal(byKey(work, key).facts, undefined, 'no facts line without saved facts');
+  }
+  assert.equal(work.items.filter(item => item.state === 'working').length, 0, 'nothing spins when the accountant is idle');
+  assert.equal(byKey(work, 'reviewing'), undefined);
+  const paused = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, business: adopted, coverage });
+  for (const key of DUTIES) assert.equal(byKey(paused, key).state, 'waiting');
+});
+
+test('the spinner appears only while a review or a matching operation is in progress', () => {
+  const reviewing = businessWork({ ...running, agent: { ...running.agent, reviewing: true, currentWork: 'Main accountant is reviewing and managing the business' }, business: adopted, coverage });
+  const review = byKey(reviewing, 'reviewing');
+  assert.equal(review.state, 'working');
+  assert.equal(review.detail, 'Main accountant is reviewing and managing the business.');
+  for (const key of DUTIES) assert.equal(byKey(reviewing, key).state, 'on-duty', 'a review alone does not mean every duty is in progress');
+  const batch = status => ({ ...adopted, currentOperation: { operationId: 'o', status, activityBatch: { day: '2026-10-29', types: ['receive-purchase-order', 'pay-adopted-bill'] } } });
+  const sending = businessWork({ ...running, business: batch('running'), coverage });
+  assert.equal(byKey(sending, 'receive-purchase-orders').state, 'working');
+  assert.match(byKey(sending, 'receive-purchase-orders').next, /Doing this now/);
+  assert.equal(byKey(sending, 'inherited-obligations').state, 'working');
+  assert.equal(byKey(sending, 'correct-own-records').state, 'on-duty', 'only the duties in the running batch spin');
+  const finished = businessWork({ ...running, business: batch('verified'), coverage });
+  for (const key of DUTIES) assert.equal(byKey(finished, key).state, 'on-duty');
+});
+
+test('each standing duty states what it has done from verified records', () => {
+  const empty = businessWork({ ...running, business: adopted, coverage: null, facts: { done: {}, open: null } });
+  assert.equal(byKey(empty, 'receive-purchase-orders').facts, 'Nothing received yet');
+  assert.equal(byKey(empty, 'correct-own-records').facts, 'No corrections made yet');
+  assert.equal(byKey(empty, 'inherited-obligations').facts, 'Nothing collected or paid yet');
+  const facts = {
+    done: {
+      'receive-purchase-order': { count: 3, last: '2026-10-29', cents: 0 },
+      'correct-own-record': { count: 1, last: '2026-10-27', cents: 0 },
+      'collect-adopted-invoice': { count: 4, last: '2026-10-28', cents: 123456 },
+      'pay-adopted-bill': { count: 1, last: '2026-10-29', cents: 5000 },
+    },
+    open: { invoices: { count: 12, cents: 432100 }, bills: { count: 0, cents: 0 } },
+  };
+  const work = businessWork({ ...running, business: adopted, coverage: null, facts });
+  assert.equal(byKey(work, 'receive-purchase-orders').facts, 'Received 3 purchase orders · last Oct 29');
+  assert.equal(byKey(work, 'correct-own-records').facts, 'Corrected 1 record · last Oct 27');
+  assert.equal(byKey(work, 'inherited-obligations').facts, 'Collected 4 invoices ($1,234.56) and paid 1 bill ($50.00) · last Oct 29 · Still open: 12 invoices ($4,321.00)');
+  const cleared = businessWork({ ...running, business: adopted, coverage: null, facts: { ...facts, open: { invoices: { count: 0, cents: 0 }, bills: { count: 0, cents: 0 } } } });
+  assert.match(byKey(cleared, 'inherited-obligations').facts, / · Nothing left open$/);
+  const renew = businessWork({ ...running, business: { ...adopted, authorityHash: 'e'.repeat(64) }, coverage: null, facts });
+  assert.equal(byKey(renew, 'receive-purchase-orders').state, 'waiting');
+  assert.equal(byKey(renew, 'receive-purchase-orders').facts, 'Received 3 purchase orders · last Oct 29', 'facts stay visible while waiting');
 });

@@ -9,10 +9,11 @@ function loadModels() { return {
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
 }; }
+const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});
 const publicEvent=row=>({id:String(row._id),kind:row.kind,role:row.role,title:row.title,detail:row.detail,at:new Date(row.at).toISOString(),...(row.data||{})});
 function createBusinessAgentStore({models=loadModels(),connection=require('mongoose').connection,transaction=createBusinessTransaction(connection),now=()=>Date.now()}={}) {
-  const {Agents,Events}=models;const completedCounts=new Map();
+  const {Agents,Events}=models;const completedCounts=new Map(),factCache=new Map();
   const get=(scope,session)=>Agents.findOne(scope).session(session).maxTimeMS(3000).lean();
   async function setup(){ for(const Model of [Agents,Events,models.Records]){await Model.createCollection();await Model.createIndexes();} }
   async function event(row,kind,title,detail='',data={},session,key=randomUUID(),role='accountant') {
@@ -71,7 +72,42 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
       recordCount=completedCounts.get(key)??null;
     }
     const blockers=businessBlockers({calendar,writer,job,run,policy});
-    return {scope,published:Boolean(calendar?.authorityHash),authorityHash:calendar?.authorityHash||null,openingDate:calendar?.openingDate||null,verifiedThrough:calendar?.verifiedThrough||null,verificationBasis:require('./business-calendar').calendarCursor(calendar).basis,adoptedThrough:require('./business-calendar').calendarCursor(calendar).adoptedThrough,lastActivityAt:calendar?.lastActivityAt?new Date(calendar.lastActivityAt).toISOString():null,lastActivityOperationId:calendar?.lastActivityOperationId?String(calendar.lastActivityOperationId):null,recordsThrough:job?.createdThrough||null,recordCount,populationStatus:job?.status||null,currentOperation:run?{operationId:String(run._id),status:run.status,fromDate:run.fromDate,throughDate:run.throughDate,recordCount:run.recordCount,completedRecords:run.nextOrdinal||0,planHash:run.planHash,agentAuthority:run.agentAuthority||null,activityBatch:run.activityBatch?{decisionKey:run.activityBatch.decisionKey,purpose:run.activityBatch.purpose,day:run.activityBatch.day}:null,executionPending:run.executionRequest?.pending===true}:null,bookChecks:observation?{period:observation.payload?.period,observedAt:observation.payload?.observedAt,status:observation.payload?.evaluation?.status,checks:observation.payload?.evaluation?.checks?.map(check=>({key:check.key,label:check.label,status:check.status}))}:null,blockers};
+    return {scope,published:Boolean(calendar?.authorityHash),authorityHash:calendar?.authorityHash||null,openingDate:calendar?.openingDate||null,verifiedThrough:calendar?.verifiedThrough||null,verificationBasis:require('./business-calendar').calendarCursor(calendar).basis,adoptedThrough:require('./business-calendar').calendarCursor(calendar).adoptedThrough,lastActivityAt:calendar?.lastActivityAt?new Date(calendar.lastActivityAt).toISOString():null,lastActivityOperationId:calendar?.lastActivityOperationId?String(calendar.lastActivityOperationId):null,recordsThrough:job?.createdThrough||null,recordCount,populationStatus:job?.status||null,currentOperation:run?{operationId:String(run._id),status:run.status,fromDate:run.fromDate,throughDate:run.throughDate,recordCount:run.recordCount,completedRecords:run.nextOrdinal||0,planHash:run.planHash,agentAuthority:run.agentAuthority||null,activityBatch:run.activityBatch?{decisionKey:run.activityBatch.decisionKey,purpose:run.activityBatch.purpose,day:run.activityBatch.day,types:[...new Set((Array.isArray(run.activityBatch.activities)?run.activityBatch.activities:[]).map(row=>row?.type).filter(type=>typeof type==='string'))]}:null,executionPending:run.executionRequest?.pending===true}:null,bookChecks:observation?{period:observation.payload?.period,observedAt:observation.payload?.observedAt,status:observation.payload?.evaluation?.status,checks:observation.payload?.evaluation?.checks?.map(check=>({key:check.key,label:check.label,status:check.status}))}:null,blockers};
+  }
+  // Facts for the accountant's standing duties, from saved records only (no QuickBooks calls):
+  // verified activity batches by type, and imported invoices/bills the local company copy
+  // still shows open. Cached briefly because the Business page polls status.
+  async function workFacts(scope){
+    const key=hash(scope),cached=factCache.get(key);
+    if(cached&&now()-cached.at<FACT_TTL_MS)return cached.value;
+    const {Types}=require('mongoose');
+    if(!Types.ObjectId.isValid(String(scope.connectionId)))return null;
+    const match={environment:scope.environment,realmId:scope.realmId,connectionId:new Types.ObjectId(String(scope.connectionId)),status:'verified','activityBatch.activities.type':{$in:DUTY_TYPES}};
+    const rows=await models.Runs.aggregate([
+      {$match:match},{$project:{day:'$activityBatch.day',activity:'$activityBatch.activities'}},{$unwind:'$activity'},
+      {$match:{'activity.type':{$in:DUTY_TYPES}}},
+      {$group:{_id:'$activity.type',count:{$sum:1},last:{$max:'$day'},cents:{$sum:{$ifNull:['$activity.amountCents',0]}}}},
+    ]).option({maxTimeMS:3000});
+    const done={};for(const row of rows)done[row._id]={count:row.count,last:typeof row.last==='string'?row.last:null,cents:Number(row.cents)||0};
+    let open=null;
+    try{open=await openAdopted(scope);}catch{open=null;}
+    const value={done,open};
+    if(factCache.size>=50)factCache.clear();
+    factCache.set(key,{at:now(),value});
+    return value;
+  }
+  async function openAdopted(scope){
+    const calendar=await models.Calendars.findOne(scope).select('adoption').maxTimeMS(3000).lean(),adoption=calendar?.adoption;
+    if(adoption?.kind!=='adopted-history'||!adoption.jobId)return null;
+    const job=await models.Jobs.findOne({_id:adoption.jobId}).select('status authorityHash').maxTimeMS(3000).lean();
+    if(job?.status!=='adopted')return null;
+    const Records=models.PopulationRecords||require('../models/BusinessPopulationRecord');
+    const mirrored=await models.Records.find({...scope,entity:{$in:['Invoice','Bill']},deleted:false,'summary.balanceCents':{$gt:0}}).select('entity qboId summary.balanceCents').limit(2000).maxTimeMS(3000).lean();
+    if(mirrored.length>=2000)return null;
+    const imported=mirrored.length?await Records.find({...scope,authorityHash:job.authorityHash,state:'saved',entity:{$in:['Invoice','Bill']},qboId:{$in:mirrored.map(row=>row.qboId)},...(adoption.importedThrough?{txnDate:{$lte:adoption.importedThrough}}:{}),'financialProof.matchesFinancialIntent':true,'relationshipCheck.outcome':{$ne:'error'}}).select('entity qboId').limit(2000).maxTimeMS(3000).lean():[];
+    const owned=new Set(imported.map(row=>row.entity+':'+row.qboId)),total={invoices:{count:0,cents:0},bills:{count:0,cents:0}};
+    for(const row of mirrored)if(owned.has(row.entity+':'+row.qboId)){const bucket=row.entity==='Invoice'?total.invoices:total.bills;bucket.count+=1;bucket.cents+=Number(row.summary?.balanceCents)||0;}
+    return total;
   }
   async function events(row){const rows=await Events.find({agentId:String(row._id)}).sort({at:-1,_id:-1}).limit(40).maxTimeMS(3000).lean();return rows.map(publicEvent);}
   async function decisions(row){
@@ -97,6 +133,6 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function release(row,token,changes){return Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token},{$set:{...changes,leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true}).lean();}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,events,decisions,decision,event,due,claim,current,update,release,run,ownedRuns,scopeOf};
+  return {models,get,setup,control,business,workFacts,events,decisions,decision,event,due,claim,current,update,release,run,ownedRuns,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};
