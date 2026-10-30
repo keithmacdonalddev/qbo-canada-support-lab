@@ -371,7 +371,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
     let stderr = '';
     let buffer = '';
     const messages = [];
-    const usage = { inputTokens: 0, outputTokens: 0 };
+    const usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }; // cachedInputTokens is part of inputTokens; null if any turn omitted it
     let toolCalls = 0;
     let settled = false;
     let quota = null, usageObserved = false;
@@ -409,6 +409,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
         usageObserved = true;
         usage.inputTokens += event.usage.input_tokens || 0;
         usage.outputTokens += event.usage.output_tokens || 0;
+        usage.cachedInputTokens = usage.cachedInputTokens !== null && Number.isSafeInteger(event.usage.cached_input_tokens) && event.usage.cached_input_tokens >= 0 ? usage.cachedInputTokens + event.usage.cached_input_tokens : null;
       }
     };
 

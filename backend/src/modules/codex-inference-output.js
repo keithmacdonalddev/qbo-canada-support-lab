@@ -18,7 +18,7 @@ function collectInference(child, { prompt, timeoutMs, signal, maxOutputBytes = 3
   return new Promise((resolve, reject) => {
     let buffer = '', outputBytes = 0, failed = null, settled = false, grace;
     const decoder = new StringDecoder('utf8');
-    const messages = [], usage = { inputTokens: 0, outputTokens: 0 };
+    const messages = [], usage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }; // cached input is part of inputTokens; null if any turn omitted it
     const error = (message, code) => Object.assign(new Error(message), { code, aiProvider: true });
     const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(grace); signal?.removeEventListener('abort', stop); fn(value); };
     const fail = reason => {
@@ -35,7 +35,7 @@ function collectInference(child, { prompt, timeoutMs, signal, maxOutputBytes = 3
       const item = event.item;
       if (item?.type && !['agent_message', 'reasoning'].includes(item.type)) { fail(error('The independent assessment attempted to use a tool.', 'AI_ASSESSMENT_TOOL_DENIED')); return; }
       if (event.type === 'item.completed' && item?.type === 'agent_message' && typeof item.text === 'string') messages.push(item.text);
-      if (event.type === 'turn.completed' && event.usage) { usage.inputTokens += event.usage.input_tokens || 0; usage.outputTokens += event.usage.output_tokens || 0; }
+      if (event.type === 'turn.completed' && event.usage) { usage.inputTokens += event.usage.input_tokens || 0; usage.outputTokens += event.usage.output_tokens || 0; const cached = event.usage.cached_input_tokens; usage.cachedInputTokens = usage.cachedInputTokens !== null && Number.isSafeInteger(cached) && cached >= 0 ? usage.cachedInputTokens + cached : null; }
     };
     const take = chunk => {
       if (failed || settled) return false;

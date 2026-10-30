@@ -10,10 +10,10 @@ function child(autoClose = true) {
 const event = text => JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }) + '\n';
 test('inference accepts only complete bounded UTF-8 text and keeps no tool bridge', async () => {
   const c = child(), result = collectInference(c, { prompt: 'safe', timeoutMs: 1000, maxOutputBytes: 2048 });
-  const bytes = Buffer.from(event('évidence') + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2 } }) + '\n');
+  const bytes = Buffer.from(event('évidence') + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, cached_input_tokens: 1, output_tokens: 2 } }) + '\n');
   const at = bytes.indexOf(Buffer.from('é'));
   c.stdout.write(bytes.subarray(0, at + 1)); c.stdout.write(bytes.subarray(at + 1)); c.emit('close', 0);
-  const done = await result; assert.equal(done.text, 'évidence'); assert.equal(done.toolCalls, 0); assert.deepEqual(done.usage, { inputTokens: 4, outputTokens: 2 });
+  const done = await result; assert.equal(done.text, 'évidence'); assert.equal(done.toolCalls, 0); assert.deepEqual(done.usage, { inputTokens: 4, outputTokens: 2, cachedInputTokens: 1 });
 });
 test('stdout/stderr floods, invalid events and attempted MCP calls kill only the supplied child', async () => {
   for (const mode of ['stdout', 'stderr', 'invalid', 'tool']) {

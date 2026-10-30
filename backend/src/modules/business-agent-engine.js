@@ -65,7 +65,7 @@ function createBusinessAgentEngine({provider=require('./ai-provider'),codex=requ
       responses++;awaitingUsage=false;
       const next=normalizeUsage(selected,response.usage);
       for(const key of ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','cacheWrite1hTokens','totalTokens'])accumulated[key]+=next[key];
-      accumulated.usageMissing=accumulated.usageMissing||next.usageMissing;
+      accumulated.usageMissing=accumulated.usageMissing||next.usageMissing;accumulated.cacheSplit=accumulated.cacheSplit&&next.cacheSplit;
       // Anthropic returns the actual serving model; never assume a configured alias is priced.
       if(selected==='anthropic'&&response.model)model=response.model;
       const estimatedCostUsd=estimateCost(selected,model,accumulated);

@@ -46,7 +46,12 @@ test('Codex quota failures record reset and partial usage even when review fails
  const saves=[];const quota={resetAt:'2026-11-01T00:00:00Z'};
  const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},createBridge:()=>({bridge:{},close:async()=>{}}),codex:{run:async()=>{throw Object.assign(new Error('limit'),{code:'CODEX_SUBSCRIPTION_LIMIT',quota,usage:{inputTokens:4,outputTokens:2}});}}});
  await assert.rejects(engine.run({context:{},tools:[],execute:async()=>({}),usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}}),/limit/);
- assert.equal(saves.at(-1).outcome,'plan-limit');assert.equal(saves.at(-1).resetAt,quota.resetAt);assert.equal(saves.at(-1).totalTokens,6);assert.equal(saves.at(-1).estimatedCostUsd,null);
+ assert.equal(saves.at(-1).outcome,'plan-limit');assert.equal(saves.at(-1).resetAt,quota.resetAt);assert.equal(saves.at(-1).totalTokens,6);assert.equal(saves.at(-1).estimatedCostUsd,null);assert.equal(saves.at(-1).cacheSplit,false);
+});
+test('Codex reviews store fresh and cached input separately with unchanged token totals and no API spend',async()=>{
+ const saves=[];const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},createBridge:()=>({bridge:{},close:async()=>{}}),codex:{getStatus:async()=>({method:'chatgpt'}),run:async()=>({text:'done',usage:{inputTokens:100,cachedInputTokens:80,outputTokens:10}})}});
+ const result=await engine.run({context:{},tools:[],execute:async()=>({}),usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}});
+ const last=saves.at(-1);assert.equal(result.complete,true);assert.equal(last.inputTokens,20);assert.equal(last.cacheReadTokens,80);assert.equal(last.totalTokens,110);assert.equal(last.cacheSplit,true);assert.equal(last.estimatedCostUsd,null);assert.equal(last.outcome,'completed');
 });
 test('usage write failure stops before model tools can execute',async()=>{
  let executed=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({usage:{input_tokens:2,output_tokens:1},content:[{type:'tool_use',id:'one',name:'write',input:{}}]})};

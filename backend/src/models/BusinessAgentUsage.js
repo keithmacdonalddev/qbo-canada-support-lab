@@ -13,6 +13,9 @@ const schema = new mongoose.Schema({
   inputTokens: count, outputTokens: count, cacheReadTokens: count, cacheWriteTokens: count,
   cacheWrite1hTokens: count, totalTokens: count,
   usageMissing: { type: Boolean, default: false },
+  // true: inputTokens is fresh input and cacheReadTokens the cached part (exact API-equivalent pricing).
+  // Codex rows recorded before 2026-10-30 lack it; their inputTokens include cached input.
+  cacheSplit: { type: Boolean, default: false },
   estimatedCostUsd: { type: Number, min: 0, default: null },
   startedAt: { type: Date, required: true, immutable: true },
   finishedAt: { type: Date, default: null },
