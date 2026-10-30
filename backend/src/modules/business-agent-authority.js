@@ -7,6 +7,11 @@ function agentAuthority(value) {
   return { ...value };
 }
 function sameAuthority(a, b) { return canonical(agentAuthority(a)) === canonical(agentAuthority(b)); }
+// Same accountant, owner and published business; only the standing grant was
+// re-issued. This NEVER authorizes approving, executing or resuming work (those
+// require sameAuthority plus fenceAgentAuthority); it only lets the current grant
+// read its own accountant's finished history.
+function sameAgentLineage(a, b) { const x = agentAuthority(a), y = agentAuthority(b); return x.agentId === y.agentId && x.ownerId === y.ownerId && x.authorityHash === y.authorityHash; }
 function assertAgentApproval(run) {
   if (!run?.agentAuthority) { if (run?.approval?.agentAuthority) fail('An agent approval cannot authorize an owner-created operation.'); return; }
   const origin = agentAuthority(run.agentAuthority);
@@ -31,4 +36,4 @@ async function fenceAgentAuthority({ authority, run, scope, ownerId, actorId, Ag
   if (!current) fail('The business agent is paused or its company authorization changed. No new accounting request was admitted.');
   return origin;
 }
-module.exports = { agentAuthority, sameAuthority, assertAgentApproval, fenceAgentAuthority };
+module.exports = { agentAuthority, sameAuthority, sameAgentLineage, assertAgentApproval, fenceAgentAuthority };

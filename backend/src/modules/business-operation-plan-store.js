@@ -122,7 +122,7 @@ function runFields(manifest, planId, actorId) {
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
 function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, Agents }) {
-  const { agentAuthority: normalizeAgentAuthority, sameAuthority, fenceAgentAuthority } = require('./business-agent-authority');
+  const { agentAuthority: normalizeAgentAuthority, sameAuthority, sameAgentLineage, fenceAgentAuthority } = require('./business-agent-authority');
   const agentAuthority = suppliedAgentAuthority ? normalizeAgentAuthority(suppliedAgentAuthority) : null;
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
   for (const fn of [assertReady, authorize, transaction, now, ...(!readOnly ? [loadCandidate, checkCurrent, writeAudit] : [])]) if (typeof fn !== 'function') throw new TypeError('Operation plans require explicit trusted adapters');
@@ -137,14 +137,24 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     if (result?.eventKey !== eventKey || typeof result.id !== 'string' || !result.id) fail('Operation plan audit was not saved');
     return result.id;
   }
-  async function read(scope, operationId, session, check = () => {}) {
+  // settledHistory: the caller only reads finished records as dependency history.
+  // Every approve/page/intent/reuse read keeps the exact-origin fence.
+  async function read(scope, operationId, session, check = () => {}, { settledHistory = false } = {}) {
     check();
     if (typeof operationId !== 'string' || !ID.test(operationId)) fail('A valid operation identifier is required', 400);
     const run = await Runs.findOne({ _id: operationId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); assertRun(run, scope);
     const plan = await Plans.findOne({ _id: run.planId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); if (!plan || plan.contractVersion !== 1 || plan.planHash !== run.planHash || hash(plan.manifest) !== plan.planHash || !sameScope(plan.manifest.scope, scope) || String(plan.operationId) !== operationId || !plan.auditId) fail('The immutable saved operation plan is missing or changed');
-    if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && !sameAuthority(run.agentAuthority, plan.agentAuthority)) || (agentAuthority && (!run.agentAuthority || !sameAuthority(agentAuthority, run.agentAuthority)))) fail('The immutable agent origin changed.');
+    if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && !sameAuthority(run.agentAuthority, plan.agentAuthority))) fail('The immutable agent origin changed.');
+    if (agentAuthority && (!run.agentAuthority || !sameAuthority(agentAuthority, run.agentAuthority))) {
+      // A re-issued standing grant (same accountant, owner and published business)
+      // may build on its accountant's verified history. Unfinished earlier-grant
+      // work is never read as settled; it cannot be approved or resumed either.
+      const lineage = settledHistory && run.agentAuthority && sameAgentLineage(agentAuthority, run.agentAuthority);
+      if (!lineage) fail('The immutable agent origin changed.');
+      if (run.status !== 'verified') fail('Saved activity belongs to unfinished work from an earlier accountant authorization; settle that operation before continuing.');
+    }
     const expected = runFields(plan.manifest, String(plan._id), String(plan.createdBy));
     for (const [key, value] of Object.entries(expected)) {
       const actual = ['planId', 'blueprintId', 'connectionId', 'createdBy'].includes(key) ? String(run[key]) : run[key];
@@ -309,7 +319,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
           }
           const operationId = String(row.operationId);
           if (!plans.has(operationId)) {
-            const saved = await call(() => read(scope, operationId, session, check)); check(); assertRunApproval(saved.run);
+            const saved = await call(() => read(scope, operationId, session, check, { settledHistory: true })); check(); assertRunApproval(saved.run);
             if (saved.run.status === 'previewed') fail('Saved activity has no approved originating operation');
             retainSize(saved.plan.manifest);
             plans.set(operationId, { ...saved, byKey: new Map(saved.plan.manifest.records.map((value, ordinal) => [value.logicalKey, { value, ordinal }])) });
