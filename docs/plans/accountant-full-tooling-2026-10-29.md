@@ -130,7 +130,8 @@ and the app shows the owner exactly which tools exist and what they reach.
   `business-unknown-recovery.js` (entity-generic; not yet covered by a list-specific
   test). Known limits: NonInventory items and added roles in
   credits/refunds/cash expenses are not built.
-- Workflow 8 (code, not yet live, tests not yet run): same-day activity policy v7
+- Workflow 8 (committed a8a7e1c after one safety review and three GPT-6.1 Sol code
+  reviews; all business and write-gate tests pass; not yet used live): same-day activity policy v7
   (`business-activity-v7`) adds `correct-own-record`, following GPT-6.1 Sol's plan
   review (artifacts/luna/tmp/sol-plan-w8-result.md, "recommended first build"). The
   accountant corrects its OWN earlier record by a full reversal dated today; the
