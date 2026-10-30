@@ -34,7 +34,7 @@ Owner direction (2026-10-29): **Opus builds (backend and all UI/UX), Sol reviews
 5. **Reviews of the code.** In parallel, read-only:
    - Sol implementation review of the commit or diff (same command, no `--write`, with a watcher);
    - `qbo-safety-reviewer` when the change writes to QuickBooks or changes operation state.
-   Verify each finding against the code, fix confirmed ones (small fixes by the lead, larger by a fork), and brief the owner.
+   Verify each finding against the code, fix confirmed ones (small fixes by the lead, larger by a fork), and brief the owner. If a fix is more than a few lines or touches a write path, send just that fix back to Sol for a focused re-review; repeat until no blocking finding remains. Record deferred findings in the plan doc.
 6. **Tests (Luna).**
    - Single-file commands, about 14 per request. Every run needs **new** receipt file names; the bridge refuses to overwrite, and old receipts would be misread as results.
    - Files that take longer than about 2 minutes get killed (exit -1) and leave later commands unrun: rerun those files one per request.
