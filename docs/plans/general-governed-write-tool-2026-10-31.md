@@ -1,8 +1,9 @@
-# General governed QuickBooks write tool — design, 2026-10-31
+# General governed QuickBooks write tool — design, 2026-10-31 (revision 3)
 
-Status: design for independent review. Nothing here is wired into live approval or
-dispatch. Pure parts (payload validator, guards, entity schema guide, tests) may be
-built first; they change no live behaviour.
+Status: approved for implementation by the lead, 2026-10-31, after two GPT-6.1 Sol
+reviews. Revision 1 findings are marked **[R1-n]**. The second review's three contract
+fixes are marked **[R2-n]** and its notes **[R2-note]**. Nothing dispatches to the live
+company until the lead has completed one implementation review.
 
 Owner direction, 2026-10-31: "why doesnt the accountant know all that... its a
 fronteir model", "give the accountant all the tools, all the api skills ... be able to
@@ -13,252 +14,392 @@ youve built syncing in and ensured its hardened and works".
 
 The accountant composes any business event the QuickBooks Online Accounting API
 supports, as real QuickBooks payloads, through one tool. The app does not dictate the
-shape of the event. It enforces safety and verification generically and
-deterministically, and it keeps the cost to **3 or fewer metered QuickBooks calls per
-saved record on average, including verification** (today: about 100).
+shape of the event: no workflow-shaped restrictions such as whole-number quantities or
+linked-only deposit lines. It enforces safety and verification generically and
+deterministically, from declarative per-entity rules.
+
+Cost target **[R1-8]**: on a normal day, at most 2 vendor-metered QuickBooks
+operations per saved record, including verification. Transport attempts and metered
+operations are measured separately.
 
 ## What stays unchanged
 
-- Activity policies v1–v8 and their fixed workflows, the monthly calendar, period
-  verification by compiler-predicted postings (`business-financial-movements.js`), the
-  corrections, adopted settlements and receiving. Saved plans rebuild exactly as before.
-- The durable pipeline: immutable saved plan → lease-fenced approval under the standing
-  grant → company writer fence → transport receipt saved before dispatch → dispatch only
-  through `qbo-write-gate.js` → unknown-outcome recovery (`business-unknown-recovery.js`)
-  that never resends without attribution.
+- Activity policies v1–v8 and their fixed workflows, the monthly calendar, and their
+  period verification by compiler-predicted postings (`business-financial-movements.js`).
+  This includes corrections, adopted settlements and receiving. Saved plans rebuild
+  exactly as before.
 - Owner protection of closed and reconciled periods (`qbo-write-period.js`). The general
   tool cannot write into a protected period. That protection is not weakened.
 - The standing grant model: new tools need no owner prompt (only a changed published
   business does).
 
+## A versioned general execution contract **[R1-suggestion]**
+
+Today's contract does not fit general writes, so this is a new, explicitly versioned
+contract (`general-write-v1`) alongside the existing one, not a stretch of it:
+
+- the dispatcher accepts creates only (`business-dispatch.js:54`);
+- the runner requires a graph verification per record (`business-operation-runner.js:65`);
+- governance requires seven-report approval evidence (`business-governance-service.js`
+  approval path).
+
+| Concern | Existing contract (unchanged) | `general-write-v1` |
+|---|---|---|
+| Plan content | compiled step intents from fixed workflows | normalized payloads + target versions + resource graph |
+| Approval evidence | seven fresh reports | guard results on the effective records + the copy's CDC watermark |
+| Dispatch | one create per request | batch items with exact transport identity (below) |
+| Per-record proof | fresh GET + graph read-back | complete write response (or one GET when incomplete) |
+| Period proof | compiler-predicted movements per operation | declarative posting rules + version-aware completeness at day close |
+
+A plan, run, receipt and evidence record each carry `contract: 'general-write-v1'`.
+Mixed plans (fixed-workflow and general items in one operation) are refused. A day may
+contain both kinds of operation; day close applies each contract to its own records.
+
 ## Tools
 
 1. `manageQboRecord` (core, `quickbooks-write`). Input: `decisionKey`, `purpose`, and
-   1–60 `operations`, each `{ ref, op: create|update|void|delete, entity, payload,
-   reason }`.
-   - `ref` is a short local name, so later operations can say `{ "$ref": "inv1" }`
-     where a QuickBooks id is needed.
+   1–60 `operations`, each `{ ref, op: create|update|void|delete, entity, id?,
+   payload, reason? }`.
+   - `$ref` placeholders name earlier creates.
    - `update` is a sparse update. The server supplies `Id` and `SyncToken` from the
-     local copy; the model never sends them.
-   - Preparation only validates and saves the plan. The same tool then runs it, so one
-     review can propose, see faults and retry.
-2. `getQboEntitySchema(entity)` (deferred, `quickbooks-read`). It returns, from a
-   static, versioned reference file:
-   - fields, required fields, allowed operations and read-only fields;
-   - link rules (which `LinkedTxn.TxnType` values may appear where);
-   - Canadian notes: `GlobalTaxCalculation` `TaxExcluded`, `TaxCodeRef` on every line,
-     the published tax code ids, HST/GST/PST behaviour, and that QuickBooks omits
-     `ARAccountRef` on CA reads;
-   - one worked example per common event.
-
-   No QuickBooks call is made.
-3. Fault feedback. A QuickBooks validation fault (400 `ValidationFault`, 6000-series,
-   duplicate document number, and so on) returns to the model as the tool result, per
-   operation, with Intuit's message and `intuit_tid`. It is never retried automatically.
-   The model may correct the payload and re-propose in the same review (bounded by the
-   review's tool-call limit). A stale-token fault (5010) is handled by the server: one
-   targeted fresh read of that record, then one retry with the new SyncToken.
+     local copy.
+   - A decisionKey is bound to its normalized content: reuse with different content is
+     refused **[R1-6]**.
+2. `getQboEntitySchema(entity)` (deferred, `quickbooks-read`): fields, required and
+   read-only fields, operations, link rules, posting notes and Canadian tax notes from
+   a static guide (`qbo-entity-schema.js`, built). It makes no QuickBooks call.
+3. Faults go back to the model per item, as tool results, with Intuit's message and
+   `intuit_tid`. The model may correct and re-propose in the same review. A corrected
+   payload is a new attempt; successful siblings are kept (see recovery).
 
 ## Allow-list
 
 Create, update, void and delete only where the Accounting API allows that operation for
-the entity (checked against the schema guide). The table is the intended starting point;
-step 1 confirms each cell against Intuit's current API reference before it is enabled,
-and any cell the API does not support is removed:
+the entity. Each cell is confirmed against Intuit's current API reference before it is
+enabled.
 
 | Entity | create | update | void | delete |
 |---|---|---|---|---|
 | Invoice, SalesReceipt, Payment, RefundReceipt, BillPayment | yes | yes | yes | yes |
 | CreditMemo, Estimate, Bill, VendorCredit, Purchase, PurchaseOrder, Deposit, Transfer, JournalEntry, TimeActivity | yes | yes | — | yes |
 | Customer, Vendor, Employee, Item, Account, Class, Department, Term, PaymentMethod | yes | yes (inactivate via `Active:false`) | — | — |
-| Attachable (notes, attachments by upload) | yes | yes | — | yes |
-| Preferences | — | sparse update of allowed fields only | — | — |
+| Attachable (notes; file upload later) | yes | yes | — | yes |
+| Preferences | — | sparse update of a fixed safe list | — | — |
 
-Never allowed through the tool: `CompanyInfo` legal/tax identity, `TaxAgency`,
-`TaxCode`/`TaxRate` creation, `TaxPayment`, bank-feed and reconciliation endpoints (not in
-the API), and any `Preferences` field outside a fixed safe list.
+**Inventory is gated off in general-write-v1 [R2-2].** Any operation is refused when its
+effective record (before or after) moves inventory: inventory item lines on any
+transaction, fractional stock quantities, inventory invoices or sales, returns, or
+historical stock edits. Creating or editing an Inventory-type Item, and journal or
+account lines on the inventory asset account, are refused too.
 
-The safe list is `SalesFormsPrefs` terms and messages, custom transaction numbers,
-`ProductAndServicesPrefs.QuantityOnHand`, and class and location tracking. Accounting
-basis, closing date, home currency, and the automatic-credit and tax settings are
-excluded: the write gate requires automatic credit application to stay off.
+The existing stock-cost calculator accepts only whole-unit Bills and SalesReceipts, and
+it rejects ambiguous unequal-cost same-day activity. Its evidence excludes returns
+(`business-stock-cost.js:81`, `business-stock-evidence.js:158`). Inventory stays with the
+fixed workflows (`receive-purchase-order`, `order-stock` and the calendar) until the
+stock cost and replay rules and their fixtures cover general operations. Non-inventory
+entities ship first.
 
-**Multicurrency.** Turning multicurrency on is irreversible in QuickBooks: it can never
-be turned off, and it changes home-currency and account behaviour for the whole company.
-`MultiCurrencyEnabled` is not on the safe list, so the tool refuses it whether or not the
-API would accept it. If the owner wants it, the owner turns it on in the QuickBooks UI.
-After that, foreign-currency customers, suppliers and transactions with `ExchangeRate`
-become a separate reviewed change, because the period checks assume CAD.
+Never through the tool: `TaxCode`/`TaxRate`/`TaxAgency` creation, `TaxPayment`,
+`CompanyInfo` identity, reconciliation and bank feeds (not in the API), and any
+Preferences field outside the safe list.
 
-## Generic guards (server-side, deterministic, before a plan is saved)
+**Multicurrency.** Turning multicurrency on is irreversible in QuickBooks. It is not on
+the safe list, so the tool refuses it. The owner can turn it on in the QuickBooks UI.
+Foreign-currency activity is then a separate reviewed change, because every proof below
+assumes CAD.
 
-Each guard is a pure function over the proposal, the local copy (CompanySyncRecord,
-fresh to the last change-data-capture (CDC) sync) and the published business. No guard
-calls QuickBooks.
+## Guards **[R1-5]**
 
-1. **Shape.** Every payload is validated against the schema guide: allowed entity and
-   operation, no read-only fields (`Id`, `SyncToken`, `MetaData`, `Balance`,
-   `TotalAmt` on most entities), CAD only, bounded size (100 lines, 64 KiB).
-2. **Date.** `TxnDate` equals the business calendar's current open day (verified
-   through + 1, which is today). For update, void and delete, the record's current and
-   new dates must not be inside an owner-protected period. A date inside an
-   already-verified (unprotected) period is allowed only with the history rule below.
-3. **Amounts.** Per record and per operation, the existing policy caps apply: $50,000
-   per settlement or record, $120,000 per operation. Journal lines are capped at $10,000
-   each. Quantities must be whole and bounded (0–1,000,000).
-4. **References.** Every `*Ref.value` exists in the local copy with the expected entity
-   type, is active, and is CAD for parties and bank, AR and AP accounts. Alternatively it
-   is a `$ref` to an earlier operation in the same plan. An item line's account follows
-   the item; a free account line must use an account of a type allowed for that line.
-5. **Links and balances.** Payment, BillPayment, CreditMemo application and Deposit
-   lines link only to records the local copy shows open (`Balance`, `RemainingCredit`,
-   undeposited and not yet deposited). The applied totals per target, across the whole
-   plan, are never more than the open amount. Each Deposit line must reference an
-   undeposited Payment or SalesReceipt exactly once. Payment `UnappliedAmt` must be 0
-   unless the operation explicitly records a customer prepayment.
-6. **Tax.** `GlobalTaxCalculation` `TaxExcluded`. Every taxable line's `TaxCodeRef`
-   is a code in the published Canadian tax policy for that direction (sales or
-   purchases). Tax amounts are left to QuickBooks.
-7. **Stock.** For each inventory item, local on-hand plus the plan's receipts minus its
-   sales and adjustments must never go negative, in plan order. Inventory adjustments
-   (`InventoryAdjustment` where available, or journal lines on stock accounts) are
-   refused in the first build.
-8. **Ownership and history.** Records the accountant created carry ownership in the
-   step registry. Records it did not create, including imported history, may be updated,
-   voided or deleted only with a non-empty `reason`. The full before image (from the
-   local copy, refreshed if stale) and after image are retained in the audit. If the
-   record's old or new date falls inside an already-verified period, that period is
-   marked *needs re-verification*. It is re-verified at the next day close, and the
-   result is shown on the Company page. Verified history is never silently changed.
-9. **Volume.** Per review at most 60 operations, and per day the owner's existing
-   daily request and record limits. Only one general operation holds the company writer
-   at a time, as today.
+Pure functions over the proposal, the local copy and the published business.
 
-## Pipeline mapping (reuse, not new machinery)
+**When the guards run.** Each guard runs at preparation (so the model gets fast
+feedback), again at approval, and again immediately before each batch is sent, inside
+the writer fence. The second and third runs use the local copy at its current CDC
+watermark. A 5010 refresh reruns them too.
 
-- **Plan.** The validated proposal is saved as an immutable plan
-  (`OperationPlan.manifest.generalWrite`). Its intents are one per operation, keyed
-  `hash({ scope, decisionKey, ref })`, so lost-response retries reuse the plan.
-- **Approval.** Same governed approval under the standing grant, without the
-  seven-report snapshot (see verification). Fenced by the calendar revision and the
-  local copy's CDC watermark: if CDC moved since preparation, the references are
-  re-checked.
-- **Dispatch.** Operations are grouped into dependency layers, because QuickBooks batch
-  items cannot reference each other. Each layer goes out as one `POST batch?requestid=…`
-  of up to 30 items (the population batch builder already does this,
-  `business-population-batch.js`).
-  - Receipts are saved before each batch.
-  - `requestid` makes a lost-response resend return the original result.
-  - The write gate gets a coordinated general-batch transport like the population one.
-  - Each item's fault or entity is recorded separately; a faulted item stops only the
-    layers that depend on it.
-- **Read-back = the write response.** The create, update or batch response carries the
-  full saved entity. Verification compares the requested fields as a subset of the
-  response (the same subset rule `business-readback.js` uses for headers and lines,
-  plus `TotalAmt` = lines + `TxnTaxDetail.TotalTax`, tax codes from policy, links as
-  requested). It then writes the entity into the local copy immediately, as a
-  write-through mirror row with the response hash. Ownership is recorded as a step. No
-  GET per record.
+**What they check.** The guards check the **effective record**:
+- for a create, the payload;
+- for an update, the current record from the local copy merged with the sparse payload;
+- for a void or delete, the current record and its reversal.
 
-## Verification without per-type posting code
+| # | Guard | Rule |
+|---|---|---|
+| 1 | Shape | Entity and operation allowed. No read-only fields. CAD only. Bounded size. **No tax overrides:** `TxnTaxDetail`, line tax amounts and `TaxInclusiveAmt` are refused wherever QuickBooks computes tax. |
+| 2 | Dates | Creates are dated on the open business day. For updates, voids and deletes, the old and new dates of the record, of every affected source (linked parents, applied credits, deposited payments) and inventory start dates (`InvStartDate`) must be outside owner-protected periods. A date inside a verified period triggers history invalidation (below). |
+| 3 | Amounts | Gross amounts **including tax**. QuickBooks computes the tax; the guard uses the dated rates from the published tax policy to bound it. Per record ≤ $50,000 gross. Plan-wide total ≤ $120,000 of absolute exposure: creates, plus the absolute change of updates, plus the reversed amount of voids and deletes. Journal exposure is the sum of debits; each line ≤ $10,000. Quantities: any finite non-negative number within bounds; fractions are allowed. |
+| 4 | References | Exist in the copy (or are an earlier `$ref` create), have the right entity and account type, are active, and parties, banks and AR/AP are CAD. |
+| 5 | Applications | Payment, BillPayment, credit application and Deposit lines: the party, control account (AR/AP) and currency must match the target's. Applied amounts per target never exceed its open balance or remaining credit. Net credit allocations balance (`TotalAmt` = applied − credits). A Deposit may mix linked undeposited receipts (each once, in full) with free `DepositLineDetail` lines (for example a bank interest line); linked-only is not required. |
+| 6 | Tax | `GlobalTaxCalculation` `TaxExcluded`. Every taxable line's `TaxCodeRef` is in the published tax policy for the direction. |
+| 7 | Stock | For each inventory item, on-hand from the copy + receipts − sales, including the reversed deltas of updates, voids and deletes of stock records, never goes negative. This is checked across the whole plan, and resource dependencies enforce the order at dispatch. |
+| 8 | Ownership and history | Records the accountant did not create need a stated reason. A full before-image is kept in the receipt. History invalidation applies. |
+| 9 | Volume | ≤ 60 operations per plan; the owner's daily request and record limits; one general operation on the writer at a time. |
 
-Fixed workflows keep their current period check. Days containing general-tool records
-use this check at **day close** (one set of reports per day, not per operation):
+Built: `general-write-guards.js` implements guards 1–9 at preparation level. The
+remaining work for this revision:
+- evaluate the effective post-update record;
+- measure gross amounts including tax;
+- count absolute exposure;
+- match party and control account on applications;
+- compute stock deltas for updates, voids and deletes;
+- check affected source dates;
+- allow free Deposit lines.
 
-1. **Completeness, from the local copy (no extra calls).** Every transaction with
-   `TxnDate` in the day, and every record changed since the last close (from CDC), is
-   one of:
-   - an accountant receipt whose saved response hash equals the current mirror version;
-   - a fixed-workflow step already verified;
-   - an adopted or imported record unchanged since import;
-   - anything else, which is an **external change**. External changes are flagged on the
-     Company page and explicitly accepted or explained by the accountant. They never
-     pass silently.
-2. **Financial, from QuickBooks' own reports.**
-   - The day's General Ledger report rows (transaction type, id, account, amount) are
-     the posting authority. Every GL row must belong to a record classified above, and
-     every accountant record must appear in the GL.
-   - For AR, AP and bank-side accounts, each record's GL total must equal its expected
-     sign × gross. This one rule covers every transaction type: receivable or payable up
-     or down, money in or out. It needs no per-type posting code.
-   - Trial balance for the day = opening + sum of the day's GL rows, per account (QBO
-     internal consistency). Opening = the previous close's trial balance.
-   - Fixed-workflow expectations still apply to their own records.
-   - Profit and loss, Balance Sheet, aged receivables and payables totals must agree
-     with the trial balance and the local copy's open balances.
-3. **Nightly reconciliation.** The separate sync-versus-QuickBooks reconciliation
-   (another worker) closes any gap between the local copy and QuickBooks; a difference
-   reopens the day's check.
+## Scheduling: references and resources **[R1-4]**
 
-Least-invasive integration: `business-financial-movements.js` gains a
-`generalPostings` input. These are the GL-observed postings of classified general
-records, added to the existing expectation for accounts it tracks. The rest of
-`createFinancialExpectation` and the movement assertion stays as it is, so fixed
-records are still checked against compiler-predicted postings.
+QuickBooks batch items are unordered, so plan order guarantees nothing. Items go into
+the same batch only when they share no resource. Each item's resource set contains:
+- `$ref` targets (it needs their ids);
+- each existing record it updates, voids, deletes, links or applies (one writer per
+  record);
+- each inventory item whose quantity it moves (a receipt and a sale of one item never
+  share a batch);
+- each open balance it consumes (invoice, bill, credit, undeposited receipt).
 
-## Request budget (metered calls, sync excluded)
+Resources come from **both the before and the after record [R2-note]**. An update that
+removes a link, or a void or delete of a record with links, still claims the records it
+was linked to, because their balances and backlinks change.
 
-Measured 2026-10-31 UTC: 5 writes against 404 single-record reads, 76 reports and 53
-queries, about 100 calls per saved record.
+Batches are built by the greedy layering of `business-population-batch.js:54`
+(`consumed` parents, stock items): an item waits for a later batch when it conflicts
+with an item already placed or depends on an unfinished one. Each batch holds at most
+30 items.
 
-| Today's call | Why it exists | New design | Calls |
-|---|---|---|---|
-| Fresh GET of each saved record (`createBusinessTransactionReader`) | read-back | write response is the read-back | 0 |
-| Fresh GET of each referenced customer, item, account and tax code (`createBusinessReferenceReader`) | reference freshness | local copy fresh to the last CDC; one CDC call per operation | ~0.05 |
-| Receivables report per invoice (`verifyInvoiceReceivables`) | CA omits `ARAccountRef` | day-close GL proves the AR posting | 0 |
-| 7 critical reports at approval and again at verification, per operation | approval evidence, period proof | one set at day close | 7 per day |
-| TaxCode / TaxRate reads per operation (`deriveBusinessPolicies`) | dated rates | local copy (daily refreshed); rates change rarely | ~0 |
-| Writes | the work | batch of up to 30 per request, one per dependency layer | ~0.1 |
-| Stale SyncToken | concurrency | one targeted GET + retry, only on 5010 | rare |
-| Freshness refresh before writes | stale copy | already a single CDC call (a98df80) | 1 per operation |
+## Exact idempotency and recovery contract **[R1-6]**
 
-Example: a medium business day of 60 records in 8 operations costs about:
-- 8 CDC calls;
-- about 10 batch requests (two to three dependency layers per operation, some operations
-  a single layer);
-- 7 reports at day close;
-- about 5 reconciliation queries.
+Before any send, the saved plan and receipt hold:
+- the normalized payload of each item;
+- the target `Id` and `SyncToken`, and for updates the full before-image (version,
+  date, amounts, lines and links);
+- batch membership and order;
+- the `requestid`, and each item's `bId`.
 
-That is about 30 calls, or **~0.5 calls per saved record**, inside the 3-call target even
-at a third of that volume.
+Then:
 
-## Risks and how they are contained
+1. **Lost response.** The unchanged batch is resent with the **same** `requestid` and
+   bIds, so QuickBooks dedupes it.
+2. **Item outcomes.** Each item's outcome is saved as it arrives: entity, fault, or
+   absent. An absent item stays unknown. It is resolved by request-correlated read-back
+   (by `requestid`/`DocNumber`/private-note marker), never by resending under a new
+   identity.
+3. **Fault correction.** A faulted item that the model corrects, or a 5010 stale token,
+   is a **new attempt** with a new `requestid` for that item only. The new attempt
+   reruns every guard affected by the refreshed record and captures its actual
+   before-image. Successful siblings are kept.
+4. **One decision.** A decisionKey whose content differs from its saved plan is refused
+   (see `activityRequestKey` for the same rule on activity batches).
 
-- **Weaker per-record proof than the fixed workflows.** The GL-row ownership rule and
-  the control-account rule catch misposted or unexplained effects at day close, not at
-  write time. Mitigation: write-time subset verification from the response; day close
-  must pass before the calendar advances. Fixed workflows remain available.
-- **Model-composed payloads that QuickBooks accepts but that are wrong for the
-  business** (wrong customer, wrong price). Guards prove safety, not intent. The plan
-  keeps the stated purpose and reason per operation, and the daily management review
-  audits outcomes. Corrections remain governed.
-- **Editing imported or verified history.** Allowed only with a reason, a full
-  before/after audit and re-verification of the affected period. Owner-protected
-  periods stay refused.
-- **Batch partial failure.** Results are per item. Dependent layers stop; unknown
-  outcomes go through the existing never-resend recovery; `requestid` dedupes resends.
-- **Write-through mirror drift.** The write response is authoritative at write time;
-  CDC and the nightly reconciliation overwrite it with QuickBooks' later truth and flag
-  any difference.
-- **Production Canada quirks** (omitted `ARAccountRef`, dropped estimate links with
-  Progress Invoicing, zero-amount payments). The schema guide documents them, and day
-  close checks postings from the GL rather than from fields QuickBooks omits.
-- **Cost of re-verifying old periods** after history edits: bounded to the affected
-  days, run at the next close, shown with the result.
+Unknown outcomes in general writes are not handled by the existing creation-specific
+unknown recovery, which needs owner attribution. The general contract gets its own
+item-level unknown resolution, with fixtures, before any live transport.
 
-## Build order (each step reviewable; nothing live until the design is confirmed)
+That resolution has an explicit **unresolved** outcome **[R2-note]**. Some entities and
+operations have no reliable correlation field: list records without a unique name, and
+updates or deletes whose result cannot be told apart from an external change. When an
+exact replay or read-back cannot establish their identity, the item stays unresolved.
+The barrier holds: no later item that depends on its resources is sent, and the owner
+or accountant must attribute it.
 
-1. Pure: schema guide data and `getQboEntitySchema`; payload validator; guards 1–9 over
-   a local-copy interface; tests with fixtures. No live behaviour change.
-2. Plan and intents for `generalWrite`; preparation through the governance service;
-   tool definition. Approval and dispatch stay disabled behind a server flag.
-3. General batch transport in the write gate, receipts, response read-back,
-   write-through mirror and ownership; tested on the simulated company.
-4. Day-close verification (completeness + GL ownership + control accounts + TB
-   consistency) and the `generalPostings` input to financial movements.
-5. Updates, voids and deletes of own records; then records it did not create, with
-   audit and re-verification.
-6. Prompt and tool descriptions. The accountant can run the business like a real one:
-   terms, partial and late payments, quotes to invoices, purchase orders to receipts to
-   bills, stock sales, grouped deposits, time billing, classes and departments. Then
-   enable the flag on Production after a sandbox-equivalent run.
+## Write responses and the local copy **[R1-7]**
+
+- **A whole mirror row is replaced only by a complete effective entity [R2-3].** A
+  sparse update's response may carry only `Id`, `SyncToken` and the changed fields.
+  Accepting it would lose the record's lines, date and totals.
+  - **Complete** means the response is a full entity of its type: every field the
+    entity guide marks as part of the effective record (for transactions: `TxnDate`,
+    `Line`, totals, party and tax detail) is present and agrees with the requested
+    effective record.
+  - Anything less triggers one GET. Delete responses are tombstones.
+- Write responses and CDC go through **one shared, version-aware merge** into
+  `CompanySyncRecord`. A row is replaced by a higher SyncToken or a later
+  `LastUpdatedTime` for the same id. Read-start times guard against overlapping reads.
+- **Equal-version parent refresh [R2-3].** A row may also be replaced by a complete
+  entity of the **same** version when that row is marked stale (invalidated by a child
+  write), and the new entity was demonstrably read after the invalidation (read start
+  later than the invalidation time).
+  - This covers a settlement that changes an invoice's balance without changing its
+    SyncToken or timestamp; `business-request-economy.test.js:71` is the fixture case.
+  - An equal-version entity is never accepted over a row that is not stale.
+  The upsert is idempotent per (entity, id, version), so concurrent writers cannot raise
+  duplicate-key failures. This replaces the current split, where response retention
+  checks SyncToken but CDC persistence checks read-start time
+  (`qbo-write-gate.js:153`, `business-observation-store.js:30`,
+  `business-agent-sync.js:188`).
+- **Dependent invalidation is kept.** A child write (a payment, a deposit, a credit
+  application) changes its parent's balance and backlinks without necessarily changing
+  the parent's SyncToken. The merge marks every linked parent stale. The parent's next
+  use takes its current version from the next CDC or one targeted GET.
+
+## Verification at day close
+
+### Declarative posting rules **[R1-1]**
+
+The GL is never compared with itself. Each accountant record's expected postings are
+derived from **its own saved lines** by entity-generic rules:
+
+- **Lines.** An item line posts to the item's income, expense or asset account (from
+  the item in the copy). An account-based or journal line posts to its `AccountRef`. A
+  tax code posts to its published tax payable or receivable account, for the tax
+  QuickBooks returned on the record.
+- **Control side, by entity:**
+  - Invoice: AR +gross. CreditMemo: AR −gross.
+  - SalesReceipt and RefundReceipt: deposit or refund account ±gross.
+  - Bill: AP +gross. VendorCredit: AP −gross.
+  - Purchase: payment account −gross.
+  - Payment: AR −applied, and deposit-to account +`TotalAmt`.
+  - BillPayment: AP +applied, and bank or card −`TotalAmt`.
+  - Deposit: linked receipts move from undeposited funds to the bank; free lines post
+    to their account.
+  - Transfer: from −, to +.
+  - JournalEntry: each line as posted.
+- **Inventory.** Gated off in general-write-v1 [R2-2]. A general record carrying
+  inventory postings is refused before dispatch, and it fails classification at close.
+- **Non-posting, classified explicitly:** Estimate, PurchaseOrder, TimeActivity,
+  Attachable, list records, Preferences, and zero-funds applications (`TotalAmt` 0, with
+  equal links).
+- **Two different comparisons [R2-1].**
+  - **Current postings.** A record's General Ledger rows (by transaction type and id)
+    must equal the rules applied to its **current, after-state** record, account by
+    account and to the cent. An update from $100 to $150 expects $150 of current
+    postings; a deleted record expects no rows; a voided record expects zero amounts.
+  - **Period movement.** The opening-to-closing movement of each tracked account uses
+    **date-allocated** differences. The before-image's postings are removed on the
+    before-image's date, and the after-image's postings are added on its date.
+    - A $100 → $150 update on the same date moves that date by +$50.
+    - A date move from day A to day B moves A by −$100 and B by +$100.
+    - A delete moves its date by −$100.
+    - A create adds its postings on its date.
+
+    These movements join the fixed workflows' compiler postings in the existing period
+    assertion (opening + movements = trial balance). A movement on a date inside a
+    verified period dirties that period (history invalidation).
+
+This catches a balanced posting to the wrong expense, tax or inventory account, and it
+never mixes a change amount with a current amount.
+
+### Version-aware completeness **[R1-2]**
+
+Every transaction dated in the day, and every record changed since the last close (from
+CDC), is classified against its **current version** in the copy:
+
+- **Accountant record, current version accounted for.** The version is the
+  write-response version, or a later version whose difference is explained only by the
+  accountant's own later settlements (balance and backlinks from its own payments,
+  credits and deposits, each itself verified).
+- **Fixed-workflow record.** Its stored verification `observedHash` equals the current
+  version, or the same own-settlement explanation applies.
+- **Adopted or imported record.** Its import proof matches the current version, or the
+  same own-settlement explanation applies.
+- **Anything else is an external change** (an external create, edit, delete or date
+  move). Historical verification alone never clears an externally edited record. The
+  change is flagged, and the record must be accepted with a reason, or corrected,
+  before the day closes.
+
+### History invalidation **[R1-3]**
+
+- **Before dispatch.** Any change to a record dated in a verified period, by the
+  accountant or detected from CDC, first writes a **durable dirty-period marker**. The
+  marker holds the earliest affected date (from the old and new dates of the record and
+  its affected sources), the reason and the receipt id.
+- **What becomes invalid.** Every close from that date through the current cursor is
+  invalidated: opening balances roll forward, and FIFO costs of later stock sales can
+  change. A change before the managed opening date invalidates the opening baseline. The
+  runner's shortcut that returns an existing verified completion
+  (`business-operation-runner.js:13`) is bypassed for dirty days.
+- **Re-verification.** Dirty days re-verify in date order at the next close, using one
+  report set per affected range. The result is shown on the Company page. The calendar
+  does not advance while a dirty day fails.
+- **Before-images.** The receipt keeps them, because the copy holds only current
+  versions. They let a later external move or deletion be re-verified against what was
+  originally proven.
+
+## Request budget, in vendor-metered operations **[R1-8]**
+
+This is a **projection [R2-note]**. It is not measured yet: today's meter increments
+once per HTTP attempt (`qbo-request-meter.js:48`), and the batch metering assumption
+comes from Intuit's sample documentation. The meter will record transport attempts and
+metered operations separately, and the figures below will be replaced with
+measurements. They also count only the **writer's incremental cost**.
+
+**Total company cost** additionally includes background synchronization: ongoing CDC
+polling, the 23 nightly COUNT checks and the amount reconciliation
+(`business-agent-sync.js`). That cost is reported separately, as a fixed daily overhead
+independent of write volume.
+
+Intuit meters batch items individually. One batch request of 25 items is one transport
+attempt but 25 metered operations. The meter (`qbo-request-meter.js`) records both
+counts: transport attempts and metered operations, including retries.
+
+Normal day, 60 saved records in 8 operations:
+
+| Source | Metered operations |
+|---|---|
+| Writes: 60 batch items, one per record | 60 |
+| CDC before each operation: 8 calls | 8 |
+| Day-close reports: TB, GL, P&L, BS, AR aging, AP aging, cash flow | 7 |
+| Report support: account query for report mapping | 1–2 |
+| Period protection: Preferences closing date once per operation (cached per day) | 1–8 |
+| Partial responses and 5010 refreshes | ~2 |
+| **Writer total** | **~80–87, about 1.3–1.5 per record** |
+| Background sync and nightly reconciliation (company overhead, reported separately) | fixed per day |
+
+That meets the target of ≤ 2 per record. A low-volume day (5 records) costs about 30,
+or 6 per record, because day close and reconciliation are fixed costs. The target
+applies to a normal day, and low days are reported as such.
+
+Today's per-record calls go away as follows:
+- the GET read-back is replaced by the response;
+- reference GETs are replaced by the local copy plus CDC;
+- per-invoice receivables reports are replaced by day-close GL rows;
+- the seven reports per operation become seven per day;
+- TaxCode and TaxRate reads per operation are served from the copy, refreshed daily.
+
+Kept, and counted above:
+- the period-protection read of Preferences;
+- link-date reads, but only for linked records missing from the copy;
+- one targeted GET for partial responses and 5010.
+
+## Risks
+
+- **Model-composed payloads that are safe but wrong for the business** (wrong customer,
+  wrong price). Guards prove safety and correct posting, not intent. The stated purpose
+  and reason are kept per item, the daily management review audits outcomes, and
+  corrections stay governed.
+- **History edits** cascade re-verification through the cursor. This is bounded by the
+  affected range and visible, and the calendar holds while a dirty day fails.
+- **Batch partial failure and unknown items** have an exact item-level contract and
+  never use a new identity for an unknown item.
+- **Mirror drift.** The shared version-aware merge and parent invalidation contain it.
+  The nightly reconciliation compares counts and totals, which cannot detect every
+  substitution. Day-close completeness and posting rules cover each changed record.
+- **Production Canada quirks** (omitted `ARAccountRef`, dropped estimate links,
+  zero-amount payments) are handled because posting rules are checked against GL rows,
+  not against fields QuickBooks omits.
+
+## Build order **[R1-suggestion]**
+
+1. Pure, now:
+   - entity guide (built);
+   - guards upgraded to effective-record and gross checks, with inventory gated off;
+   - declarative posting rules (current postings and date-allocated movements);
+   - resource-aware scheduler (before and after resources);
+   - version-aware completeness classifier;
+   - dirty-period invalidation model;
+   - the merge decision (complete-entity and equal-version rules).
+2. Fixtures, still no live transport. These cover:
+   - adopted-invoice settlement;
+   - external edit, deletion and date move;
+   - non-posting records;
+   - a wrong counterpart account (must fail at close);
+   - shared-stock batches;
+   - partial batch failure;
+   - lost responses and unknown items;
+   - 5010 refresh;
+   - history edit invalidating later closes and the baseline.
+3. `general-write-v1` plan, receipts and evidence records; preparation and approval
+   through governance; tool definition, behind a server flag that stays off.
+4. General batch transport in the write gate, with the exact identity contract; shared
+   version-aware merge; tested on the simulated company.
+5. Day-close verification for general records, joined with the existing movement
+   assertion.
+6. Prompt and tool descriptions. Then enable on Production after a full simulated run
+   and the lead's go-ahead.
