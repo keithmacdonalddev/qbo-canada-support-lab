@@ -283,7 +283,7 @@ Every item needs live proof: records in QuickBooks, a day closing, or a blocker 
 6. **History re-verification for fixed-workflow and adopted records.** Job H covered general records only (`docs/plans/history-reverification-job-h-2026-10-31.md`).
 7. **Inspect the "Record something" panel rendered** on desktop (`/company`, Directions & controls tab), and fix any problems.
 8. **Landing page overhaul.** This is a TODO with a full review in `docs/plans/landing-page-overhaul-todo-2026-10-31.md`. Build a polished rendered slice and get the owner's acceptance before rolling it out.
-9. **Multicurrency** is the owner's one-time, irreversible switch in QBO settings. Ask once, plainly, when everything else is stable.
+9. **Multicurrency is already enabled** in the live company (synced Preferences 1, found by job C on 2026-10-31). No owner decision needed; foreign-currency writing is being built (job F).
 10. **Specialists (R13/R14)** only if they would measurably help.
 11. **Deployment on the Codex subscription:** `docs/deployment.md` is written but untested on a server.
 
