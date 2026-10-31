@@ -5,6 +5,9 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { createHash } = require('node:crypto');
 const CATEGORIES = Object.freeze(['sync', 'report', 'query', 'read', 'write']);
+// Only server-owned labels are retained: never a stack, endpoint, ID or caller text.
+const CALLERS = Object.freeze(['untagged', 'business-reference', 'business-transaction', 'business-receivables', 'business-tax-policy', 'business-period-guard', 'business-stock', 'business-deposit-guard', 'business-report-operation', 'business-report-preparation', 'business-report-baseline', 'business-report-book', 'business-write', 'business-sync']);
+const callerTag = value => CALLERS.includes(value) ? value : 'untagged';
 const context = new AsyncLocalStorage();
 const MAX_PENDING = 500;
 const dayOf = clock => new Date(clock).toISOString().slice(0, 10);
@@ -14,7 +17,10 @@ function validScope(scope) {
   return scope && ['production', 'sandbox'].includes(scope.environment) && /^[0-9A-Za-z]{1,40}$/.test(String(scope.realmId || '')) && /^[0-9a-f]{24}$/.test(String(scope.connectionId || ''));
 }
 // Work run inside this wrapper (and anything it awaits) is classified as background synchronization.
-function runWithCategory(category, fn) { return context.run({ category }, fn); }
+function runWithCategory(category, fn) { return context.run({ ...context.getStore(), category }, fn); }
+function runWithCaller(caller, fn) { return context.run({ ...context.getStore(), caller: callerTag(caller) }, fn); }
+function currentCaller() { return callerTag(context.getStore()?.caller || (context.getStore()?.category === 'sync' ? 'business-sync' : 'untagged')); }
+const mergeCallers = (target, source) => { for (const [tag, counts] of Object.entries(source || {})) { const name = callerTag(tag), row = target[name] ||= { attempts: zero(), succeeded: zero() }; for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) row[kind][category] += Number(counts?.[kind]?.[category]) || 0; } };
 function categorize(method, endpoint) {
   if (String(method).toUpperCase() !== 'GET') return 'write';
   if (context.getStore()?.category === 'sync') return 'sync';
@@ -32,14 +38,16 @@ function createQboRequestMeter({ Model = null, now = () => Date.now(), flushMs =
     if (timer || !flushMs) return;
     timer = setTimeout(() => { timer = null; void flush(); }, flushMs); timer.unref?.();
   }
-  function record(scope, category, kind = 'attempts') {
+  function record(scope, category, kind = 'attempts', caller = currentCaller()) {
     try {
       if (!validScope(scope) || !CATEGORIES.includes(category) || !['attempts', 'succeeded'].includes(kind)) return;
       const clean = { environment: scope.environment, realmId: String(scope.realmId), connectionId: String(scope.connectionId) };
       const day = dayOf(now()), key = scopeKey(clean) + ':' + day;
       let entry = pending.get(key);
-      if (!entry) { if (pending.size >= MAX_PENDING) return; entry = { scope: clean, day, attempts: zero(), succeeded: zero() }; pending.set(key, entry); }
+      if (!entry) { if (pending.size >= MAX_PENDING) return; entry = { scope: clean, day, attempts: zero(), succeeded: zero(), callers: {} }; pending.set(key, entry); }
       entry[kind][category]++;
+      const tag = callerTag(caller), purpose = entry.callers[tag] ||= { attempts: zero(), succeeded: zero() };
+      purpose[kind][category]++;
       schedule();
     } catch { /* Metering never affects the request. */ }
   }
@@ -55,6 +63,7 @@ function createQboRequestMeter({ Model = null, now = () => Date.now(), flushMs =
       for (const [key, entry] of batch) {
         const inc = {};
         for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) if (entry[kind][category]) inc[kind + '.' + category] = entry[kind][category];
+        for (const [tag, counts] of Object.entries(entry.callers)) for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) if (counts[kind][category]) inc['callers.' + tag + '.' + kind + '.' + category] = counts[kind][category];
         if (!Object.keys(inc).length) { inflight.delete(key); continue; }
         const _id = createHash('sha256').update(key).digest('hex').slice(0, 48);
         try {
@@ -63,8 +72,8 @@ function createQboRequestMeter({ Model = null, now = () => Date.now(), flushMs =
         } catch {
           inflight.delete(key);
           // Return unsaved counts to memory; the next flush retries them.
-          const back = pending.get(key) || (pending.size < MAX_PENDING ? { scope: entry.scope, day: entry.day, attempts: zero(), succeeded: zero() } : null);
-          if (back) { for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) back[kind][category] += entry[kind][category]; pending.set(key, back); }
+          const back = pending.get(key) || (pending.size < MAX_PENDING ? { scope: entry.scope, day: entry.day, attempts: zero(), succeeded: zero(), callers: {} } : null);
+          if (back) { mergeCallers(back.callers, entry.callers); for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) back[kind][category] += entry[kind][category]; pending.set(key, back); }
         }
       }
       if (pending.size) schedule();
@@ -72,34 +81,35 @@ function createQboRequestMeter({ Model = null, now = () => Date.now(), flushMs =
     return flushing;
   }
   const sum = (target, source) => { for (const category of CATEGORIES) target[category] += Number(source?.[category]) || 0; return target; };
-  const totals = (attempts, succeeded) => ({ attempts, succeeded, total: CATEGORIES.reduce((n, key) => n + attempts[key], 0) });
+  const totals = (attempts, succeeded, callers = {}) => ({ attempts, succeeded, total: CATEGORIES.reduce((n, key) => n + attempts[key], 0), callers: Object.fromEntries(Object.entries(callers).map(([tag, row]) => [tag, { ...row, total: CATEGORIES.reduce((n, key) => n + row.attempts[key], 0) }])) });
   // Read-only: today's and this month's totals (UTC), including counts not yet flushed by this process.
   async function summary(scope) {
     const clean = { environment: scope.environment, realmId: String(scope.realmId), connectionId: String(scope.connectionId) };
     const clock = now(), today = dayOf(clock), monthStart = today.slice(0, 8) + '01';
-    const day = { attempts: zero(), succeeded: zero() }, month = { attempts: zero(), succeeded: zero() };
+    const day = { attempts: zero(), succeeded: zero(), callers: {} }, month = { attempts: zero(), succeeded: zero(), callers: {} };
     let persisted = false;
     reading++;
     try {
       // Let a flush already in progress settle (bounded) so its batch is counted exactly once.
       if (flushing) { let timeout; await Promise.race([flushing.catch(() => {}), new Promise(resolve => { timeout = setTimeout(resolve, summaryWaitMs); })]); clearTimeout(timeout); }
       if (connected()) {
-        const rows = await model().find({ ...clean, day: { $gte: monthStart, $lte: today } }).select('day attempts succeeded').maxTimeMS(3000).lean();
-        for (const row of rows) { sum(month.attempts, row.attempts); sum(month.succeeded, row.succeeded); if (row.day === today) { sum(day.attempts, row.attempts); sum(day.succeeded, row.succeeded); } }
+        const rows = await model().find({ ...clean, day: { $gte: monthStart, $lte: today } }).select('day attempts succeeded callers').maxTimeMS(3000).lean();
+        for (const row of rows) { mergeCallers(month.callers, row.callers); if (row.day === today) mergeCallers(day.callers, row.callers); sum(month.attempts, row.attempts); sum(month.succeeded, row.succeeded); if (row.day === today) { sum(day.attempts, row.attempts); sum(day.succeeded, row.succeeded); } }
         persisted = true;
       }
     } finally { reading--; }
     // Unsaved counts: pending plus any batch still being written (only after a slow flush outlasted the wait above).
     for (const entry of [...pending.values(), ...inflight.values()]) {
       if (scopeKey(entry.scope) !== scopeKey(clean) || entry.day < monthStart || entry.day > today) continue;
+      mergeCallers(month.callers, entry.callers); if (entry.day === today) mergeCallers(day.callers, entry.callers);
       sum(month.attempts, entry.attempts); sum(month.succeeded, entry.succeeded);
       if (entry.day === today) { sum(day.attempts, entry.attempts); sum(day.succeeded, entry.succeeded); }
     }
-    return { timezone: 'UTC', day: today, persisted, measured: 'QuickBooks API transport attempts made by this app; token refreshes are not included.', today: totals(day.attempts, day.succeeded), month: totals(month.attempts, month.succeeded) };
+    return { timezone: 'UTC', day: today, persisted, measured: 'QuickBooks API transport attempts made by this app; token refreshes are not included.', today: totals(day.attempts, day.succeeded, day.callers), month: totals(month.attempts, month.succeeded, month.callers) };
   }
   function close() { if (timer) clearTimeout(timer); timer = null; }
   return { record, flush, summary, close, pendingSize: () => pending.size + inflight.size };
 }
 let singleton;
 function getQboRequestMeter() { return singleton ||= createQboRequestMeter(); }
-module.exports = { createQboRequestMeter, getQboRequestMeter, runWithCategory, categorize, CATEGORIES };
+module.exports = { createQboRequestMeter, getQboRequestMeter, runWithCategory, runWithCaller, currentCaller, categorize, CATEGORIES, CALLERS };

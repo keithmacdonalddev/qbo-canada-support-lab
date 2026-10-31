@@ -1,4 +1,5 @@
 'use strict';
+const { runWithCaller } = require('./qbo-request-meter');
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -24,6 +25,8 @@ function validateStockSource(value, scope, items, billIds) {
   return value;
 }
 function stockBillIds(state) { return [...new Set(state.items.flatMap(item => item.lots.map(lot => lot.source.qboId)))].sort(); }
+// Keep independent live quantities and original purchase lots: stock close proof
+// must follow the final graph observations, which an older mirror cannot prove.
 // Fixed exact-ID GETs through the original client, with per-attempt authority.
 function createBusinessStockReader({ access, now = () => Date.now(), purpose = 'operations.verify' }) {
   if (!['operations.preview','operations.verify'].includes(purpose) || [access?.authorize,access?.resolveClient,now].some(fn => typeof fn !== 'function')) throw new TypeError('Stock reads need current scoped business access');
@@ -53,12 +56,12 @@ function createBusinessStockReader({ access, now = () => Date.now(), purpose = '
       const control = { signal:controller.signal,onFailure:stop,beforeAttempt:async () => { await authorize(); if (attempts++ >= MAX_CALLS) fail('Stock observation exceeded its request budget.'); } };
       const items = [], bills = [];
       for (const [entity,id] of jobs) {
-        await authorize(); const body = await client.apiCall('GET',entity.toLowerCase() + '/' + id,undefined,0,0,control); await authorize();
+        await authorize(); const body = await runWithCaller('business-stock',()=>client.apiCall('GET',entity.toLowerCase() + '/' + id,undefined,0,0,control)); await authorize();
         if (!plain(body) || Object.keys(body).some(key => ![entity,'time'].includes(key)) || body[entity]?.Id !== id) fail('The exact stock record response is incomplete.');
         (entity === 'Item' ? items : bills).push(projectStockRecord(entity,body[entity]));
         if (Buffer.byteLength(canonical({items,bills})) > MAX_SOURCE_BYTES - 4096) fail('Stock source content exceeds its evidence budget.');
       }
-      await authorize(); const company = await client.query('SELECT * FROM CompanyInfo MAXRESULTS 1',control); await authorize();
+      await authorize(); const company = await runWithCaller('business-stock',()=>client.query('SELECT * FROM CompanyInfo MAXRESULTS 1',control)); await authorize();
       const rows = company?.QueryResponse?.CompanyInfo, months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
       if (!plain(company) || Object.keys(company).some(key => !['QueryResponse','time'].includes(key)) || !plain(company.QueryResponse) || Object.keys(company.QueryResponse).some(key => !['CompanyInfo','startPosition','maxResults','totalCount'].includes(key)) || !Array.isArray(rows) || rows.length !== 1 || !plain(rows[0]) || rows[0].Country !== 'CA' || typeof rows[0].Id !== 'string' || !QID.test(rows[0].Id) || (company.QueryResponse.startPosition !== undefined && company.QueryResponse.startPosition !== 1) || (company.QueryResponse.maxResults !== undefined && company.QueryResponse.maxResults !== 1) || (company.QueryResponse.totalCount !== undefined && company.QueryResponse.totalCount !== 1)) fail('Current Canadian fiscal settings are unavailable.');
       const fiscalYearStartMonth = months.indexOf(rows[0].FiscalYearStartMonth) + 1;

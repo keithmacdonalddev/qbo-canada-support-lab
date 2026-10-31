@@ -65,4 +65,4 @@ function classifyWriteResponse(request, response, intuitTid = '') {
   if (typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken)) return { ...base, outcome: 'unknown' };
   return { ...base, outcome: 'saved', qboId, syncToken: record.SyncToken };
 }
-module.exports = { denied, scoped, freezeWriteRequest, withBusinessWritePermit, consumeBusinessWritePermit, classifyWriteResponse };
+module.exports = { denied, scoped, freezeWriteRequest, withBusinessWritePermit, consumeBusinessWritePermit, classifyWriteResponse, responsePayload };

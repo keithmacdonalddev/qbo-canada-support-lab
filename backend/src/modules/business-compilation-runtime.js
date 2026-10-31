@@ -1,4 +1,5 @@
 'use strict';
+const { runWithCaller } = require('./qbo-request-meter');
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { createBusinessReferenceReader } = require('./business-reference');
@@ -15,7 +16,7 @@ async function depositSet(client, paymentId, call, check) {
   const rows = new Map(); let bytes = 0, declaredTotal = null;
   for (let start = 1; start <= 10001; start += 1000) {
     const query = 'SELECT * FROM Deposit ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000';
-    const body = await call(() => client.query(query)); check();
+    const body = await call(() => runWithCaller('business-deposit-guard',()=>client.query(query))); check();
     if (!body || Object.keys(body).some(key => !['QueryResponse', 'time'].includes(key)) || !body.QueryResponse || Object.getPrototypeOf(body.QueryResponse) !== Object.prototype) fail('Deposit links could not be read completely.');
     const page = body.QueryResponse;
     if (Object.keys(page).some(key => !['Deposit', 'startPosition', 'maxResults', 'totalCount'].includes(key)) || (page.Deposit !== undefined && !Array.isArray(page.Deposit))) fail('Deposit query returned incomplete or unsupported evidence.');

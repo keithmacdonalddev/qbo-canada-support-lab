@@ -29,6 +29,8 @@ const TOOLS = Object.freeze({
   resumeBusinessOperation: { group: 'quickbooks-write', summary: 'Restarts its own interrupted work without sending anything twice.' },
   recordBusinessDecision: { group: 'notes', summary: 'Records a business decision with its evidence, or asks the owner a question.' },
   rememberBusinessContext: { group: 'notes', summary: 'Leaves a handoff note for its next review.' },
+  getQboEntitySchema: { group: 'quickbooks-read', summary: 'Explains how to write one QuickBooks record type: required fields, links, posting and Canadian tax rules.' },
+  manageQboRecord: { group: 'quickbooks-write', summary: 'Writes QuickBooks records directly (create, change, void or delete), checked field by field against the company copy and the business rules before anything is sent. Saved as a plan; sending is switched off on this server until its review is complete.' },
   linkReproductionCase: { group: 'notes', summary: 'Links a troubleshooting case to its work. Does not run the case.' },
   getManagementReview: { group: 'business-read', summary: 'Reads today’s plan, the business measures and coverage gaps from the local company copy, the tool map and the open build list.' },
   recordDailyPlan: { group: 'notes', summary: 'Records today’s plan from its daily management review: findings against the app’s goals, today’s changes and a short note for you.' },

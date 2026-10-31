@@ -1,6 +1,6 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
-const { createQboRequestMeter, runWithCategory, categorize } = require('../src/modules/qbo-request-meter');
+const { createQboRequestMeter, runWithCategory, runWithCaller, currentCaller, categorize } = require('../src/modules/qbo-request-meter');
 const scope = { environment: 'production', realmId: '123456789', connectionId: 'd'.repeat(24) };
 function fakeModel() {
   const h = { rows: new Map(), updates: [], fail: false, indexes: 0 };
@@ -10,7 +10,7 @@ function fakeModel() {
       if (h.fail) throw new Error('storage unavailable');
       assert.equal(options.upsert, true); h.updates.push({ filter, update });
       const row = h.rows.get(filter._id) || { ...filter, attempts: {}, succeeded: {} };
-      for (const [path, value] of Object.entries(update.$inc)) { const [kind, category] = path.split('.'); row[kind][category] = (row[kind][category] || 0) + value; }
+      for (const [path, value] of Object.entries(update.$inc)) { const parts = path.split('.'); let target = row; for (const part of parts.slice(0,-1)) target = target[part] ||= {}; const last = parts.at(-1); target[last] = (target[last] || 0) + value; }
       h.rows.set(filter._id, row); return { matchedCount: 1 };
     },
     find: query => ({ select() { return this; }, maxTimeMS() { return this; }, lean: async () => [...h.rows.values()].filter(row => row.realmId === query.realmId && row.day >= query.day.$gte && row.day <= query.day.$lte) }),
@@ -32,7 +32,7 @@ test('counts batch in memory, flush as $inc per company-day and include unflushe
   meter.record({ ...scope, connectionId: 'not-an-id' }, 'sync'); meter.record(scope, 'unknown');
   assert.equal(h.updates.length, 0, 'recording never touches storage');
   await meter.flush();
-  assert.equal(h.updates.length, 1); assert.deepEqual(h.updates[0].update.$inc, { 'attempts.sync': 2, 'attempts.report': 1, 'attempts.write': 1, 'succeeded.sync': 1 });
+  assert.equal(h.updates.length, 1); assert.deepEqual(h.updates[0].update.$inc, { 'attempts.sync': 2, 'attempts.report': 1, 'attempts.write': 1, 'succeeded.sync': 1, 'callers.untagged.attempts.sync': 2, 'callers.untagged.attempts.report': 1, 'callers.untagged.attempts.write': 1, 'callers.untagged.succeeded.sync': 1 });
   assert.equal(h.updates[0].filter.day, '2026-10-30'); assert.equal(meter.pendingSize(), 0);
   clock = Date.parse('2026-10-31T09:00:00Z'); meter.record(scope, 'query');
   const view = await meter.summary(scope);
@@ -93,4 +93,20 @@ test('summaries never dip while a flush is writing, whether they wait for it or 
     assert.equal((await meter.summary(scope)).today.total, 1, 'and counted once after it is persisted');
     meter.close();
   }
+});
+
+test('purpose counts persist by day, survive failed flushes, preserve sync context and discard arbitrary labels', async () => {
+ const h=fakeModel();let clock=Date.parse('2026-10-30T23:59:59Z');
+ const meter=createQboRequestMeter({Model:h.Model,now:()=>clock,flushMs:0,connected:()=>true});
+ await runWithCategory('sync',()=>runWithCaller('business-reference',async()=>{await null;assert.equal(categorize('GET','account/1'),'sync');assert.equal(currentCaller(),'business-reference');meter.record(scope,'sync');meter.record(scope,'sync','succeeded');}));
+ h.fail=true;await meter.flush();h.fail=false;await meter.flush();
+ clock+=2000;meter.record(scope,'query','attempts','secret query / token');await meter.flush();
+ const view=await meter.summary(scope);assert.equal(view.today.callers.untagged.total,1);assert.equal(view.month.callers['business-reference'].attempts.sync,1);assert.equal(view.month.callers['business-reference'].succeeded.sync,1);assert.equal(view.month.total,2);
+ assert.ok(!JSON.stringify([...h.rows.values()]).includes('secret'));meter.close();
+});
+
+test('the strict daily model accepts persisted nested purpose counters without storing request text',()=>{
+ const Model=require('../src/models/QboRequestDay');
+ const query=Model.updateOne({_id:'fixture'},{$inc:{'callers.business-reference.attempts.read':2,'callers.business-stock.succeeded.read':1}});
+ assert.deepEqual(query._castUpdate(query.getUpdate()),{$inc:{'callers.business-reference.attempts.read':2,'callers.business-stock.succeeded.read':1}});
 });

@@ -224,6 +224,24 @@ and the app shows the owner exactly which tools exist and what they reach.
   built; a stock order received on a day the same item is sold at a different unit
   cost is refused by the existing FIFO proof (reorder at the published unit cost);
   partial PO receipts remain unavailable. Not yet run on Production.
+- General governed write tool (code, dispatch held; 2026-10-31): `manageQboRecord`
+  (core) and `getQboEntitySchema` (deferred), contract `general-write-v1`, design
+  `docs/plans/general-governed-write-tool-2026-10-31.md` (rev 3, approved after two
+  GPT-6.1 Sol reviews). Instead of a new fixed workflow per kind of event, the
+  accountant composes QuickBooks payloads (create, sparse update, void, delete;
+  non-inventory transactions, lists, notes, safe Preferences). Server guards
+  (`general-write-guards.js`) check the effective record against the synced copy and
+  the published business before anything is sent, again before each batch: dates on
+  the open day, protected periods, gross caps including tax, references, applications
+  (party, control account, open balance), tax codes, inventory gated off, reasons and
+  audit for records it did not create. `general-write-service.js` saves the plan
+  (`GeneralWriteRun`), schedules resource-ordered batches, keeps exact transport
+  identity (requestid, bIds) for lost-response replay, and records item outcomes,
+  dirty-period markers and ownership. Posting rules, version-aware completeness, the
+  dirty range and the complete-entity merge are pure modules with fixtures. Dispatch
+  stays off (`GENERAL_WRITE_DISPATCH_ENABLED`, no transport installed) until the
+  live batch transport through the write gate and day-close verification of general
+  records pass the lead's implementation review.
 
 ## Constraint that shapes every workflow
 

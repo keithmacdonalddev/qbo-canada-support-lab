@@ -35,6 +35,7 @@ function harness() {
     }
     h.gets++; const url = new URL(options.url), name = url.pathname.split('/').at(-1);
     if (url.pathname.includes('/reports/')) return { status: 200, json: structuredClone(reports[name]) };
+    if (name === 'query' && /FROM Estimate WHERE Id IN/.test(url.searchParams.get('query'))) return { status: 200, json: { QueryResponse: { Estimate: [structuredClone(h.record)], startPosition: 1, maxResults: 1 } } };
     if (name === 'query') return { status: 200, json: { QueryResponse: { Account: [{ Id: '1', SyncToken: '0', AccountType: 'Accounts Receivable' }, { Id: '2', SyncToken: '0', AccountType: 'Accounts Payable' }], startPosition: 1, maxResults: 2 } } };
     const reference = h.referenceRecords.find(value => options.url.endsWith('/' + value.entity.toLowerCase() + '/' + value.record.Id));
     return { status: 200, json: reference ? { [reference.entity]: structuredClone(reference.record) } : { Estimate: structuredClone(h.record) } };

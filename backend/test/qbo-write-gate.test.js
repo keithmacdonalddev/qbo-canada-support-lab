@@ -365,3 +365,12 @@ test('agent origin and exact approval provenance cannot be stripped or forged', 
     const h = agentHarness(); mutate(h); await assert.rejects(h.gate.begin(h.input)); assert.equal(h.data.Receipts.length, 0);
   }
 });
+
+test('successful full response is retained privately without entering observed facts or audits',async()=>{
+ const h=harness(),ticket=await h.gate.begin(h.input),body={Invoice:{Id:'100',SyncToken:'0',Line:[],Empty:{}}};
+ const outcome=await h.gate.complete(ticket,request,{status:200,json:body});
+ assert.deepEqual(h.data.Receipts[0].savedResponse,body);assert.equal(outcome.savedResponse,undefined);
+ assert.ok(!JSON.stringify(h.data.Audits).includes('Empty'));assert.equal(h.data.Receipts[0].observed.savedResponse,undefined);
+ const Model=require('../src/models/QboWriteReceipt');const doc=new Model(h.data.Receipts[0]);
+ assert.deepEqual(doc.toObject().savedResponse.Invoice.Empty,{});assert.equal(Model.schema.path('savedResponse').options.select,false);
+});

@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { assertAccountEligible } = require('./account-policy');
 const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
-const { denied, scoped, classifyWriteResponse } = require('./qbo-write-contract');
+const { denied, scoped, classifyWriteResponse, responsePayload } = require('./qbo-write-contract');
 const { normalizePermissions } = require('./rebuild-permissions');
 const { readWritePeriodEvidence, assertWritePeriod, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
 const { normalizeWorkflow } = require('./qbo-write-workflow');
@@ -141,7 +141,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     });
   }
   async function complete(ticket, request, response, intuitTid) {
-    return finish(ticket, request, ticket?.kind === 'business-population' || (ticket?.kind==='population-link-repair'&&request.entity==='batch') ? await (ticket.kind==='business-population'?populationTransport:populationRepairTransport).classify({ ticket, request, response, intuitTid }) : classifyWriteResponse(request, response, intuitTid), 'http-response');
+    return finish(ticket, request, ticket?.kind === 'business-population' || (ticket?.kind==='population-link-repair'&&request.entity==='batch') ? await (ticket.kind==='business-population'?populationTransport:populationRepairTransport).classify({ ticket, request, response, intuitTid }) : classifyWriteResponse(request, response, intuitTid), 'http-response', responsePayload(response));
   }
   async function failTransport(ticket, request, facts = {}) {
     const status = Number.isInteger(facts.httpStatus) && facts.httpStatus >= 100 && facts.httpStatus <= 599 ? facts.httpStatus : null;
@@ -150,7 +150,10 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     const observed = { outcome: 'unknown', entity: request.entity, operation: request.operation, httpStatus: status, intuitTid, responseHash: null, transportFailure: true };
     return finish(ticket, request, observed, 'sdk-failure');
   }
-  async function finish(ticket, request, observed, endKind) {
+  async function finish(ticket, request, observed, endKind, payload = null) {
+    // Retain the response privately, after classification. Partial responses keep
+    // their saved receipt but require a later complete read for verification.
+    const savedResponse = observed.outcome === 'saved' && ['create', 'update'].includes(request.operation) && request.entity !== 'batch' && payload && Buffer.byteLength(JSON.stringify(payload)) <= 256000 && require('node:crypto').createHash('sha256').update(JSON.stringify(payload)).digest('hex') === observed.responseHash ? JSON.parse(JSON.stringify(payload)) : null;
     if (!ticket?.coordinated) return { outcome: 'uncoordinated' };
     const resultAuditId = hash({ receiptId: ticket.receiptId, event: 'response', observed }).slice(0, 24);
     return transaction(async session => {
@@ -161,7 +164,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const observedAt = new Date(now());
       const terminal = observed.outcome === 'unknown' ? { version: 1, scope: ticket.scope, receiptId: stored._id, dispatchKey: stored.dispatchKey, requestHash: stored.requestHash, kind: endKind, endedAt: observedAt.toISOString(), observedHash: hash(observed) } : null;
       const terminalHash = terminal ? hash(terminal) : null, terminalAuditId = terminal ? hash({ terminalHash }).slice(0, 24) : null;
-      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
+      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, savedResponse, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
       if (!saved) throw denied('The response receipt changed while saving.', true);
       if (stored.kind === 'business-population') {
         if (typeof populationTransport?.settle !== 'function') throw denied('Population settlement requires its native runtime.', true);

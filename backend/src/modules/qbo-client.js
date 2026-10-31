@@ -589,7 +589,7 @@ class QBOClient {
     try {
       const meter = this.requestMeter || require('./qbo-request-meter').getQboRequestMeter();
       const resolved = category || require('./qbo-request-meter').categorize(method, endpoint);
-      meter.record({ environment: config.qbo.environment, realmId: String(this.realmId || ''), connectionId: String(this.connection?._id || '') }, resolved, kind);
+      meter.record({ environment: config.qbo.environment, realmId: String(this.realmId || ''), connectionId: String(this.connection?._id || '') }, resolved, kind, require('./qbo-request-meter').currentCaller() === 'untagged' && resolved === 'write' ? 'business-write' : require('./qbo-request-meter').currentCaller());
       return resolved;
     } catch { return null; }
   }

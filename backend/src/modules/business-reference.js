@@ -1,6 +1,8 @@
 'use strict';
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
+const { runWithCaller } = require('./qbo-request-meter');
+const { createBusinessObservationStore } = require('./business-observation-store');
 const ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/, HASH = /^[a-f0-9]{64}$/;
 const ENTITIES = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']);
 // Saved-record reads: transactions plus the list records the accountant adds.
@@ -28,7 +30,7 @@ function validateReferenceBinding(binding) {
 function observedRecord(scope, entity, observed, now) {
   if (!observed || !sameScope(observed.scope, scope) || observed.entity !== entity || !fresh(observed.observedAt, now) || !observed.record || observed.recordHash !== hash(observed.record)) fail('The company reference is stale, incomplete or from another company.');
   const source = observed.source, record = observed.record;
-  if (!source || source.version !== 1 || source.kind !== 'qbo-full-entity-get' || !sameScope(source.scope, scope) || source.entity !== entity || source.id !== record.Id || source.endpoint !== entity.toLowerCase() + '/' + record.Id || source.recordHash !== observed.recordHash) fail('The reference requires provenance from a complete QuickBooks entity GET.');
+  if (!source || source.version !== 1 || !['qbo-full-entity-get', 'qbo-current-mirror'].includes(source.kind) || !sameScope(source.scope, scope) || source.entity !== entity || source.id !== record.Id || (source.kind === 'qbo-full-entity-get' ? source.endpoint !== entity.toLowerCase() + '/' + record.Id : typeof source.generation !== 'string' || !source.generation || !Number.isFinite(Date.parse(source.completedAt)) || Date.parse(source.completedAt) > Date.parse(observed.observedAt) || !Number.isFinite(Date.parse(source.freshUntil)) || Date.parse(source.freshUntil) < Date.parse(observed.observedAt)) || source.recordHash !== observed.recordHash) fail('The reference requires provenance from a complete QuickBooks entity GET or current synchronized source.');
   return record;
 }
 // Preparation only: bind a fresh full entity read BEFORE the step's policy is
@@ -49,11 +51,11 @@ function verifyBusinessReference({ scope, binding, observed, now = Date.now() })
 }
 // Fixed full GET only; there is no caller-provided endpoint, query projection or
 // record-enrichment hook. The resolver must supply the existing scoped QBO client.
-function createBusinessRecordReader({ resolveClient, authorize, now = () => Date.now() }, transactions = false) {
+function createBusinessRecordReader({ resolveClient, authorize, now = () => Date.now(), observationStore = createBusinessObservationStore({ now }) }, transactions = false) {
   const entities = transactions ? TRANSACTIONS : ENTITIES;
   const action = transactions ? 'operations.read' : 'operations.preview';
   if ([resolveClient, authorize, now].some(value => typeof value !== 'function')) throw new TypeError('Reference reading needs explicit company client and authority adapters');
-  return async (scope, entity, id, { signal } = {}) => {
+  return async (scope, entity, id, { signal, live = false } = {}) => {
     scope = scoped(scope);
     if (!entities.has(entity) || typeof id !== 'string' || !ID.test(id)) fail('Choose an exact supported company reference.');
     const started = now(), controller = new AbortController();
@@ -70,6 +72,22 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
     try {
       check(); const actor = await call(() => authorize(scope, action, { signal: controller.signal })); check();
       if (!actor?.actorId) fail('Company reference read permission is required.');
+      if (observationStore && !live) {
+        let cached;
+        try { cached = await call(() => observationStore.read(scope, entity, id, { transactions, signal: controller.signal }));
+          if (!cached && transactions) cached = await call(() => observationStore.saved(scope, entity, id, { signal: controller.signal }));
+        } catch { check(); /* An unavailable mirror falls back to the full scoped GET. */ }
+        if (cached) {
+          check();
+          if (!sameScope(cached.scope, scope) || cached.entity !== entity || cached.record?.Id !== id || cached.recordHash !== hash(cached.record) || !fresh(cached.observedAt, now())) fail('The local observation differs from the exact company record.');
+          if (!transactions) { observedRecord(scope, entity, cached, now()); referenceDefinition(scope, entity, cached.record); }
+          if (cached.source.kind === 'qbo-write-response') try { await call(() => observationStore.retain(scope, entity, cached.record, cached.observedAt)); } catch { check(); /* The durable receipt survives mirror failure. */ }
+          check();
+          const current = await call(() => authorize(scope, action, { signal: controller.signal })); check();
+          if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The company reader changed during the local observation.');
+          return cached;
+        }
+      }
       const client = await call(() => resolveClient(scope, { signal: controller.signal })); check();
       const expectedBase = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
       const clientScope = () => { if (!client || typeof client.read !== 'function' || String(client.connection?._id) !== scope.connectionId || client.realmId !== scope.realmId || String(client.connection?.realmId) !== scope.realmId || client.apiBase !== expectedBase || client.connection?.status !== 'active') fail('The QuickBooks client no longer matches the approved company connection.'); };
@@ -78,7 +96,7 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
         if (!(client instanceof QBOClient) || client.read !== QBOClient.prototype.read || client.apiCall !== QBOClient.prototype.apiCall || !/^[a-f0-9]{24}$/.test(actor.ownerId || '') || String(client.connection?.userId) !== actor.ownerId) fail('Saved transaction reads require the original scoped QuickBooks client.');
       }
       clientScope();
-      const body = await call(() => client.read(entity.toLowerCase(), id)); check(); clientScope();
+      const body = await call(() => runWithCaller(transactions ? 'business-transaction' : 'business-reference', () => client.read(entity.toLowerCase(), id))); check(); clientScope();
       if (!body || Object.getPrototypeOf(body) !== Object.prototype || Object.keys(body).some(key => ![entity, 'time'].includes(key)) || !body[entity] || body[entity].Id !== id) fail('QuickBooks did not return the requested full entity envelope.');
       const serialized = canonical(body[entity]);
       if (Buffer.byteLength(serialized) > 256000) fail('The saved record exceeds its observation size budget.');
@@ -94,5 +112,5 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
   };
 }
 const createBusinessReferenceReader = options => createBusinessRecordReader(options);
-const createBusinessTransactionReader = options => createBusinessRecordReader(options, true);
+const createBusinessTransactionReader = options => createBusinessRecordReader({ observationStore: null, ...options }, true);
 module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition };

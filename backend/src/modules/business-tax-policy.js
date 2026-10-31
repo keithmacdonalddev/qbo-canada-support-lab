@@ -1,5 +1,6 @@
 'use strict';
 const { hash, date } = require('./business-calendar');
+const { readBusinessTaxRecord } = require('./business-observation-store');
 const { lifecyclePolicy } = require('./business-lifecycle-policy');
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
@@ -40,7 +41,7 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
     const key = entity + ':' + id;
     if (!cache.has(key)) {
       if (cache.size >= 25) fail('Tax definitions exceed their read budget.');
-      const response = await client.read(entity.toLowerCase(), id), record = response?.[entity];
+      const response = await readBusinessTaxRecord(client, entity, id), record = response?.[entity];
       if (!record || record.Id !== id || typeof record.SyncToken !== 'string' || record.sparse === true) fail('A complete tax definition could not be read.');
       cache.set(key, record); sources.push({ entity, id, recordHash: hash(record), record });
     }
@@ -90,7 +91,7 @@ async function verifyBusinessTaxSources(policy, client) {
   if (!policy.taxSources) return;
   for (const source of policy.taxSources) {
     if (!['TaxCode', 'TaxRate'].includes(source.entity) || hash(source.record) !== source.recordHash) fail('Retained tax policy evidence changed.');
-    const response = await client.read(source.entity.toLowerCase(), source.id);
+    const response = await readBusinessTaxRecord(client, source.entity, source.id);
     if (hash(response?.[source.entity] || null) !== source.recordHash) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.');
   }
 }

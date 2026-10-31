@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
   day: { type: String, required: true, immutable: true, match: /^\d{4}-\d{2}-\d{2}$/ },
   attempts: categories(),
   succeeded: categories(),
+  callers: { type: Map, of: new mongoose.Schema({ attempts: categories(), succeeded: categories() }, { _id: false }), default: {} },
   updatedAt: { type: Date, default: null },
 }, { autoCreate: false, autoIndex: false, strict: 'throw', minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, day: -1 });

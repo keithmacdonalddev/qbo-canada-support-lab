@@ -128,3 +128,9 @@ test('runtime cancellation rejects the awaiting ledger read and drains a late re
   const pending = h.runtime().readRecord(scope, 'Invoice', '2000', { signal: controller.signal });
   await started; controller.abort(); await assert.rejects(pending, /cancelled/); finish();
 });
+
+test('repeated omitted-account proof reuses its ledger only for unchanged independently observed content',async()=>{
+ const h=omittedInvoiceHarness(),runtime=h.runtime();await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,4);
+ await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,6);assert.equal(h.calls.filter(call=>call.url.includes('/reports/')).length,1);
+ h.sample.observed.record.SyncToken='1';h.sample.refresh();await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.filter(call=>call.url.includes('/reports/')).length,2);
+});

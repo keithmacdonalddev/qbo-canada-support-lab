@@ -188,6 +188,7 @@ function evaluateBooks(reports, period, failures = {}, accountSource, { allowExp
     limitation: 'These checks do not confirm bank reconciliation, a closed period, or complete business activity.' };
 }
 function evaluateReportSources(sources, { allowExplicitZero = false } = {}) {
+  require('./business-report-cache').assertReportReuse(sources);
   const reports = unpackReports(sources);
   return evaluateBooks(reports, sources.period, {}, { records: sources.accounts }, { allowExplicitZero, includeCritical: [2, 3].includes(sources.version), sourceVersion: sources.version });
 }

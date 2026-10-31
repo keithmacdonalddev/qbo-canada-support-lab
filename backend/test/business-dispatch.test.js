@@ -111,6 +111,8 @@ test('concrete compilation and verification runtimes persist dispatch proof and 
       assert.equal(opts.method, 'GET');
       const reference = h.referenceRecords.find(value => opts.url.endsWith('/' + value.entity.toLowerCase() + '/' + value.record.Id));
       if (reference) return { status: 200, json: { [reference.entity]: clone(reference.record) } };
+      const query = new URL(opts.url).searchParams.get('query');
+      if (query) { assert.equal(query, "SELECT * FROM Estimate WHERE Id IN ('1000') MAXRESULTS 1000"); gets++; return { status: 200, json: { QueryResponse: { Estimate: [clone(record)], startPosition: 1, maxResults: 1 } } }; }
       assert.match(opts.url, /estimate\/1000$/); gets++;
     }
     return { status: 200, json: { Estimate: clone(record) } };

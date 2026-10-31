@@ -1,5 +1,6 @@
 'use strict';
 const { hash, canonical, date } = require('./business-calendar');
+const { runWithCaller } = require('./qbo-request-meter');
 const { scoped, denied } = require('./qbo-write-contract');
 const TRANSACTIONS = new Map(['Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate', 'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment', 'TaxPayment'].map(name => [name.toLowerCase(), name]));
 const LISTS = new Map(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term', 'TaxCode', 'TaxRate', 'PaymentMethod'].map(name => [name.toLowerCase(), name]));
@@ -73,7 +74,7 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
     const next = pending.shift(), key = next.entity + ':' + next.id;
     if (records.has(key)) continue;
     if (records.size >= 50 || now() - started > 180000) throw denied('Linked period evidence exceeds its read budget. Nothing was sent.');
-    const body = await client.read(next.entity.toLowerCase(), next.id), record = body?.[next.entity];
+    const body = await runWithCaller('business-period-guard', () => client.read(next.entity.toLowerCase(), next.id)), record = body?.[next.entity];
     if (!record || record.Id !== next.id || typeof record.SyncToken !== 'string' || !/^\d+$/.test(record.SyncToken)) throw denied('An original or linked record could not be read completely before writing.');
     if (next.target && (typeof payload.SyncToken !== 'string' || payload.SyncToken !== record.SyncToken)) throw denied('The original record changed before protected-period verification.');
     const entity = next.entity.toLowerCase(), dates = datesIn(entity, record, TRANSACTIONS.has(entity)), links = linksIn(record);
@@ -82,8 +83,10 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
   }
   const affectedDates = postingDates(request, payload, [...records.values()], directDates);
   let qboClosedThrough = null, preferencesHash = null;
+  // Closing dates and automatic-credit settings can change outside CDC. Keep
+  // this independent live dispatch check even while the local mirror is current.
   if (affectedDates.length) {
-    const response = await client.query('SELECT * FROM Preferences MAXRESULTS 1'), preferences = response?.QueryResponse?.Preferences;
+    const response = await runWithCaller('business-period-guard', () => client.query('SELECT * FROM Preferences MAXRESULTS 1')), preferences = response?.QueryResponse?.Preferences;
     if (!Array.isArray(preferences) || preferences.length !== 1 || !preferences[0]?.AccountingInfoPrefs || typeof preferences[0].AccountingInfoPrefs !== 'object') throw denied('QuickBooks closing preferences could not be verified. Nothing was sent.');
     if (creditControl && (!plain(preferences[0]) || !plain(preferences[0].AccountingInfoPrefs) || !plain(preferences[0].SalesFormsPrefs) || !own(preferences[0].SalesFormsPrefs, 'AutoApplyCredit') || preferences[0].SalesFormsPrefs.AutoApplyCredit !== false)) throw automaticCreditsBlocked();
     const raw = preferences[0].AccountingInfoPrefs.BookCloseDate;

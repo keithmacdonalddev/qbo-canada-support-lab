@@ -137,3 +137,40 @@ test('the copy merge replaces a row only with a complete entity, and refreshes a
   assert.equal(mergeDecision('Invoice', { record: full }, { deleted: true }).action, 'tombstone');
   assert.deepEqual(invalidatedParents({ Line: [{ LinkedTxn: [{ TxnId: '100', TxnType: 'Invoice' }] }] }, { Line: [{ LinkedTxn: [{ TxnId: '101', TxnType: 'Invoice' }] }] }), ['Invoice:100', 'Invoice:101']);
 });
+
+test('a day close passes accountant records whose ledger rows match, and fails a wrong account or an external edit', () => {
+  const { evaluateDay } = require('../src/modules/general-write-close');
+  const created = invoice(100, '2026-12-02'), updated = invoice(150, '2026-12-02', { SyncToken: '1' });
+  const good = postingsOf('Invoice', updated, ctx);
+  const passing = evaluateDay({ ctx, records: [{ entity: 'Invoice', id: '700', current: updated, before: created, evidence: { accountant: { versionHash: versionHash(updated), record: updated } } }], ledger: { 'Invoice:700': rows(good) } });
+  assert.equal(passing.ok, true, JSON.stringify(passing.failures));
+  assert.deepEqual(passing.movements.find(row => row.accountId === '120'), { date: '2026-12-02', accountId: '120', cents: 5750 });
+  const wrong = evaluateDay({ ctx, records: [{ entity: 'Invoice', id: '700', current: updated, evidence: { accountant: { versionHash: versionHash(updated), record: updated } } }], ledger: { 'Invoice:700': rows(good).map(row => row.accountId === '400' ? { ...row, accountId: '499' } : row) } });
+  assert.equal(wrong.ok, false); assert.match(wrong.failures[0].reason, /differ from the postings/);
+  const external = evaluateDay({ ctx, records: [{ entity: 'Bill', id: '5', current: { Id: '5', TxnDate: '2026-12-02' }, evidence: {} }], ledger: {} });
+  assert.equal(external.ok, false); assert.equal(external.results[0].kind, 'external-change');
+});
+
+test('the day close reads one debit/credit General Ledger and verifies the day’s general records (step 5)', async () => {
+  const { closeGeneralDay, parseLedger, ledgerEndpoint } = require('../src/modules/general-write-day-close');
+  assert.match(ledgerEndpoint('2026-12-02'), /columns=tx_date%2Ctxn_type.*debt_amt%2Ccredit_amt/);
+  const saved = invoice(150, '2026-12-02', { Id: '700', SyncToken: '1' });
+  const run = { _id: 'r1', contract: 'general-write-v1', status: 'complete', dirty: [{ date: '2026-11-20', reason: 'General write k' }], plan: { operations: [{ ref: 'inv', op: 'create', entity: 'Invoice' }] }, items: { inv: { outcome: 'saved', op: 'create', entity: 'Invoice', qboId: '700', record: saved } } };
+  const Runs = { find: () => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean: async () => [run] }) };
+  const copy = { read: async () => structuredClone(saved) };
+  const columns = ['tx_date', 'txn_type', 'doc_num', 'name', 'memo', 'split_acc', 'debt_amt', 'credit_amt'].map(ColType => ({ ColType }));
+  const row = (label, id, debit, credit) => ({ type: 'Data', ColData: [{ value: '2026-12-02' }, { value: label, id }, { value: '' }, { value: '' }, { value: '' }, { value: '' }, { value: debit }, { value: credit }] });
+  const section = (account, rows) => ({ type: 'Section', Header: { ColData: [{ value: 'Account ' + account, id: account }] }, Rows: { Row: rows } });
+  const report = (income = '400') => ({ Header: { ReportName: 'GeneralLedger', ReportBasis: 'Accrual', StartPeriod: '2026-12-02', EndPeriod: '2026-12-02' }, Columns: { Column: columns }, Rows: { Row: [section('120', [row('Invoice', '700', '172.50', ''), row('Payment', '901', '', '20.00')]), section(income, [row('Invoice', '700', '', '150.00')]), section('210', [row('Invoice', '700', '', '22.50')]), section('125', [row('Payment', '901', '20.00', '')])] } });
+  assert.deepEqual(parseLedger(report(), '2026-12-02').byRecord['Invoice:700'], [{ accountId: '120', cents: 17250 }, { accountId: '400', cents: -15000 }, { accountId: '210', cents: -2250 }]);
+  const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) };
+  const closed = await closeGeneralDay({ Runs, scope, day: '2026-12-02', copy, ledgerReport: report(), ctx, verifiedThrough: '2026-12-01', openingDate: '2026-11-01' });
+  assert.equal(closed.ok, true, JSON.stringify(closed.failures));
+  assert.deepEqual(closed.fixedWorkflowKeys, ['Payment:901'], 'other ledger transactions go to the fixed workflows’ own proof');
+  assert.deepEqual(closed.reverify, { from: '2026-11-20', through: '2026-12-01', baseline: false, markers: 1 });
+  const misposted = await closeGeneralDay({ Runs, scope, day: '2026-12-02', copy, ledgerReport: report('499'), ctx, verifiedThrough: '2026-12-01', openingDate: '2026-11-01' });
+  assert.equal(misposted.ok, false); assert.match(misposted.failures[0].reason, /differ from the postings/);
+  const edited = await closeGeneralDay({ Runs, scope, day: '2026-12-02', copy: { read: async () => ({ ...saved, SyncToken: '2', DueDate: '2027-03-01' }) }, ledgerReport: report(), ctx, verifiedThrough: '2026-12-01' });
+  assert.equal(edited.ok, false); assert.equal(edited.records[0].kind, 'external-change');
+  assert.throws(() => parseLedger({ ...report(), Header: { ...report().Header, StartPeriod: '2026-12-01' } }, '2026-12-02'), /not the accrual report/);
+});

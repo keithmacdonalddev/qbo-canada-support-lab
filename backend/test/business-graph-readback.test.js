@@ -131,6 +131,8 @@ for (const kind of ['sales', 'purchase']) test('concrete verification runtime re
   Object.defineProperty(client, 'apiBase', { value: 'https://sandbox-quickbooks.api.intuit.com/v3/company/123' });
   Object.assign(client, { connection: { _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' }, realmId: scope.realmId, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, oauthClient: { makeApiCall: async options => {
     assert.equal(options.method, 'GET'); gets.push(options.url);
+    const query = new URL(options.url).searchParams.get('query');
+    if (query) { const entity = /FROM (\w+)/.exec(query)?.[1], ids = /WHERE Id IN \(([^)]+)\)/.exec(query)?.[1]?.split(',').map(id => id.trim().replaceAll("'",'')); assert.ok(ids); const rows = h.value.entries.filter(value => value.step.entity === entity && ids.includes(value.step.qboId)).map(value => clone(value.observed.record)); return { status: 200, json: { QueryResponse: { [entity]: rows, startPosition: 1, maxResults: rows.length } } }; }
     const entry = h.value.entries.find(value => options.url.endsWith('/' + value.step.entity.toLowerCase() + '/' + value.step.qboId)); assert.ok(entry);
     return { status: 200, json: { [entry.step.entity]: clone(entry.observed.record) } };
   } } });

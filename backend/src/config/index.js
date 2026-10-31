@@ -61,6 +61,9 @@ const config = {
       issuePackMutations: enabled('LEGACY_ISSUEPACK_MUTATIONS_ENABLED', false),
     },
     legacyStartupMaintenance: enabled('LEGACY_STARTUP_MAINTENANCE_ENABLED', false),
+    // General governed QuickBooks writes (manageQboRecord, general-write-v1). Off until the
+    // live transport and day-close verification of general records pass review.
+    generalWriteDispatch: enabled('GENERAL_WRITE_DISPATCH_ENABLED', false),
   },
 };
 

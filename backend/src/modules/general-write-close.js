@@ -50,4 +50,29 @@ function dirtyRange({ markers, verifiedThrough, openingDate }) {
 // The earliest date a change can affect: the record's old and new dates (history affects
 // every later opening balance).
 function earliestAffected(before, after) { return [before?.TxnDate, after?.TxnDate].filter(Boolean).sort()[0] || null; }
-module.exports = { classifyRecord, explainedByOwnSettlements, dirtyRange, earliestAffected, versionHash };
+// One day's close for general records (pure). records: [{ entity, id, current, deleted,
+// evidence, before? }] for every transaction dated in the day or changed since the last
+// close; ledger: { 'Entity:id': [{ accountId, cents }] } from the day's General Ledger rows;
+// ownSettlements: the accountant's own verified settlements. Returns the classification,
+// the current-posting comparison of each accountant record (after-state, R2-1), the
+// date-allocated movements to add to the period assertion, and every failure.
+function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx }) {
+  const { postingsOf, compareLedger, movementsOf } = require('./general-write-postings');
+  const results = [], movements = [], failures = [];
+  for (const row of records) {
+    const key = row.entity + ':' + row.id, classified = classifyRecord({ entity: row.entity, current: row.current, deleted: row.deleted, evidence: row.evidence, ownSettlements });
+    const result = { key, kind: classified.kind, reason: classified.reason };
+    if (classified.kind === 'external-change') failures.push({ key, reason: classified.reason });
+    if (classified.kind === 'accountant') {
+      try {
+        const comparison = compareLedger(postingsOf(row.entity, row.deleted ? null : row.current, ctx), ledger[key] || []);
+        result.postings = comparison;
+        if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });
+        if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, ctx));
+      } catch (error) { failures.push({ key, reason: error.message }); }
+    }
+    results.push(result);
+  }
+  return { ok: failures.length === 0, results, movements, failures };
+}
+module.exports = { classifyRecord, explainedByOwnSettlements, dirtyRange, earliestAffected, versionHash, evaluateDay };

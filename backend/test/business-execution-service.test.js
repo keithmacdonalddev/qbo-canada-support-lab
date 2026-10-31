@@ -102,7 +102,7 @@ test('stop recovery tolerates completion releasing the calendar before its worke
   assert.equal(stopCalls, 1); assert.equal(h.data.Runs[0].executionRequest.pending, false); assert.equal(h.data.Runs[0].executionRequest.result.complete, true);
 });
 test('stop continues a real blocked operation after a saved record without another POST', async () => {
-  const h = setup(); h.beforeProvider = async options => { if (options.method === 'GET' && options.url.endsWith('/estimate/1000')) throw new Error('read unavailable'); };
+  const h = setup(); h.beforeProvider = async options => { if (h.posts > 0 && options.method === 'GET' && new URL(options.url).pathname.endsWith('/reports/TrialBalance')) throw new Error('read unavailable'); };
   await h.service.request(user, operationId, h.body); await h.flush();
   assert.equal(h.posts, 1); assert.equal(h.data.Runs[0].status, 'blocked'); assert.equal(h.data.Runs[0].executionRequest.pending, false);
   h.beforeProvider = null; await h.service.stop(user, operationId); await h.flush();

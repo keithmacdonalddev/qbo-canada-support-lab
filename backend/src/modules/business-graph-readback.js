@@ -83,7 +83,7 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
 }
 // This reader owns no defaults and performs no writes. Its model snapshot loads both
 // directions so omitting a known saved child cannot turn a used source into unused.
-function createBusinessGraphReader({ Steps, transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
+function createBusinessGraphReader({ Steps, transaction, assertReady, authorize, readFence, readRecord, prepareRecords = null, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
   if (!Steps || [transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, now].some(value => typeof value !== 'function')) throw new TypeError('Graph reading needs explicit company-scoped adapters');
   function checkedFence(value, scope) {
     if (!value || !sameScope(value.scope, scope) || !Number.isSafeInteger(value.revision) || value.revision < 0 || !ID.test(value.operationId || '')) fail('The company writer has an unresolved or unavailable state.');
@@ -170,12 +170,13 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
         const manifest = { version: 1, scope, roots, records, writerFence: fence };
         return { ...manifest, kind: 'business-graph-preparation', recordCount: records.length, evidenceHash: hash(manifest), prepared: true };
       }
+      const prepared = prepareRecords ? await read(() => prepareRecords(scope, rows, { signal: controller.signal })) : null; check();
       const entries = new Array(rows.length); let next = 0, firstError = null, retainedBytes = 0;
       const worker = async () => {
         while (!firstError && next < rows.length) {
           const index = next++, step = rows[index];
           try {
-            check(); const observed = await read(() => readRecord(scope, step.entity, step.qboId, { signal: controller.signal })); check();
+            check(); const observed = await read(() => readRecord(scope, step.entity, step.qboId, { signal: controller.signal, ...(prepared ? { observed: prepared.get(step.entity + ':' + step.qboId) } : {}) })); check();
             const taxPolicy = await read(() => loadTaxPolicy(scope, step.compilation, { signal: controller.signal })); check();
             const entry = { step, observed, taxPolicy };
             retainedBytes += Buffer.byteLength(JSON.stringify(entry));

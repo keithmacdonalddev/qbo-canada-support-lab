@@ -5,6 +5,9 @@ const { validateCompilation } = require('./business-readback');
 const { assertOwnerAttribution } = require('./business-owner-attribution');
 const { createBusinessGraphReader } = require('./business-graph-readback');
 const { createBusinessTransactionReader, createBusinessReferenceReader } = require('./business-reference');
+const { runWithCaller } = require('./qbo-request-meter');
+const { createBusinessObservationStore } = require('./business-observation-store');
+const { createBusinessTransactionBatchReader } = require('./business-transaction-batch-reader');
 const { accountPostingEvidence, endpointFor } = require('./business-receivables-route');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
@@ -32,14 +35,18 @@ function taxExpectation(policy, compiled) {
 // Internal composition only: no routes, startup, storage preparation or activation.
 // All models/adapters come from server code; the bound scope and operation cannot
 // be overridden by a tool/request payload passed to the returned graph reader.
-function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, PopulationRecords, Receipts, Authorities, Audits, Writers, transaction, assertReady, access, writerFence, plans, retainSources = false, now = () => Date.now() }) {
+function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps, PopulationRecords, Receipts, Authorities, Audits, Writers, transaction, assertReady, access, writerFence, plans, retainSources = false, now = () => Date.now(), observations = createBusinessObservationStore({ now }) }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || !Steps || [transaction, assertReady, access?.authorize, access?.resolveClient, writerFence?.graphSnapshot, plans?.loadIntent, now].some(value => typeof value !== 'function')) throw new TypeError('Verification needs an exact operation and concrete runtime adapters');
   const { authorize, resolveClient } = access, { graphSnapshot } = writerFence, { loadIntent } = plans;
   const checkScope = value => { if (!sameScope(value, scope)) fail('Verification cannot switch its bound company.'); };
   const checkSignal = signal => { if (signal?.aborted) fail('Business verification was cancelled.'); };
   const authority = async (value, action, options = {}) => { checkScope(value); checkSignal(options.signal); const actor = await authorize(scope, action, options); checkSignal(options.signal); return actor; };
-  const rawRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now });
+  const rawRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now, observationStore: observations });
+  const liveRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now, observationStore: null });
+  const preparedRecords = new WeakSet();
+  const readBatch = createBusinessTransactionBatchReader({ access: { authorize: authority, resolveClient }, observations, now });
+  const prepareRecords = async (...args) => { const records = await readBatch(...args); for (const record of records.values()) preparedRecords.add(record); return records; };
   const references = createBusinessReferenceReader({ authorize: authority, resolveClient, now });
   const readFence = async (value, { signal } = {}) => {
     checkScope(value); checkSignal(signal); await assertReady();
@@ -51,8 +58,15 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
       return { ...snapshot, unresolved: snapshot.unresolved ?? null };
     }, { signal });
   };
-  const accountRead = async (value, entity, qboId, { signal } = {}) => {
-    const observed = await rawRecord(value, entity, qboId, { signal });
+  // Bounded per-runtime reuse of an already independently bracketed ledger proof.
+  // Full record hash, original compilation, receipt, account definition and five-
+  // minute freshness must still match; changing balances/links misses this cache.
+  const routingReports = new Map();
+  const accountRead = async (value, entity, qboId, { signal, observed: prepared } = {}) => {
+    checkScope(value); checkSignal(signal);
+    if (prepared && (!preparedRecords.has(prepared) || !sameScope(prepared.scope, scope) || prepared.entity !== entity || prepared.record?.Id !== qboId || prepared.recordHash !== hash(prepared.record) || !Number.isFinite(Date.parse(prepared.observedAt)) || Date.parse(prepared.observedAt) > now() || now() - Date.parse(prepared.observedAt) > 300000)) fail('The prepared record differs from its exact current company observation.');
+    if (prepared) await authority(scope, 'operations.read', { signal });
+    const observed = prepared || await rawRecord(value, entity, qboId, { signal });
     if (!['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(entity) || observed.record[entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef'] !== undefined) return observed;
     // A zero-funds application posts nothing a ledger could show. Read-back proves it
     // from its exact application pair instead, or refuses it (no evidence is added here).
@@ -69,6 +83,18 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (bindings.length !== 1) fail('The original invoice needs one approved receivables account.');
     const beforeFence = await readFence(scope, { signal }), actor = await authority(scope, 'operations.read', { signal });
     const accountObserved = await references(scope, 'Account', bindings[0].id, { signal }); checkSignal(signal);
+    const cacheKey = entity + ':' + qboId + ':' + observed.recordHash, cached = routingReports.get(cacheKey);
+    if (cached && cached.compilationHash === compiled.compilationHash && cached.receiptHash === row.receipt.evidenceHash && now() - Date.parse(cached.observedAt) <= 300000) {
+      // A prior create response is not an independent current observation. Use a
+      // current GET/query or CDC coverage after the report; otherwise keep a GET.
+      const independent = ['qbo-full-entity-get', 'qbo-full-entity-query'].includes(observed.source?.kind) || observed.source?.kind === 'qbo-current-mirror' && Date.parse(observed.source.coverageAt) >= Date.parse(cached.observedAt);
+      const after = independent ? observed : await liveRecord(scope, entity, qboId, { signal });
+      if (after.recordHash !== observed.recordHash) fail('The invoice changed after its retained receivables report.');
+      const afterFence = await readFence(scope, { signal }), current = await authority(scope, 'operations.read', { signal });
+      if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The receivables reader changed.');
+      const accountRouting = accountPostingEvidence({ compiled, receipt: { ...row.receipt, scope, entity, logicalKey: row.logicalKey }, observed, accountBinding: bindings[0], accountObserved, report: cached.report, reportObservedAt: cached.observedAt, beforeFence, afterFence, now: now() });
+      return { ...observed, accountRouting };
+    }
     const client = await resolveClient(scope, { signal }); checkSignal(signal);
     const { QBOClient } = require('./qbo-client');
     const expectedBase = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
@@ -84,20 +110,24 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
         if (reportController.signal.aborted) { abort(); return; }
         reportController.signal.addEventListener('abort', abort, { once: true });
         const control = { signal: reportController.signal, beforeAttempt: async () => { checkSignal(signal); clientScope(); await authority(scope, 'operations.read', { signal: reportController.signal }); }, onFailure: () => {} };
-        Promise.resolve().then(() => client.apiCall('GET', endpoint, undefined, 0, 0, control)).then(resolve, reject).finally(() => reportController.signal.removeEventListener('abort', abort));
+        Promise.resolve().then(() => runWithCaller('business-receivables', () => client.apiCall('GET', endpoint, undefined, 0, 0, control))).then(resolve, reject).finally(() => reportController.signal.removeEventListener('abort', abort));
       });
     } finally { clearTimeout(reportTimer); signal?.removeEventListener('abort', cancelReport); reportController.abort(); }
     checkSignal(signal); clientScope();
-    const after = await rawRecord(scope, entity, qboId, { signal });
+    // The ledger must be bracketed by an independent unchanged observation; a
+    // create response repeated here cannot detect an intervening external edit.
+    const after = await liveRecord(scope, entity, qboId, { signal });
     if (after.recordHash !== observed.recordHash) fail('The invoice changed during receivables report verification.');
     const afterFence = await readFence(scope, { signal }), current = await authority(scope, 'operations.read', { signal }); checkSignal(signal);
     if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The receivables reader changed.');
     const receipt = { ...row.receipt, scope, entity, logicalKey: row.logicalKey };
     const accountRouting = accountPostingEvidence({ compiled, receipt, observed, accountBinding: bindings[0], accountObserved, report, reportObservedAt, beforeFence, afterFence, now: now() });
+    if (routingReports.size >= 8) routingReports.delete(routingReports.keys().next().value);
+    routingReports.set(cacheKey, { report, observedAt: reportObservedAt, compilationHash: compiled.compilationHash, receiptHash: row.receipt.evidenceHash });
     return { ...observed, accountRouting };
   };
-  const readRecord = async (value, entity, qboId, { signal } = {}) => {
-    const observed = await accountRead(value, entity, qboId, { signal });
+  const readRecord = async (value, entity, qboId, { signal, observed: prepared } = {}) => {
+    const observed = await accountRead(value, entity, qboId, { signal, observed: prepared });
     if (entity !== 'Invoice' || observed.record.Line?.some(line => line.LinkedTxn !== undefined)) return observed;
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const payload = row?.compilation?.request?.body && JSON.parse(row.compilation.request.body);
@@ -106,7 +136,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (!lineage) return observed;
     const before = await readFence(scope, { signal }), source = row.compilation.relationships.find(link => link.entity === 'Estimate'), time = row.compilation.relationships.find(link => link.entity === 'TimeActivity');
     const estimateObserved = await rawRecord(scope, 'Estimate', source.qboId, { signal }), timeObserved = await rawRecord(scope, 'TimeActivity', time.qboId, { signal });
-    const after = await rawRecord(scope, 'Invoice', qboId, { signal }), afterFence = await readFence(scope, { signal });
+    const after = await liveRecord(scope, 'Invoice', qboId, { signal }), afterFence = await readFence(scope, { signal });
     if (after.recordHash !== observed.recordHash || hash(before) !== hash(afterFence)) fail('The invoice or company changed during full-conversion verification.');
     const receipt = { ...row.receipt, scope, entity, logicalKey: row.logicalKey };
     const estimateConversion = require('./business-estimate-conversion').createEstimateConversionProof({ compiled: row.compilation, receipt, observed, estimateObserved, timeObserved, lineage, now: now() });
@@ -139,13 +169,13 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (current?.actorId !== actor?.actorId || current?.ownerId !== actor?.ownerId) fail('The graph reader changed.');
     return expectation ? { ...expectation,...(purchaseOrderReceipt ? { purchaseOrderReceipt } : {}),...(intent.step.details?.datedTax?{originalStep:intent.step,originalPolicy:policy}:{}), status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
   };
-  const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, loadTaxPolicy, retainSources, now });
+  const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, prepareRecords, loadTaxPolicy, retainSources, now });
   const loadGraphReadback = input => { checkScope(input?.scope); return reader(input); };
   const boundSnapshot = input => {
     checkScope(input?.scope);
     if (input?.intent?.operationId !== operationId || input?.intent?.planHash !== planHash) fail('The verification operation changed.');
     return graphSnapshot(input);
   };
-  return { loadGraphReadback, graphSnapshot: boundSnapshot, readRecord, rawRecord, loadTaxPolicy, readFence };
+  return { loadGraphReadback, graphSnapshot: boundSnapshot, readRecord, rawRecord: liveRecord, loadTaxPolicy, readFence };
 }
 module.exports = { createBusinessVerificationRuntime, taxExpectation };

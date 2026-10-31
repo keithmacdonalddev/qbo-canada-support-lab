@@ -9,6 +9,8 @@ const schema = new mongoose.Schema({
   entity: { type: String, required: true, immutable: true },
   qboId: { type: String, required: true, immutable: true },
   // Private app mirror only: raw company records never enter logs or public status.
+  // One private same-day report set, independent of the mirrored QBO payload.
+  reportCache: { type: mongoose.Schema.Types.Mixed, select: false, default: null },
   record: { type: mongoose.Schema.Types.Mixed, required: true },
   generation: { type: String, required: true },
   deleted: { type: Boolean, required: true, default: false },

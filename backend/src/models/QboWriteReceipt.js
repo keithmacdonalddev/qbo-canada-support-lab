@@ -17,10 +17,12 @@ const schema = new mongoose.Schema({
   reconciliation: { type: mongoose.Schema.Types.Mixed, default: null },
   terminal: { type: mongoose.Schema.Types.Mixed, default: null },
   ownerRecovery: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Private full successful create/update envelope, never copied into audits or API results.
+  savedResponse: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
   observed: { type: mongoose.Schema.Types.Mixed, default: null },
   sentAt: { type: Date, required: true, immutable: true }, observedAt: Date,
   startAuditId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true }, resultAuditId: mongoose.Schema.Types.ObjectId,
-}, { timestamps: false, autoIndex: false, autoCreate: false });
+}, { timestamps: false, autoIndex: false, autoCreate: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, dispatchKey: 1 }, { unique: true });
 schema.index({ environment: 1, realmId: 1, state: 1, sentAt: -1 });
 module.exports = mongoose.model('QboWriteReceipt', schema);
