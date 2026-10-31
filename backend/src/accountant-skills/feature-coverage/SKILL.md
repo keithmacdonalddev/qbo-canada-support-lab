@@ -1,6 +1,6 @@
 ---
 name: feature-coverage
-description: Measure every catalogued support situation and weekly record, lifecycle, tax, class and location breadth from the company mirror; deliberately plan uncovered states and request precise missing tools or owner settings.
+description: Use when measuring every catalogued support situation and weekly record, lifecycle, tax, class and location breadth from the company mirror, deliberately planning uncovered states and requesting precise missing tools or owner settings.
 ---
 
 # Deliberate support-situation coverage

@@ -149,3 +149,59 @@ test('transaction reader cannot opt back into stale mirror or saved-response reu
     assert.equal(observed.record.fixtureStale, undefined); assert.equal(observed.recordHash, hash(h.sample.observed.record));
   }
 });
+
+
+test('writer fence refuses authority changed inside its transaction before reading a snapshot', async () => {
+  for (const key of ['actorId', 'ownerId']) {
+    const h = harness();
+    h.deps.transaction = async work => { h.actor[key] = 'e'.repeat(24); return work({ inTransaction: () => true }); };
+    await assert.rejects(h.runtime().readFence(scope), /graph reader changed/);
+    assert.equal(h.snapshots.length, 0);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test('omitted-account ledger refreshes on same-token content changes and returning old content', async () => {
+  const h = omittedInvoiceHarness(), runtime = h.runtime();
+  await runtime.readRecord(scope, 'Invoice', '2000');
+  const original = clone(h.sample.observed.record);
+  h.sample.observed.record.Balance = 0;
+  h.sample.refresh();
+  await runtime.readRecord(scope, 'Invoice', '2000');
+  assert.equal(h.calls.filter(call => call.url.includes('/reports/')).length, 2);
+  Object.assign(h.sample.observed.record, original);
+  h.sample.refresh();
+  await runtime.readRecord(scope, 'Invoice', '2000');
+  assert.equal(h.calls.filter(call => call.url.includes('/reports/')).length, 3);
+});
+
+test('changed omitted-account record cannot hide a now incorrect ledger posting behind shared reports', async () => {
+  const h = omittedInvoiceHarness(), runtime = h.runtime();
+  await runtime.readRecord(scope, 'Invoice', '2000');
+  h.sample.observed.record.SyncToken = '1'; h.sample.refresh();
+  const column = h.report.Columns.Column.findIndex(value => value.ColType === 'subt_nat_amount_home_nt');
+  h.report.Rows.Row[0].Rows.Row[0].ColData[column].value = '1.00';
+  await assert.rejects(runtime.readRecord(scope, 'Invoice', '2000'), { code: 'BUSINESS_BOOK_RISK' });
+  assert.equal(h.calls.filter(call => call.url.includes('/reports/')).length, 2);
+});
+
+
+test('a first-time record observed after a shared ledger needs its own current report', async () => {
+  const h = omittedInvoiceHarness(), runtime = h.runtime();
+  const ledgerRows = h.report.Rows.Row[0].Rows.Row;
+  const second = clone(ledgerRows[0]);
+  const typeColumn = h.report.Columns.Column.findIndex(value => value.ColType === 'txn_type');
+  second.ColData[typeColumn].id = '2001';
+  ledgerRows.push(second);
+  await runtime.readRecord(scope, 'Invoice', '2000');
+  h.clock += 1000;
+  h.sample.observed.record.Id = h.row.qboId = h.row.receipt.qboId = '2001';
+  h.Steps.findOne = filter => {
+    assert.deepEqual(filter, { ...scope, entity: 'Invoice', qboId: '2001' });
+    const query = { select() { return query; }, maxTimeMS() { return query; }, lean: async () => clone(h.row) }; return query;
+  };
+  // Current ledger no longer posts this newly observed record to approved AR.
+  ledgerRows.pop();
+  await assert.rejects(runtime.readRecord(scope, 'Invoice', '2001'), { code: 'BUSINESS_RECEIVABLES_UNVERIFIED' });
+  assert.equal(h.calls.filter(call => call.url.includes('/reports/')).length, 2);
+});

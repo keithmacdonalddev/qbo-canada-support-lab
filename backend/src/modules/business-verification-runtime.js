@@ -67,7 +67,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   // Bounded per-runtime reuse of an already independently bracketed ledger proof.
   // Full record hash, original compilation, receipt, account definition and five-
   // minute freshness must still match; changing balances/links misses this cache.
-  const routingReports = new Map(), routingReportReads = new Map();
+  const routingReports = new Map(), routingReportReads = new Map(), routingRecords = new Map();
   const accountRead = async (value, entity, qboId, { signal, observed: prepared } = {}) => {
     checkScope(value); checkSignal(signal);
     if (prepared && (!preparedRecords.has(prepared) || !sameScope(prepared.scope, scope) || prepared.entity !== entity || prepared.record?.Id !== qboId || prepared.recordHash !== hash(prepared.record) || !Number.isFinite(Date.parse(prepared.observedAt)) || Date.parse(prepared.observedAt) > now() || now() - Date.parse(prepared.observedAt) > 300000)) fail('The prepared record differs from its exact current company observation.');
@@ -91,7 +91,16 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     if (bindings.length !== 1) fail('The original invoice needs one approved receivables account.');
     const beforeFence = await readFence(scope, { signal }), actor = await authority(scope, 'operations.read', { signal });
     const accountObserved = await references(scope, 'Account', bindings[0].id, { signal }); checkSignal(signal);
-    const cacheKey = entity + ':' + qboId + ':' + observed.recordHash, cached = routingReports.get(cacheKey);
+    const recordKey = entity + ':' + qboId;
+    const contentHash = hash({ recordHash: observed.recordHash, compilationHash: compiled.compilationHash, receiptHash: row.receipt.evidenceHash, accountBinding: bindings[0] });
+    // A stable writer revision cannot detect an external edit. Once a full
+    // observation changes, no earlier ledger may prove that record, even if
+    // its old content later returns. Keep sharing reports for unchanged graphs.
+    if (routingRecords.has(recordKey) && routingRecords.get(recordKey) !== contentHash || !routingRecords.has(recordKey) && routingRecords.size >= 1000) {
+      routingReports.clear(); routingReportReads.clear(); routingRecords.clear();
+    }
+    routingRecords.set(recordKey, contentHash);
+    const cacheKey = recordKey + ':' + observed.recordHash, cached = routingReports.get(cacheKey);
     if (cached && cached.compilationHash === compiled.compilationHash && cached.receiptHash === row.receipt.evidenceHash && now() - Date.parse(cached.observedAt) <= 300000) {
       // A prior create response is not an independent current observation. Use a
       // current GET/query or CDC coverage after the report; otherwise keep a GET.
@@ -115,7 +124,9 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     try {
       const reportKey = endpoint + ':' + hash(beforeFence);
       let shared = routingReportReads.get(reportKey);
-      if (!shared || now() < shared.started || now() - shared.started > 60000) {
+      // New participants must have been independently observed before the
+      // shared report began; a later first read cannot establish that bracket.
+      if (!shared || now() < shared.started || now() - shared.started > 60000 || Date.parse(observed.observedAt) > shared.started) {
         shared = { started: now(), promise: new Promise((resolve, reject) => {
         const abort = () => reject(Object.assign(new Error('The receivables report read was cancelled or exceeded its one-minute budget.'), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }));
         if (reportController.signal.aborted) { abort(); return; }
@@ -208,15 +219,16 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     return expectation ? { ...expectation,...(purchaseOrderReceipt ? { purchaseOrderReceipt } : {}),...(intent.step.details?.datedTax?{originalStep:intent.step,originalPolicy:policy}:{}), status: 'approved', scope, compilationHash: compiled.compilationHash, evidenceHash: hash({ scope, operationId: intent.operationId, planHash: intent.planHash, policyHash: hash(policy), compilationHash: compiled.compilationHash, expectation }) } : null;
   };
   const reader = createBusinessGraphReader({ Steps, transaction, assertReady, authorize: authority, readFence, readRecord, prepareRecords, loadTaxPolicy, retainSources, now });
-  const loadGraphReadback = async input => {
+  const loadGraphReadback = input => {
     checkScope(input?.scope);
     lastGraph = null;
     if (input.forceLive) readBatch.clear();
     const context = { records: new Map(), started: now() };
-    const result = await graphContext.run(context, () => reader(input));
-    if (result.complete === true && input.mode !== 'prepare') lastGraph = { records: context.records, fenceHash: hash(result.writerFence), started: context.started };
-    else lastGraph = null;
-    return result;
+    return graphContext.run(context, () => reader(input)).then(result => {
+      if (result.complete === true && input.mode !== 'prepare') lastGraph = { records: context.records, fenceHash: hash(result.writerFence), started: context.started };
+      else lastGraph = null;
+      return result;
+    });
   };
   const boundSnapshot = input => {
     checkScope(input?.scope);
