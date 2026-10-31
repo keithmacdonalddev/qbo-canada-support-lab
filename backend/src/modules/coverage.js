@@ -484,9 +484,9 @@ function scoreCoverage(data, { today, catalog = loadCatalog() } = {}) {
 const cache = new Map(); // realmId -> { result, at }
 const inflight = new Map(); // realmId -> Promise
 
-function getCached(realmId) {
-  const hit = cache.get(String(realmId));
-  return hit ? hit.result : null;
+function getCached(realmId, { scope } = {}) {
+  const hit = cache.get(scope ? mirrorKey(scope) : String(realmId));
+  return hit && (!scope || Date.now() - hit.at < MIRROR_CACHE_MS) ? hit.result : null;
 }
 
 async function runCheck(qbo, realmId, now) {
@@ -532,6 +532,7 @@ async function getCoverage(qbo, realmId, { refresh = false, now = new Date() } =
 /** Forget a company's result, e.g. after the lab changed its records. */
 function invalidate(realmId) {
   cache.delete(String(realmId));
+  for (const [key, hit] of cache) if (key.startsWith('mirror:') && hit.result.realmId === String(realmId)) cache.delete(key);
 }
 
 const STATUS_WORDS = {
@@ -557,7 +558,56 @@ function summarizeForAssistant(result, { areaKey } = {}) {
   return lines.join('\n');
 }
 
+
+// Mirror coverage is scoped to environment + realm + connection; never falls back to QBO.
+// The legacy QBO reader above remains for existing callers; the Coverage route uses this.
+const breadth = require('./business-weekly-breadth');
+const MIRROR_CACHE_MS = 60 * 1000;
+function mirrorKey(scope) {
+  if (!scope || !['production','sandbox'].includes(scope.environment) || !/^\d+$/.test(String(scope.realmId || '')) || !/^[a-f\d]{24}$/i.test(String(scope.connectionId || ''))) throw new TypeError('Coverage needs a concrete company scope.');
+  return 'mirror:' + scope.environment + ':' + scope.realmId + ':' + scope.connectionId;
+}
+async function getMirrorCoverage(scope, { Records, Agents, now = new Date(), refresh = false } = {}) {
+  const key = mirrorKey(scope);
+  const hit = cache.get(key);
+  if (hit && !refresh && Date.now() - hit.at < MIRROR_CACHE_MS) return hit.result;
+  if (inflight.has(key)) return inflight.get(key);
+  const work = (async () => {
+    Records ||= require('../models/CompanySyncRecord');
+    Agents ||= require('../models/BusinessAgent');
+    const filter = {environment:scope.environment,realmId:String(scope.realmId),connectionId:scope.connectionId};
+    const started=Date.now();
+    const [rows,agent] = await Promise.all([
+      Records.find(filter).select('entity qboId record deleted changedAt').sort({_id:1}).limit(MAX_CHECK_RECORDS+1).maxTimeMS(10000).lean(),
+      Agents.findOne(filter).select('sync.sources').maxTimeMS(5000).lean(),
+    ]);
+    const snapshot={records:rows.slice(0,MAX_CHECK_RECORDS),sources:agent?.sync?.sources||{},truncated:rows.length>MAX_CHECK_RECORDS};
+    const today=breadth.localDay(now);
+    const data={};
+    for(const name of [...Object.keys(LIST_SOURCES),...TXN_SOURCES]) {
+      const entity=LIST_SOURCES[name]?.entity||name;
+      const status=breadth.sourceStatus(snapshot.sources[entity],new Date(now).getTime());
+      data[name]={records:snapshot.records.filter(row=>row.entity===entity&&!row.deleted&&row.record.status!=='Deleted').map(row=>row.record),
+        ...(status!=='current'?{error:'Synced '+entity+' source is '+status+'.'}:{}),
+        ...(snapshot.truncated?{truncated:true,incompleteReason:'Mirror scan cap reached.'}:{})};
+    }
+    const situations=breadth.situations(snapshot,{today,now}),weekly=breadth.weekly(snapshot,{today,now,situations});
+    const scored=scoreCoverage(data,{today});
+    const result={realmId:String(scope.realmId),environment:scope.environment,connectionId:String(scope.connectionId),checkedAt:new Date(now).toISOString(),
+      durationMs:Date.now()-started,lookbackDays:LOOKBACK_DAYS,...scored,situations,weekly,
+      evidence:{...scored.evidence,source:'CompanySyncRecord',qboRequests:0,recordsScanned:snapshot.records.length,
+        meaning:'Bounded read of the synced company copy, not an atomic snapshot or proof of posting correctness, report acceptance or reconciliation.'}};
+    cache.set(key,{result,at:Date.now()});
+    return result;
+  })().finally(()=>inflight.delete(key));
+  inflight.set(key,work);
+  return work;
+}
+
 module.exports = {
+  getMirrorCoverage,
+  situations: breadth.situations,
+  weekly: breadth.weekly,
   getCoverage,
   readSource,
   getCached,

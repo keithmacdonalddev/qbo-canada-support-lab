@@ -217,3 +217,40 @@
 .coverage-report-intro { color:var(--ink-3); font-size:11px; margin:3px 0 12px; }
 @media (max-width:1100px) { .coverage-start-layout { gap:18px;grid-template-columns:1.3fr 1fr; } .coverage-spotlight { padding:25px; } .coverage-feature-workspace { grid-template-columns:minmax(270px,1fr) minmax(0,1.2fr); } .coverage-toolbar { gap:7px; } }
 @media (max-width:800px) { .coverage-start-layout { grid-template-columns:1fr; } .coverage-interest { flex-wrap:wrap; padding:12px 0; } .coverage-observed { margin-left:0; } .coverage-alternatives { grid-template-columns:1fr; } .coverage-area-directory > div { grid-template-columns:1fr 1fr; } .coverage-feature-workspace { grid-template-columns:1fr; } .coverage-feature-list { max-height:280px; min-height:0; } .coverage-inline-detail { max-height:none; } }
+
+
+/* Situation evidence is the default arrival view; gap details stay alongside examples. */
+.situation-summary { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0 6px; font-size:13px; }
+.situation-summary strong { color:var(--ink); font-variant-numeric:tabular-nums; font-size:18px; }
+.situation-summary p { color:var(--ink-2); }
+.situation-summary p > span { margin:0 8px; color:var(--ink-3); }
+.situation-summary button,.situation-message button,.situation-error button { border:1px solid var(--line); border-radius:5px; padding:6px 10px; font-size:12px; cursor:pointer; }
+.situation-summary button:disabled,.situation-message button:disabled { opacity:.6; cursor:default; }
+.situation-note { color:var(--ink-2); font-size:12px; line-height:1.6; }
+.situation-result-count { margin-left:auto; color:var(--ink-3); font-size:12px; }
+.situation-group { border:1px solid var(--line); border-radius:7px; margin-bottom:10px; background:var(--surface); overflow:clip; }
+.situation-group > summary { display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; list-style:none; }
+.situation-group > summary::before { content:'›'; color:var(--ink-3); font-size:18px; width:12px; }
+.situation-group[open] > summary::before { transform:rotate(90deg); }
+.situation-group summary h2 { font-size:14px; font-weight:600; }
+.situation-group summary > span { margin-left:auto; font-size:12px; color:var(--ink-2); }
+.situation-group table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:12px; }
+.situation-group thead th { text-align:left; color:var(--ink-3); font-weight:500; background:var(--sunken); }
+.situation-group th,.situation-group td { padding:10px 14px; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere; text-align:left; }
+.situation-group th:nth-child(1) { width:24%; }
+.situation-group th:nth-child(2) { width:18%; }
+.situation-group th:nth-child(3) { width:38%; }
+.situation-group th:nth-child(4) { width:20%; }
+.situation-group tbody th { font-weight:500; }
+.situation-group small { display:block; font-size:10.5px; line-height:1.5; font-weight:400; color:var(--ink-3); margin-top:4px; }
+.situation-group td p { color:var(--ink-2); line-height:1.5; margin-top:4px; }
+.situation-group a,.situation-message a { color:var(--link); text-decoration:underline; text-underline-offset:3px; }
+.situation-reach { font-size:11px; font-weight:600; }
+.situation-state { display:inline-block; font-size:11px; color:var(--attention); }
+.situation-state.is-present { color:var(--ok); }
+.situation-state.is-unknown,.situation-none { color:var(--ink-3); }
+.situation-message { padding:28px 0; color:var(--ink-2); font-size:13px; line-height:1.7; }
+.situation-message h2 { color:var(--ink); font-weight:600; font-size:16px; }
+.situation-message p { margin:5px 0 12px; }
+.situation-error { color:var(--danger-ink); padding:10px 0; font-size:12px; }
+.situation-group summary:focus-visible,.situation-workspace button:focus-visible,.situation-workspace a:focus-visible,.situation-workspace select:focus-visible { outline:2px solid var(--link); outline-offset:3px; }

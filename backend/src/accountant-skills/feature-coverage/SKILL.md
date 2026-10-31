@@ -1,47 +1,35 @@
 ---
 name: feature-coverage
-description: Weekly record and lifecycle coverage using general governed writes plus fixed v8 workflows; distinguishes supported non-stock records/dimensions from refused prepayments, inventory limits and manual work. Use in daily management review and before choosing underused features for the next slice.
+description: Measure every catalogued support situation and weekly record, lifecycle, tax, class and location breadth from the company mirror; deliberately plan uncovered states and request precise missing tools or owner settings.
 ---
 
-# Feature coverage from actual records
+# Deliberate support-situation coverage
 
-Use context.management, getBusinessWork and fresh queryCompanyData results. Capability descriptions, skill recipes and planned counts are not saved-record proof. Older Not built labels must be checked against the currently supplied tools and guard.
+The purpose is complete QBO data for every potential customer-support situation. Deliberately cover features, settings, edge cases and lifecycle states more than natural business volume would. The 220-record daily target serves that breadth. This versioned catalogue is a starting inventory, not a claim that every possible combination is already listed or covered.
 
-Source-checked 2026-10-31; recipes remain **unverified live** until actual record/link/report evidence exists.
+Use the situation and weekly evidence supplied by management review when available. The builder exports pure coverage.situations(snapshot, options) and coverage.weekly(snapshot, options); tool discovery may expose those results later. Until wired, use queryCompanyData against the same mirror, not fresh QBO reads for presence checks. Never claim an unavailable tool exists.
 
-| Area | Available path | Limits to retain |
-| --- | --- | --- |
-| Service sales | Fixed v8 quotes, time, terms/settled invoices; general Invoice, Estimate, TimeActivity, SalesReceipt | Actual Estimate/time link must survive readback |
-| Collections | Fixed eligible own/adopted collections; general partial/full Payment + grouped Deposit | No unapplied payment/overpayment; don't deposit a receipt twice |
-| Credits/refunds | General CreditMemo and later zero-cash Payment application, RefundReceipt; fixed eligible correction workflows | Genuine reason, same customer, open balances; refund alone does not apply open credit |
-| Purchasing | General non-inventory PurchaseOrder, partial linked Bill, BillPayment, VendorCredit, Cash/Check/CreditCard Purchase | Fixed stock order/full receipt remains separate; general inventory off for these recipes |
-| Close/banking | General balance-sheet JournalEntry, Deposit, Transfer; fixed income/expense reclassification | No tax/inventory journals, no negative deposit lines, no verified-history edits/voids |
-| Lists | General Customer, Vendor, Employee, Service/NonInventory Item, Account, Class, Department, Term, PaymentMethod | No opening balances; create only for real demand; employees are not payroll |
-| Dimensions | General line ClassRef and supported DepartmentRef | Existing tracking settings, proper field placement and actual saved use |
-| Recurring business | Accountant's per-customer renewal register + new dated invoices, due collections and close schedules | No native recurring-template management or future-dated writes |
-| Notes | General Attachable note metadata per schema | File upload not enabled; Attachable is not mirrored by queryCompanyData, so don't claim local-copy proof |
-| Still missing/held | Unapplied/excess receipts and later application, mixed-tax sales (one runtime sales code), single net fee deposits, general inventory adjustments/returns, unsupported custom fields/projects/budgets/multicurrency | Request only the specific missing capability; CAD only |
-| Owner/manual | Bank/card reconciliation, closing date/password, tax filing/tax-centre work, feeds/matching/rules | Record manual items once; never claim API completion |
+## Read the evidence correctly
 
-## Work a gap into normal volume
+- All-history count and example identify retained matching records. Seven-day counts use transaction dates; list creation dates measure setup added. Sync observation time is not activity.
+- Missing means a complete current source has no matching record. Stale means matching activity exists but outside the seven-day window. Unknown means stale/incomplete/unmirrored sources or a state the mirror cannot prove.
+- Deleted tombstones can prove a retained deletion; weekly deletion requires a dated native deletion event; none cannot prove that a company never had deleted records. Unsent is not draft; zero tax is not proof of zero-rated or exempt; repeated invoice descriptions are not native recurrence.
+- Record states are current retained states, not an immutable event history. A paid invoice does not also prove a retained partially paid invoice. Keep representative states available for support.
+- Weekly breadth covers each activity situation and every active Class and Location separately. Having a class/location in the list is not evidence of activity using it. Setup records need not be recreated weekly.
+- Saved fields and links prove presence only. Verification, financial postings, native reports, reconciliation and closing-date protection remain separate evidence.
 
-1. Query the trailing seven days by record type and actual link/dimension fields. Inspect freshness and all pages before saying a feature is absent.
-2. Load running-a-medium-sized-business-day and select a genuine due business need with support value. Schedule follow-up, not just initial creation.
-3. Use a general payload where fixed choices cannot express a supported shape. Read the entity schema first; never send raw accounting fields to prepareBusinessActivity.
-4. Verify actual saved outcomes, links/balances and relevant reports. A non-stock partial receipt proves that non-stock lifecycle only.
-5. Re-measure next day; don't create needless lists, transfers, corrections or credits for a coverage count.
+## Turn measured gaps into deliberate work
 
-Sample coverage query:
-```json
-{
-  "mode":"aggregate",
-  "entities":["Invoice","Estimate","TimeActivity","SalesReceipt","Payment","Deposit","Bill","BillPayment","Purchase","PurchaseOrder","CreditMemo","VendorCredit","RefundReceipt","Transfer","JournalEntry"],
-  "where":[{"field":"TxnDate","op":"gte","value":"<SEVEN_DAY_START>"}],
-  "groupBy":[{"field":"_entity"}],"metrics":[{"op":"count"}]
-}
-```
-For dimensions query sales/expense detail ClassRef and header DepartmentRef, not just Class/Department list counts. Reports need matching postings: BalanceSheet, ProfitAndLoss, TrialBalance, GeneralLedger, CashFlow, AR/AP aging and, where authorized stock exists, InventoryValuationSummary.
+1. Review never-found situations, weekly gaps and unknown checks by entity. First restore missing evidence for unknown checks; do not treat them as zero.
+2. Choose a coherent customer/supplier need and an explicit support situation to exercise. Plan both its next transition and representative records that retain useful states. Deliberate test scenarios, including rare states, are valid business needs in this company.
+3. Discover the current governed tools and load the entity schema. Reachability is guidance, not authorization: current guard results, company scope, open calendar dates and protected-history rules decide eligibility.
+4. Reachable now: use the supplied general or fixed workflow and verify saved outcomes. Partial/late/unapplied receipts, credit applications, mixed-tax sales, processor-fee deposits, cheques and credit-card expenses are available where the current guards permit them. Do not repeat a write just for a count.
+5. Needs a tool: reuse the matching requestCapability key and supply the situation key, entity, precise missing operation/field, expected saved state and accounting proof. Request the tools needed for the complete support inventory, including rare cases.
+6. Needs an owner setting: inspect current mirrored Preferences rather than repeating a historical note. For example, multicurrency is an irreversible owner decision only if the setting is actually off; even when enabled, current general writes may still refuse non-CAD records. Record owner-only decisions once.
+7. Re-measure after sync. Retain the example IDs and evidence; never report plans or capabilities as records in QBO.
 
-## When supplied tools cannot close a gap
+## Preserve factual boundaries
 
-Discover getManagementReview and requestCapability, reuse the existing gap key, and give requirement, missing tool/lifecycle, feature, why and priority. Do not repeatedly request tools already supplied by manageQboRecord. Owner/manual facts belong in recordBusinessDecision with requiresOwner true, not a request to build an unsupported API.
+Native drafts, recurring templates, progress invoicing, budgets, enhanced custom fields, projects, inventory adjustments and attachment uploads need their exact evidence/tool contracts. Do not substitute labels, journals or similarly named list records.
+
+Bank/card reconciliation, payroll, user roles, tax filing and closing-password decisions need native or owner evidence. Employee time is not payroll. Tax/inventory journals cannot substitute for supported tax-centre or inventory operations. None of the coverage outputs grants permission to alter protected history or existing customer-support records.
