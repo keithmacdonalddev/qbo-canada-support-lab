@@ -243,11 +243,30 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
     // workflows use); without it nothing can be guarded.
     const published = await require('./business-authority').readPublishedBusiness({ ...models, scope, session });
     const mappings = published?.view?.mappings || {};
-    const taxCodes = { sales: [mappings.salesTax].filter(Boolean).map(String), purchases: [mappings.purchaseTax].filter(Boolean).map(String) };
+    const { bindDatedTax, datedTaxChoice } = require('./business-dated-tax');
+    const dated = bindDatedTax(published.view.business, mappings);
+    const selected = key => dated ? datedTaxChoice(dated, key, day).id : mappings[key];
+    const taxCodes = { sales: [selected('salesTax')].filter(Boolean).map(String), purchases: [selected('purchaseTax')].filter(Boolean).map(String) };
     if (!taxCodes.sales.length || !taxCodes.purchases.length) fail('The published business has no sales and purchase tax codes.');
-    const taxPercent = {}, rate = row => Number(local.get('TaxRate', String(row.TaxRateRef?.value))?.RateValue) || 0;
-    for (const id of taxCodes.sales) taxPercent[id] = (local.get('TaxCode', id)?.SalesTaxRateList?.TaxRateDetail || []).reduce((sum, row) => sum + rate(row), 0);
-    for (const id of taxCodes.purchases) taxPercent[id] = Math.max(taxPercent[id] || 0, (local.get('TaxCode', id)?.PurchaseTaxRateList?.TaxRateDetail || []).reduce((sum, row) => sum + rate(row), 0));
+    const taxPercent = {};
+    for (const [direction, ids] of Object.entries(taxCodes)) for (const id of ids) {
+      const code = local.get('TaxCode', id);
+      // Only referenced records are loaded; unrelated writes need no tax read.
+      if (!code) continue;
+      const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail;
+      if (code.Active !== true || code.sparse === true || !Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length)) fail('The published tax code has no complete current rates.');
+      const ids = new Set();
+      const percent = details.reduce((sum, row) => {
+        const rateId = row.TaxRateRef?.value;
+        if (typeof rateId !== 'string' || ids.has(rateId) || row.TaxTypeApplicable !== 'TaxOnAmount' || (row.TaxOnTaxOrder != null && row.TaxOnTaxOrder !== 0)) fail('The published tax code has ambiguous or compound rates.');
+        ids.add(rateId);
+        const rate = local.get('TaxRate', rateId);
+        if (rate?.sparse === true) fail('The published tax rate is incomplete.');
+        return sum + require('./business-tax-policy').applicableRate(rate, day);
+      }, 0);
+      if (dated && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', day).percent) fail('The published dated tax rate differs from its approved policy.');
+      taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
+    }
     const features = require('../config').features || {};
     const inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
     let stock = null;

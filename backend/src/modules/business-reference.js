@@ -7,25 +7,36 @@ const ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/, HASH = /^[a-f0-9]{64}$
 const ENTITIES = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']);
 // Saved-record reads: transactions plus the list records the accountant adds.
 const TRANSACTIONS = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry', 'Customer', 'Vendor', 'Item']);
-// Definition contract v1: do not expand these exclusions without a new version.
+// Keep v1 stable for saved approvals. Items/tax codes use canonical v2 definitions.
 // Balances and stock are current observations, not approved master definitions.
 const DYNAMIC = Object.freeze({ Customer: ['Balance', 'BalanceWithJobs'], Vendor: ['Balance'], Employee: [], Item: ['QtyOnHand'], Account: ['CurrentBalance', 'CurrentBalanceWithSubAccounts'], TaxCode: [] });
 const METADATA = new Set(['SyncToken', 'MetaData', 'domain', 'sparse']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_REFERENCE_UNVERIFIED' }); }
 function fresh(stamp, now) { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(now) && Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= now && now - value <= 300000; }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
-function referenceDefinition(scope, entity, record) {
+// Canonical definition fields exclude transport state and reference display labels.
+// Unknown provider settings stay bound: only known presentation fields are removed.
+function definitionFields(entity, record) {
+  function copy(value, key = '') {
+    if (Array.isArray(value)) return value.map(entry => copy(entry));
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).filter(([field]) => !(field === 'name' && /Ref$/.test(key) && typeof value.value === 'string')).map(([field, entry]) => [field, copy(entry, field)]));
+  }
+  return copy(Object.fromEntries(Object.entries(record).filter(([key]) => !METADATA.has(key) && !['CreateTime', 'LastUpdatedTime'].includes(key) && !(DYNAMIC[entity] || []).includes(key))));
+}
+function referenceDefinition(scope, entity, record, version = ['Item', 'TaxCode'].includes(entity) ? 2 : 1) {
   scope = scoped(scope);
   if (!ENTITIES.has(entity) || !record || Object.getPrototypeOf(record) !== Object.prototype || typeof record.Id !== 'string' || !ID.test(record.Id) || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken) || record.Active !== true || (record.sparse !== undefined && record.sparse !== false)) fail('A complete active company record with an exact version is required.');
   let serialized;
   try { serialized = canonical(record); } catch { fail('Company reference observations must be plain JSON.'); }
   if (Buffer.byteLength(serialized) > 256000) fail('The company reference exceeds its observation size budget.');
   for (const key of DYNAMIC[entity]) if (key in record && (typeof record[key] !== 'number' || !Number.isFinite(record[key]))) fail('A current balance or quantity has an invalid value.');
-  const fields = Object.fromEntries(Object.entries(record).filter(([key]) => !METADATA.has(key) && !DYNAMIC[entity].includes(key)));
-  return { version: 1, hash: hash({ version: 1, scope, entity, fields }) };
+  if (![1, 2].includes(version)) fail('Unsupported company definition version.');
+  const fields = version === 1 ? Object.fromEntries(Object.entries(record).filter(([key]) => !METADATA.has(key) && !DYNAMIC[entity].includes(key))) : definitionFields(entity, record);
+  return { version, hash: hash({ version, scope, entity, fields }) };
 }
 function validateReferenceBinding(binding) {
-  if (!binding || !ENTITIES.has(binding.entity) || typeof binding.key !== 'string' || !binding.key || binding.key.length > 100 || typeof binding.id !== 'string' || !ID.test(binding.id) || typeof binding.syncToken !== 'string' || !VERSION.test(binding.syncToken) || binding.status !== 'resolved' || binding.definition?.version !== 1 || typeof binding.definition.hash !== 'string' || !HASH.test(binding.definition.hash)) fail('Each record choice requires its approved definition and original version.');
+  if (!binding || !ENTITIES.has(binding.entity) || typeof binding.key !== 'string' || !binding.key || binding.key.length > 100 || typeof binding.id !== 'string' || !ID.test(binding.id) || typeof binding.syncToken !== 'string' || !VERSION.test(binding.syncToken) || binding.status !== 'resolved' || ![1, 2].includes(binding.definition?.version) || typeof binding.definition.hash !== 'string' || !HASH.test(binding.definition.hash)) fail('Each record choice requires its approved definition and original version.');
 }
 function observedRecord(scope, entity, observed, now) {
   if (!observed || !sameScope(observed.scope, scope) || observed.entity !== entity || !fresh(observed.observedAt, now) || !observed.record || observed.recordHash !== hash(observed.record)) fail('The company reference is stale, incomplete or from another company.');
@@ -42,11 +53,19 @@ function bindBusinessReference({ scope, key, entity, observed, now = Date.now() 
   validateReferenceBinding(binding); return binding;
 }
 // Execution never rewrites the saved binding. Version drift is permitted only
-// when the complete master definition still matches the approved v1 definition.
+// when the complete master definition still matches the approved definition.
+function matchesReferenceDefinition(scope, entity, record, definition, definitionObservation, now = Date.now()) {
+  if (referenceDefinition(scope, entity, record, definition.version).hash === definition.hash) return true;
+  if (definition.version !== 1 || !['Item', 'TaxCode'].includes(entity) || !definitionObservation) return false;
+  // Authenticate the old full record before comparing canonical definitions.
+  const retained = observedRecord(scope, entity, definitionObservation, now);
+  return retained.Id === record.Id && referenceDefinition(scope, entity, retained, 1).hash === definition.hash && referenceDefinition(scope, entity, retained, 2).hash === referenceDefinition(scope, entity, record, 2).hash;
+}
 function verifyBusinessReference({ scope, binding, observed, now = Date.now() }) {
   scope = scoped(scope); validateReferenceBinding(binding);
-  const record = observedRecord(scope, binding.entity, observed, now), definition = referenceDefinition(scope, binding.entity, record);
-  if (record.Id !== binding.id || BigInt(record.SyncToken) < BigInt(binding.syncToken) || definition.hash !== binding.definition.hash) fail('The selected ' + binding.entity + ' (' + binding.key + ') differs from its approved definition or version.');
+  const record = observedRecord(scope, binding.entity, observed, now);
+  const matches = matchesReferenceDefinition(scope, binding.entity, record, binding.definition, observed.definitionObservation, now);
+  if (record.Id !== binding.id || BigInt(record.SyncToken) < BigInt(binding.syncToken) || !matches) fail('The selected ' + binding.entity + ' (' + binding.key + ') differs from its approved definition or version.');
   return record;
 }
 // Fixed full GET only; there is no caller-provided endpoint, query projection or
@@ -90,6 +109,11 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
           return cached;
         }
       }
+      let definitionObservation;
+      if (!transactions && live && observationStore && ['Item', 'TaxCode'].includes(entity)) {
+        try { definitionObservation = await call(() => observationStore.read(scope, entity, id, { signal: controller.signal })); }
+        catch { check(); /* Without a retained witness, legacy definitions still fail closed. */ }
+      }
       const client = await call(() => resolveClient(scope, { signal: controller.signal })); check();
       const expectedBase = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;
       const clientScope = () => { if (!client || typeof client.read !== 'function' || String(client.connection?._id) !== scope.connectionId || client.realmId !== scope.realmId || String(client.connection?.realmId) !== scope.realmId || client.apiBase !== expectedBase || client.connection?.status !== 'active') fail('The QuickBooks client no longer matches the approved company connection.'); };
@@ -109,10 +133,10 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
       const recordHash = hash(record), observedAt = new Date(now()).toISOString();
       const currentActor = await call(() => authorize(scope, action, { signal: controller.signal })); check(); clientScope();
       if (currentActor?.actorId !== actor.actorId || (transactions && (currentActor?.ownerId !== actor.ownerId || String(client.connection?.userId) !== actor.ownerId))) fail('The company reader changed during the reference read.');
-      return { scope, entity, observedAt, record, recordHash, source: { version: 1, kind: 'qbo-full-entity-get', scope, entity, id, endpoint: entity.toLowerCase() + '/' + id, recordHash } };
+      return { scope, entity, observedAt, record, recordHash, ...(definitionObservation ? { definitionObservation } : {}), source: { version: 1, kind: 'qbo-full-entity-get', scope, entity, id, endpoint: entity.toLowerCase() + '/' + id, recordHash } };
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
 }
 const createBusinessReferenceReader = options => createBusinessRecordReader(options);
 const createBusinessTransactionReader = options => createBusinessRecordReader({ observationStore: null, ...options }, true);
-module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition };
+module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition, definitionFields, matchesReferenceDefinition };

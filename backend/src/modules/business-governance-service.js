@@ -244,7 +244,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       const addedRoles = require('./business-added-roles'); addedRoles.assertListOnlyBatch(batch);
       const registry = await addedRoles.listAddedRoles(models, scope, ownerId); addedRoles.assertCapacity(registry, batch);
       await addedRoles.assertNamesAvailable({ batch, registry, query: text => client.query(text) });
-      const usedRoles = await addedRoles.resolveBatchRoles({ registry, batch, scope, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
+      const usedRoles = await addedRoles.resolveBatchRoles({ registry, batch, scope, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], now, readDefinitionWitness: (entity, id) => require('./business-observation-store').createBusinessObservationStore({ now }).read(scope, entity, id) });
       // Corrections (policy v7): every term re-derived from the accountant's own original
       // and every eligibility rule proved before a plan is saved (business-correction.js).
       if (batch.activities.some(row => row.type === 'correct-own-record')) {

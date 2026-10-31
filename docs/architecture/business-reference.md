@@ -38,6 +38,16 @@ Binding and execution validation require that provenance. A matching query proje
 
 The reader discards results on cancellation or after its one-minute return budget. The current QBOClient does not accept AbortSignal; its underlying GET/token refresh or retries may still finish. Network cancellation and bounded transport cleanup remain integration work. The reader itself does not create or edit business records; the existing client's token-refresh persistence is unchanged.
 
+## Canonical Item and tax definitions (2026-10-31)
+
+New Item and TaxCode bindings and Item list-readback fingerprints use definition version 2. They exclude the existing transport metadata and dynamic fields, top-level CreateTime/LastUpdatedTime, and display-only name labels inside references. Reference IDs and other reference attributes, item price/type/active status, account and tax destinations, and unknown settings remain bound. Other master entities retain version 1 so existing financial-account and party expectations keep their hashes.
+
+A saved version-1 Item or TaxCode approval is never rewritten. If the current full record does not match its original digest, acceptance requires a fresh, same-company full observation whose version-1 digest matches that approval and whose version-2 definition matches the current record. Forced-live master reads may attach a current mirror observation for this proof; quantities still come from the live record. The same proof supports legacy accountant-added Item fingerprints. Missing, stale, foreign, partial or altered witnesses refuse use.
+
+Tax policies retain the raw source recordHash for evidence integrity. Revalidation compares canonical TaxCode/TaxRate definitions, while still requiring complete active records and non-regressing versions. Rate history, applicable-rate links, agencies and tax return destinations remain bound. The general-write context uses the existing published dated-tax selector for today's code and effective percentage; it does not allow historical and current codes together.
+
+Read-only Mongo inspection confirmed operation 3359607d8aee4df04a3d88da at ordinal 21 and its approved Item 44 version-1 digest matching the current mirror. The failed live response was not retained, so its exact differing field remains unverified. The independent quote refusal was separately confirmed as the historical-only general-write allowlist, despite the publication containing the dated transition. No operation was resumed as part of this correction.
+
 ## Evidence
 
 107 focused reference/compiler/plan/read-back/graph tests pass, backend syntax covers 104 files, and diff checks pass. Tests include unchanged intent/request through newer inventory/balance observations, changed evidence hashes, insufficient stock, unchanged-version tampering, account/customer/tax-code definition changes, partial evidence, wrong scopes, version downgrade, full GET shape, actor/connection changes, deadlines and cancellation. Required independent source reviews are clear. These are synthetic fixtures, not live Canadian acceptance or a completed business period.

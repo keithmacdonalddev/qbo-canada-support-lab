@@ -14,7 +14,7 @@ function assertOverlay(original,overlay,step){
  if(!overlay||canonical(fixed(original))!==canonical(fixed(overlay)))fail('A tax review cannot change dates, prices, record choices or business authority.');
  if(overlay.taxReferenceDefinitions){
   if(!Array.isArray(overlay.taxReferenceDefinitions)||overlay.taxReferenceDefinitions.length>2)fail('Tax reference choices exceed their approved budget.');
-  for(const choice of overlay.taxReferenceDefinitions){const binding=step?.references.find(row=>row.entity==='TaxCode'&&row.key===choice.key&&row.id===choice.id),source=overlay.taxSources?.find(row=>row.entity==='TaxCode'&&row.id===choice.id);if(!binding||binding.definition.hash!==choice.originalDefinitionHash||!source||canonical(referenceDefinition(overlay.scope,'TaxCode',source.record))!==canonical(choice.definition))fail('Only the same selected tax code can receive a reviewed definition.');}
+  for(const choice of overlay.taxReferenceDefinitions){const binding=step?.references.find(row=>row.entity==='TaxCode'&&row.key===choice.key&&row.id===choice.id),source=overlay.taxSources?.find(row=>row.entity==='TaxCode'&&row.id===choice.id);if(!binding||binding.definition.hash!==choice.originalDefinitionHash||!source||canonical(referenceDefinition(overlay.scope,'TaxCode',source.record,choice.definition.version))!==canonical(choice.definition))fail('Only the same selected tax code can receive a reviewed definition.');}
  }
  const {evidenceHash,...body}=overlay;if(!HASH.test(evidenceHash||'')||hash(body)!==evidenceHash)fail('The approved tax expectation changed.');
 }

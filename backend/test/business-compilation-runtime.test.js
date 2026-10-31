@@ -103,7 +103,8 @@ test('stock compilation reads Item quantity after a prior receipt instead of its
   h.deps.observations = { read: async (_scope, entity, id) => { if (entity === 'Item' && id === item.record.Id) { itemCopies++; return stale; } return null; } };
   assert.equal((await h.deps.observations.read(scope, 'Item', item.record.Id)).record.QtyOnHand, 0); itemCopies = 0;
   const values = await h.read();
-  assert.equal(itemCopies, 0, 'quantity-sensitive compilation must bypass the available old copy');
+  assert.equal(itemCopies, 1, 'the old copy is read only as an authenticated definition witness');
+  assert.equal(values.referenceEvidence.find(x => x.entity === 'Item' && x.record.Id === item.record.Id).source.kind, 'qbo-full-entity-get');
   assert.equal(values.referenceEvidence.find(x => x.entity === 'Item' && x.record.Id === item.record.Id).record.QtyOnHand, 12);
   item.record.QtyOnHand = 0;
   await assert.rejects(h.read(), /stock availability/);

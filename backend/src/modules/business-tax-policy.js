@@ -2,6 +2,13 @@
 const { hash, date } = require('./business-calendar');
 const { readBusinessTaxRecord } = require('./business-observation-store');
 const { lifecyclePolicy } = require('./business-lifecycle-policy');
+const { canonical } = require('./business-calendar');
+const { definitionFields } = require('./business-reference');
+function taxDefinition(entity, id, record) {
+  if (!['TaxCode', 'TaxRate'].includes(entity) || !record || Object.getPrototypeOf(record) !== Object.prototype || !/^\d{1,30}$/.test(id || '') || record.Id !== id || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken || '') || typeof record.SyncToken !== 'string' || record.Active !== true || (record.sparse !== undefined && record.sparse !== false)) fail('A complete active tax definition is required.');
+  if (Buffer.byteLength(canonical(record)) > 256000) fail('The tax definition exceeds its observation size budget.');
+  return hash({ version: 2, entity, fields: definitionFields(entity, record) });
+}
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
 function rateDate(value) {
@@ -42,7 +49,7 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
     if (!cache.has(key)) {
       if (cache.size >= 25) fail('Tax definitions exceed their read budget.');
       const response = await readBusinessTaxRecord(client, entity, id), record = response?.[entity];
-      if (!record || record.Id !== id || typeof record.SyncToken !== 'string' || record.sparse === true) fail('A complete tax definition could not be read.');
+      taxDefinition(entity, id, record);
       cache.set(key, record); sources.push({ entity, id, recordHash: hash(record), record });
     }
     return cache.get(key);
@@ -92,7 +99,8 @@ async function verifyBusinessTaxSources(policy, client) {
   for (const source of policy.taxSources) {
     if (!['TaxCode', 'TaxRate'].includes(source.entity) || hash(source.record) !== source.recordHash) fail('Retained tax policy evidence changed.');
     const response = await readBusinessTaxRecord(client, source.entity, source.id);
-    if (hash(response?.[source.entity] || null) !== source.recordHash) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.');
+    const approved = taxDefinition(source.entity, source.id, source.record), current = response?.[source.entity];
+    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || taxDefinition(source.entity, source.id, current) !== approved) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.');
   }
 }
 module.exports = { applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };

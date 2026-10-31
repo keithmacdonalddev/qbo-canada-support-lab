@@ -150,7 +150,7 @@ function assertCapacity(registry, batch) {
 }
 // Roles a batch uses must exist, be the right entity, keep their retained capabilities
 // and still have their verified full QuickBooks definition (any drift refuses use).
-async function resolveBatchRoles({ registry, batch, readRecord, scope }) {
+async function resolveBatchRoles({ registry, batch, readRecord, scope, readDefinitionWitness, now = () => Date.now() }) {
   const { ADDED } = require('./business-activity-batch'), { referenceDefinition } = require('./business-reference'), used = new Map();
   const want = (key, kind) => { if (key && ADDED[kind].test(key)) used.set(key, kind); };
   for (const row of batch.activities) { want(row.customerKey, 'customer'); want(row.vendorKey, 'supplier'); want(row.itemKey, 'item'); }
@@ -161,9 +161,13 @@ async function resolveBatchRoles({ registry, batch, readRecord, scope }) {
     if (!role || role.kind !== kind) fail('The added ' + kind + ' ' + key + ' is not a verified accountant-added role yet. Use it in a later batch, after the batch that created it verified.');
     for (const row of batch.activities.filter(value => value.itemKey === key)) if (row.incomeRole !== role.incomeRole || row.unit !== role.unit) fail('The added item ' + key + ' sale must use its retained income role and unit.');
     const observed = await readRecord(role.entity, role.id);
-    let definition = null;
-    try { definition = referenceDefinition(scope, role.entity, observed).hash; } catch { definition = null; }
-    if (!observed || observed.Id !== role.id || observed.Active !== true || typeof observed.SyncToken !== 'string' || definition !== role.definitionHash) fail('The added ' + kind + ' ' + role.name + ' changed in QuickBooks after it was created; it cannot be used.');
+    let definition = null, legacyDefinition = null;
+    try { definition = referenceDefinition(scope, role.entity, observed).hash; legacyDefinition = referenceDefinition(scope, role.entity, observed, 1).hash; } catch { definition = null; }
+    if (definition !== role.definitionHash && legacyDefinition !== role.definitionHash && typeof readDefinitionWitness === 'function') {
+      const witness = await readDefinitionWitness(role.entity, role.id);
+      try { if (require('./business-reference').matchesReferenceDefinition(scope, role.entity, observed, { version: 1, hash: role.definitionHash }, witness, now())) legacyDefinition = role.definitionHash; } catch { /* Missing or changed evidence refuses the role below. */ }
+    }
+    if (!observed || observed.Id !== role.id || observed.Active !== true || typeof observed.SyncToken !== 'string' || (definition !== role.definitionHash && legacyDefinition !== role.definitionHash)) fail('The added ' + kind + ' ' + role.name + ' changed in QuickBooks after it was created; it cannot be used.');
     resolved.push({ key, entity: role.entity, id: role.id, syncToken: observed.SyncToken, ...(role.entity === 'Item' ? { incomeRole: role.incomeRole } : {}) });
   }
   return resolved;

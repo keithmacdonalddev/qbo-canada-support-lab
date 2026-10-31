@@ -18,7 +18,7 @@ function setup(entity = 'Item', fields = { Type: 'Inventory', QtyOnHand: 12, Inc
   return h;
 }
 test('definition bindings are company-scoped and preserve the original approved version', () => {
-  const h = setup(); assert.equal(h.binding.syncToken, '0'); assert.equal(h.binding.definition.version, 1); assert.deepEqual(h.verify(), h.original.record);
+  const h = setup(); assert.equal(h.binding.syncToken, '0'); assert.equal(h.binding.definition.version, 2); assert.deepEqual(h.verify(), h.original.record);
   const foreign = referenceDefinition({ ...scope, realmId: '456' }, 'Item', h.original.record); assert.notEqual(foreign.hash, h.binding.definition.hash);
   assert.notEqual(referenceDefinition(scope, 'Account', h.original.record).hash, h.binding.definition.hash);
 });
@@ -60,7 +60,7 @@ test('partial, inactive and malformed live values cannot bypass definition compa
   for (const change of [r => { r.Active = false; }, r => { delete r.Active; }, r => { r.sparse = true; }, r => { r.sparse = 'false'; }, r => { r.QtyOnHand = '24'; }, r => { r.QtyOnHand = null; }, r => { r.QtyOnHand = Infinity; }]) { const h = setup(); change(h.observed.record); if (Number.isFinite(h.observed.record.QtyOnHand) || h.observed.record.QtyOnHand !== Infinity) h.refresh(); assert.throws(h.verify); }
 });
 test('definition contract cannot be removed, changed or extended by caller exclusions', () => {
-  for (const change of [b => { delete b.definition; }, b => { b.definition.version = 2; }, b => { b.definition.hash = hash('other'); }]) { const h = setup(); change(h.binding); assert.throws(h.verify); }
+  for (const change of [b => { delete b.definition; }, b => { b.definition.version = 3; }, b => { b.definition.hash = hash('other'); }]) { const h = setup(); change(h.binding); assert.throws(h.verify); }
   const h = setup(); h.binding.definition.exclude = ['IncomeAccountRef']; h.observed.record.IncomeAccountRef.value = '999'; h.refresh(); assert.throws(h.verify, /definition/);
 });
 test('definition observations are bounded and preparation itself requires fresh exact source evidence', () => {
@@ -113,4 +113,50 @@ test('cancelled and over-budget GETs never produce accepted full-read evidence',
 });
 test('untrusted entity or identifier cannot select arbitrary endpoints', async () => {
   for (const [entity, id] of [['query', '100'], ['Item', '100?include=other'], ['Item/100', '100']]) { const h = readerHarness(); await assert.rejects(h.reader(scope, entity, id), /exact supported/); assert.equal(h.calls.length, 0); }
+});
+
+function serviceFields() { return { Type: 'Service', UnitPrice: 149, IncomeAccountRef: { value: '126', name: 'Income display' }, SalesTaxCodeRef: { value: '16', name: 'Tax display' }, Taxable: true }; }
+test('canonical Item and TaxCode definitions match live, mirror and saved shapes in both directions', () => {
+  for (const [entity, fields] of [['Item', serviceFields()], ['TaxCode', { Taxable: true, SalesTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '34', name: 'Tax rate display' }, TaxTypeApplicable: 'TaxOnAmount' }] } }]]) {
+    const mirror = observation(entity, fields), live = clone(mirror);
+    live.record.SyncToken = '2'; live.record.domain = 'QBO'; live.record.sparse = false;
+    live.record.MetaData = { LastUpdatedTime: '2026-10-06T11:59:59Z' };
+    live.record.LastUpdatedTime = '2026-10-06T11:59:59Z';
+    const dropLabels = value => { if (!value || typeof value !== 'object') return; for (const [key, child] of Object.entries(value)) { if (/Ref$/.test(key)) delete child.name; dropLabels(child); } };
+    dropLabels(live.record); live.recordHash = hash(live.record); live.source.recordHash = live.recordHash;
+    for (const [before, after] of [[mirror, live], [live, mirror]]) {
+      const binding = bindBusinessReference({ scope, entity, key: 'chosen', observed: before, now }); binding.syncToken = '0';
+      assert.deepEqual(verifyBusinessReference({ scope, binding, observed: after, now }), after.record);
+    }
+  }
+});
+test('legacy approval needs an authenticated matching witness; genuine Item changes still refuse', () => {
+  const h = setup('Item', serviceFields());
+  h.binding.definition = referenceDefinition(scope, 'Item', h.original.record, 1);
+  delete h.observed.record.IncomeAccountRef.name; h.refresh();
+  assert.throws(h.verify, /definition/);
+  h.observed.definitionObservation = clone(h.original); assert.doesNotThrow(h.verify);
+  const binding = clone(h.binding);
+  for (const change of [r => { r.UnitPrice++; }, r => { r.IncomeAccountRef.value = '999'; }, r => { r.SalesTaxCodeRef.value = '12'; }, r => { r.Type = 'NonInventory'; }, r => { r.Active = false; }, r => { r.IncomeAccountRef.type = 'Other'; }, r => { r.FutureSetting = true; }]) {
+    const saved = clone(h.observed.record); change(h.observed.record); h.refresh(); assert.throws(h.verify); h.observed.record = saved; h.refresh();
+  }
+  for (const change of [o => { o.record.UnitPrice++; o.recordHash = hash(o.record); o.source.recordHash = o.recordHash; }, o => { o.scope.realmId = '999'; }, o => { o.observedAt = '2026-10-06T11:54:59.000Z'; }, o => { o.recordHash = hash('tampered'); }]) {
+    h.observed.definitionObservation = clone(h.original); change(h.observed.definitionObservation); assert.throws(h.verify);
+  }
+  assert.deepEqual(h.binding, binding);
+});
+test('forced live Item reads keep live quantities and a fresh mirror witness for saved v1 bindings', async () => {
+  const h = readerHarness(), mirror = observation('Item', { ...serviceFields(), QtyOnHand: 2 });
+  mirror.source = { version: 1, kind: 'qbo-current-mirror', scope, entity: 'Item', id: '100', recordHash: mirror.recordHash, generation: 'current', completedAt: new Date(now - 1000).toISOString(), freshUntil: new Date(now + 60000).toISOString() };
+  h.record = { ...clone(mirror.record), QtyOnHand: 9 }; delete h.record.IncomeAccountRef.name;
+  h.reader = createBusinessReferenceReader({ resolveClient: async () => h.client, authorize: async () => ({ actorId: 'actor' }), now: () => now, observationStore: { read: async () => clone(mirror) } });
+  const observed = await h.reader(scope, 'Item', '100', { live: true });
+  const binding = { ...bindBusinessReference({ scope, entity: 'Item', key: 'chosen', observed: mirror, now }), definition: referenceDefinition(scope, 'Item', mirror.record, 1) };
+  assert.equal(observed.record.QtyOnHand, 9); assert.equal(observed.source.kind, 'qbo-full-entity-get');
+  assert.equal(verifyBusinessReference({ scope, binding, observed, now }).QtyOnHand, 9); assert.equal(h.calls.length, 1);
+  observed.definitionObservation.source.freshUntil = new Date(now - 1).toISOString();
+  assert.throws(() => verifyBusinessReference({ scope, binding, observed, now }), /provenance/);
+  observed.definitionObservation.source.freshUntil = new Date(now + 60000).toISOString();
+  observed.definitionObservation.source.generation = '';
+  assert.throws(() => verifyBusinessReference({ scope, binding, observed, now }), /provenance/);
 });

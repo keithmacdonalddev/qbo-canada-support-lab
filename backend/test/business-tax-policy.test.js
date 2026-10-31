@@ -25,10 +25,35 @@ test('server-derived expectations retain their exact tax definitions and are rec
  const h=fixture(), policies=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now);
  assert.equal(policies.length,2);assert.equal(h.calls.length,2);assert.equal(policies[0].policy.readbackTax.totalTaxCents,3198);assert.equal(policies[0].policy.readbackTax.lines[0].percent,13);
  assert.equal(policies[0].policy.authorityHash,hash('authority'));await verifyBusinessTaxSources(policies[0].policy,h.client);
- h.records.TaxRate.SyncToken='1';await assert.rejects(verifyBusinessTaxSources(policies[0].policy,h.client),/changed after/);
+ h.records.TaxRate.EffectiveTaxRate[0].RateValue=14;await assert.rejects(verifyBusinessTaxSources(policies[0].policy,h.client),/changed after/);
 });
 test('compound, inactive, missing or unreadable historical tax definitions cannot become approved policies',async()=>{
  for(const change of [h=>{h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxTypeApplicable='TaxOnTax';},h=>{h.records.TaxRate.Active=false;},h=>{h.records.TaxRate.EffectiveTaxRate=[];},h=>{h.records.TaxCode.Active=false;}]){
  const h=fixture();change(h);await assert.rejects(deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now));
  }
+});
+
+test('tax source comparison accepts transport and reference-label differences in both directions, preserving raw integrity', async () => {
+  for (const reverse of [false, true]) {
+    const h = fixture();
+    h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.name = 'Displayed tax rate';
+    h.records.TaxRate.AgencyRef = { value: '1', name: 'Displayed agency' };
+    const live = records => { for (const record of Object.values(records)) { record.MetaData = { LastUpdatedTime: '2026-10-06T11:59:59Z' }; record.domain = 'QBO'; record.sparse = false; record.SyncToken = '2'; } delete records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.name; delete records.TaxRate.AgencyRef.name; };
+    if (reverse) live(h.records);
+    const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now);
+    if (reverse) { delete h.records.TaxCode.MetaData; delete h.records.TaxCode.domain; delete h.records.TaxCode.sparse; h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.name = 'Renamed rate'; h.records.TaxRate.AgencyRef.name = 'Renamed agency'; }
+    else live(h.records);
+    await verifyBusinessTaxSources(policy, h.client);
+    policy.taxSources[0].record.Description = 'Tampered retained evidence';
+    await assert.rejects(verifyBusinessTaxSources(policy, h.client), /evidence changed/);
+  }
+});
+test('canonical tax comparison still refuses rate, history, accounts, applicability, status, partial and version changes', async () => {
+  for (const change of [h => { h.records.TaxCode.Active = false; }, h => { h.records.TaxCode.Taxable = false; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.value = '951'; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxTypeApplicable = 'TaxOnTax'; }, h => { h.records.TaxRate.EffectiveTaxRate[0].RateValue++; }, h => { h.records.TaxRate.EffectiveTaxRate[0].EffectiveDate = '2021-01-01'; }, h => { h.records.TaxRate.AgencyRef.value = '2'; }, h => { h.records.TaxRate.TaxReturnLineRef.value = '3'; }, h => { h.records.TaxRate.sparse = true; }, h => { h.records.TaxRate.sparse = 'false'; }, h => { h.records.TaxRate.SyncToken = '01'; }, h => { delete h.records.TaxRate.SyncToken; }]) {
+    const h = fixture(); h.records.TaxRate.AgencyRef = { value: '1' }; h.records.TaxRate.TaxReturnLineRef = { value: '2' };
+    const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now); change(h);
+    await assert.rejects(verifyBusinessTaxSources(policy, h.client));
+  }
+  const h = fixture(); h.records.TaxRate.SyncToken = '2'; const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now); h.records.TaxRate.SyncToken = '1';
+  await assert.rejects(verifyBusinessTaxSources(policy, h.client));
 });

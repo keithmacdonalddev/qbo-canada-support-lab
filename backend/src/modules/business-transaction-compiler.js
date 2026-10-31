@@ -105,7 +105,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     let approvedBinding = binding;
     if (binding.entity === 'TaxCode' && policy.taxReferenceDefinitions) {
       const choices = policy.taxReferenceDefinitions.filter(choice => choice.key === binding.key && choice.id === binding.id && choice.originalDefinitionHash === binding.definition.hash);
-      if (choices.length !== 1 || !HASH.test(choices[0].definition?.hash || '') || choices[0].definition.version !== 1) fail('The owner-reviewed tax-code definition is unavailable.');
+      if (choices.length !== 1 || !HASH.test(choices[0].definition?.hash || '') || ![1, 2].includes(choices[0].definition.version)) fail('The owner-reviewed tax-code definition is unavailable.');
       approvedBinding = { ...binding, definition: choices[0].definition };
     }
     const record = verifyBusinessReference({ scope, binding: approvedBinding, observed: observed[0], now }); id(record.Id);

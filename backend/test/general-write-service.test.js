@@ -202,3 +202,37 @@ test('an invoice created through the general tool but paid externally still fail
   await assert.rejects(gate.close(), /Invoice changed after it was proved/);
   assert.equal(gate.closes[0].ok, false);
 });
+
+test('general quote context uses the published dated code for the open day and rejects the historical code', async t => {
+  const authority = require('../src/modules/business-authority');
+  const view = { mappings: { salesTax: '12', purchaseTax: '12' }, business: { openingDate: '2023-09-01', activityTemplateVersion: 2, datedTax: { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '16', purchaseTax: '16' } } };
+  t.mock.method(authority, 'readPublishedBusiness', async () => ({ view }));
+  const q = value => ({ session() { return this; }, select() { return this; }, maxTimeMS() { return this; }, lean: async () => value });
+  const models = { Calendars: { findOne: () => q({ verifiedThrough: '2026-12-01' }) }, Policies: { findOne: () => q({ periodControl: {} }) }, GeneralWriteRuns: { findOne: () => q(null) } };
+  const h = company(), detail = { TaxRateRef: { value: '34', name: 'HST' }, TaxTypeApplicable: 'TaxOnAmount' };
+  h.records.set('TaxCode:16', { Id: '16', SyncToken: '0', Active: true, Taxable: true, SalesTaxRateList: { TaxRateDetail: [detail] }, PurchaseTaxRateList: { TaxRateDetail: [detail] } });
+  h.records.set('TaxCode:12', { Id: '12', Active: true });
+  h.records.set('TaxRate:34', { Id: '34', SyncToken: '0', Active: true, RateValue: 99, EffectiveTaxRate: [{ EffectiveDate: '2025-04-01T00:00:00-07:00', RateValue: 14 }] });
+  const local = { get: (entity, id) => h.records.get(entity + ':' + id), owned: () => false, map: h.records };
+  const contextFor = require('../src/modules/general-write-service').createGeneralWriteContext({ models, now: () => Date.parse(DAY + 'T16:00:00Z') });
+  const context = await contextFor(scope, local);
+  assert.deepEqual(context.taxCodes, { sales: ['16'], purchases: ['16'] }); assert.equal(context.taxPercent['16'], 14);
+  const quotes = [1, 2, 3].map(i => { const op = structuredClone(invoiceOp); op.ref = 'quote' + i; op.entity = 'Estimate'; delete op.payload.DueDate; op.payload.Line[0].SalesItemLineDetail.TaxCodeRef.value = '16'; return op; });
+  const check = operations => require('../src/modules/general-write-guards').checkGeneralWrite({ proposal: input('three-independent-quotes', operations), local, context });
+  assert.equal(check(quotes).ok, true, JSON.stringify(check(quotes).problems));
+  quotes[0].payload.Line[0].SalesItemLineDetail.TaxCodeRef.value = '12'; assert.equal(check(quotes).ok, false);
+  h.records.get('TaxRate:34').EffectiveTaxRate[0].RateValue = 15;
+  await assert.rejects(contextFor(scope, local), /differs from its approved policy/);
+  h.records.get('TaxRate:34').EffectiveTaxRate = []; await assert.rejects(contextFor(scope, local), /history/);
+  h.records.delete('TaxCode:16');
+  assert.deepEqual((await contextFor(scope, local)).taxPercent, {}, 'unrelated nontax work need not load tax records');
+});
+test('general context selects historical codes before the transition without permitting both code sets', async t => {
+  const authority = require('../src/modules/business-authority');
+  const view = { mappings: { salesTax: '12', purchaseTax: '12' }, business: { openingDate: '2023-09-01', activityTemplateVersion: 2, datedTax: { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '16', purchaseTax: '16' } } };
+  t.mock.method(authority, 'readPublishedBusiness', async () => ({ view }));
+  const q = value => ({ session() { return this; }, select() { return this; }, maxTimeMS() { return this; }, lean: async () => value });
+  const models = { Calendars: { findOne: () => q({ verifiedThrough: '2025-03-30' }) }, Policies: { findOne: () => q({ periodControl: {} }) }, GeneralWriteRuns: { findOne: () => q(null) } };
+  const context = await require('../src/modules/general-write-service').createGeneralWriteContext({ models, now: () => Date.parse('2025-03-31T16:00:00Z') })(scope, { get: () => null, map: new Map() });
+  assert.deepEqual(context.taxCodes, { sales: ['12'], purchases: ['12'] });
+});
