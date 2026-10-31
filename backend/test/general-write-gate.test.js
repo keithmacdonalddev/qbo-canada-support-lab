@@ -29,7 +29,7 @@ function harness() {
     async create(rows) { for (const row of rows) { if (h.data[name].some(value => value._id === row._id)) throw new Error('duplicate'); h.data[name].push(clone(row)); } },
   }]));
   let queue = Promise.resolve();
-  h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); try { return await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } }); queue = result.catch(() => {}); return result; };
+  h.transaction = work => { const result = queue.then(async () => { const before = clone(h.data); let output; try { output = await work({ inTransaction: () => true }); } catch (error) { h.data = before; throw error; } if(h.loseReply){h.loseReply=false;throw new Error('commit reply lost');} return output; }); queue = result.catch(() => {}); return result; };
   h.context = { day: '2026-12-02', verifiedThrough: '2026-12-01', protectedThrough: '2026-10-31', taxCodes: { sales: ['7'], purchases: ['7'] } };
   h.records = new Map();
   h.copy = { read: async (scope, entity, id) => clone(h.records.get(entity + ':' + id) || null) };
@@ -68,7 +68,7 @@ test('a lost response keeps the barrier; only the same batch is replayed, as a n
   // Another batch of the run cannot use the held writer; the same batch (same requestid) can.
   h.run().batches.push({ index: 1, attempt: 2, requestId: 'f'.repeat(32), items: [h.run().batches[0].items[0]], state: 'sending', sends: 1 });
   const other = h.gateFor(1), request = buildGeneralBatch(scope, h.run().batches[1]);
-  await assert.rejects(other.begin({ request, ownerId, actorId: ownerId, workflow: { version: 1, kind: 'general-write', runId, batchIndex: 1, sends: 1 }, periodEvidence: await other.preflight({ request, client: h.client }) }), /owns this company/);
+  await assert.rejects(other.preflight({ request, client: h.client }), /owns this company/);
   const replay = await h.begin(h.gateFor(), 2);
   assert.notEqual(replay.receiptId, ticket.receiptId); assert.equal(h.data.Receipts[1].general.requestId, h.data.Receipts[0].general.requestId);
   assert.equal((await h.gateFor().complete(replay, h.request(), answered, 'tid-2')).outcome, 'saved');
@@ -214,4 +214,148 @@ test('an exact overnight replay still checks fresh QuickBooks closing preference
   h.clock+=86400000;h.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{BookCloseDate:'2026-12-02'}}]}});
   await assert.rejects(h.begin(h.gateFor(),2),/closed or reconciled period/);
   assert.equal(h.data.Receipts.length,1);assert.ok(h.writer().unresolved);
+});
+
+
+function resourceBatch(h, index, invoice = String(100 + index), customer = String(10 + index)) {
+  const item = { bId: '1', ref: 'payment-' + index, op: 'create', operation: 'create', entity: 'Payment', payload: { TxnDate: '2026-12-02', CustomerRef: { value: customer }, TotalAmt: 10, Line: [{ Amount: 10, LinkedTxn: [{ TxnId: invoice, TxnType: 'Invoice' }] }] } };
+  const batch = { index, requestId: String(index + 1).padStart(32, '0'), items: [item], state: 'sending', sends: 1 };
+  h.run().batches.push(batch);
+  const request = buildGeneralBatch(scope, batch);
+  const client = { ...h.client, read: async (entity, id) => ({ [entity[0].toUpperCase() + entity.slice(1)]: { Id: id, SyncToken: '0', TxnDate: '2026-11-20', CustomerRef: { value: customer }, TotalAmt: 10, Balance: 10 } }) };
+  const gate = createQboWriteGate({ ...h.models, transaction: h.transaction, assertReady: async () => {}, now: () => h.clock, generalTransport: createGeneralGateTransport({ models: h.models, scope, runId, batchIndex: index, admissionGuard: async () => {}, now: () => h.clock }) });
+  const preflight = () => gate.preflight({ request, client });
+  const admit = periodEvidence => gate.begin({ request, ownerId, actorId: ownerId, workflow: { version: 1, kind: 'general-write', runId, batchIndex: index, sends: 1 }, periodEvidence });
+  const begin = async () => admit(await preflight());
+  const finish = ticket => gate.complete(ticket, request, { status: 200, json: { BatchItemResponse: [{ bId: '1', Payment: { ...item.payload, Id: String(500 + index), SyncToken: '0' } }] } });
+  return { batch, request, gate, client, preflight, admit, begin, finish };
+}
+const tick = () => new Promise(resolve => setTimeout(resolve, 40));
+test('two disjoint accountant batches are both admitted before either dispatch settles', async () => {
+  const h = harness(), a = resourceBatch(h, 1), b = resourceBatch(h, 2);
+  const [ta, tb] = await Promise.all([a.begin(), b.begin()]);
+  assert.equal(h.data.Receipts.length, 2);
+  assert.equal(h.writer().resourceClaims.filter(row => row.state === 'admitted').length, 2);
+  await Promise.all([a.finish(ta), b.finish(tb)]);
+  assert.deepEqual(h.writer().resourceClaims, []);
+});
+test('batches paying the same invoice queue in FIFO order and read fresh after grant', async () => {
+  const h = harness(), a = resourceBatch(h, 1, '100', '10'), b = resourceBatch(h, 2, '100', '10'), c = resourceBatch(h, 3, '100', '10');
+  const ta = await a.begin(), order = [];
+  let bRead = false; b.client.read = async (entity, id) => { bRead = true; return { [entity[0].toUpperCase() + entity.slice(1)]: { Id: id, SyncToken: '1', TxnDate: '2026-11-20' } }; };
+  const pb = b.begin().then(ticket => { order.push('b'); return ticket; });
+  await tick(); const pc = c.begin().then(ticket => { order.push('c'); return ticket; });
+  await tick(); assert.equal(bRead, false); assert.deepEqual(order, []);
+  await a.finish(ta); const tb = await pb; assert.equal(bRead, true); assert.deepEqual(order, ['b']);
+  await b.finish(tb); const tc = await pc; assert.deepEqual(order, ['b', 'c']); await c.finish(tc);
+});
+test('an unknown outcome holds only its resources and party/entity, leaving disjoint work free', async () => {
+  const h = harness(), a = resourceBatch(h, 1), ta = await a.begin();
+  await a.gate.failTransport(ta, a.request, {});
+  const overlaps = resourceBatch(h, 2, '101', '99'), sameParty = resourceBatch(h, 3, '999', '11');
+  await assert.rejects(overlaps.preflight(), /unknown request owns/);
+  await assert.rejects(sameParty.preflight(), /unknown request owns/);
+  const disjoint = resourceBatch(h, 4), td = await disjoint.begin(); await disjoint.finish(td);
+  assert.equal(h.writer().resourceClaims.length, 1); assert.equal(h.writer().resourceClaims[0].state, 'unknown');
+  h.clock += 86400000;
+  await assert.rejects(overlaps.preflight(), /unknown request owns/);
+});
+test('company concurrency is capped at four requests and ended unknowns release their slots', async () => {
+  const h = harness(), batches = [1,2,3,4,5].map(n => resourceBatch(h,n));
+  const tickets = await Promise.all(batches.slice(0,4).map(b => b.begin()));
+  let fifth = false; const waiting = batches[4].begin().then(t => { fifth = true; return t; });
+  await tick(); assert.equal(fifth, false);
+  await batches[0].gate.failTransport(tickets[0], batches[0].request, {});
+  const last = await waiting; assert.equal(fifth, true);
+  await Promise.all(batches.slice(1,4).map((b,i) => b.finish(tickets[i+1]))); await batches[4].finish(last);
+  assert.equal(h.writer().resourceClaims.length, 1);
+});
+test('preflight or admission failures release only unsent reservations; policy changes remain fenced', async () => {
+  const h = harness(), a = resourceBatch(h,1);
+  const proof = await a.preflight(); h.data.Policies[0].revision++;
+  await assert.rejects(a.admit(proof), /protected-period choices changed/);
+  assert.deepEqual(h.writer().resourceClaims, []); assert.equal(h.data.Receipts.length,0);
+  a.client.query = async () => { throw new Error('fixture'); };
+  await assert.rejects(a.preflight(), /could not be verified/); assert.deepEqual(h.writer().resourceClaims, []);
+});
+test('history edits are exclusive against every disjoint admitted and queued batch', async () => {
+  const h = harness(), a = resourceBatch(h,1), history = resourceBatch(h,2), later = resourceBatch(h,3);
+  history.batch.items = [{ bId:'1',ref:'edit',op:'update',operation:'update',entity:'Invoice',id:'77',before:{Id:'77',SyncToken:'0',TxnDate:'2026-11-20'},payload:{Id:'77',SyncToken:'0',TxnDate:'2026-11-20',CustomerRef:{value:'90'},Line:[]} }];
+  const request = buildGeneralBatch(scope,history.batch);
+  const ta = await a.begin(); let gotHistory = false, gotLater = false;
+  const ph = history.gate.preflight({request,client:history.client}).then(e => {gotHistory=true;return e;});
+  await tick(); const pl = later.preflight().then(e=>{gotLater=true;return e;});
+  await tick(); assert.equal(gotHistory,false); assert.equal(gotLater,false);
+  await a.finish(ta); const evidence = await ph; assert.equal(gotHistory,true); assert.equal(gotLater,false);
+  // Refuse an invalidated historical plan before transport, releasing its exclusive reservation.
+  h.data.Policies[0].revision++;
+  await assert.rejects(history.gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:2,sends:1},periodEvidence:evidence}));
+  const final = await later.admit(await pl); await later.finish(final);
+});
+
+test('a possibly-sent exact batch resumes after lost admission acknowledgement without losing resources', async () => {
+  const h=harness(), gate=h.gateFor();
+  // Simulate a transaction committed but the caller never obtained its ticket.
+  const periodEvidence=await gate.preflight({request:h.request(),client:h.client}); h.loseReply=true;
+  await assert.rejects(gate.begin({request:h.request(),ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence}),/commit reply lost/);
+  assert.equal(h.data.Receipts[0].state,'possibly-sent');
+  assert.equal(h.writer().resourceClaims[0].state,'admitted');
+  const firstId=h.data.Receipts[0]._id, replayGate=h.gateFor(), replay=await h.begin(replayGate,2);
+  assert.notEqual(replay.receiptId,firstId);
+  assert.equal(h.data.Receipts.length,2);
+  assert.equal(h.data.Receipts[1].general.requestId,h.data.Receipts[0].general.requestId);
+  await replayGate.complete(replay,h.request(),answered,'recovered');
+  assert.deepEqual(h.writer().resourceClaims,[]);
+});
+test('an old scalar unknown keeps its exact replay recovery and never admits unrelated work', async () => {
+  const h=harness(),gate=h.gateFor(),ticket=await h.begin(gate);
+  await gate.failTransport(ticket,h.request(),{});
+  delete h.writer().resourceClaims; delete h.writer().resourceQueue;
+  const before=clone(h.writer().unresolved);
+  h.run().batches.push({index:1,requestId:'f'.repeat(32),items:[{...h.run().batches[0].items[0],payload:{DisplayName:'Different'}}],state:'sending',sends:1});
+  const other=h.gateFor(1),request=buildGeneralBatch(scope,h.run().batches[1]);
+  const evidence=await other.preflight({request,client:h.client});
+  await assert.rejects(other.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:1,sends:1},periodEvidence:evidence}),/owns this company/);
+  assert.deepEqual(h.writer().unresolved,before);
+  const replayGate=h.gateFor(),replay=await h.begin(replayGate,2);await replayGate.complete(replay,h.request(),answered,'legacy');
+  assert.equal(h.writer().unresolved,null);
+});
+test('an exact unknown replay waits for a request slot beside four active disjoint batches', async () => {
+  const h=harness(),original=resourceBatch(h,1),ticket=await original.begin();await original.gate.failTransport(ticket,original.request,{});
+  const others=[2,3,4,5].map(n=>resourceBatch(h,n)),tickets=await Promise.all(others.map(b=>b.begin()));
+  let ready=false; const proof=original.preflight().then(e=>{ready=true;return e;});
+  await tick();assert.equal(ready,false);
+  await others[0].finish(tickets[0]);await proof;assert.equal(ready,true);
+  // Use the next deduplicated transport attempt, preserving original requestid.
+  const replay=await original.gate.begin({request:original.request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:1,sends:2},periodEvidence:await proof});
+  await original.finish(replay);await Promise.all(others.slice(1).map((b,i)=>b.finish(tickets[i+1])));
+});
+
+test('a live original attempt cannot be replayed or lose ownership of its definite response', async () => {
+  const h=harness(),gate=h.gateFor(),ticket=await h.begin(gate);
+  await assert.rejects(h.begin(h.gateFor(),2),/in-flight request/);
+  assert.equal(h.data.Receipts.length,1);
+  await gate.complete(ticket,h.request(),answered,'original');
+  assert.equal(h.data.Receipts[0].state,'saved');assert.deepEqual(h.writer().resourceClaims,[]);
+});
+
+test('disjoint service invoices sharing one Item dispatch together with fresh provider Type proof', async () => {
+  for (const providerType of ['Service','Inventory']) {
+    const h=harness();
+    h.models.Records={findOne(){const q={session(){return q;},maxTimeMS(){return q;},lean:async()=>({record:{Id:'9',Type:'Service'}})};return q;}};
+    const create=index=>{
+      const b=resourceBatch(h,index);
+      b.batch.items=[{bId:'1',ref:'sale-'+index,op:'create',operation:'create',entity:'Invoice',payload:{TxnDate:'2026-12-02',CustomerRef:{value:String(index)},Line:[{Amount:10,DetailType:'SalesItemLineDetail',SalesItemLineDetail:{ItemRef:{value:'9'},Qty:1,UnitPrice:10}}]}}];
+      const request=buildGeneralBatch(scope,b.batch);b.client.read=async(entity,id)=>({Item:{Id:id,SyncToken:'0',Type:providerType}});
+      return { ...b,request,begin:async()=>b.gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:index,sends:1},periodEvidence:await b.gate.preflight({request,client:b.client})}) };
+    };
+    const a=create(1),b=create(2);
+    if(providerType==='Inventory') {
+      await assert.rejects(a.begin(),/no longer a verified service/);assert.equal(h.data.Receipts.length,0);assert.deepEqual(h.writer().resourceClaims,[]);
+    } else {
+      const [ta,tb]=await Promise.all([a.begin(),b.begin()]);assert.equal(h.data.Receipts.length,2);
+      assert.ok(h.data.Receipts.every(row=>row.periodProof.proofs[0].evidence.coordination.sharedItems[0].type==='Service'));
+      await Promise.all([a.gate.failTransport(ta,a.request,{}),b.gate.failTransport(tb,b.request,{})]);
+    }
+  }
 });

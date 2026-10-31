@@ -274,3 +274,89 @@ test('replaced run workers cannot claim or mark an unsent step', async () => {
   await h.steps.beginDispatch(scope, id, key, handle, h.dispatchEvidence(hash('request')), { runLeaseToken: current });
   assert.equal(h.step().state, 'dispatched'); assert.ok(h.writer().unresolved);
 });
+
+
+test('calendar close cannot reserve while any resource claim or queued batch exists', async () => {
+  for (const field of ['resourceClaims','resourceQueue']) {
+    const h=harness(); h.writer()[field]=[{id:'reservation',state:'reserved',expiresAt:h.clock+300000,resources:[]}];
+    await assert.rejects(h.transaction(session=>h.fence.reserve(h.run(),scope,session)), /idle company writer/);
+  }
+  const h=harness(); await h.transaction(session=>h.fence.reserve(h.run(),scope,session));
+  const {createCompanyResourceClaims}=require('../src/modules/business-writer-fence');
+  const claims=createCompanyResourceClaims({Writers:h.models.Writers,transaction:h.transaction,now:()=>h.clock});
+  await assert.rejects(claims.acquire(scope,hash('disjoint'),{resources:[],uncertainty:[],exclusive:false}),/owns this company writer/);
+});
+test('resource extraction covers removed links, stock, deposit payments and list update conflicts', () => {
+  const {resourcesForBatch,resourceConflict}=require('../src/modules/business-writer-fence');
+  const write=resourcesForBatch({items:[{entity:'Invoice',operation:'update',id:'1',before:{Id:'1',TxnDate:'2026-09-01',LinkedTxn:[{TxnId:'2',TxnType:'Estimate'}],Line:[{SalesItemLineDetail:{ItemRef:{value:'3'}}}]},payload:{Id:'1',TxnDate:'2026-10-01',Line:[{SalesItemLineDetail:{ItemRef:{value:'4'}}}]}}]});
+  assert.ok(write.exclusive); assert.deepEqual(write.resources,['record:estimate:2','record:invoice:1','record:item:3','record:item:4']);
+  const item=resourcesForBatch({items:[{entity:'Item',id:'3',operation:'update',before:{Id:'3'},payload:{Id:'3',Name:'New'}}]});
+  assert.ok(resourceConflict(write,item));
+  const deposit=resourcesForBatch({items:[{entity:'Deposit',operation:'create',payload:{Line:[{LinkedTxn:[{TxnId:'5',TxnType:'Payment'}]}]}}]});
+  const payment=resourcesForBatch({items:[{entity:'Payment',operation:'update',id:'5',before:{Id:'5'},payload:{Id:'5'}}]});
+  assert.ok(resourceConflict(deposit,payment));
+});
+test('pre-upgrade general unknown barrier cannot be erased by a disjoint resource claim', async () => {
+  const {createCompanyResourceClaims,writerForRequest}=require('../src/modules/business-writer-fence');
+  const h=harness(); Object.assign(h.writer(),{operationId:null,planHash:null,unresolved:{kind:'general-write',key:hash('old'),requestHash:hash('old-request'),transportConsumed:{receiptId:hash('old-receipt')}}});
+  const before=clone(h.writer()), claims=createCompanyResourceClaims({Writers:h.models.Writers,transaction:h.transaction,now:()=>h.clock});
+  await assert.rejects(claims.acquire(scope,hash('new'),{resources:[],uncertainty:[],exclusive:false}),/owns this company writer/);
+  assert.deepEqual(h.writer(),before);
+  assert.deepEqual(writerForRequest(h.writer(),{requestHash:hash('new')}).unresolved,before.unresolved);
+});
+test('only never-admitted reservations expire; receipt-bound claims survive arbitrarily long', async () => {
+  const {createCompanyResourceClaims}=require('../src/modules/business-writer-fence');
+  const h=harness(); Object.assign(h.writer(),{operationId:null,planHash:null});
+  const claims=createCompanyResourceClaims({Writers:h.models.Writers,transaction:h.transaction,now:()=>h.clock});
+  const spec={resources:['record:invoice:1'],uncertainty:['party:customer:1:payment'],exclusive:false};
+  const first=await claims.acquire(scope,hash('first'),spec); h.clock+=300001;
+  const next=await claims.acquire(scope,hash('next'),spec); assert.notEqual(next.id,first.id); assert.equal(h.writer().resourceClaims.length,1);
+  await h.transaction(async()=>{const row=h.writer().resourceClaims[0]; row.state='admitted';row.barrier={kind:'general-write',key:hash('admitted'),requestHash:row.requestHash,transportConsumed:{receiptId:hash('receipt')}};h.writer().unresolved=row.barrier;});
+  h.clock+=86400000; await claims.abandon(scope,next);
+  assert.equal(h.writer().resourceClaims[0].state,'admitted');
+  h.writer().resourceClaims[0].state='unknown';
+  await assert.rejects(claims.acquire(scope,hash('third'),spec),/unknown request owns/);
+});
+test('all SDK clients share four company request slots, release on error and leave other companies free', async () => {
+  const {withCompanyRequestSlot}=require('../src/modules/business-writer-fence');
+  let active=0,peak=0; const release=[];
+  const work=()=>withCompanyRequestSlot(scope,async()=>{active++;peak=Math.max(active,peak);try{await new Promise(resolve=>release.push(resolve));}finally{active--;}});
+  const first=[work(),work(),work(),work()]; let fifthStarted=false;
+  const fifth=withCompanyRequestSlot(scope,async()=>{fifthStarted=true;throw new Error('fixture');});
+  await Promise.resolve(); assert.equal(fifthStarted,false);
+  assert.equal(await withCompanyRequestSlot({...scope,realmId:'999'},async()=>42),42);
+  const rejection=assert.rejects(fifth,/fixture/);release.shift()();await rejection;
+  assert.equal(peak,4);assert.equal(fifthStarted,true);
+  release.splice(0).forEach(resolve=>resolve());await Promise.all(first);
+  assert.equal(await withCompanyRequestSlot(scope,async()=>43),43);
+});
+
+test('service Item readers coexist but stock movement and list Item edits remain exclusive', () => {
+  const {resourcesForBatch,resourceConflict}=require('../src/modules/business-writer-fence');
+  const batch={items:[{entity:'Invoice',operation:'create',payload:{CustomerRef:{value:'1'},Line:[{SalesItemLineDetail:{ItemRef:{value:'5'}}}]}}]};
+  const service=resourcesForBatch(batch,{itemTypes:{5:'Service'}}), stock=resourcesForBatch(batch,{itemTypes:{5:'Inventory'}});
+  assert.equal(resourceConflict(service,service),false);
+  assert.equal(resourceConflict(stock,stock),true);
+  const edit=resourcesForBatch({items:[{entity:'Item',operation:'update',id:'5',before:{Id:'5'},payload:{Id:'5'}}]});
+  assert.equal(resourceConflict(service,edit),true); assert.equal(resourceConflict(stock,edit),true);
+});
+
+test('expired never-admitted reservations do not strand calendar close after a restart', async () => {
+  const h=harness();h.writer().resourceClaims=[{id:'old',state:'reserved',expiresAt:h.clock-1,resources:[]}];h.writer().resourceQueue=[{id:'queued',expiresAt:h.clock-1}];
+  await h.transaction(session=>h.fence.reserve(h.run(),scope,session));
+  assert.deepEqual(h.writer().resourceClaims,[]);assert.deepEqual(h.writer().resourceQueue,[]);
+});
+
+test('actual SDK calls share the company cap and a queued cancelled GET never enters transport', async () => {
+  const {QBOClient}=require('../src/modules/qbo-client');
+  const clients=[],release=[];let calls=0,observers=0;
+  const controller=new AbortController();
+  const make=()=>{const client=Object.create(QBOClient.prototype);Object.assign(client,{realmId:'987654',connection:{_id:scope.connectionId,userId:'b'.repeat(24),realmId:'987654'},_requestLog:[],_windowMs:60000,_retryAfterUntil:0,ensureFreshToken:async()=>{},oauthClient:{makeApiCall:async()=>{calls++;await new Promise(resolve=>release.push(resolve));return{status:200,json:{QueryResponse:{}}};}}});clients.push(client);return client;};
+  const active=[1,2,3,4].map(()=>make().apiCall('GET','query'));
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,4);
+  const queued=make().apiCall('GET','query',undefined,0,0,{signal:controller.signal,beforeAttempt:async()=>{},onFailure:()=>{},onSdkAttempt:()=>{observers++;}});
+  await new Promise(resolve=>setImmediate(resolve));controller.abort();
+  const refused=assert.rejects(queued,error=>error.code==='QBO_READ_CANCELLED'&&error.qboStage===undefined);
+  release.shift()();await refused;assert.equal(calls,4);assert.equal(observers,0);
+  release.splice(0).forEach(resolve=>resolve());await Promise.all(active);
+});

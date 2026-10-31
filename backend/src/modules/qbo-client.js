@@ -311,13 +311,17 @@ class QBOClient {
       // Past token refresh and setup: any throw from here is the API call
       // itself (QBO 5xx or a network failure), which intuit-oauth rejects
       // rather than resolves.
-      reachedApiCall = true;
-      requestCategory = this._meterRequest(method, endpoint, 'attempts');
       // Observe the synchronous SDK invocation, including a synchronous throw.
       // The admission budget stays separate: abort may win after admission.
-      try { response = this.oauthClient.makeApiCall(opts); }
-      finally { if (control?.onSdkAttempt) try { const observed = control.onSdkAttempt(); observed?.catch?.(() => {}); } catch { /* A metrics observer cannot alter transport authority or its result. */ } }
-      response = await response;
+      response = await require('./business-writer-fence').withCompanyRequestSlot({ environment: this.apiBase.includes('sandbox-') ? 'sandbox' : 'production', realmId: this.realmId }, async () => {
+        if (control) { try { assertReadActive(control); } catch (error) { localReadFailure = true; throw error; } }
+        reachedApiCall = true;
+        requestCategory = this._meterRequest(method, endpoint, 'attempts');
+        let pending;
+        try { pending = this.oauthClient.makeApiCall(opts); }
+        finally { if (control?.onSdkAttempt) try { const observed = control.onSdkAttempt(); observed?.catch?.(() => {}); } catch { /* A metrics observer cannot alter transport authority or its result. */ } }
+        return await pending;
+      });
       // Count the transport response before any caller-side cancellation check can discard it.
       if (requestCategory && typeof response?.status === 'number' && response.status >= 200 && response.status < 300) this._meterRequest(method, endpoint, 'succeeded', requestCategory);
       if (control) {
@@ -331,6 +335,7 @@ class QBOClient {
         try { assertReadActive(control); } catch (error) { localReadFailure = true; throw error; }
       }
     } catch (err) {
+      if (!reachedApiCall && writeTicket?.resourceClaim) require('./business-writer-fence').trackResourceAttempt(writeTicket.receiptId, false);
       notifyReadFailure(control, err);
       if (localReadFailure) throw err;
       // Genuinely thrown exception: network failure, or refresh() rejecting

@@ -76,7 +76,7 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
       recovery = null; preflighted = batch;
       // Reuse the original admission evidence: a saved update advances its target
       // token and a saved delete removes it. Only preferences and controls are fresh.
-      const writer = models.Writers ? await read(models.Writers, scope) : null;
+      const writer = require('./business-writer-fence').writerForRequest(models.Writers ? await read(models.Writers, scope) : null, request);
       if (sameReplay(writer, batch, request)) {
         const receipt = await recoveryReceipt(writer, batch, request), startedAt = new Date(now()).toISOString();
         const proofs = receipt.periodProof.proofs;
@@ -117,6 +117,22 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
       return { version: 1, kind: 'general-period-proof', runId, batchIndex, proofs, protectedThrough: proofs.map(row => row.protectedThrough).filter(Boolean).sort().at(-1) || null, evidenceHash: hash({ requestHash: request.requestHash, proofs }) };
     },
     async savedBatch(session) { return (await saved(session)).batch; },
+    async resourceTypes({ session }) {
+      if (!models.Records) return {}; // Unknown types take a conservative write claim.
+      const { batch } = await saved(session), ids = new Set();
+      const walk = value => {
+        if (Array.isArray(value)) return value.forEach(walk);
+        if (!value || typeof value !== 'object') return;
+        for (const [key, child] of Object.entries(value)) { if (key === 'ItemRef' && child?.value != null) ids.add(String(child.value)); walk(child); }
+      };
+      for (const item of batch.items) { walk(item.payload); walk(item.before); }
+      const types = {};
+      for (const id of ids) {
+        const row = await read(models.Records, { ...scope, entity: 'Item', qboId: id, deleted: false }, session);
+        if (row?.record?.Id === id) types[id] = row.record.Type;
+      }
+      return types;
+    },
     async admit({ request, receiptId, dispatchKey, writer, ownerId, actorId, session, periodProof }) {
       const { run, batch } = await saved(session);
       if (!['sending', 'unknown'].includes(run.status) || run.contract !== 'general-write-v1' || String(run.ownerId) !== String(ownerId) || String(run.actorId) !== String(actorId) || buildGeneralBatch(scope, batch).requestHash !== request.requestHash || batch.state === 'answered') throw denied('The exact saved general batch is not ready to send.');

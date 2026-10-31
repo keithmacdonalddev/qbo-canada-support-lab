@@ -13,6 +13,9 @@ const schema = new mongoose.Schema({
   workflowKind: { type: String, enum: ['master-preparation', null], default: null },
   // No expiration. An uncertain external request cannot release company ownership.
   unresolved: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Reserved claims expire only before admission; unknown outcomes never expire.
+  resourceClaims: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  resourceQueue: { type: [mongoose.Schema.Types.Mixed], default: [] },
   populationDelegation: { type: mongoose.Schema.Types.Mixed, default: null },
   lastReleasedOperationId: { type: mongoose.Schema.Types.ObjectId, default: null },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
