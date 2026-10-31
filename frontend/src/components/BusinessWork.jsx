@@ -75,15 +75,25 @@ function rightNowLine(value, clock) {
     default: return [Clock3, 'Idle', next === null ? 'next review is queued' : next <= clock ? 'next review starting shortly' : 'next review at ' + when(next, clock) + ' (in ' + minutes(next - clock) + ')']
   }
 }
+// "Today (Fri Oct 30): 20 planned · 7 in QuickBooks · next review 2:15 PM (business hours)", or the
+// calendar catch-up state. Counts and reasons come from the server; only the time is worded here.
+function todayLine(value, clock) {
+  const next = stamp(value.nextReviewAt), reason = value.cadence?.reason
+  const timing = value.state === 'idle' && next !== null ? (value.calendar ? 'next try ' : 'next review ') + (next <= clock ? 'shortly' : when(next, clock)) + (reason ? ' (' + reason + ')' : '') : ''
+  if (value.calendar) return ['Calendar closed through ' + (value.calendar.closedThrough || 'its opening') + ' · closing ' + value.calendar.closing, timing].filter(Boolean).join(' · ')
+  if (value.today?.line) return [value.today.line, timing].filter(Boolean).join(' · ')
+  return ''
+}
 function RightNow({ value, now }) {
   const [mountedAt] = useState(Date.now)
   if (!value || value.state === 'not-configured') return null
   const clock = now ?? mountedAt
   const [Icon, title, detail] = rightNowLine(value, clock)
-  const reviewing = value.state === 'reviewing', last = stamp(value.lastReviewAt)
+  const reviewing = value.state === 'reviewing', last = stamp(value.lastReviewAt), today = todayLine(value, clock)
   return <div className={'bwk-now bwk-now--' + value.state} role="group" aria-label="Right now">
     <span className="bwk-now-eyebrow">Right now</span>
     <p className="bwk-now-line"><Icon aria-hidden="true" className={reviewing ? 'animate-spin' : ''} /><strong>{title}</strong>{detail && <span> · {detail}</span>}</p>
+    {today && <p className="bwk-now-today">{today}</p>}
     {reviewing ? (value.steps?.length ? <ol className="bwk-steps" aria-label="Latest steps, newest first">
       {value.steps.map((step, index) => {
         const StepIcon = STEP_ICONS[step.status] || Check

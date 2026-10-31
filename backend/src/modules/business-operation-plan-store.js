@@ -121,7 +121,7 @@ function runFields(manifest, planId, actorId) {
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, Agents }) {
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, agentLease = null, Agents }) {
   const { agentAuthority: normalizeAgentAuthority, sameAuthority, sameAgentLineage, fenceAgentAuthority } = require('./business-agent-authority');
   const agentAuthority = suppliedAgentAuthority ? normalizeAgentAuthority(suppliedAgentAuthority) : null;
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
@@ -183,7 +183,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const prepared = validateOperationCandidate(candidate, scope, now());
       if (agentAuthority) {
         if (prepared.manifest.authorityHash !== agentAuthority.authorityHash) fail('The agent grant belongs to a different published business.');
-        await fenceAgentAuthority({ authority: agentAuthority, run: { ...prepared.manifest, createdBy: actorId }, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
+        await fenceAgentAuthority({ authority: agentAuthority, run: { ...prepared.manifest, createdBy: actorId }, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session, lease: agentLease });
       }
       const auditId = await audit(scope, actorId, operationId, prepared.planHash, 'prepared', session);
       await Plans.create([{ _id: planId, contractVersion: 1, ...scope, operationId, createdBy: actorId, requestKey: request.requestKey, candidateHash: request.candidateHash, manifest: prepared.manifest, planHash: prepared.planHash, auditId, ...(agentAuthority ? { agentAuthority } : {}) }], { session });
@@ -200,7 +200,8 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     return transaction(async session => {
       if (await authority(scope, 'operations.execute', session) !== actorId) fail('The operation actor changed', 403);
       const { run, plan } = await read(scope, operationId, session);
-      if (agentAuthority) await fenceAgentAuthority({ authority: agentAuthority, run, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session });
+      // The worker lease is fenced inside this approval transaction: capacity admission is exclusive.
+      if (agentAuthority) await fenceAgentAuthority({ authority: agentAuthority, run, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session, lease: agentLease });
       if (run.status === 'retired') fail('This unsent operation was retired; prepare a fresh plan.');
       if (plan.planHash !== planHash) fail('The reviewed operation plan changed');
       await loadEntries(scope, operationId, 0, MAX_RECORDS, session);

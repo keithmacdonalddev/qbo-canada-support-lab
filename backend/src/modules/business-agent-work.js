@@ -54,7 +54,15 @@ function ownOperation(operation,agent){
   return Boolean(origin&&grant&&origin.agentId===agent.id&&origin.grantId===grant.id&&origin.authorityHash===grant.authorityHash&&RESUMABLE.has(operation.status));
 }
 
-function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null,facts=null}={}){
+// "Today (Fri Oct 30): 20 planned · 7 in QuickBooks · 3 in progress" from counted native create receipts.
+function todayLine(today){
+  if(!today||!today.label)return null;
+  if(today.unavailable)return 'Today ('+today.label+'): '+(today.target?today.target+' planned · ':'')+'count unavailable right now';
+  if(!today.target)return 'Today ('+today.label+'): closed'+(today.saved?' · '+today.saved+' in QuickBooks':'');
+  return 'Today ('+today.label+'): '+today.target+' planned · '+today.saved+' in QuickBooks'+(today.verified<today.saved?' ('+today.verified+' verified)':'')+(today.reserved?' · '+today.reserved+' in progress':'');
+}
+const halifaxTime=value=>require('./business-agent-cadence').localTime(value);
+function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null,facts=null,today=null,calendarClose=null,cadence=null,owned=[],requests=null}={}){
   settings=settings||{};agent=agent||{};business=business||{};sync=sync||{};
   const items=[],blockers=Array.isArray(business.blockers)?business.blockers:[],codes=new Set(blockers.map(item=>item.code));
   const add=item=>items.push({detail:'',next:'',...item});
@@ -101,6 +109,34 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   };
   if(published)duty('receive-purchase-orders',['receive-purchase-order'],{title:'Receive open purchase orders into supplier bills',detail:'Receives wholly unreceived purchase orders created by its own workflows or adopted import, in full at their original inventory cost. Partially received orders are unavailable.',capability:'purchase-order-receiving'},'Looks for open orders to receive at each business review.');
   if(published)duty('correct-own-records',['correct-own-record'],{title:'Correct its own mistakes',detail:'Reverses its own earlier records dated today when they were wrong: a full credit applied to an unpaid service invoice, a refund of a fully collected service sale, a supplier credit applied to an unpaid operating bill, or the exact reverse of a journal entry, at the original tax rate. Originals are never edited, and each record is corrected at most once.'},'Checks its recent records for mistakes at each business review.');
+  // Approved work that holds no calendar slot (for example, approval saved but queueing failed).
+  // Unsent work outside the slot is retired automatically and is not shown.
+  const pending=(Array.isArray(owned)?owned:[]).filter(run=>run&&run.disposition!=='unsent'&&run.operationId!==operation?.operationId&&grant&&run.agentAuthority?.agentId===agent.id&&run.agentAuthority?.grantId===grant.id);
+  const stranded=pending.some(run=>run.disposition==='stranded');
+  if(pending.length)add({key:'finish-approved',owner:ACCOUNTANT,state:stranded?'blocked':!running?'waiting':pending.some(run=>run.executionPending||IN_PROGRESS.has(run.status))?'working':'waiting',title:'Finish approved accounting work',
+    detail:plural(pending.length,'approved operation')+' not finished yet ('+pending.slice(0,3).map(run=>run.status+(run.day?' for '+shortDate(run.day):'')).join(', ')+'). New periods and batches wait until it is done.',
+    next:stranded?'It stopped after saving records outside the business calendar. Continuing it needs a recovery capability that is being built; nothing is sent twice.':running?'Resumes it at the next review, without sending anything twice.':'Resumes once the accountant is running.',...(stranded?{capability:'stranded-recovery',href:'/company/manage'}:{})});
+  // Calendar catch-up and today's activity (continuous-business plan v2 §3b–§3c).
+  const nextAt=cadence?.nextReviewAt?halifaxTime(cadence.nextReviewAt):null,held=cadence?.kind==='held'||cadence?.kind==='ceiling';
+  if(published&&calendarClose){
+    const closed=shortDate(business.verifiedThrough),closing=shortDate(calendarClose.fromDate)+(calendarClose.throughDate!==calendarClose.fromDate?'–'+shortDate(calendarClose.throughDate):'');
+    add({key:'close-calendar',owner:ACCOUNTANT,state:!running?'waiting':held?'blocked':'on-duty',title:'Close the business calendar through yesterday',
+      detail:(closed?'Calendar closed through '+closed:'Calendar not closed yet')+' · closing '+closing+(calendarClose.behindDays>1?' ('+plural(calendarClose.behindDays,'day')+' behind)':'')+'. Each period closes within one calendar month, on its seven-report evidence, including days with no scheduled activity.',
+      next:!running?'Starts once the accountant is running.':(cadence?.reason?cadence.reason.charAt(0).toUpperCase()+cadence.reason.slice(1):'Closes at the next review')+(nextAt?' · next try '+nextAt:'')+'.'});
+  }
+  if(published&&today){
+    const due=today.dueSlot,line=todayLine(today);
+    const detail=today.unavailable?'Today’s count could not be read; same-day activity waits for the next review.'
+      :!today.target?'The business is closed today. New sales and expenses resume on the next business day; obligations and corrections continue.'
+      :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
+      :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
+      :requests?.reached&&today.remaining>0?(requests.unavailable?'Today’s QuickBooks request count could not be read, so new sales and expenses wait. Recovery, obligations and calendar closes continue.':'Today’s QuickBooks request budget of '+requests.limit.toLocaleString('en-CA')+' is used ('+requests.used.toLocaleString('en-CA')+' requests). New sales and expenses resume after midnight UTC; recovery, obligations and calendar closes continue.')
+      :due?'Activity slot '+due.n+' of '+today.slotCount+' is due now: about '+plural(due.records,'record')+' of genuine business work.'
+      :today.remaining===0?'Today’s planned activity is in QuickBooks.'
+      :today.nextSlotAt?'Next activity slot at '+halifaxTime(today.nextSlotAt)+'.':'Today’s activity slots are finished; any shortfall is not replayed.';
+    add({key:'todays-activity',owner:ACCOUNTANT,state:stale||!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
+      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':nextAt?'Next review '+nextAt+(cadence?.reason?' ('+cadence.reason+')':'')+'.':'Spread across business hours in small batches.'});
+  }
   if(business.adoptedThrough)duty('inherited-obligations',['collect-adopted-invoice','pay-adopted-bill'],{title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',capability:'adopted-obligations'},'Collects and pays them at business reviews as customers pay and bills fall due.');
   for(const blocker of blockers)if(!KNOWN.has(blocker.code))add({key:'blocker-'+(blocker.code||'unknown'),owner:ACCOUNTANT,state:'blocked',title:blocker.title||'Business work is held',detail:blocker.detail||'',next:'Retried on the next review.',href:blocker.href||'/company/manage'});
 
@@ -127,10 +163,15 @@ function oneLine(text,max=220){
 const SHOWN_STEPS=8;
 // What the accountant is doing at this moment. Times are ISO strings; the page words them.
 // state: not-configured | stopped | paused | usage-paused | reviewing | recovering | catching-up | idle
-function rightNow({configured=false,settings={},usage=null,reviewing=false,recovering=false,activePass=null,progress=null,nextDecisionAt=null,lastDecisionAt=null,events=[],sync={}}={}){
+function rightNow({configured=false,settings={},usage=null,reviewing=false,recovering=false,activePass=null,progress=null,nextDecisionAt=null,lastDecisionAt=null,events=[],sync={},today=null,calendarClose=null,cadence=null,requests=null}={}){
   settings=settings||{};
+  // Today's counts, why the next review is when it is, and any calendar lag, for the "Today" line.
+  const extra={today:today&&today.label?{label:today.label,target:today.target,saved:today.saved??null,verified:today.verified??null,reserved:today.reserved??null,ceiling:today.ceiling,ceilingReached:Boolean(today.ceilingReached),unavailable:Boolean(today.unavailable),line:todayLine(today)}:null,
+    cadence:cadence&&cadence.kind?{kind:cadence.kind,reason:String(cadence.reason||'')}:null,
+    requests:requests?{used:requests.used,limit:requests.limit,reached:Boolean(requests.reached),unavailable:Boolean(requests.unavailable)}:null,
+    calendar:calendarClose?{closedThrough:shortDate(calendarClose.closedThrough||null)||null,closing:shortDate(calendarClose.fromDate)+(calendarClose.throughDate!==calendarClose.fromDate?'–'+shortDate(calendarClose.throughDate):''),behindDays:calendarClose.behindDays}:null};
   const last=(Array.isArray(events)?events:[]).filter(event=>event&&event.kind==='review-completed').sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0]||null;
-  const base={state:'idle',role:null,startedAt:null,nextReviewAt:nextDecisionAt||null,lastReviewAt:last?.at||lastDecisionAt||null,lastSummary:last?oneLine(last.detail):'',steps:[],earlierSteps:0,pause:null};
+  const base={state:'idle',role:null,startedAt:null,nextReviewAt:nextDecisionAt||null,lastReviewAt:last?.at||lastDecisionAt||null,lastSummary:last?oneLine(last.detail):'',steps:[],earlierSteps:0,pause:null,...extra};
   if(!configured)return {...base,state:'not-configured',nextReviewAt:null};
   if(!settings.monitoring)return {...base,state:'stopped',nextReviewAt:null};
   if(reviewing&&activePass){
@@ -145,4 +186,4 @@ function rightNow({configured=false,settings={},usage=null,reviewing=false,recov
   return base;
 }
 
-module.exports={businessWork,rightNow,oneLine,dutyFacts,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};
+module.exports={businessWork,rightNow,oneLine,dutyFacts,todayLine,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};

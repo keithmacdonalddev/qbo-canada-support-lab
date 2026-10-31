@@ -21,7 +21,9 @@ function assertAgentApproval(run) {
 // Called INSIDE the actual accounting-admission transaction. Touching the same
 // document as Pause makes concurrent revocation conflict and be re-read. Receipt
 // settlement never calls this function: an already admitted request must settle.
-async function fenceAgentAuthority({ authority, run, scope, ownerId, actorId, Agents, session }) {
+// lease ({ token, now }) additionally fences the exact business-agent worker lease: a worker whose
+// lease expired or was taken over cannot admit work, even after its own outer checks passed.
+async function fenceAgentAuthority({ authority, run, scope, ownerId, actorId, Agents, session, lease = null }) {
   const value = authority || run?.agentAuthority;
   if (!value) return null;
   const origin = agentAuthority(value);
@@ -32,8 +34,8 @@ async function fenceAgentAuthority({ authority, run, scope, ownerId, actorId, Ag
   // direction 2026-10-29: test-data company; new workflows must not re-ask).
   if (run?.activityBatch && !require('./business-activity-batch').SAVED_POLICIES.has(batchPolicy)) fail('The additional business activity policy is unknown.');
   const Model = Agents || require('../models/BusinessAgent');
-  const current = await Model.findOneAndUpdate({ _id: origin.agentId, environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, ownerId: origin.ownerId, 'settings.monitoring': true, 'settings.autonomous': true, 'grant.id': origin.grantId, 'grant.authorityHash': origin.authorityHash, 'grant.ownerId': origin.ownerId, }, { $inc: { dispatchRevision: 1 } }, { new: true, session }).lean();
-  if (!current) fail('The business agent is paused or its company authorization changed. No new accounting request was admitted.');
+  const current = await Model.findOneAndUpdate({ _id: origin.agentId, environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, ownerId: origin.ownerId, 'settings.monitoring': true, 'settings.autonomous': true, 'grant.id': origin.grantId, 'grant.authorityHash': origin.authorityHash, 'grant.ownerId': origin.ownerId, ...(lease ? { leaseToken: String(lease.token || ''), leaseExpiresAt: { $gt: new Date((lease.now || Date.now)()) } } : {}) }, { $inc: { dispatchRevision: 1 } }, { new: true, session }).lean();
+  if (!current) fail(lease ? 'The business agent is paused, its company authorization changed, or this review lost its worker lease. No new accounting work was admitted.' : 'The business agent is paused or its company authorization changed. No new accounting request was admitted.');
   return origin;
 }
 module.exports = { agentAuthority, sameAuthority, sameAgentLineage, assertAgentApproval, fenceAgentAuthority };

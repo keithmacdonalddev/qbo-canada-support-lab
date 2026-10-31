@@ -31,6 +31,11 @@ const schema = new mongoose.Schema({
   lastError: { type: String, default: null },
   // Consecutive reviews that yielded because company sources could not be refreshed in time; a completed review resets it.
   reviewYields: { type: Number, default: 0, min: 0 },
+  // Durable review cadence (business-agent-cadence.js): Halifax day, reviews started today (ceiling),
+  // no-progress count, progress baseline, frozen day rhythm, and the last decision's kind and reason.
+  cadence: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Set when the owner asks for a review (run now, instructions, a decision response); it outranks the cadence.
+  reviewRequestedAt: { type: Date, default: null },
   codexQuotaClearedAt: { type: Date, default: null },
   codexQuota: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });

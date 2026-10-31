@@ -189,7 +189,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       await touchCoordination(bound, current, session);
       return { reportEvidence, scope, operationId, planHash, actorId, expectedRevision: manifest.expectedRevision, fenceHash: hash({ authorityHash: state.authority.contentHash, manifest, periodControlHash: current.policy.periodControl.contentHash, reportSourceHash: reportFence.sourceHash }) };
     };
-    return createBusinessOperationPlanStore({ ...models, agentAuthority: dependencies.agentAuthority, Agents: dependencies.Agents, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, verifyApproval: ({ run, session }) => readApprovalReports({ models, run, ownerId, session }), loadCandidate: async (_scope, candidateHash, session) => {
+    return createBusinessOperationPlanStore({ ...models, agentAuthority: dependencies.agentAuthority, agentLease: dependencies.agentLease || null, Agents: dependencies.Agents, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, verifyApproval: ({ run, session }) => readApprovalReports({ models, run, ownerId, session }), loadCandidate: async (_scope, candidateHash, session) => {
       const row = await read(models.Candidates, { ...scope, candidateHash }, session);
       if (!row || hash(row.payload) !== candidateHash || !row.auditId) fail('The exact server-prepared candidate is unavailable.');
       await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: row.payload, session, fence: true });
@@ -282,7 +282,10 @@ function createBusinessGovernanceService(dependencies = {}) {
         if (prepared.continuity) fail('A continuing business revision cannot yet exclude follow-ups of adopted history.');
         prepared.limitations = [...(prepared.limitations || []), excluded.size + ' scheduled follow-ups of adopted import history were not prepared. Their obligations stay open in QuickBooks for separate handling.'];
       }
-      if (!prepared.steps.length) fail('Nothing schedulable remains in this period after excluding follow-ups of adopted history.');
+      // Zero-activity close (continuous-business plan v2 §3b): a period with nothing schedulable is
+      // not skipped and the cursor never moves directly. It runs the same preparation, approval and
+      // seven-report observation as any period, with no writes, and records why it has no activity.
+      if (!prepared.steps.length) prepared.limitations = [...(prepared.limitations || []), 'No scheduled activity remains in this period. It closes on its report evidence alone, with no QuickBooks records created.'];
     }
     // The owner's published tax choices are resolved structurally here. Their
     // dated rates and exact expected tax are derived independently below.

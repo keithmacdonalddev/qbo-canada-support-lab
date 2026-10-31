@@ -8,7 +8,7 @@ const schema=(properties={},required=[])=>({type:'object',properties,required,ad
 const text={type:'string'}, id={type:'string',pattern:'^[a-f0-9]{24}$'}, digest={type:'string',pattern:'^[a-f0-9]{64}$'};
 const EXTRA_TOOLS = Object.freeze([
   {name:'getBusinessDecision',description:'Read the full retained evidence and owner response for one exact decision summarized in the operating context.',input_schema:schema({decisionId:id},['decisionId'])},
-  {name:'getBusinessState',description:'Inspect current synchronization, published policy, retained work, accounting checks, owner decisions and blockers before acting. The usage field shows token totals, estimated API spend (USD), monthly owner caps and ChatGPT plan-limit/reset status. Usage is read-only; only the owner can change limits.',input_schema:schema()},
+  {name:'getBusinessState',description:'Inspect current synchronization, published policy, retained work, accounting checks, owner decisions and blockers before acting. today shows the day’s activity target (about 150 records on weekdays, 30 on Saturday), what QuickBooks already received, work in progress, the daily ceiling and the due slot; calendarClose names the next period to close; unfinishedOperations lists your approved work that must finish first; dueObligations counts adopted invoices and bills now due. The usage field shows token totals, estimated API spend (USD), monthly owner caps and ChatGPT plan-limit/reset status. Usage is read-only; only the owner can change limits.',input_schema:schema()},
   {name:'getBusinessWork',description:'Read the complete business work list: what you (the accountant) own, what is blocked and why, which QuickBooks features still need to be used, and the few items only the owner can do. Treat accountant-owned items as your responsibility.',input_schema:schema()},
   {name:'getObligations',description:'Read currently mirrored unpaid invoices or bills with dates and amounts. Results are explicitly provisional when source synchronization is incomplete.',input_schema:schema({area:{type:'string',enum:['receivables','payables']},overdueOnly:{type:'boolean'},limit:{type:'integer',minimum:1,maximum:50}},['area'])},
   {name:'inspectBusinessOperation',description:'Read the immutable saved accounting plan and its retained verification/recovery state.',input_schema:schema({operationId:id,offset:{type:'integer',minimum:0,maximum:1000}},['operationId'])},
@@ -39,8 +39,40 @@ function validateArguments(value,definition,path='input') {
   }
 }
 function operationAllowed(run,row) {const origin=run?.agentAuthority;return Boolean(run&&String(run.createdBy)===String(row.ownerId)&&origin?.version===1&&origin.agentId===String(row._id)&&origin.grantId===row.grant?.id&&origin.authorityHash===row.grant?.authorityHash&&origin.ownerId===String(row.ownerId));}
-function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase,coverageFor=()=>null,usageFor=async()=>({unavailable:true})}={}) {
+// Same-day activity limits (continuous-business plan v2 §3c). todayFor({fresh}) returns today's counted
+// activity (business-agent-cadence.summarizeToday) or {unavailable:true}; without it no limit applies.
+// Limits apply only to discretionary slices: obligations (adopted collections and payments,
+// receiving, corrections, list additions) and recovery of existing work are never limited.
+function todayLimit(today){
+  if(today.unavailable)fail('Today’s activity count could not be read, so no same-day batch was started. The next review continues.');
+  if(!today.target)fail('The business is closed today ('+today.label+'), so no same-day activity is prepared. Standing work resumes on the next business day.');
+  if(today.ceilingReached)fail('Today’s activity ceiling of '+today.ceiling+' records is reached ('+today.saved+' in QuickBooks, '+today.reserved+' in progress). Same-day activity resumes tomorrow.');
+}
+function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase,coverageFor=()=>null,usageFor=async()=>({unavailable:true}),todayFor=null,lease=null,requestsFor=null}={}) {
+  const cadence=require('./business-agent-cadence');
   const native=readTools||require('./ai-tools');
+  const forgetToday=()=>{if(typeof store?.forgetToday==='function')store.forgetToday();};
+  // Unfinished operations of this grant, whether or not they hold the calendar slot. While one exists
+  // no new period or batch is prepared or approved: it is recovered first, so a calendar close never
+  // passes a date an approved plan still targets.
+  // lease ({ token, now }) is fenced inside the governed prepare and approval transactions.
+  const governed=origin=>governanceFor(origin,origin?lease:null);
+  async function unfinished(){
+    if(typeof store?.unfinishedRuns!=='function'||!row.grant)return [];
+    return (await store.unfinishedRuns(scope,String(row._id),{id:row.grant.id,authorityHash:row.grant.authorityHash})).filter(run=>run.agentAuthority?.grantId===row.grant?.id&&run.agentAuthority?.authorityHash===row.grant?.authorityHash);
+  }
+  // Only work that can be continued, or that saved records outside the calendar slot, blocks new work.
+  // Unsent work outside the slot is retired by the worker through the governed retirement.
+  // Enforced daily QuickBooks request budget for new discretionary slices only (read fresh from the meter).
+  async function requireRequestBudget(){
+    if(typeof requestsFor!=='function')return;
+    const budget=cadence.requestBudget(await requestsFor().catch(()=>null));
+    if(budget.reached)fail(budget.unavailable?'Today\u2019s QuickBooks request count could not be read, so no new same-day sales or expenses were started. Recovery, obligations and calendar closes continue.':'Today\u2019s QuickBooks request budget of '+budget.limit.toLocaleString('en-CA')+' is used ('+budget.used.toLocaleString('en-CA')+' requests). New same-day sales and expenses resume after midnight UTC; recovery, obligations and calendar closes continue.');
+  }
+  async function requireNoUnfinished(except=null){
+    const open=(await unfinished()).filter(run=>run.operationId!==except&&run.disposition!=='unsent');
+    if(open.length)fail(open[0].disposition==='stranded'?'Your operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') stopped outside the calendar after saving records. It must be continued before new periods or batches; that recovery capability is not available yet, so record it and continue independent work.':'Finish your unfinished operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') first with resumeBusinessOperation; new periods and batches wait until it is done.');
+  }
   const definitions=[...native.toolDefinitions.filter(tool=>READ_NAMES.includes(tool.name)),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation'].includes(tool.name))];
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0;
   async function readClient(reportsOnly=false){
@@ -62,7 +94,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     if(READ_NAMES.includes(name))result=await native.toolHandlers[name](input,{qbo:await readClient(name==='runReport'),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}});
     else if(name==='getBusinessDecision')result={success:true,data:await store.decision(row,input.decisionId)};
     else if(name==='getBusinessWork'){const business=await store.business(scope);result={success:true,data:require('./business-agent-work').businessWork({usage:await usageFor(),settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:require('./business-agent-service').publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};}
-    else if(name==='getBusinessState')result={success:true,data:{usage:await usageFor(),business:await store.business(scope),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities()}};
+    else if(name==='getBusinessState'){const business=await store.business(scope);result={success:true,data:{usage:await usageFor(),business,unfinishedOperations:(await unfinished()).filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),...(typeof store.dueObligations==='function'?{dueObligations:await store.dueObligations(scope,businessDate(new Date(now())))}:{}),...(typeof todayFor==='function'?{today:await todayFor(),calendarClose:cadence.nextClose(business,businessDate(new Date(now())))}:{}),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities()}};}
     else if(name==='getObligations'){
       const today=businessDate(new Date(now())),entity=input.area==='receivables'?'Invoice':'Bill';
       const rows=await store.models.Records.find({...scope,entity,deleted:false,'summary.balanceCents':{$gt:0},...(input.overdueOnly?{'summary.dueDate':{$lt:today}}:{})}).select('entity qboId summary lastObservedAt').sort({'summary.dueDate':1,_id:1}).limit(input.limit||20).maxTimeMS(3000).lean();
@@ -77,23 +109,55 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     else if(name==='prepareBusinessActivity'){
       const batch = require('./business-activity-batch'); batch.validateChoices(input);
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
+      await requireNoUnfinished();
+      if(typeof todayFor==='function'&&cadence.isSlice(input.activities)){
+        const today=await todayFor({fresh:true});todayLimit(today);await requireRequestBudget();
+        // A scheduled slice takes the server-owned identity of today's due slot, so a repeated
+        // review reuses that slot's batch instead of creating duplicate logical work.
+        {
+          const prepared=(today.open||[]).find(run=>run.status==='previewed');
+          if(!today.dueSlot&&prepared)fail('Today’s slot already has a prepared batch (operation '+prepared.operationId+'). Inspect and execute that exact plan instead of preparing another.');
+          if(!today.dueSlot)fail('No same-day activity slot is due now'+(today.nextSlotAt?'; the next one opens at '+cadence.localTime(today.nextSlotAt)+' (Halifax)':'; today’s slots are finished')+'. Today: '+today.target+' planned, '+today.saved+' in QuickBooks, '+today.reserved+' in progress. Receiving orders, settling adopted obligations, corrections and list additions remain available.');
+          input={...input,decisionKey:today.dueSlot.decisionKey};
+        }
+      }
       await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)};
-      result={success:true,data:await governanceFor(origin).prepareActivityBatch(user,input,{signal})};
+      try{result={success:true,data:await governed(origin).prepareActivityBatch(user,input,{signal})};}finally{forgetToday();}
     }else if(name==='prepareBusinessPeriod'){
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
+      await requireNoUnfinished();
       const from=business.verifiedThrough?shift(business.verifiedThrough,1):business.openingDate;
-      if(!from||input.throughDate<from||input.throughDate>=businessDate(new Date(now()))||date(input.throughDate)-date(from)>30*86400000)fail('Choose the next uninterrupted period through yesterday, at most 31 days; keep today open for hourly activity.');
+      if(!from||input.throughDate<from||input.throughDate>=businessDate(new Date(now()))||date(input.throughDate)-date(from)>30*86400000)fail('Choose the next uninterrupted period through yesterday, at most 31 days; keep today open for same-day activity.');
+      // Financial proof covers one calendar month: never prepare across a month-end.
+      if(input.throughDate.slice(0,7)!==from.slice(0,7))fail('Close one calendar month at a time: prepare through '+cadence.monthEnd(from)+' first, then continue with the next month.');
       await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)};
-      result={success:true,data:await governanceFor(origin).prepare(user,{requestKey:hash({agentId:row._id,grantId:row.grant.id,passId,throughDate:input.throughDate}),throughDate:input.throughDate},{signal})};
+      result={success:true,data:await governed(origin).prepare(user,{requestKey:hash({agentId:row._id,grantId:row.grant.id,passId,throughDate:input.throughDate}),throughDate:input.throughDate},{signal})};
     }else if(name==='executeBusinessPeriod'){
       await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only exact retained plans belonging to this agent grant can be executed.');
+      if(run.status==='previewed')await requireNoUnfinished(String(run._id));
+      // Capacity admission for a new same-day slice: fresh counts (no cache), checked immediately
+      // before approval. The agent's exclusive lease is the fence: guard(true) re-verifies it before
+      // approve, and only the lease holder admits batches for this agent. Obligations and recovery
+      // of partially posted work (resumeBusinessOperation) are never limited.
+      if(run.activityBatch&&run.status==='previewed'&&typeof todayFor==='function'&&cadence.isSlice(run.activityBatch.activities)){
+        const today=await todayFor({fresh:true});
+        if(today.unavailable)fail('Today’s activity count could not be read, so this batch was not started. The next review continues.');
+        if(run.activityBatch.day===today.day){
+          // Native creates come from the saved plan (manifest.createCount), never from the model's estimate.
+          const counted=today.reservedByRun?.[String(run._id)],planned=today.plannedByRun?.[String(run._id)]??counted??(Number(run.recordCount)||0),projected=today.saved+today.reserved-(counted||0)+planned;
+          // One slice carries at most twice its slot's share (today.sliceCap).
+          if(Number.isSafeInteger(today.sliceCap)&&planned>today.sliceCap)fail('This batch plans '+planned+' new records, more than this slot\u2019s allowance of '+today.sliceCap+'. It was not approved. Prepare a smaller batch (fewer activities) for this slot.');
+          if(projected>today.ceiling)fail('This batch would take today to '+projected+' records, over its ceiling of '+today.ceiling+'. Prepare a smaller batch in the next slot.');
+          await requireRequestBudget();
+        }
+      }
       const origin=run.agentAuthority;await store.event(row,'plan-decision','Main accountant approved business activity',input.reason.slice(0,3000),{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,authorityHash:row.grant.authorityHash,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'approve'}),role);
-      await guard(true);await governanceFor(origin).approve(user,input.operationId,{planHash:input.planHash,...(scope.environment==='production'?{confirmProduction:true}:{})});
-      await guard(true);result={success:true,data:await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'execute'})})};
+      await guard(true);await governed(origin).approve(user,input.operationId,{planHash:input.planHash,...(scope.environment==='production'?{confirmProduction:true}:{})});
+      await guard(true);try{result={success:true,data:await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'execute'})})};}finally{forgetToday();}
     }else if(name==='resumeBusinessOperation'){
       await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only the exact retained operation belonging to this standing grant can resume.');
       if(input.reason.trim().length<20||input.reason.length>2000)fail('Record the exact recovery reason in 20–2000 characters.',400);
-      const governor=governanceFor(run.agentAuthority);
+      const governor=governed(run.agentAuthority);
       if(run.status==='stopped'){const reviewed=await governor.reviewResume(user,input.operationId,{planHash:input.planHash});await guard(true);await governor.resume(user,input.operationId,{planHash:input.planHash,reviewHash:reviewed.reviewHash,reason:input.reason.trim()});}
       else if(!['approved','reserved','running','blocked','awaiting-evidence'].includes(run.status))fail('This operation is not awaiting a supported continuation.');
       await guard(true);await store.event(row,'plan-decision','Main accountant continued retained business work',input.reason,{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'resume',revision:run.executionRevision||0}),role);

@@ -4,6 +4,7 @@ const SPECIALISTS = Object.freeze(['receivables', 'payables', 'inventory']);
 const DEFAULT_SETTINGS = Object.freeze({ monitoring: false, autonomous: false, syncIntervalSeconds: 30, decisionIntervalMinutes: 60, instructions: '', specialists: [], monthlyCaps: { apiUsd: null, tokens: null } });
 const COMMANDS = Object.freeze(['enable-monitoring','enable-autonomy','pause','resume','stop-monitoring','run-now','sync-now','save-instructions','configure-specialists','configure','respond-decision','configure-usage','retry-plan-limit']);
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
+const REVIEW_REQUESTS = new Set(['run-now', 'save-instructions', 'respond-decision', 'resume', 'enable-autonomy', 'retry-plan-limit']);
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_AGENT_UNAVAILABLE' }); }
 function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) fail('Use the exact business-agent control without company or authority overrides.', 400); }
 function validateControl(input) {
@@ -50,6 +51,9 @@ function reduceControl(row, input, business, clock, ownerId) {
     case 'respond-decision': if(settings.autonomous)changes.nextDecisionAt=now; break;
     default: fail('Unsupported business control.',400);
   }
+  // A review the owner asked for runs ahead of the cadence's actionable-work filter (never past the
+  // daily ceiling). Settings changes only re-check the cadence; they are not review requests.
+  if (changes.nextDecisionAt && REVIEW_REQUESTS.has(input.command)) changes.reviewRequestedAt = now;
   return { ...changes, settings, nextWakeAt: now, lastError: null };
 }
 function businessBlockers({ calendar, writer, job, run, policy }) {

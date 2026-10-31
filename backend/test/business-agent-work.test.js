@@ -222,3 +222,40 @@ test('rightNow shows the live review with its latest steps, newest first, only f
   assert.equal(stale.startedAt, pass.startedAt);
   assert.equal(rightNow({ ...live, reviewing: true, activePass: pass, settings: { monitoring: true, autonomous: false } }).state, 'reviewing', 'a review already running is shown as running');
 });
+
+// Continuous-business Phase 1: today's activity and calendar catch-up are visible accountant work.
+const cadenceModule = require('../src/modules/business-agent-cadence');
+const friday = cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2026-10-30'), now: Date.parse('2026-10-30T17:15:00Z'),
+  runs: [{ id: 'r1', status: 'verified', decisionKey: 'slot-20261030-r1-s1', createdAt: 0, createCount: 7 }, { id: 'r2', status: 'running', decisionKey: 'slot-20261030-r1-s2', createdAt: 0, createCount: 5 }],
+  receipts: [...Array.from({ length: 7 }, (_, i) => ({ operationId: 'r1', entity: 'invoice', logicalKey: 'a' + i })), { operationId: 'r2', entity: 'invoice', logicalKey: 'b' }] });
+test('today’s activity states planned, saved, verified and in-progress counts and the next slot', () => {
+  assert.equal(friday.saved, 8);
+  const work = businessWork({ ...running, today: friday, cadence: { kind: 'idle', reason: 'next activity slot', nextReviewAt: '2026-10-30T17:30:00.000Z' } });
+  const item = byKey(work, 'todays-activity');
+  assert.equal(item.owner, 'accountant');assert.equal(item.state, 'on-duty');
+  assert.equal(item.facts, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
+  assert.match(item.detail, /Activity slot 6 of 10 is due now: about 30 records of genuine business work/);
+  assert.equal(item.next, 'Next review 2:30 PM (next activity slot).');
+  assert.equal(work.needsOwner, 0);
+  const closed = businessWork({ ...running, today: cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2026-11-01'), now: Date.parse('2026-11-01T16:00:00Z') }) });
+  assert.match(byKey(closed, 'todays-activity').detail, /closed today/);
+});
+test('a calendar behind yesterday shows what is closed, what is closing and when it tries next', () => {
+  const calendarClose = cadenceModule.nextClose({ verifiedThrough: '2026-10-27' }, '2026-10-30');
+  const work = businessWork({ ...running, business: { ...running.business, verifiedThrough: '2026-10-27' }, today: friday, calendarClose, cadence: { kind: 'catch-up', reason: 'closing Oct 28–Oct 29', nextReviewAt: '2026-10-30T17:17:00.000Z' } });
+  const item = byKey(work, 'close-calendar');
+  assert.equal(item.state, 'on-duty');
+  assert.match(item.detail, /^Calendar closed through Oct 27 · closing Oct 28–Oct 29 \(2 days behind\)\./);
+  assert.equal(item.next, 'Closing Oct 28–Oct 29 · next try 2:17 PM.');
+  assert.match(byKey(work, 'todays-activity').detail, /starts once the calendar is closed through yesterday/);
+  const held = businessWork({ ...running, business: { ...running.business, verifiedThrough: '2026-10-27' }, calendarClose, cadence: { kind: 'held', reason: 'held: a QuickBooks request needs recovery' } });
+  assert.equal(byKey(held, 'close-calendar').state, 'blocked');
+});
+test('rightNow carries the Today line, the cadence reason and any calendar lag', () => {
+  const view = rightNow({ ...live, today: friday, cadence: { kind: 'idle', reason: 'business hours' } });
+  assert.equal(view.today.line, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
+  assert.deepEqual(view.cadence, { kind: 'idle', reason: 'business hours' });assert.equal(view.calendar, null);
+  const behind = rightNow({ ...live, calendarClose: cadenceModule.nextClose({ verifiedThrough: '2026-10-28' }, '2026-10-30') });
+  assert.deepEqual(behind.calendar, { closedThrough: 'Oct 28', closing: 'Oct 29', behindDays: 1 });
+  assert.equal(rightNow({ ...live }).today, null, 'missing data omits the line');
+});

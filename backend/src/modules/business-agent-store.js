@@ -8,12 +8,13 @@ function loadModels() { return {
   Users:require('../models/User'), Connections:require('../models/Connection'), Memberships:require('../models/CompanyMembership'), Audits:require('../models/AuditLog'),
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
+  Plans:require('../models/OperationPlan'), Receipts:require('../models/QboWriteReceipt'), Steps:require('../models/OperationStep'),
 }; }
-const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000;
+const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000,TODAY_TTL_MS=10000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});
 const publicEvent=row=>({id:String(row._id),kind:row.kind,role:row.role,title:row.title,detail:row.detail,at:new Date(row.at).toISOString(),...(row.data||{})});
 function createBusinessAgentStore({models=loadModels(),connection=require('mongoose').connection,transaction=createBusinessTransaction(connection),now=()=>Date.now()}={}) {
-  const {Agents,Events}=models;const completedCounts=new Map(),factCache=new Map();
+  const {Agents,Events}=models;const completedCounts=new Map(),factCache=new Map(),todayCache=new Map();
   const get=(scope,session)=>Agents.findOne(scope).session(session).maxTimeMS(3000).lean();
   async function setup(){ for(const Model of [Agents,Events,models.Records]){await Model.createCollection();await Model.createIndexes();} }
   async function event(row,kind,title,detail='',data={},session,key=randomUUID(),role='accountant') {
@@ -96,18 +97,78 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     factCache.set(key,{at:now(),value});
     return value;
   }
-  async function openAdopted(scope){
+  async function openAdopted(scope,dueBy=null){
     const calendar=await models.Calendars.findOne(scope).select('adoption').maxTimeMS(3000).lean(),adoption=calendar?.adoption;
     if(adoption?.kind!=='adopted-history'||!adoption.jobId)return null;
     const job=await models.Jobs.findOne({_id:adoption.jobId}).select('status authorityHash').maxTimeMS(3000).lean();
     if(job?.status!=='adopted')return null;
     const Records=models.PopulationRecords||require('../models/BusinessPopulationRecord');
-    const mirrored=await models.Records.find({...scope,entity:{$in:['Invoice','Bill']},deleted:false,'summary.balanceCents':{$gt:0}}).select('entity qboId summary.balanceCents').limit(2000).maxTimeMS(3000).lean();
+    const mirrored=await models.Records.find({...scope,entity:{$in:['Invoice','Bill']},deleted:false,'summary.balanceCents':{$gt:0},...(dueBy?{'summary.dueDate':{$lte:dueBy}}:{})}).select('entity qboId summary.balanceCents').limit(2000).maxTimeMS(3000).lean();
     if(mirrored.length>=2000)return null;
     const imported=mirrored.length?await Records.find({...scope,authorityHash:job.authorityHash,state:'saved',entity:{$in:['Invoice','Bill']},qboId:{$in:mirrored.map(row=>row.qboId)},...(adoption.importedThrough?{txnDate:{$lte:adoption.importedThrough}}:{}),'financialProof.matchesFinancialIntent':true,'relationshipCheck.outcome':{$ne:'error'}}).select('entity qboId').limit(2000).maxTimeMS(3000).lean():[];
     const owned=new Set(imported.map(row=>row.entity+':'+row.qboId)),total={invoices:{count:0,cents:0},bills:{count:0,cents:0}};
     for(const row of mirrored)if(owned.has(row.entity+':'+row.qboId)){const bucket=row.entity==='Invoice'?total.invoices:total.bills;bucket.count+=1;bucket.cents+=Number(row.summary?.balanceCents)||0;}
     return total;
+  }
+  // Today's accountant-owned same-day batches and their saved native create receipts
+  // (saved records only, no QuickBooks calls). Counted by business-agent-cadence.summarizeToday.
+  // fresh:true bypasses the short display cache: write admission always reads current counts.
+  async function todayActivity(scope,agentId,day,{fresh=false}={}){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(day||'')||!agentId)throw new Error('Choose a business day.');
+    const key=hash({scope,agentId,day}),cached=todayCache.get(key);
+    if(!fresh&&cached&&now()-cached.at<TODAY_TTL_MS)return cached.value;
+    const since=new Date(Date.parse(day+'T00:00:00Z')-2*86400000);
+    const rows=await models.Runs.find({environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,createdAt:{$gte:since},'activityBatch.day':day,'agentAuthority.agentId':agentId}).select('_id status planId createdAt recordCount activityBatch.decisionKey').sort({createdAt:-1}).limit(200).maxTimeMS(3000).lean();
+    const open=rows.filter(row=>!['verified','retired'].includes(row.status)),plans=new Map();
+    if(open.length)for(const plan of await models.Plans.find({_id:{$in:open.map(row=>row.planId)},environment:scope.environment,realmId:scope.realmId}).select('_id manifest.createCount').limit(200).maxTimeMS(3000).lean())plans.set(String(plan._id),plan.manifest?.createCount);
+    const receipts=rows.length?await models.Receipts.find({environment:scope.environment,realmId:scope.realmId,kind:'business',operation:'create',state:'saved',operationId:{$in:rows.map(row=>row._id)}}).select('operationId entity logicalKey').limit(5000).maxTimeMS(3000).lean():[];
+    const value={runs:rows.map(row=>({id:String(row._id),status:row.status,decisionKey:row.activityBatch?.decisionKey||null,createdAt:new Date(row.createdAt).getTime(),recordCount:row.recordCount,createCount:plans.get(String(row.planId))})),receipts:receipts.map(row=>({operationId:String(row.operationId),entity:row.entity,logicalKey:row.logicalKey}))};
+    if(todayCache.size>=50)todayCache.clear();
+    todayCache.set(key,{at:now(),value});
+    return value;
+  }
+  // Drop cached counts after a same-day batch is prepared or queued, so the page and the next check see it.
+  function forgetToday(){todayCache.clear();}
+  // Unfinished operations this agent approved, independently of whether they hold the calendar slot:
+  // an approved plan whose queueing failed is not the calendar's current operation but still needs recovery.
+  // grant ({ id, authorityHash }) filters inside the query, so older grants can never hide current work.
+  // Each run gets a disposition from saved records only:
+  //   active   - executing or queued (poll it)
+  //   continue - holds the calendar/writer slot, or is approved/reserved and only needs queueing
+  //   stranded - stopped/blocked outside the slot with saved effects: keeps blocking until continued
+  //   unsent   - stopped/blocked outside the slot with no receipt or saved effect: retire it (governed)
+  const UNFINISHED=['approved','reserved','running','blocked','stopped','awaiting-evidence','committing'];
+  async function unfinishedRuns(scope,agentId,grant=null){
+    if(!agentId)return [];
+    const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,status:{$in:UNFINISHED},...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
+    const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending nextOrdinal').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
+    if(!rows.length)return [];
+    const calendar=models.Calendars?await models.Calendars.findOne(scope).select('currentOperationId').maxTimeMS(3000).lean():null;
+    const writer=models.Writers?await models.Writers.findOne({environment:scope.environment,realmId:scope.realmId}).select('operationId').maxTimeMS(3000).lean():null;
+    const holders=new Set([calendar?.currentOperationId,writer?.operationId].filter(Boolean).map(String));
+    const out=[];
+    for(const row of rows){
+      const id=String(row._id),pending=row.executionRequest?.pending===true,holds=holders.has(id);
+      let disposition=['running','committing'].includes(row.status)||pending?'active':holds||['approved','reserved'].includes(row.status)?'continue':null;
+      if(!disposition){
+        // Same evidence the governed retirement checks: any transport receipt or non-claimed/dispatched step is a saved effect.
+        const receipt=models.Receipts?await models.Receipts.exists({environment:scope.environment,realmId:scope.realmId,operationId:row._id}).maxTimeMS(3000):null;
+        const effect=receipt||!models.Steps?true:await models.Steps.exists({environment:scope.environment,realmId:scope.realmId,operationId:row._id,$or:[{state:{$ne:'claimed'}},{dispatch:{$ne:null}},{receipt:{$ne:null}},{qboId:{$ne:null}}]}).maxTimeMS(3000);
+        disposition=effect?'stranded':'unsent';
+      }
+      out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,agentAuthority:row.agentAuthority||null,executionPending:pending,completedRecords:row.nextOrdinal||0,holdsSlot:holds,disposition});
+    }
+    return out;
+  }
+  // Due obligations from saved records only (no QuickBooks reads): open invoices and bills from the
+  // adopted import history whose due date is today or earlier. Cached briefly; null when unknown.
+  async function dueObligations(scope,day){
+    const key=hash({scope,day,kind:'due'}),cached=factCache.get(key);
+    if(cached&&now()-cached.at<FACT_TTL_MS)return cached.value;
+    let value=null;try{const open=await openAdopted(scope,day);value=open?{invoices:open.invoices.count,bills:open.bills.count,count:open.invoices.count+open.bills.count}:null;}catch{value=null;}
+    if(factCache.size>=50)factCache.clear();
+    factCache.set(key,{at:now(),value});
+    return value;
   }
   async function events(row){const rows=await Events.find({agentId:String(row._id)}).sort({at:-1,_id:-1}).limit(40).maxTimeMS(3000).lean();return rows.map(publicEvent);}
   async function decisions(row){
@@ -134,7 +195,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   // Best-effort live review steps: fenced to the live lease and its exact pass, never bumps the owner revision.
   async function progress(row,token,passId,steps){return Agents.updateOne({_id:row._id,...scopeOf(row),leaseToken:token,'reviewProgress.passId':passId,leaseExpiresAt:{$gt:new Date(now())}},{$set:{'reviewProgress.steps':require('./business-agent-progress').cleanSteps(steps)}}).maxTimeMS(2000);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
-  async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,scopeOf};
+  async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.activities.type').maxTimeMS(3000).lean();}
+  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};
