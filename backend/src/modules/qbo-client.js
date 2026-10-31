@@ -269,7 +269,7 @@ class QBOClient {
     const endpointType = String(endpoint).split(/[/?]/)[0] || 'unknown';
 
     let response;
-    let reachedApiCall = false, localReadFailure = false;
+    let reachedApiCall = false, localReadFailure = false, requestCategory = null;
     try {
       await this.ensureFreshToken();
 
@@ -312,11 +312,14 @@ class QBOClient {
       // itself (QBO 5xx or a network failure), which intuit-oauth rejects
       // rather than resolves.
       reachedApiCall = true;
+      requestCategory = this._meterRequest(method, endpoint, 'attempts');
       // Observe the synchronous SDK invocation, including a synchronous throw.
       // The admission budget stays separate: abort may win after admission.
       try { response = this.oauthClient.makeApiCall(opts); }
       finally { if (control?.onSdkAttempt) try { const observed = control.onSdkAttempt(); observed?.catch?.(() => {}); } catch { /* A metrics observer cannot alter transport authority or its result. */ } }
       response = await response;
+      // Count the transport response before any caller-side cancellation check can discard it.
+      if (requestCategory && typeof response?.status === 'number' && response.status >= 200 && response.status < 300) this._meterRequest(method, endpoint, 'succeeded', requestCategory);
       if (control) {
         if (typeof response?.status === 'number' && response.status >= 400) {
           const fault = this._extractFaultMessage(response), error = new Error('QBO API error (HTTP ' + response.status + ')' + (fault ? ': ' + fault : ''));
@@ -580,6 +583,16 @@ class QBOClient {
   }
 
   // ---------- Internal helpers ----------
+
+  // Daily QuickBooks request measurement (counts only). Never throws or delays the request.
+  _meterRequest(method, endpoint, kind, category) {
+    try {
+      const meter = this.requestMeter || require('./qbo-request-meter').getQboRequestMeter();
+      const resolved = category || require('./qbo-request-meter').categorize(method, endpoint);
+      meter.record({ environment: config.qbo.environment, realmId: String(this.realmId || ''), connectionId: String(this.connection?._id || '') }, resolved, kind);
+      return resolved;
+    } catch { return null; }
+  }
 
   _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));

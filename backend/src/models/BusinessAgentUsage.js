@@ -19,7 +19,9 @@ const schema = new mongoose.Schema({
   estimatedCostUsd: { type: Number, min: 0, default: null },
   startedAt: { type: Date, required: true, immutable: true },
   finishedAt: { type: Date, default: null },
-  outcome: { type: String, required: true, enum: ['running', 'usage-unknown', 'completed', 'incomplete', 'failed', 'cancelled', 'plan-limit', 'cap-reached'] },
+  outcome: { type: String, required: true, enum: ['running', 'usage-unknown', 'completed', 'incomplete', 'yielded', 'failed', 'cancelled', 'plan-limit', 'cap-reached'] },
+  // The review pass this attempt belongs to; the attempt id is this row's _id and appears on its terminal event.
+  passId: { type: String, maxlength: 64, default: null },
   resetAt: { type: Date, default: null },
 }, { autoCreate: false, autoIndex: false, strict: 'throw' });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, startedAt: -1 });

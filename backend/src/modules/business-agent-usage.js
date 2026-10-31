@@ -56,6 +56,18 @@ function reviewPause(usage, settings = {}, quota = null, clock = Date.now(), pro
   if (quota && provider !== 'anthropic' && (!quota.resetAt || Date.parse(quota.resetAt) > clock)) return { code: 'plan-limit', title: 'ChatGPT plan limit reached', detail: quota.resetAt ? 'Codex reviews will resume after the plan resets.' : 'Codex did not supply a reset time. After your plan resets, choose Check plan again.', resetAt: quota.resetAt || null };
   return null;
 }
+// One terminal outcome per review attempt, shared by the usage row and the review's event so they agree.
+const REVIEW_OUTCOMES = Object.freeze(['completed', 'incomplete', 'yielded', 'failed', 'cancelled', 'plan-limit', 'cap-reached']);
+function reviewOutcome({ failure = null, result = null, aborted = false } = {}) {
+  if (failure) {
+    if (REVIEW_OUTCOMES.includes(failure.reviewOutcome)) return failure.reviewOutcome;
+    if (failure.code === 'CODEX_SUBSCRIPTION_LIMIT') return 'plan-limit';
+    if (failure.code === 'BUSINESS_REVIEW_PAUSED') return 'cap-reached';
+    if (failure.code === 'BUSINESS_FRESHNESS_YIELD') return 'yielded';
+    return aborted ? 'cancelled' : 'failed';
+  }
+  return result?.complete ? 'completed' : 'incomplete';
+}
 const STALE_MS = 240000;
 const totals = { _id: null, reviews: { $sum: 1 }, inputTokens: { $sum: '$inputTokens' }, outputTokens: { $sum: '$outputTokens' }, cacheReadTokens: { $sum: '$cacheReadTokens' }, cacheWriteTokens: { $sum: '$cacheWriteTokens' }, totalTokens: { $sum: '$totalTokens' }, estimatedCostUsd: { $sum: '$estimatedCostUsd' }, unpricedReviews: { $sum: { $cond: [{ $and: [{ $eq: ['$provider', 'anthropic'] }, { $eq: ['$estimatedCostUsd', null] }, { $or: [{ $ne: ['$outcome', 'running'] }, { $lt: ['$startedAt', { $subtract: ['$$NOW', STALE_MS] }] }] }] }, 1, 0] } }, missingUsageReviews: { $sum: { $cond: [{ $and: ['$usageMissing', { $or: [{ $ne: ['$outcome', 'running'] }, { $lt: ['$startedAt', { $subtract: ['$$NOW', STALE_MS] }] }] }] }, 1, 0] } } };
 const legacyRow = { $and: [{ $eq: ['$provider', 'codex'] }, { $ne: [{ $ifNull: ['$cacheSplit', false] }, true] }] };
@@ -68,9 +80,10 @@ function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsag
     if (!ready) ready = (async () => { await Usage.createCollection(); await Usage.createIndexes(); })().catch(error => { ready = null; throw error; });
     await ready;
   }
-  async function begin(scope, { provider, model, role, billing }) {
+  async function begin(scope, { provider, model, role, billing, attemptId, passId }) {
     await setup();
-    const record = { _id: randomUUID(), environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId), provider, model, role, billing: provider==='anthropic'?'estimated API cost':billing==='included in plan'?'included in plan':'billing unverified', startedAt: new Date(now()), outcome: 'running', ...normalizeUsage(provider, null), estimatedCostUsd: null };
+    const id = typeof attemptId === 'string' && /^[0-9a-f-]{36}$/.test(attemptId) ? attemptId : randomUUID();
+    const record = { _id: id, passId: typeof passId === 'string' && passId.length <= 64 ? passId : null, environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId), provider, model, role, billing: provider==='anthropic'?'estimated API cost':billing==='included in plan'?'included in plan':'billing unverified', startedAt: new Date(now()), outcome: 'running', ...normalizeUsage(provider, null), estimatedCostUsd: null };
     await Usage.create(record);
     return record;
   }
@@ -97,4 +110,4 @@ function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsag
   }
   return { begin, save, summary };
 }
-module.exports = { createBusinessAgentUsage, normalizeUsage, estimateCost, apiEquivalent, windows, reviewPause };
+module.exports = { createBusinessAgentUsage, normalizeUsage, estimateCost, apiEquivalent, windows, reviewPause, reviewOutcome, REVIEW_OUTCOMES };

@@ -93,3 +93,14 @@ test('summary prices each window and model from grouped rows and retains the cac
  near(result.models[0].apiEquivalent.lowUsd,4.5);assert.equal(result.models[0].legacyInputTokens,undefined);assert.equal(result.models[0].billing,'included in plan');
  const facet=pipeline[1].$facet;assert.ok(facet.todayPricing&&facet.weekPricing&&facet.monthPricing);assert.match(JSON.stringify(facet.models[1].$group.legacyInputTokens),/cacheSplit/);
 });
+test('review outcomes are terminal, shared and stored with the attempt identity',async()=>{
+ const {reviewOutcome,createBusinessAgentUsage:create}=require('../src/modules/business-agent-usage');
+ assert.equal(reviewOutcome({result:{complete:true}}),'completed');assert.equal(reviewOutcome({result:{complete:false}}),'incomplete');
+ assert.equal(reviewOutcome({failure:{code:'BUSINESS_FRESHNESS_YIELD'}}),'yielded');assert.equal(reviewOutcome({failure:{code:'CODEX_SUBSCRIPTION_LIMIT'}}),'plan-limit');
+ assert.equal(reviewOutcome({failure:{code:'BUSINESS_REVIEW_PAUSED'}}),'cap-reached');assert.equal(reviewOutcome({failure:new Error('x'),aborted:true}),'cancelled');assert.equal(reviewOutcome({failure:new Error('x')}),'failed');
+ assert.equal(reviewOutcome({failure:{reviewOutcome:'yielded'},aborted:true}),'yielded','the outcome already saved on the usage row wins');
+ assert.ok(require('../src/models/BusinessAgentUsage').schema.path('outcome').enumValues.includes('yielded'));
+ let created;const usage=create({Usage:{createCollection:async()=>{},createIndexes:async()=>{},create:async value=>{created=value;}}});
+ const attemptId='0f0e0d0c-0b0a-4908-8706-050403020100';await usage.begin({environment:'production',realmId:'123',connectionId:'d'.repeat(24)},{provider:'codex',model:'m',role:'accountant',billing:'included in plan',attemptId,passId:'pass-1'});
+ assert.equal(created._id,attemptId);assert.equal(created.passId,'pass-1');
+});

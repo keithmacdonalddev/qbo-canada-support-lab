@@ -8,11 +8,17 @@ const { createBusinessAgentEngine } = require('./business-agent-engine');
 const { createBusinessAgentTools, businessAgentCapabilities } = require('./business-agent-tools');
 const { businessWork, rightNow } = require('./business-agent-work');
 const { createReviewProgress } = require('./business-agent-progress');
-const { createBusinessAgentUsage, reviewPause } = require('./business-agent-usage');
+const { createBusinessAgentUsage, reviewPause, reviewOutcome } = require('./business-agent-usage');
 const { DEFAULT_SETTINGS, validateControl, reduceControl, fail, ID } = require('./business-agent-policy');
 const { runAsActor } = require('./actor-context');
 const iso=value=>value?new Date(value).toISOString():null;
 const at=value=>value?new Date(value).getTime():0;
+// Bounded source refresh before writes: one allowance per review attempt, never replenished by later checks.
+const FRESHNESS=Object.freeze({requests:40,ms:60000,tickRequests:12});
+// Consecutive freshness yields wait 1, 2, 5, then 15 minutes before the next review; a completed review resets the count.
+const YIELD_RETRY_MINUTES=Object.freeze([1,2,5,15]);
+const yieldDelayMs=count=>YIELD_RETRY_MINUTES[Math.min(Math.max(count,1),YIELD_RETRY_MINUTES.length)-1]*60000;
+const sourceSignature=view=>(view.sources||[]).map(source=>source.entity+':'+source.status+':'+(source.lastSuccessAt||'')).join('|')+'#'+(view.summaryAt||'');
 const safeError=error=>require('./log-diagnostic').redactLogSecrets(/^(BUSINESS_|QBO_)/.test(error?.code||'')?error.message:error?.aiProvider?'The model service could not finish this review. Check the AI connection in Settings.':'The business worker could not finish. Saved records, decisions and cursors are retained.').slice(0,700);
 function publicSync(row,clock){
   const settings={...DEFAULT_SETTINGS,...(row?.settings||{})},view=row?.syncView;
@@ -31,6 +37,7 @@ function createBusinessAgentService(options={}) {
   const makeSync=options.createSync||require('./business-agent-sync').createBusinessAgentSync;
   const execution=options.execution||require('./business-execution-service').getBusinessExecutionService();
   const governanceFor=options.governanceFor||((origin)=>require('./business-governance-service').createBusinessGovernanceService({...(origin?{agentAuthority:origin,Agents:store.models.Agents}:{})}));
+  const requestMeter=options.requestMeter||require('./qbo-request-meter').getQboRequestMeter();
   const coverageFor=options.coverageFor||(scope=>{try{return require('./coverage').getCached(scope.realmId);}catch{return null;}});
   const jobs=new Map();let interval=null,scanPromise=null,closed=false,lastScanError=null;
   const leaseMs=240000,scanMs=5000;
@@ -46,6 +53,7 @@ function createBusinessAgentService(options={}) {
     let business;try{business=await store.business(bound.scope);}catch{business={scope:bound.scope,published:null,unavailable:true,verifiedThrough:null,recordsThrough:null,recordCount:null,currentOperation:null,blockers:[{code:'business-state-unavailable',title:'Business state needs another read',detail:'Saved business evidence could not be read. Current controls and monitoring state remain available.',href:'/company/manage'}]};}
     const settings={...DEFAULT_SETTINGS,...(row?.settings||{}),specialists:[...(row?.settings?.specialists||[])]};
     const sync=publicSync(row,now()),usageState=await usageView(bound.scope,row);
+    let qboRequests;try{qboRequests=await requestMeter.summary(bound.scope);}catch{qboRequests={unavailable:true};}
     const events=row?await store.events(row):[],decisions=row?await store.decisions(row):[];
     await bound.access.authorize(bound.scope,'operations.read');
     const expired=row?.leaseToken&&at(row.leaseExpiresAt)<=now();
@@ -53,7 +61,7 @@ function createBusinessAgentService(options={}) {
     const reviewing=Boolean(row?.leaseToken&&!expired&&row.activePass&&row.status==='reviewing');
     // Duty facts come from saved records only; any failure just omits them.
     let facts=null;if(row&&business.published&&typeof store.workFacts==='function'){try{facts=await store.workFacts(bound.scope);}catch{facts=null;}}
-    return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,configured:Boolean(row),revision:row?.revision||0,settings,
+    return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
       agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':row.status||'ready',summary:row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),memory:row?.memory||'',currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:row?.lastError||lastScanError,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
       sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities(),
       work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts}),
@@ -92,23 +100,69 @@ function createBusinessAgentService(options={}) {
   async function worker(id,controller){
     const token=randomUUID();let row=await store.claim(id,token,leaseMs);if(!row)return;
     const scope=scopeOf(row),ownerId=String(row.ownerId),access=accessFor({actorId:ownerId,ownerId}),user={id:ownerId,actorId:ownerId,role:'supervisor'};
-    let pulse=null,heartbeatFailure=null,heartbeatPending=Promise.resolve();
+    let pulse=null,heartbeatFailure=null,heartbeatPending=Promise.resolve(),syncer=null,pass=null,usageId=null;
+    // Each worker run is one review attempt; its id joins the usage row and the terminal event.
+    const attemptId=randomUUID(),refresh={requests:0,ms:0,ticks:0};
+    const syncFor=async()=>{
+      if(!syncer){const client=await access.resolveClient(scope,{signal:controller.signal});syncer=makeSync({client,scope,Records:store.models.Records,loadState:async()=>row.sync,saveState:async next=>{await update({sync:next});},authorize:async()=>{await guard();},signal:controller.signal,now,intervalMs:row.settings.syncIntervalSeconds*1000});}
+      return syncer;
+    };
+    const syncSlice=async(maxRequests,timeoutMs)=>{const view=await (await syncFor()).tick({maxRequests,...(timeoutMs?{timeoutMs}:{})});await update({syncView:view,nextSyncAt:new Date(now()+(view.status==='current'?row.settings.syncIntervalSeconds*1000:5000))});return view;};
+    const yieldError=detail=>Object.assign(new Error(detail+' Saved work is retained; the accountant continues after the next synchronization.'),{code:'BUSINESS_FRESHNESS_YIELD',status:409});
+    // Bring every required source current within this attempt's refresh allowance, or yield before the write.
+    const freshen=async current=>{
+      let view=publicSync(current,now());
+      const exhausted=()=>yieldError('Company sources could not be brought current within this review’s refresh allowance, so the next write was not started.');
+      while(view.status!=='current'){
+        const left=FRESHNESS.requests-refresh.requests,remainingMs=FRESHNESS.ms-refresh.ms;
+        if(left<1||remainingMs<1000)throw exhausted();
+        const before=sourceSignature(view),started=now(),slice=Math.min(FRESHNESS.tickRequests,left);
+        // Charge the slice's full request allowance so the bound holds however many requests it used.
+        refresh.requests+=slice;refresh.ticks++;
+        // The slice may use only the time left in the allowance.
+        try{await syncSlice(slice,Math.min(120000,Math.floor(remainingMs)));}finally{refresh.ms+=Math.max(0,now()-started);}
+        current=await store.current(row,token);view=publicSync(current,now());
+        if(view.status!=='current'&&sourceSignature(view)===before)throw yieldError('Company sources did not advance during this review’s refresh, so the next write was not started.');
+      }
+      // Recheck before admitting the write: a refresh that overran its time allowance does not admit it.
+      if(refresh.ms>FRESHNESS.ms)throw exhausted();
+      return current;
+    };
+    // guard(): read access. guard('authority'): execute authority and the unchanged grant. guard(true): authority plus current sources, refreshed within the attempt's budget.
     const guard=async(mutating=false)=>{try{
       if(closed||controller.signal.aborted||heartbeatFailure)fail('The business worker was paused or cancelled.');
-      const current=await store.current(row,token);await access.authorize(scope,mutating?'operations.execute':'operations.read',{signal:controller.signal});
-      if(mutating&&publicSync(current,now()).status!=='current')fail('Company sources need to finish synchronizing before autonomous work.');
+      let current=await store.current(row,token);await access.authorize(scope,mutating?'operations.execute':'operations.read',{signal:controller.signal});
       if(mutating&&(!current.settings.autonomous||!current.grant||current.grant.id!==row.grant?.id||current.grant.authorityHash!==row.grant?.authorityHash))fail('Autonomous accounting authority changed.');
+      if(mutating===true)current=await freshen(current);
       return current;
     }catch(error){error.businessAgentFatal=true;throw error;}};
     const update=async changes=>{await guard();row=await store.update(row,token,changes);return row;};
+    // One idempotent finalizer per attempt: the terminal event fixes the outcome, then the usage row and scheduling state follow it.
+    // If the terminal event cannot be saved, the attempt is failed (never completed); later steps never add a second terminal event.
+    let finalized=false,usageRecord=null;
+    const finalize=async({outcome,role='accountant',event=null,apply=null,error=null})=>{
+      if(finalized)return;finalized=true;let final=outcome;
+      const evidence=()=>({passId:pass?.id||null,attemptId,usageId,outcome:final,refresh:{...refresh}});
+      if(event){
+        try{await store.event(row,event.kind,event.title,event.detail,{...evidence(),...(event.data||{})},null,event.key||hash({attemptId,kind:event.kind}),role);}
+        catch{
+          if(['completed','incomplete'].includes(final)){
+            final='failed';
+            try{await store.event(row,'attention','Business review needs attention','The review finished, but its result could not be recorded. Saved records, decisions and cursors are retained; the next review continues.',{...evidence(),href:'/company/manage'},null,hash({attemptId,kind:'attention'}),role);}catch{/* Storage is unavailable; the usage row still records the failure. */}
+          }
+        }
+      }
+      if(usageRecord){try{await usage.save(usageRecord,{outcome:final,finishedAt:new Date(now()),resetAt:error?.quota?.resetAt||null});}catch{/* The engine already saved token totals. */}}
+      if(apply){try{await apply(final);}catch{/* Owner changes and expired leases win; no second terminal outcome is recorded. */}}
+      return final;
+    };
+    const failedState=error=>({status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
       await runAsActor(ownerId,async()=>{
         if(at(row.nextSyncAt)<=now()){
           await update({status:row.settings.autonomous?'monitoring':'paused',currentWork:'Synchronizing company changes'});
-          const client=await access.resolveClient(scope,{signal:controller.signal});
-          const sync=makeSync({client,scope,Records:store.models.Records,loadState:async()=>row.sync,saveState:async next=>{await update({sync:next});},authorize:async()=>{await guard();},signal:controller.signal,now,intervalMs:row.settings.syncIntervalSeconds*1000});
-          const view=await sync.tick({maxRequests:12});await update({syncView:view,nextSyncAt:new Date(now()+(view.status==='current'?row.settings.syncIntervalSeconds*1000:5000))});
+          await syncSlice(12);
         }
         if(!row.settings.autonomous)return;
         if(publicSync(row,now()).status!=='current'){await update({status:'catching-up',summary:'Company monitoring is catching up. The accountant will act after all required sources are current.'});return;}
@@ -117,7 +171,7 @@ function createBusinessAgentService(options={}) {
         const usageState=await usageView(scope,row);
         if(usageState.pause){await update({status:'usage-paused',summary:usageState.pause.detail,currentWork:''});return;}
         await guard(true);
-        const pass=row.activePass&&row.activePass.role===role?row.activePass:{id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
+        pass=row.activePass&&row.activePass.role===role?row.activePass:{id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
         // Each attempt starts a fresh, bounded step list fenced to this pass and lease.
         await update({activePass:pass,status:'reviewing',currentWork:role==='accountant'?'Main accountant is reviewing and managing the business':role+' specialist is reviewing its work',reviewProgress:{passId:pass.id,role,startedAt:new Date(now()).toISOString(),steps:[]}});
         const progressRow=row,progress=createReviewProgress({now,write:steps=>typeof store.progress==='function'?store.progress(progressRow,token,pass.id,steps):undefined});
@@ -125,23 +179,33 @@ function createBusinessAgentService(options={}) {
         const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
         const context={usage:usageState,ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH}).items};
-        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,usage:{begin:details=>usage.begin(scope,details),save:usage.save},beforeModel:async()=>{
-          await guard(true);
+        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
+          // Model calls are not writes: they need authority, not current sources. Write steps refresh sources themselves.
+          await guard('authority');
           const state=await usageView(scope,row);
           if(state.pause)throw Object.assign(new Error(state.pause.detail),{code:'BUSINESS_REVIEW_PAUSED',businessAgentFatal:true});
         }});}finally{await progress.flush();}
-        await guard(true);
-        await store.event(row,role==='accountant'?'review-completed':'specialist-report',role==='accountant'?'Main accountant completed a business review':role+' specialist report',result.summary,{passId:pass.id,toolCalls:result.calls||0,complete:result.complete===true,...(role==='accountant'?{}:{reportsTo:'accountant'})},null,pass.id,role);
+        const outcome=result.outcome||reviewOutcome({result});
         const next=new Date(now()+(result.complete?row.settings.decisionIntervalMinutes:5)*60000);
-        if(role==='accountant')await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:next,status:business.blockers.length?'attention':'ready',activePass:null,lastError:null});
-        else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',summary:result.summary,lastDecisionAt:new Date(now()).toISOString(),nextDecisionAt:next.toISOString()}},nextDecisionAt:new Date(Math.min(at(row.nextDecisionAt)||now(),now()+60000)),activePass:null,status:'ready'});
+        await finalize({outcome,role,event:{kind:role==='accountant'?'review-completed':'specialist-report',title:role==='accountant'?'Main accountant completed a business review':role+' specialist report',detail:result.summary,key:pass.id,data:{toolCalls:result.calls||0,complete:result.complete===true,...(role==='accountant'?{}:{reportsTo:'accountant'})}},apply:async final=>{
+          if(final!==outcome){row=await store.update(row,token,failedState(new Error('The review result could not be recorded.')));return;}
+          if(role==='accountant')await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:next,status:business.blockers.length?'attention':'ready',activePass:null,lastError:null,reviewYields:0});
+          else await update({reviewYields:0,specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',summary:result.summary,lastDecisionAt:new Date(now()).toISOString(),nextDecisionAt:next.toISOString()}},nextDecisionAt:new Date(Math.min(at(row.nextDecisionAt)||now(),now()+60000)),activePass:null,status:'ready'});
+        }});
       });
     }catch(error){
-      if(error.code==='CODEX_SUBSCRIPTION_LIMIT'||error.code==='BUSINESS_REVIEW_PAUSED'){
-        try{row=await store.update(row,token,{status:'usage-paused',summary:error.code==='CODEX_SUBSCRIPTION_LIMIT'?'ChatGPT plan limit reached. New Codex reviews wait for the plan to reset.':error.message,lastError:null,...(error.quota?{codexQuota:{resetAt:error.quota.resetAt,detectedAt:new Date(now()).toISOString()}}:{})});}catch{/* Owner revision wins; usage record retains the outcome. */}
+      // Every attempt ends with exactly one terminal outcome, shared with its usage row when a model session began.
+      const outcome=reviewOutcome({failure:error,aborted:controller.signal.aborted}),role=pass?.role||'accountant';
+      const save=async changes=>{row=await store.update(row,token,changes);};
+      if(outcome==='plan-limit'||outcome==='cap-reached'){
+        await finalize({outcome,role,error,event:pass?{kind:'review-paused',title:'Review paused at a usage limit',detail:outcome==='plan-limit'?'ChatGPT plan limit reached. New Codex reviews wait for the plan to reset.':safeError(error)}:null,apply:()=>save({status:'usage-paused',summary:error.code==='CODEX_SUBSCRIPTION_LIMIT'?'ChatGPT plan limit reached. New Codex reviews wait for the plan to reset.':error.message,lastError:null,...(error.quota?{codexQuota:{resetAt:error.quota.resetAt,detectedAt:new Date(now()).toISOString()}}:{})})});
+      }else if(outcome==='yielded'){
+        // Expected and recoverable: synchronize now and review again after a short, growing wait instead of a blind 5-minute retry.
+        const yields=(Number(row.reviewYields)||0)+1,retryAt=new Date(now()+yieldDelayMs(yields));
+        await finalize({outcome,role,error,event:{kind:'review-yielded',title:'Review paused to refresh company sources',detail:safeError(error),data:{yields,retryAt:retryAt.toISOString()}},apply:()=>save({status:'catching-up',summary:'The accountant stopped before a write because company sources could not be brought current in time. Saved work is retained; the next review follows synchronization.',lastError:null,reviewYields:yields,nextSyncAt:new Date(now()),...(role==='accountant'?{nextDecisionAt:retryAt}:{specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',nextDecisionAt:retryAt.toISOString()}}})})});
       }else{
-      if(!controller.signal.aborted){try{await store.event(row,'attention','Business review needs attention',safeError(error),{href:'/company/manage'},null,hash({passId:row.activePass?.id||token,error:safeError(error)}));}catch{/* Retain the lease/control barrier if event storage is unavailable. */}}
-      try{row=await store.update(row,token,{status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});}catch{/* Owner changes and expired leases win. */}
+        const event=outcome==='cancelled'?(pass?{kind:'review-cancelled',title:'Review stopped before it finished',detail:'The review was paused, cancelled or lost its lease. Saved records, decisions and cursors are retained.'}:null):{kind:'attention',title:'Business review needs attention',detail:safeError(error),data:{href:'/company/manage'}};
+        await finalize({outcome,role,error,event,apply:()=>save(failedState(error))});
       }
     }finally{
       if(pulse)clearInterval(pulse);await heartbeatPending;

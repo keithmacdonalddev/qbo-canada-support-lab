@@ -1,213 +1,156 @@
-# Continuous business activity — plan, 2026-10-30
+# Continuous business activity — plan v2, 2026-10-30
 
 Owner direction (verbatim, 2026-10-30): "this is supposed to be a continual active business. the accountant should be simulating the real business in the qbo account all the time."
 
-Status: plan only. No code, QuickBooks or database changes were made. Facts below come from source reading and read-only MongoDB queries on 2026-10-30 (Production company ending 2856).
+Status: v2 revises v1 (commit 2fec6d0) after an independent review (see Review history). Phase 0 is implemented in source on 2026-10-30; its live proof waits for the next backend reload. Phases 1–4 are plan only. Facts come from source reading and read-only MongoDB queries on 2026-10-30 (Production company ending 2856).
 
 ## In plain English
 
 The business is quiet for three reasons:
 
-1. **The accountant only plans to work once an hour.** After a good review it waits the owner's 60-minute interval, day and night, even when work is overdue.
-2. **Same-day work is locked until yesterday is closed.** The accountant can add today's sales and expenses only after the business calendar is marked verified through yesterday. The calendar has been stuck at Oct 28 since early Oct 30, so nothing could be added for Oct 30. Some of the accountant's reviews then fail on a timing check and retry every 5 minutes. On Oct 30 that meant 65 reviews and 0 new records for the day.
-3. **Nothing says how busy a day should be.** The monthly schedule averages about 9.5 records per calendar day once fully running. Same-day batches have no daily target, so the accountant adds a few records per review, or none.
+1. **The accountant reviews once an hour.** After a good review it waits the owner's 60-minute interval, day and night.
+2. **Same-day work waits for yesterday to close.** The business calendar has been stuck at Oct 28, so nothing could be added for Oct 30. Some reviews also failed a timing check ("sources need to finish synchronizing") and retried every 5 minutes: 65 reviews and 0 new records on Oct 30.
+3. **Nothing says how busy a day should be.** Same-day batches have no daily target.
 
-The fix has four parts:
+The fix, in order:
 
-- **Clock.** A cadence decides when the next review runs: right away while it is catching up, every 15 minutes during business hours, and slower overnight and on weekends.
-- **Daily rhythm.** A target says roughly how many records of each kind a medium-sized business like this makes per weekday, spread across the day.
-- **Catch-up first.** The calendar catches up through yesterday before any same-day work.
-- **Visible progress.** A "Today" line shows planned, done and next slice.
+- **Phase 0 — reviews can actually write (done in source).** A review now refreshes stale company data itself, within a fixed allowance, before it writes. If it cannot, it stops cleanly and tries again shortly. QuickBooks requests are counted per day.
+- **Phase 1 — recovery and catch-up first.** Restart stuck work before anything else, then close the calendar through yesterday (including days with no scheduled activity), then add today's work in small slices with a daily ceiling and a hard review limit.
+- **Phase 2 — a daily rhythm** using only the workflows that exist today.
+- **Phase 3 — measured tuning** of sync and cadence before any acceleration.
+- **Phase 4 — new realism workflows** (invoices on terms, grouped deposits, transfers, accruals).
 
-All existing safety checks stay in place.
+All existing safety checks stay: one writer, protected periods, exact plans, receipts and uncertain-write blocks.
 
-Terms used below:
+Terms:
 
-- **Review (pass):** one bounded model session with tools.
-- **Slice:** one same-day activity batch of at most 12 activities.
+- **Review (attempt):** one bounded model session with tools. Each attempt now has an id shared by its usage row and its final event.
+- **Slice:** one same-day activity batch (at most 12 activities, which can be up to 60 records — a field-service sale expands into five).
 - **Calendar close:** the dated period operation that advances `verifiedThrough`.
+- **Retained work:** an operation that still owns the one-writer slot.
 
 ## 1. Where cadence and volume are decided today
 
 | Control | Where | Current value |
 | --- | --- | --- |
-| Owner decision interval | `backend/src/modules/business-agent-policy.js:4` (default), `:20` (allowed 5–1440 min) | 60 min (Production setting) |
-| Next review after a pass | `business-agent-service.js:135` | complete → +`decisionIntervalMinutes`; incomplete → +5 min |
-| Next review after an error | `business-agent-service.js:144` | +5 min |
-| Owner actions that trigger an immediate review | `business-agent-policy.js:37-50` | run-now, resume, save instructions, configure, respond to decision |
-| Worker scan / lease | `business-agent-service.js:36` | scans every 5 s; 240 s lease |
-| Per-review bounds | `business-agent-service.js:128` | 120 s, 8 model rounds, 24 tool calls |
-| Sync slice | `business-agent-service.js:111` | ≤12 QBO requests per tick; next tick in 30 s if current, else 5 s |
-| Sync sources | `business-agent-sync.js:7,18,75` | 28 sources (TimeActivity every 5 min); a source counts as current for max(2×cadence, 120 s) |
-| Writes require current sync **mid-pass** | `business-agent-service.js:99` (`guard(true)`) | any source older than its window fails the write → attention → 5-min retry |
-| Same-day work requires yesterday closed | `business-governance-service.js:406` | `verifiedThrough === yesterday` and an idle writer |
-| Calendar close bounds | `business-agent-tools.js:85` | next uninterrupted period, through yesterday, ≤31 days |
-| Business day and time zone | `business-activity-preview.js:19` | America/Halifax |
-| Prompt cadence | `business-agent-engine.js:18` | "repeated hourly passes" |
-| Monthly schedule | `business-activity-preview.js:7,46,94` | flagship cohorts 30 field / 15 supply / 25 care, each **monthly** on day `1+(i·5)%28`; 278 (v2) or 288 (v3) records/month ≈ 9.5 per calendar day |
-| Approved volume profile | `docs/discovery/volume-profiles.v1.json` | flagship: 120 customers, 45 vendors, 90 items, 260 txns/month; provisional 6 req/s, 300 req/min |
-| Batch capacity | `business-activity-batch.js:7` (policy v7) | ≤12 activities, qty ≤8, unit ≤ $1,000, expense ≤ $10,000, settlement ≤ $50,000, batch ≤ $120,000 |
-| Daily batch limit | none | No per-day count; the limits are the writer and the yesterday gate |
-| Published blueprint | `BlueprintVersion 90a620e4…` v7 | `volumeProfile: flagship`, opening 2023-09-01, Halifax |
+| Owner decision interval | `business-agent-policy.js:4,20` | 60 min (allowed 5–1440) |
+| Next review after a pass | `business-agent-service.js` worker | complete → +interval; incomplete → +5 min |
+| Worker scan / lease | `business-agent-service.js` | 5 s scan; 240 s lease |
+| Per-review bounds | `business-agent-service.js` | 120 s, 8 rounds, 24 tool calls |
+| Sync slice | `business-agent-sync.js:7`, service | ≤12 requests/tick over 28 sources; 30 s when current, else 5 s; a source is current for max(2×cadence, 120 s) |
+| Same-day gate | `business-governance-service.js:406`, enforced again in `business-activity-batch.js:485` | `verifiedThrough === yesterday` and idle writer |
+| Calendar close bounds | `business-agent-tools.js:85` | next uninterrupted period through yesterday, ≤31 days |
+| Monthly schedule | `business-activity-preview.js` | 278 (template v2) records/month ≈ 9.5/day; v3 (288) is rejected for Production at `:14` |
+| Batch capacity | `business-activity-batch.js:7` (policy v7) | ≤12 activities; not a record cap or a daily limit |
+| Business day | `business-activity-preview.js:19` | America/Halifax |
 
-### What limits volume to 2–9 records per day
+## 2. Review findings that change the design
 
-- **Calendar periods:** Oct 21–28 was one operation with 30 records over 8 days (3.75 per day). This is below the steady-state 9.5 per day. One possible cause, unverified: cohorts that began in the adopted import do not continue in the calendar.
-- **Same-day batches for Oct 29:** batches of 5, 2 and 2 records were verified, and one batch of 4 is still `previewed`. There were none on Oct 30, because Oct 29 is not closed.
-- **Review timing:** reviews ran 65 times on Oct 30. The 15 `attention` events all read "Company sources need to finish synchronizing before autonomous work". The cause is a timing mismatch: a review takes about 56 s and sync does not run during it, so sources go stale under the 120 s window before the write check.
+1. **Recovery must not be skipped.** v1 skipped the model whenever the writer was busy. But an operation can hold the writer while *stopped, blocked or awaiting evidence*, and only the accountant's `resumeBusinessOperation` releases it (`business-agent-tools.js:93`, `business-agent-work.js:89`). `currentOperationId` alone cannot tell "running" from "retained".
+2. **Catch-up can block permanently.** Preparation rejects a period with nothing schedulable (`business-governance-service.js:285`); financial proof needs a period within one calendar month (`business-financial-movements.js:63`); plans cap at 500 creates / 1,000 entries / 8 MB (`business-operation-plan-store.js:9`); retirement refuses operations with receipts or saved effects (`business-operation-retirement.js:16`).
+3. **One sync tick does not guarantee freshness**, and the old write check also ran before every model round and after the engine returned, so a finished model session could fail before its completion event.
+4. **Counting `OperationRun` rows is wrong.** Previews create nothing; `recordCount` can include existing prerequisites; a new `decisionKey` creates new identities for the same intended work (`business-activity-batch.js:280`).
+5. **QBO use is understated.** The sync envelope is up to ~34,560 requests/day at 30 s ticks and ~207,000/day at 5 s ticks. A fresh write-bearing operation can run five seven-report observations (35 report calls) plus queries, stock reads, writes and read-backs (`business-runtime.js:98,117`, `business-period-evidence.js:71`). Intuit's Builder allowance is 500,000 CorePlus calls per workspace per month. The client records a 60 s window only and has no shared rate limiter (`qbo-client.js:290`).
+6. **Budgets arrive too late.** A current calendar with an unmet, unsupported target could invoke the model every 15 minutes forever. Specialists can pull the main review forward. A "budget" that only slows reviews does not bound them.
+7. **Grant renewal was overstated.** Admission accepts governed batch policies known to the code under the existing grant (`business-agent-authority.js:30`).
+8. **v1 targets exceed current workflows.** Same-day sales auto-collect and deposit individually; estimates and time entries ride on field sales; journal roles exclude balance-sheet accounts (`business-activity-batch.js:62`); stock-enabled preparation reads at most 100 verified same-day batches (`business-stock-history.js:28`).
+9. **v1 proof could pass falsely** (imported/manual records counted; spread-across-hours proves distribution, not good accounting).
 
-## 2. Design for a continually active business
+## 3. Design
 
-### a. Adaptive cadence
+### a. Scheduling order (Phase 1)
 
-Add a pure function `nextReviewAt(state)` in a new `business-agent-cadence.js`. It replaces the fixed delays at `business-agent-service.js:135` and `:144`. Inputs:
+Each worker wake classifies the company, in this order:
 
-- the clock in Halifax time;
-- the owner's settings;
-- calendar lag (`verifiedThrough` vs yesterday);
-- today's planned vs done (from §2b);
-- whether the writer is busy;
-- whether the last pass made progress. Progress means the calendar revision, `verifiedThrough` or today's done count changed.
+1. **Active execution** (an operation is running a dispatch): poll it without a model, every 2 min. Native writer admission stays authoritative.
+2. **Retained but inactive** (stopped, blocked, awaiting evidence, approved-not-queued): run a bounded recovery review whose only job is to resume, finish or report that operation.
+3. **Calendar behind** (`verifiedThrough < yesterday`): catch-up review (§3b).
+4. **Today's activity:** a slice review when the rhythm says work is due (§3c).
+5. **Nothing actionable:** no model call; next check at the quiet interval.
 
-| Situation | Next review |
-| --- | --- |
-| Calendar behind and last pass made progress | 2 min |
-| Calendar behind, no progress | back off 5 → 15 → 30 → 60 min, with the reason shown (§2c) |
-| Writer busy (operation running) | re-check in 2 min **without a model call** |
-| Business hours and done < planned-by-now | `activeIntervalMinutes` (default 15) |
-| Business hours, on or ahead of plan | `decisionIntervalMinutes` (owner's 60) |
-| Quiet hours or weekend | `decisionIntervalMinutes`, and the model is skipped when the work list has no actionable accountant item. The first slot after 00:05 closes yesterday. |
-| Plan limit or usage cap | unchanged: pause until reset |
+A new pure module `business-agent-cadence.js` returns `{ kind, nextReviewAt, reason }` from saved state only. It replaces the fixed delays in the worker. Owner run-now keeps priority.
 
-New owner settings, added to the `configure` command in `business-agent-policy.js:20`. Validation follows the existing pattern.
+**No-progress backoff (durable):** progress means `verifiedThrough`, the calendar revision, today's verified creates, or a retained operation's status changed. A pass without progress backs off 5 → 15 → 30 → 60 min, stored on the agent row so restarts keep it, with the reason shown. A completed pass with progress resets it.
 
-- `activeIntervalMinutes`: 5–60, default 15.
-- `businessHours`: default Mon–Fri 08:00–18:00 and Sat 10:00–14:00, Halifax.
-- `activityLevel`: 0.5×, 1× or 2×, default 1×.
+**Actionable-work filter:** permanent duties (for example, "use unused features") are not actionable by themselves. The model is called only for a recovery item, a calendar gap, a due slice the current workflows can fill, or an owner response.
 
-The owner's 60-minute interval stays the quiet interval and the ceiling between business-hour slices. Run-now keeps priority.
+**Hard review ceiling:** at most N model reviews per Halifax day across all roles and failure paths (default 60; specialists count). At the ceiling, due work is retained, the work list says so, and reviews resume automatically at the next Halifax midnight. Existing monthly caps and the plan-limit pause stay.
 
-Change the prompt at `business-agent-engine.js:18` from "hourly" to "small slices across the business day". Add a `context.today` block containing the target, done, due now and next slice. The model picks concrete activities. The server picks timing.
+### b. Calendar catch-up (Phase 1)
 
-### b. Realistic daily volume
+- **Split periods** at month-end and at plan capacity (500 creates / 1,000 entries). Never one operation across a month boundary.
+- **Zero-activity day close.** When a period has nothing schedulable, close it with an evidence-backed empty operation: the same preparation, approval and seven-report observation, recording "no scheduled activity" with its evidence. The cursor never moves directly.
+- **Preparation failure vs partial execution.** If preparation fails, nothing was sent; split smaller and retry. Once any receipt or saved effect exists, the same operation must continue (recovery, §3a step 2). Never retire or replace partially posted work.
+- **Visible lag.** Record `behindDays` and `catchUpStartedAt`; the work list shows "Calendar closed through Oct 28 · closing Oct 29 · <exact blocker> · next try <time>".
 
-These are proposed defaults for a medium-sized Canadian service, project, wholesale and recurring-care business. They assume the flagship scale: 120 customers, 45 suppliers, about 25 staff with time entries. The figures are QBO records per weekday at 1×. Calendar records dated today count toward the target, so same-day slices fill only the remainder.
+### c. Same-day activity (Phases 1–2)
 
-| Area | Records/weekday | Shape across the day |
-| --- | --- | --- |
-| Sales (invoices on terms, settled sales, stock sales) | 10 | 09–17, evenly |
-| Customer payments | 7 | morning mail, midday online |
-| Deposits | 3 | 10:00, 13:00, 16:30, grouping that day's receipts |
-| Estimates | 3 | mornings |
-| Time activities | 6 | end of day (16–18) |
-| Purchase orders / receiving (bill from PO) | 2 / 2 | mornings / afternoons |
-| Supplier bills / bill payments | 3 / 3 | bills daily; payments heavier on Tue/Fri payment runs |
-| Cash expenses (Purchase) | 3 | any hour |
-| Credits, refunds, supplier credits | ~0.5 | about 2–3 a week |
-| Transfers | ~0.2 | weekly. A second bank role is still needed (accountant-full-tooling, Workflows 3 and 6) |
-| Journal entries | ~0.3 | mostly the last two business days of the month (accruals, depreciation): 3–5 |
-| List additions (customer, supplier, item) | ~0.5 | about 3 a week, in their own batch |
-| **Total** | **≈45** | Saturday ≈8; Sunday 0–2; month-end +5 |
+- **Count what QuickBooks received.** Daily done = unique native create receipts (`QboWriteReceipt`) for the business date, by entity, from accountant-owned operations, split into *saved* and *fully verified*. Previews and prerequisites do not count.
+- **Reserve in-flight capacity.** A prepared or running slice reserves its planned creates against the day, so two reviews cannot both fill the same gap.
+- **Durable server-owned slot identities.** The server names each due slice (`<business date>:<rhythm version>:<slot n>`) and derives the batch's `decisionKey` from it. The model chooses contents, not identity, so a repeated review reuses the same slot instead of creating duplicate logical work.
+- **Frozen daily rhythm.** Each day's rhythm version is fixed at its first slot. A settings change applies from the next business day, so counts and admitted batches are not reset mid-day.
+- **Daily ceiling (Phase 1, not Phase 2):** 2× the day's target, counting receipts plus reservations; shown when reached; resets each Halifax day.
 
-That is about 950 records per month, roughly 3.3 times the current schedule's 288 and in line with the import's density.
+### d. Achievable targets with current workflows (Phase 2)
 
-Configure the targets in a new `business-activity-rhythm.js`. It holds a table keyed by the published `volumeProfile` (flagship ≈45 per weekday, development ≈12), with weekday, month-end and seasonal weights, scaled by `activityLevel`. It has three outputs:
+Targets use only what policy v7 can do today: same-day settled sales (with their payment and deposit), field-service sales (with estimate and time), expenses, bills and bill payments, and list additions in their own batch. Start at a flagship weekday target of ~20 records, Saturday ~4, Sunday 0, scaled by `activityLevel` (0.5×/1×/2×). Raise targets only when Phase 4 adds the workflows they need (invoices on terms, grouped deposits, transfers, accruals and depreciation). v1's 45/weekday figure is the Phase 4 goal, not the Phase 2 target.
 
-- `todayPlan(day)`: per-area targets and time windows.
-- `plannedByNow(at)`: cumulative due counts.
-- `doneToday`: counted from `OperationRun` rows with `activityBatch.day === today`, plus calendar events dated today.
+### e. Time rules
 
-Keep the targets out of the published blueprint in the first slice. Changing the blueprint changes `authorityHash` and forces grant renewal. Moving them into a blueprint `operatingRhythm` field later is optional.
+- **Time zone:** America/Halifax, using real offsets (ADT −03:00 / AST −04:00). Slots are defined in local time; on the November fall-back day the repeated hour runs its slots once; on the March spring-forward day slots in the missing hour run at 03:00.
+- **Business hours:** Mon–Fri 08:00–18:00; Saturday 10:00–14:00 takes precedence over the weekday table; Sunday has no slices.
+- **Rounding:** per-area daily targets round half-up after scaling; a fraction below 1 becomes a weekly count placed on fixed weekdays (for example, 0.4/day → Tue and Fri).
+- **Midnight rollover:** at 00:05 Halifax the cadence schedules a calendar-close review for the day just ended; quiet hours never suppress due obligations or recovery (consistent with `continuous-business-operator-completion-2026-10-24.md:257`).
+- **Restart:** the cadence is computed from saved state, so a restart resumes the same slot, backoff and ceiling; missed slots are not replayed beyond the day's target.
 
-Add a server-enforced **daily** ceiling at 2× the target. It is a runaway guard that resets each business day, not a lifetime quota (R09), and it is shown when reached.
+### f. Resource controls
 
-Realism gaps to fill in later phases (§3):
+- **QBO requests (Phase 0, done):** a daily per-company counter of actual transport attempts and HTTP 2xx successes by category — sync, report, query, read, write — recorded from the single client transport path (`qbo-client.js` `apiCall`). Counts batch in memory and flush every 15 s with `$inc` into `QboRequestDay` (UTC day). Token refreshes are not counted. Today's and the month's totals appear read-only in the business-agent status (`qboRequests`) and on one line of the AI usage panel.
+- **Sync tuning before acceleration (Phase 3, required before any cadence above v1's):** from measurements, slow lists and singletons to 60–300 s, keep transaction CDC at 30 s, and set a monthly request budget with room for verification and recovery (at least 30% headroom under the confirmed Intuit allowance). Add a shared per-realm rate limiter, since average per-minute rates do not prove instantaneous compliance.
+- **Model use:** the hard daily review ceiling (§3a). Cached-token totals are not converted into ChatGPT plan headroom; the plan-limit pause stays the authority.
 
-- Same-day stock sales and same-day purchase orders.
-- Invoices on terms that the calendar collects later, without double collection.
-- Deposits that group several payments.
-- A second bank account so transfers can be prepared.
+### g. Authority
 
-### c. Calendar catch-up first
+Phases 0–3 need no grant renewal. Adding a v8 workflow known to the code does not by itself require one either (`business-agent-authority.js:30`). Republishing the business (for example, to add a bank mapping for transfers) changes `authorityHash` and currently invalidates the grant, so Phase 4 should bundle any republish into one owner step. Exact unfinished operations stay tied to their original grant; do not reissue grants unnecessarily.
 
-- Gate rule: while `verifiedThrough < yesterday`, the accountant's only job is closing the calendar. The governance gate already blocks same-day work (`business-governance-service.js:406`).
-- Speed: cadence runs reviews 2 min apart while each pass makes progress. A period may cover up to 31 days (`business-agent-tools.js:85`). Close in one operation when the plan is unblocked. If a multi-day plan fails, fall back to day-by-day.
-- No progress: the work list gets a blocking item, "Calendar closed through Oct 28 — Oct 29 not closed: <exact reason>". It names the operation or blocker and the next retry, and the cadence backs off. Owner work is still limited to genuinely human items.
-- Measure: record `behindDays` and `catchUpStartedAt` so lag is visible and measurable.
+## 4. Build order and proof
 
-### d. Safety and limits that stay
+**Phase 0 — reviews can write; usage is measurable (implemented 2026-10-30).**
 
-- **Exact checks:** every slice keeps preview, fingerprint, the exact plan hash, approval under the standing grant with `activityPolicyHash`, and the period, tax, receipt, seven-report and stock-cost checks. A slice is still at most 12 activities, under the batch-cent caps.
-- **One writer:** slices run in sequence. The cadence never prepares while `currentOperationId` is set. Ambiguous or possibly sent writes still block.
-- **Write freshness — fix first.** The mid-pass freshness check must stay. Run a bounded sync tick (the existing `sync.tick`) inside `guard(true)` before writes, or check freshness only for the sources the write depends on (W07.2). This stops the 5-minute retry loop.
-- **QBO API.** Sync dominates. At ≤12 requests per 30 s tick (5 s ticks while not current), sync alone can make up to about 34,500 requests per day, roughly 1.0M per month. This is an upper bound, not a measurement.
-  - **Writes:** a slice is estimated at about 40 calls (writes, read-backs, about 14 report reads, lookups). This is also not measured. About 35 slices a day would be about 1,400 calls.
-  - **Rate:** the per-minute rate is far below Intuit's 500 per minute per realm and 10 per second.
-  - **Monthly allowance:** if this app is on a Builder allowance of 500k CorePlus calls per month and these reads are metered, **sync alone could exceed it**.
-  - **Measurement:** `qbo-client.js:570` keeps only an in-memory 60 s window, and no daily per-category count exists. Persist daily counts by category before any cadence change goes live (D06, W07.3), then tune sync to 60–120 s for slow-moving lists and singletons.
-- **Codex plan quota (measured Oct 30):**
-  - **Reviews:** 65 completed, averaging 241k tokens each, about 15.7M tokens for the day, with no plan-limit outcome.
-  - **Cache:** cached input is about 78–89% on rows that record the split (`cacheSplit: true`).
-  - **Weekday estimate:** 40 business-hour slices plus about 6 overnight reviews (the model is skipped when nothing is actionable) ≈ 46 reviews ≈ 11M tokens.
-  - **Weekend estimate:** about 3M tokens per day.
-  - **Weekly estimate:** about 60M tokens per week, below today's observed rate.
-  - **Existing guards stay:** the plan-limit pause, monthly caps and usage records.
-  - **New guard:** a daily review budget, defaulting to 80. When it is reached, cadence falls back to the owner interval.
+- *Bounded freshness:* write-bearing steps (`guard(true)`) re-evaluate source freshness and, if stale, run sync slices of ≤12 requests from one per-attempt allowance of 40 requests and 60 s, never replenished by later checks. Each slice may use only the time left in the allowance, and the allowance is rechecked before the write is admitted. A slice that makes no progress, or an exhausted allowance, yields: the step does not start, the attempt ends `yielded` (event `review-yielded`, not an attention alarm), sync runs immediately, and the next review waits 1, 2, 5, then 15 minutes for consecutive yields (`reviewYields`, reset by a completed review). Model rounds and review finalization check authority only, not freshness.
+- *Truthful outcomes:* one shared function decides each attempt's terminal outcome — completed, incomplete, yielded, failed, cancelled, plan-limit or cap-reached. The usage row stores it (its id is the attempt id, plus `passId`); the attempt's event (`review-completed`, `specialist-report`, `review-yielded`, `attention`, `review-paused`, `review-cancelled`) carries the same `outcome`, `attemptId` and `usageId`. One idempotent per-attempt finalizer writes the terminal event first, then the usage outcome, then the scheduling state; if the terminal event cannot be saved the attempt is `failed`, and a later state-save failure never adds a second terminal event. On the Codex path the first fatal tool error (for example a freshness yield) is retained, later tool calls are refused, and it is rethrown once the tool bridge drains.
+- *Request measurement:* §3f.
+- *Proof after reload (read-only):* over one Halifax business day, (a) every `BusinessAgentUsage` row has an event with the same `attemptId` and `outcome`; (b) "need to finish synchronizing" attention events fall from 15 to 0, with any freshness stops recorded as `review-yielded` and followed by a completed review; (c) `QboRequestDay` totals for the day are non-zero by category and roughly match the sum of sync ticks plus operation reads.
 
-### e. Visibility
+**Phase 1 — recovery, catch-up and bounded same-day slices.**
 
-The `rightNow` function (`business-agent-work.js:130`) gains a server-computed `today` block, not text written by the model:
+- `business-agent-cadence.js` (pure, tests for every §3a row and §3e rule), wired into the worker.
+- Recovery-aware scheduling, month/capacity-aware catch-up with the zero-activity close, receipt-based daily counting with reservations, server-owned slot identities, frozen daily rhythm, daily ceiling, actionable-work filter, durable backoff, hard review ceiling, `context.today` and the Right-now "Today" line.
+- No new accounting workflows and no grant change.
+- *Proof (read-only, after reload):* within one business day `verifiedThrough` reaches yesterday with no gap; any empty day closed with recorded evidence; no logical slot executed twice; reviews ≤ ceiling; QBO requests and plan use recorded for the day.
 
-- In plan: "Today (Fri Oct 30): 45 planned · 17 in QuickBooks · next slice 2:15 PM".
-- Behind: "Catching up: calendar closed through Oct 28 · closing Oct 29 · next try 2:02 PM", or the exact blocker.
-- Quiet: "Quiet hours · next slice 8:00 AM Mon · 44 of 45 done Friday".
-- Ceiling: "Daily ceiling reached (90) · resumes tomorrow".
+**Phase 2 — daily rhythm with current workflows.** Per-area targets from §3d, time windows, Tue/Fri payment runs, "Today's business" work item. *Proof:* one week within ±30% of the §3d targets.
 
-The work list gains a "Today's business" item with per-area done and planned counts (Sales 6/10, Collections 4/7, …) and a link to that day's records. The Right-now line already shows `nextReviewAt`. Add a "why this time" label: catching up, slice, on plan or quiet.
+**Phase 3 — measured tuning.** Sync intervals, per-realm rate limiter and monthly request budget from Phase 0 data. *Proof:* a full week of measured requests within the budget and plan-limit-free model use.
 
-## 3. Build order
+**Phase 4 — realism workflows (activity policy v8).** Invoices on terms collected later, grouped deposits, same-day stock sales and purchase orders, transfers (second bank role; needs a republish), month-end accruals and depreciation (balance-sheet journal roles). Each lands with its own targets. *Proof:* each workflow verified in QuickBooks and through seven-report evidence.
 
-**Phase 0 — make reviews able to write (prerequisite, small).**
+**Direct proof for Phases 1–2 (all read-only).**
 
-- Run a bounded sync refresh inside `guard(true)` before mutating tools.
-- Persist a daily count of QBO requests by category (sync, preparation, write, read-back, reports, UI).
-- Proof: on one day, the "need to finish synchronizing" attention count falls from 15 to near 0. Every review in `BusinessAgentUsage` has a matching `review-completed` event.
+1. Record a baseline before activation: native counts by entity and the latest receipt per company.
+2. Over the **first full business day** after activation, join each new native identity (`CompanySyncRecord` by entity/`qboId`) to an accountant create receipt and a completed (verified) operation. Records without a receipt — imported or manual — are excluded and reported.
+3. Convert `MetaData.CreateTime` to Halifax time and show distinct due slots across the day, each with its slot identity.
+4. Show calendar continuity (no gaps), no duplicate logical work, seven-report results for each operation, and the day's actual QBO requests and review usage.
 
-**Phase 1 — smallest slice that makes the day visibly continuous.**
+## 5. Risks
 
-- Add `business-agent-cadence.js`, a pure module with tests for every row of the §2a table, wired at `business-agent-service.js:135/144`.
-- Add `activeIntervalMinutes` and `businessHours` settings.
-- Add catch-up 2-minute chaining with backoff and a visible blocker.
-- Add a flat weekday target from `business-activity-rhythm.js` (one total, not yet per area) feeding `context.today` and the Right-now line.
-- Update the prompt wording.
-- No new accounting workflows and no change to grants or policy hashes.
-- Proof, read-only, after the owner authorizes the backend reload:
-  - Within one business day, `verifiedThrough` reaches yesterday.
-  - QBO records dated today grow to at least 25 by 18:00 Halifax.
-  - Their QuickBooks `MetaData.CreateTime` falls in at least 8 distinct hours. Count from `CompanySyncRecord` grouped by entity and hour; spot-check a few records directly in QBO.
-  - API requests and tokens for the day fall within §2d.
+- **API allowance:** unknown for this app (D06). Sync alone may exceed a Builder allowance; Phase 3 must run before any acceleration.
+- **Plan quota:** weekly ChatGPT limits are unpublished; the review ceiling bounds use but cannot prove sustainability.
+- **Rework:** more slices mean more seven-report checks. A failed slice holds the writer until recovered; recovery runs first and backs off rather than loops.
+- **Calendar ramp:** post-adoption months may stay below 9.5 records/day; same-day targets fill the gap without duplicating calendar obligations.
+- **Unchanged rules:** server startup never schedules QBO mutations. Activation needs the owner's reload.
 
-**Phase 2 — rhythm by area.**
+## Review history
 
-- Per-area targets and time windows, Tue/Fri payment runs, month-end journal entries, the 2× daily ceiling, and the "Today's business" work item.
-- Proof: one week of daily per-area counts within ±30% of target, with month-end journal entries present.
-
-**Phase 3 — budgets.**
-
-- A daily review budget and skipping the model when nothing is actionable.
-- Sync cadence tuned from the Phase 0 measurements to fit the confirmed Intuit allowance (D06).
-- Proof: measured requests and tokens per day against limits for a full week.
-
-**Phase 4 — realism workflows (activity policy v8, needs renewed owner grant).**
-
-- Same-day stock sales and purchase orders, invoices on terms, multi-payment deposits, and a second bank role for transfers.
-- Proof: each workflow verified in QBO and through the seven-report evidence.
-
-**Risks.**
-
-- **Allowance:** the API allowance is unknown (D06). Sync may already exceed a Builder allowance; measure before scaling.
-- **Plan quota:** the weekly Codex limit is unpublished. Today's 15.7M tokens did not trip it, but a weekly limit may.
-- **Rework:** more slices mean more seven-report checks per day. If one slice fails it holds the writer until recovered, and the cadence must back off rather than loop.
-- **Calendar ramp:** the post-adoption calendar may stay below 9.5 per day for about 45 days. Same-day targets must fill the gap without duplicating calendar obligations.
-- **Realism:** settled same-day sales (quote → invoice → payment → deposit all in one day) are unrealistic at volume. Shift the mix toward invoices on terms in Phase 4.
-- **Unchanged rules:** server startup still never schedules QBO mutations. Activation needs the owner's reload authorization.
+- 2026-10-30, v1 (commit 2fec6d0): initial plan.
+- 2026-10-30, GPT-6.1 Sol read-only review (`artifacts/luna/tmp/sol-plan-continuous-result.md`, Codex session `01a18f37-30a8-7102-9d8f-a3ff66569d49`): nine findings — recovery skipped while the writer is retained; catch-up blockers (empty periods, month boundaries, plan capacity, partial execution); one sync tick is not a freshness guarantee; unsafe daily counting; understated QBO use; late and incomplete budgets; stale grant-renewal claim; targets beyond current workflows and undefined time rules; a proof that could pass falsely. The lead accepted all nine; v2 incorporates each (§2 lists them, §3–4 the changes) and Phase 0 was implemented the same day.

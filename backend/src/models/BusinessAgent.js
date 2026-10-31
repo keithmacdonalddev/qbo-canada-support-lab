@@ -29,6 +29,8 @@ const schema = new mongoose.Schema({
   leaseToken: { type: String, default: null },
   leaseExpiresAt: { type: Date, default: null },
   lastError: { type: String, default: null },
+  // Consecutive reviews that yielded because company sources could not be refreshed in time; a completed review resets it.
+  reviewYields: { type: Number, default: 0, min: 0 },
   codexQuotaClearedAt: { type: Date, default: null },
   codexQuota: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });

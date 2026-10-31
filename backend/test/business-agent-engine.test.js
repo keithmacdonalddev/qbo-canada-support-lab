@@ -76,3 +76,28 @@ test('a review stopped before dispatch retains known zero usage instead of block
  await assert.rejects(createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),beforeModel:async()=>{if(++guards===2)throw new Error('owner paused before dispatch');},usage:{begin:async value=>(record={...value}),save:async(row,value)=>Object.assign(record,value)}}),/owner paused/);
  assert.equal(chats,0);assert.equal(record.usageMissing,false);assert.equal(record.totalTokens,0);assert.equal(record.estimatedCostUsd,0);
 });
+test('one terminal outcome per attempt: finalization failure, freshness yield and completion agree with the usage row',async()=>{
+ const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({model:'claude-sonnet-5-5',usage:{input_tokens:1,output_tokens:1},stop_reason:'end_turn',content:[{type:'text',text:'done'}]})};
+ const usageFor=saves=>({begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)});
+ let saves=[];const result=await createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),usage:usageFor(saves),beforeFinish:async()=>{}});
+ assert.equal(result.outcome,'completed');assert.equal(saves.at(-1).outcome,'completed');
+ saves=[];let failure;await createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),usage:usageFor(saves),beforeFinish:async()=>{throw new Error('authority changed');}}).catch(error=>{failure=error;});
+ assert.match(failure.message,/authority/);assert.equal(failure.reviewOutcome,'failed');assert.equal(saves.at(-1).outcome,'failed','a model session that could not be finalized is not recorded as completed');
+ let rounds=0;const toolProvider={resolveProvider:async()=> 'anthropic',chat:async()=>({usage:{input_tokens:1,output_tokens:1},stop_reason:++rounds===1?'tool_use':'end_turn',content:[{type:'tool_use',id:'w',name:'executeBusinessPeriod',input:{}}]})};
+ saves=[];failure=null;await createBusinessAgentEngine({provider:toolProvider}).run({context:{},tools:[],execute:async()=>{throw Object.assign(new Error('sources stale'),{code:'BUSINESS_FRESHNESS_YIELD',businessAgentFatal:true});},usage:usageFor(saves)}).catch(error=>{failure=error;});
+ assert.equal(failure.reviewOutcome,'yielded');assert.equal(saves.at(-1).outcome,'yielded');assert.equal(rounds,1,'the review stops at the yield');
+});
+test('Codex: a fatal tool error through the real MCP bridge is retained, refuses later calls and ends the attempt as yielded',async()=>{
+ const {handleMcpRequest}=require('../src/modules/ai-tool-bridge');const saves=[],replies=[];let executed=0;
+ const call=(token,id)=>handleMcpRequest(token,{jsonrpc:'2.0',id,method:'tools/call',params:{name:'executeBusinessPeriod',arguments:{}}});
+ const codex={run:async({bridge})=>{replies.push((await call(bridge.token,1)).json,(await call(bridge.token,2)).json);return {text:'Business review completed.',usage:{inputTokens:5,outputTokens:1}};}};
+ const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},codex});
+ let failure;await engine.run({context:{},tools:[{name:'executeBusinessPeriod',description:'write',input_schema:{type:'object',properties:{}}}],execute:async()=>{executed++;throw Object.assign(new Error('Company sources could not be brought current.'),{code:'BUSINESS_FRESHNESS_YIELD',businessAgentFatal:true});},usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}}).catch(error=>{failure=error;});
+ assert.equal(failure?.code,'BUSINESS_FRESHNESS_YIELD');assert.equal(failure.reviewOutcome,'yielded');assert.equal(saves.at(-1).outcome,'yielded');assert.equal(saves.at(-1).totalTokens,6,'usage from the finished Codex run is kept');
+ assert.equal(executed,1,'the second call is refused without running');assert.equal(replies[0].result.isError,true);assert.match(replies[1].result.content[0].text,/stopped/);
+});
+test('deferOutcome leaves the terminal outcome to the caller’s attempt finalizer',async()=>{
+ const saves=[];const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({model:'claude-sonnet-5-5',usage:{input_tokens:1,output_tokens:1},stop_reason:'end_turn',content:[{type:'text',text:'done'}]})};
+ const result=await createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),deferOutcome:true,usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}});
+ assert.equal(result.outcome,'completed');assert.equal(Object.hasOwn(saves.at(-1),'outcome'),false);assert.ok(saves.at(-1).finishedAt);
+});

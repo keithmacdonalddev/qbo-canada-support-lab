@@ -151,10 +151,10 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     const state = await stateRead(); observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
     const controller = new AbortController(), abort = () => controller.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
-    const deadline = setTimeout(abort, 120000); deadline.unref?.();
+    const deadline = setTimeout(abort, perform.timeoutMs); deadline.unref?.();
     const maxRequests = perform.maxRequests;
     const readCurrent = factory => new Promise((resolve, reject) => {
-      const aborted = () => reject(fail('The synchronization observation was cancelled or exceeded two minutes.'));
+      const aborted = () => reject(fail('The synchronization observation was cancelled or exceeded its time allowance.'));
       if (controller.signal.aborted) return aborted();
       controller.signal.addEventListener('abort', aborted, { once: true });
       Promise.resolve().then(() => { controller.signal.throwIfAborted(); return factory(); }).then(resolve, reject).finally(() => controller.signal.removeEventListener('abort', aborted));
@@ -235,11 +235,13 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
       return publicSnapshot(state, entities, now(), intervalMs);
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   }
-  function tick({ maxRequests = 8 } = {}) {
+  function tick({ maxRequests = 8, timeoutMs = 120000 } = {}) {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) return Promise.reject(new TypeError('Use a sync time allowance of 1–120 seconds.'));
     if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 40) return Promise.reject(new TypeError('Use a bounded sync slice of 1–40 requests.'));
     if (ticking) return ticking;
-    perform.maxRequests = maxRequests;
-    ticking = perform().finally(() => { ticking = null; }); return ticking;
+    perform.maxRequests = maxRequests; perform.timeoutMs = timeoutMs;
+    // Requests made by a sync slice are measured as background synchronization.
+    ticking = require('./qbo-request-meter').runWithCategory('sync', () => perform()).finally(() => { ticking = null; }); return ticking;
   }
   async function snapshot() { return publicSnapshot(await stateRead(), entities, now(), intervalMs); }
   return { tick, snapshot };

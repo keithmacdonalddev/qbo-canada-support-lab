@@ -7,7 +7,7 @@ const dollars = value => new Intl.NumberFormat('en-CA', { style: 'currency', cur
 // What the same usage would cost at pay-per-use API prices; a range when older Codex reviews lack the cached-input split.
 const atApiPrices = value => value ? '≈ ' + dollars(value.lowUsd) + (value.legacyReviews > 0 && dollars(value.highUsd) !== dollars(value.lowUsd) ? '–' + dollars(value.highUsd) : '') + ' at API prices' + (value.unpricedReviews > 0 ? ' + unpriced usage' : '') : ''
 
-export default function BusinessAgentUsage({ usage, disabled, configured, onCommand }) {
+export default function BusinessAgentUsage({ usage, qboRequests, disabled, configured, onCommand }) {
   const [editing, setEditing] = useState(false)
   const [apiUsd, setApiUsd] = useState(''), [tokens, setTokens] = useState('')
   const caps = usage?.caps || {}
@@ -19,6 +19,7 @@ export default function BusinessAgentUsage({ usage, disabled, configured, onComm
       {usage.models?.length ? <ul className="bw-usage-models">{usage.models.map(item => <li key={[item.provider, item.model, item.role, item.billing].join(':')}><strong>{item.provider === 'codex' ? 'Codex' : 'Anthropic'} · {item.model}</strong><span>{item.role} · {number(item.reviews)} reviews · {number(item.totalTokens)} tokens · {item.provider === 'codex' ? (item.billing === 'included in plan' ? 'Included in plan' : 'Billing unverified') + (item.apiEquivalent ? ' · ' + atApiPrices(item.apiEquivalent) : '') : cost(item.estimatedCostUsd) + ' estimated API spend' + (item.unpricedReviews > 0 ? ' + unpriced usage' : '')}</span></li>)}</ul> : <p>No reviews recorded this month. Earlier reviews have no usage history.</p>}
       {usage.latest && <p>Latest review: {usage.latest.role} · {usage.latest.outcome} · {dateTime(usage.latest.finishedAt || usage.latest.startedAt)}</p>}
       {usage.month?.missingUsageReviews > 0 && <p>Some reviews have no reported token count. Totals are incomplete.</p>}
+      {qboRequests?.today && <p>QuickBooks requests by this app: {number(qboRequests.today.total)} today · {number(qboRequests.month?.total)} this month (UTC; sync {number(qboRequests.today.attempts?.sync)}, reports {number(qboRequests.today.attempts?.report)}, writes {number(qboRequests.today.attempts?.write)} today).</p>}
     </>}
     <p>Monthly limits: {caps.apiUsd == null ? 'No API spend cap' : cost(caps.apiUsd) + ' API spend'} · {caps.tokens == null ? 'No token cap' : number(caps.tokens) + ' tokens'}.</p>
     {usage?.pause && <div className="bw-notice bw-notice--attention" role="status"><div><strong>{usage.pause.title}</strong><p>{usage.pause.detail}{usage.pause.resetAt && <> Reset: {dateTime(usage.pause.resetAt)}.</>}</p></div></div>}
