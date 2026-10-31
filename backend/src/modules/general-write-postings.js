@@ -28,7 +28,7 @@ function postingsOf(entity, record, ctx) {
     // opposite sign of the control side; tax posts to the rate's published tax account.
     const lineSign = sales !== undefined ? sales : purchases, direction = sales !== undefined ? 'sales' : 'purchases';
     let gross = 0;
-    for (const line of lines) {
+    for (const [lineIndex, line] of lines.entries()) {
       const type = line?.DetailType, detail = line?.[type];
       if (type === 'SubTotalLineDetail' || type === 'DescriptionOnly') continue;
       if (type === 'DiscountLineDetail') fail('Discount lines are not in general-write-v1.');
@@ -36,8 +36,19 @@ function postingsOf(entity, record, ctx) {
       if (type === 'SalesItemLineDetail' || type === 'ItemBasedExpenseLineDetail') {
         const item = ctx.get('Item', id(detail?.ItemRef));
         if (!item) fail(entity + ' line item ' + id(detail?.ItemRef) + ' is not in the company copy.');
-        if (item.Type === 'Inventory') fail('Inventory postings are not in general-write-v1.');
-        account = id(type === 'SalesItemLineDetail' ? item.IncomeAccountRef : item.ExpenseAccountRef) || id(item.IncomeAccountRef);
+        if (item.Type === 'Inventory') {
+          if (ctx.inventory?.enabled !== true || ctx.inventory.entities?.[entity] !== true) fail('Inventory postings for ' + entity + ' are disabled.');
+          if (purchases !== undefined) {
+            if (!['Bill', 'Purchase'].includes(entity) || record.Credit === true || type !== 'ItemBasedExpenseLineDetail') fail('Unsupported inventory purchase reversal.');
+            account = id(item.AssetAccountRef);
+          } else {
+            if (type !== 'SalesItemLineDetail' || typeof ctx.stockCost !== 'function') fail('Inventory sales require independent FIFO replay.');
+            const cost = ctx.stockCost(entity, record, lineIndex);
+            if (!Number.isSafeInteger(cost) || (sales === -1 ? cost < 0 : cost > 0)) fail('Inventory line cost direction is invalid.');
+            add(id(item.ExpenseAccountRef), cost); add(id(item.AssetAccountRef), -cost);
+            account = id(item.IncomeAccountRef);
+          }
+        } else account = id(type === 'SalesItemLineDetail' ? item.IncomeAccountRef : item.ExpenseAccountRef) || id(item.IncomeAccountRef);
       } else if (type === 'AccountBasedExpenseLineDetail') account = id(detail?.AccountRef);
       else fail(entity + ' line type ' + type + ' has no posting rule.');
       const amount = cents(line.Amount); gross += amount; add(account, lineSign * amount);

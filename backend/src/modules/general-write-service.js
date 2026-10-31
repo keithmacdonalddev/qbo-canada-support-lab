@@ -242,7 +242,14 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
     const taxPercent = {}, rate = row => Number(local.get('TaxRate', String(row.TaxRateRef?.value))?.RateValue) || 0;
     for (const id of taxCodes.sales) taxPercent[id] = (local.get('TaxCode', id)?.SalesTaxRateList?.TaxRateDetail || []).reduce((sum, row) => sum + rate(row), 0);
     for (const id of taxCodes.purchases) taxPercent[id] = Math.max(taxPercent[id] || 0, (local.get('TaxCode', id)?.PurchaseTaxRateList?.TaxRateDetail || []).reduce((sum, row) => sum + rate(row), 0));
-    return { day, verifiedThrough: calendar.verifiedThrough, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
+    const features = require('../config').features || {};
+    const inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
+    let stock = null;
+    if (inventory.enabled && [...(local.map?.values() || [])].some(record => record.Type === 'Inventory')) {
+      stock = await require('./business-stock-general').readGeneralStockContext({ models, scope, active: published, day, session, purchaseOrderIds: [...local.map.keys()].filter(key => key.startsWith('PurchaseOrder:')).map(key => key.split(':')[1]),
+        observations: require('./business-observation-store').createBusinessObservationStore({ Records: models.Records, Agents: models.Agents, Receipts: models.Receipts, Writers: models.Writers, Audits: models.Audits, session, now }) });
+    }
+    return { inventory, stock, day, verifiedThrough: calendar.verifiedThrough, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
   };
 }
 // Server composition: the synced copy through the hardened observation store (fresh

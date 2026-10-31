@@ -64,6 +64,17 @@ const config = {
     // General governed QuickBooks writes (manageQboRecord, general-write-v1). Off until the
     // live transport and day-close verification of general records pass review.
     generalWriteDispatch: enabled('GENERAL_WRITE_DISPATCH_ENABLED', false),
+    generalWriteInventory: enabled('GENERAL_WRITE_INVENTORY_ENABLED', false),
+    generalWriteInventoryEntities: {
+      Invoice: enabled('GENERAL_WRITE_INVENTORY_INVOICE_ENABLED', true),
+      SalesReceipt: enabled('GENERAL_WRITE_INVENTORY_SALES_RECEIPT_ENABLED', true),
+      Bill: enabled('GENERAL_WRITE_INVENTORY_BILL_ENABLED', true),
+      Purchase: enabled('GENERAL_WRITE_INVENTORY_PURCHASE_ENABLED', true),
+      PurchaseOrder: enabled('GENERAL_WRITE_INVENTORY_PURCHASE_ORDER_ENABLED', true),
+      Estimate: enabled('GENERAL_WRITE_INVENTORY_ESTIMATE_ENABLED', true),
+      // No independently verified Canadian adjustment/return valuation contract yet.
+      CreditMemo: false, RefundReceipt: false, Item: false, InventoryAdjustment: false,
+    },
   },
 };
 

@@ -10,21 +10,25 @@ function projectStockRecord(entity, value) {
   if (!plain(value) || typeof value.Id !== 'string' || !QID.test(value.Id) || typeof value.SyncToken !== 'string' || !VERSION.test(value.SyncToken) || (value.sparse !== undefined && value.sparse !== false) || Buffer.byteLength(canonical(value)) > 1000000) fail('An exact complete stock source is required.');
   // Settlement balances/links and current PurchaseCost do not determine FIFO cost.
   const keys = entity === 'Item' ? ['Id','SyncToken','Type','Active','TrackQtyOnHand','QtyOnHand','InvStartDate','AssetAccountRef','ExpenseAccountRef']
-    : ['Id','SyncToken','TxnDate','CurrencyRef','VendorRef','APAccountRef','GlobalTaxCalculation','Line','TxnTaxDetail','TotalAmt','ClassRef','DepartmentRef','ProjectRef'];
+    : ['Id','SyncToken','TxnDate','CurrencyRef','VendorRef','APAccountRef','GlobalTaxCalculation','Line','TxnTaxDetail','TotalAmt','ClassRef','DepartmentRef','ProjectRef', ...(entity !== 'Bill' ? ['CustomerRef','ARAccountRef','AccountRef','DepositToAccountRef','PaymentType','Credit'] : [])];
   return JSON.parse(canonical(Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]))));
 }
 function validateStockSource(value, scope, items, billIds) {
   const { sourceHash, ...source } = value || {};
-  if (source.version !== 1 || canonical(source.scope) !== canonical(scoped(scope)) || hash(source) !== sourceHash || Buffer.byteLength(canonical(value)) > MAX_SOURCE_BYTES || !Number.isInteger(source.fiscalYearStartMonth) || source.fiscalYearStartMonth < 1 || source.fiscalYearStartMonth > 12 || !/^[a-f0-9]{64}$/.test(source.companyRecordHash || '') || !Array.isArray(source.items) || !Array.isArray(source.bills)) fail('The scoped stock observation is unavailable or changed.');
+  if (![1,2].includes(source.version) || canonical(source.scope) !== canonical(scoped(scope)) || hash(source) !== sourceHash || Buffer.byteLength(canonical(value)) > MAX_SOURCE_BYTES || !Number.isInteger(source.fiscalYearStartMonth) || source.fiscalYearStartMonth < 1 || source.fiscalYearStartMonth > 12 || !/^[a-f0-9]{64}$/.test(source.companyRecordHash || '') || !Array.isArray(source.items) || !Array.isArray(source.bills)) fail('The scoped stock observation is unavailable or changed.');
   const started = Date.parse(source.startedAt), ended = Date.parse(source.observedAt);
   if (!Number.isFinite(started) || !Number.isFinite(ended) || ended < started || ended - started > 180000) fail('The stock observation has invalid time bounds.');
-  for (const [entity, rows, expected] of [['Item',source.items,items.map(row => row.itemId)],['Bill',source.bills,billIds]]) {
+  const other = billIds.filter(id => id.includes(':'));
+  if (source.version === 1 && source.purchases !== undefined) fail('Legacy stock observations cannot contain typed purchases.');
+  if (other.length && source.version !== 2 || source.version === 2 && (!Array.isArray(source.purchases) || canonical(source.purchases.map(row => row.entity + ':' + row.record?.Id).sort()) !== canonical(other))) fail('The typed stock source set changed.');
+  for (const row of source.purchases || []) if (!['Purchase','CreditMemo','RefundReceipt'].includes(row.entity) || canonical(projectStockRecord(row.entity,row.record)) !== canonical(row.record)) fail('The typed stock source projection changed.');
+  for (const [entity, rows, expected] of [['Item',source.items,items.map(row => row.itemId)],['Bill',source.bills,billIds.filter(id => !id.includes(':'))]]) {
     if (rows.length !== expected.length || new Set(expected).size !== expected.length || new Set(rows.map(row => row?.Id)).size !== rows.length || canonical(rows.map(row => row.Id).sort()) !== canonical([...expected].sort())) fail('The stock observation lacks an exact complete record set.');
     for (const row of rows) if (canonical(projectStockRecord(entity,row)) !== canonical(row)) fail('The retained stock projection changed.');
   }
   return value;
 }
-function stockBillIds(state) { return [...new Set(state.items.flatMap(item => item.lots.map(lot => lot.source.qboId)))].sort(); }
+function stockBillIds(state) { return [...new Set(state.items.flatMap(item => item.lots.map(lot => (lot.source.entity && lot.source.entity !== 'Bill' ? lot.source.entity + ':' : '') + lot.source.qboId)))].sort(); }
 // Keep independent live quantities and original purchase lots: stock close proof
 // must follow the final graph observations, which an older mirror cannot prove.
 // Fixed exact-ID GETs through the original client, with per-attempt authority.
@@ -32,7 +36,7 @@ function createBusinessStockReader({ access, now = () => Date.now(), purpose = '
   if (!['operations.preview','operations.verify'].includes(purpose) || [access?.authorize,access?.resolveClient,now].some(fn => typeof fn !== 'function')) throw new TypeError('Stock reads need current scoped business access');
   return async function read(scope, state, { signal } = {}) {
     scope = scoped(scope); require('./business-stock-cost').validateStockState(state,scope);
-    const billIds = stockBillIds(state), jobs = [...state.items.map(row => ['Item',row.itemId]),...billIds.map(id => ['Bill',id])];
+    const billIds = stockBillIds(state), jobs = [...state.items.map(row => ['Item',row.itemId]),...billIds.map(id => id.includes(':') ? id.split(':') : ['Bill',id])];
     if (jobs.length + 1 > MAX_CALLS) fail('Remaining stock sources exceed the bounded read budget.');
     const started = now(), controller = new AbortController(), abort = () => controller.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener('abort',abort,{once:true});
@@ -54,19 +58,19 @@ function createBusinessStockReader({ access, now = () => Date.now(), purpose = '
         if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('Stock observation authority changed.');
       };
       const control = { signal:controller.signal,onFailure:stop,beforeAttempt:async () => { await authorize(); if (attempts++ >= MAX_CALLS) fail('Stock observation exceeded its request budget.'); } };
-      const items = [], bills = [];
+      const items = [], bills = [], purchases = [];
       for (const [entity,id] of jobs) {
         await authorize(); const body = await runWithCaller('business-stock',()=>client.apiCall('GET',entity.toLowerCase() + '/' + id,undefined,0,0,control)); await authorize();
         if (!plain(body) || Object.keys(body).some(key => ![entity,'time'].includes(key)) || body[entity]?.Id !== id) fail('The exact stock record response is incomplete.');
-        (entity === 'Item' ? items : bills).push(projectStockRecord(entity,body[entity]));
-        if (Buffer.byteLength(canonical({items,bills})) > MAX_SOURCE_BYTES - 4096) fail('Stock source content exceeds its evidence budget.');
+        if (entity === 'Item') items.push(projectStockRecord(entity,body[entity])); else if (entity === 'Bill') bills.push(projectStockRecord(entity,body[entity])); else purchases.push({entity,record:projectStockRecord(entity,body[entity])});
+        if (Buffer.byteLength(canonical({items,bills,purchases})) > MAX_SOURCE_BYTES - 4096) fail('Stock source content exceeds its evidence budget.');
       }
       await authorize(); const company = await runWithCaller('business-stock',()=>client.query('SELECT * FROM CompanyInfo MAXRESULTS 1',control)); await authorize();
       const rows = company?.QueryResponse?.CompanyInfo, months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
       if (!plain(company) || Object.keys(company).some(key => !['QueryResponse','time'].includes(key)) || !plain(company.QueryResponse) || Object.keys(company.QueryResponse).some(key => !['CompanyInfo','startPosition','maxResults','totalCount'].includes(key)) || !Array.isArray(rows) || rows.length !== 1 || !plain(rows[0]) || rows[0].Country !== 'CA' || typeof rows[0].Id !== 'string' || !QID.test(rows[0].Id) || (company.QueryResponse.startPosition !== undefined && company.QueryResponse.startPosition !== 1) || (company.QueryResponse.maxResults !== undefined && company.QueryResponse.maxResults !== 1) || (company.QueryResponse.totalCount !== undefined && company.QueryResponse.totalCount !== 1)) fail('Current Canadian fiscal settings are unavailable.');
       const fiscalYearStartMonth = months.indexOf(rows[0].FiscalYearStartMonth) + 1;
       if (!fiscalYearStartMonth) fail('The actual company fiscal calendar is unavailable.');
-      const source = {version:1,scope,startedAt:new Date(started).toISOString(),observedAt:new Date(now()).toISOString(),fiscalYearStartMonth,companyRecordHash:hash(rows[0]),items,bills};
+      const source = {version:purchases.length?2:1,...(purchases.length?{purchases}:{}),scope,startedAt:new Date(started).toISOString(),observedAt:new Date(now()).toISOString(),fiscalYearStartMonth,companyRecordHash:hash(rows[0]),items,bills};
       return validateStockSource({...source,sourceHash:hash(source)},scope,state.items,billIds);
     } catch (error) { stop(error); throw failure || error; }
     // Every SDK promise above has settled, including any normal token persistence.

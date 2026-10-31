@@ -22,8 +22,18 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     const accounts = await Records.find({ ...company(scope), entity: 'Account', deleted: false, 'record.AccountSubType': { $in: TAX_SUBTYPES } }).select('qboId record').limit(201).maxTimeMS(3000).lean();
     if (accounts.length > 200) fail('Tax-account enumeration exceeds its proof budget; close is incomplete.');
     const tax = accounts.filter(row => row.record?.AccountSubType !== 'OtherCurrentLiabilities' || /\b(GST|HST|PST|QST|tax)\b/i.test(row.record?.Name || '')).map(row => String(row.qboId));
-    const evidence = { mappings, items: [...items], taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
-    return { evidence, get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : null,
+    const features = require('../config').features || {}, inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
+    let stock = null;
+    if ([...items.values()].some(item => item.Type === 'Inventory')) {
+      if (!inventory.enabled) fail('Inventory close proof is disabled on this server.');
+      const stockModels = { ...require('./business-runtime').loadModels(), ...models, Records, Agents: models.Agents || require('../models/BusinessAgent'), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
+      const active = await require('./business-authority').readPublishedBusiness({ ...stockModels, scope });
+      const days = [...new Set(records.flatMap(row => [row.current?.TxnDate, row.before?.TxnDate]).filter(Boolean))];
+      if (days.length !== 1) fail('Inventory close needs one complete open-day replay.');
+      stock = await require('./business-stock-general').readGeneralStockContext({ models: stockModels, scope, active, day: days[0], observations: require('./business-observation-store').createBusinessObservationStore({ ...stockModels, now }) });
+    }
+    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash } : {}), mappings, items: [...items], taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
+    return { evidence, inventory, ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : null,
       receivables: mappings.accountsReceivable ? String(mappings.accountsReceivable) : null, payables: mappings.accountsPayable ? String(mappings.accountsPayable) : null, undepositedFunds: mappings.undepositedFunds ? String(mappings.undepositedFunds) : null,
       // Retain real account identities. Multiple agency accounts require an explicit
       // rate-to-account proof; guessing or collapsing them could hide a substitution.

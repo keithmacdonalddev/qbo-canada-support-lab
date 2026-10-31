@@ -65,8 +65,10 @@ async function loadStockBasis(models,scope,run,manifest,stepRows,session) {
 }
 async function loadPurchaseOrigins(models,state,session) {
   validateStockState(state); const result = [], cache = new Map();
-  for (const qboId of stockBillIds(state)) {
-    const lots = state.items.flatMap(item => item.lots.filter(lot => lot.source.qboId === qboId)), source = lots[0].source;
+  for (const identity of stockBillIds(state)) {
+    const [entity, qboId] = identity.includes(':') ? identity.split(':') : ['Bill', identity];
+    const lots = state.items.flatMap(item => item.lots.filter(lot => lot.source.qboId === qboId && (lot.source.entity || 'Bill') === entity)), source = lots[0].source;
+    if (source.receiptSource === 'general-copy-replay') { result.push(await require('./business-stock-general-history').generalPurchaseOrigin(models,state,qboId,lots,session)); continue; }
     if (source.receiptSource === 'population-readback') { result.push(await require('./business-adopted-stock').adoptedPurchaseOrigin({Records:models.PopulationRecords || require('../models/BusinessPopulationRecord')},state.scope,state,qboId,lots,{taxExpectation,session})); continue; }
     const run = await read(models.Runs,{_id:source.operationId,...state.scope},session), step = await read(models.Steps,{...state.scope,logicalKey:source.logicalKey},session);
     if (!run || !step || step.entity !== 'Bill' || step.qboId !== qboId || run.status !== 'verified' || !run.verification?.evidenceHash) fail('A carried purchase must belong to a fully committed original business period.');
@@ -86,7 +88,11 @@ function matchesPayload(wanted,actual) {
 }
 function assertPurchaseContent(origins,source) {
   for (const origin of origins) {
-    const actual = source.bills.find(row => row.Id === origin.qboId), wanted = origin.payload;
+    const actual = origin.entity && origin.entity !== 'Bill' ? source.purchases?.find(row => row.entity === origin.entity && row.record.Id === origin.source.qboId)?.record : source.bills.find(row => row.Id === origin.qboId), wanted = origin.payload;
+    if (origin.nativeTax !== undefined) {
+      if (!actual || canonical(require('./business-stock-source').projectStockRecord(origin.entity,wanted)) !== canonical({...actual,SyncToken:wanted.SyncToken}) || canonical(actual.TxnTaxDetail || null) !== canonical(origin.nativeTax)) fail('A general purchase changed its native stock cost, tax or accounting content.');
+      continue;
+    }
     if (!actual || !matchesPayload(Object.fromEntries(Object.entries(wanted).filter(([key]) => ['TxnDate','CurrencyRef','VendorRef','APAccountRef','GlobalTaxCalculation','Line'].includes(key))),actual) || !Array.isArray(actual.Line) || actual.Line.length !== wanted.Line.length || ['ClassRef','DepartmentRef','ProjectRef'].some(key => !wanted[key] && actual[key]?.value)) fail('A remaining purchase changed its original accounting date, quantities, prices, accounts or tax.');
     for (const [index,line] of actual.Line.entries()) { const expected = wanted.Line[index], detail = line[line.DetailType], intended = expected[expected.DetailType]; if (['ClassRef','ProjectRef','CustomerRef','AccountRef'].some(key => !intended?.[key] && detail?.[key]?.value)) fail('A remaining purchase gained an unsupported cost relationship.'); }
     const tax = actual.TxnTaxDetail, expected = origin.tax, lines = tax?.TaxLine || [], used = new Set();
@@ -149,7 +155,7 @@ function compareStockCosts(expectation,basis,observation,stockSource,{openingOnl
     validateStockSource(stockSource,expectation.scope,state.items,stockBillIds(calculateStockCost(expectation.opening,expectation.priorActivityRows || [],expectation.period).closing));
     if (stockSource.fiscalYearStartMonth !== expectation.fiscalYearStartMonth) fail('The observed company fiscal calendar changed.');
     assertPurchaseContent(expectation.purchaseOrigins,stockSource); actual = reportBalances(expectation,observation);
-    quantities = summarizeStockState(state).items.map(expected => { const item = stockSource.items.find(row => row.Id === expected.itemId), identity = state.items.find(row => row.itemId === expected.itemId), available = item?.Type === 'Inventory' && item.Active === true && item.TrackQtyOnHand === true && Number.isSafeInteger(item.QtyOnHand) && item.QtyOnHand >= 0 && item.AssetAccountRef?.value === identity.assetAccountId && item.ExpenseAccountRef?.value === identity.costAccountId && typeof item.InvStartDate === 'string' && item.InvStartDate === expectation.startingStockSource.items.find(row => row.Id === item.Id)?.InvStartDate; return {...expected,actualQuantity:available?item.QtyOnHand:null,status:!available?'unavailable':item.QtyOnHand === expected.quantity?'passed':'failed'}; });
+    quantities = summarizeStockState(state).items.map(expected => { const item = stockSource.items.find(row => row.Id === expected.itemId), identity = state.items.find(row => row.itemId === expected.itemId), available = item?.Type === 'Inventory' && item.Active === true && item.TrackQtyOnHand === true && Number.isFinite(item.QtyOnHand) && item.QtyOnHand >= 0 && item.AssetAccountRef?.value === identity.assetAccountId && item.ExpenseAccountRef?.value === identity.costAccountId && typeof item.InvStartDate === 'string' && item.InvStartDate === expectation.startingStockSource.items.find(row => row.Id === item.Id)?.InvStartDate; return {...expected,actualQuantity:available?item.QtyOnHand:null,status:!available?'unavailable':item.QtyOnHand === expected.quantity?'passed':'failed'}; });
   } catch (error) { if (!['BUSINESS_STOCK_COST_UNVERIFIED','BUSINESS_FINANCIAL_MOVEMENTS_UNVERIFIED'].includes(error.code)) throw error; reason = error.message; }
   const closingValue = summarizeStockState(state).valueCents, expectedCost = expectation.openingCostCents + calculation.costOfSalesCents;
   const checks = [['inventoryAsset',closingValue],['costOfGoods',expectedCost]].map(([key,expectedCents]) => { const actualCents = actual?.[key] ?? null; return {key,accountId:expectation.accounts.find(row => row.key === key).id,expectedCents,actualCents,differenceCents:actualCents === null?null:actualCents-expectedCents,status:actualCents === null?'unavailable':actualCents === expectedCents?'passed':'failed'}; });
@@ -157,4 +163,12 @@ function compareStockCosts(expectation,basis,observation,stockSource,{openingOnl
   const attributed = new Set([...expectation.opening.items.flatMap(item => item.lots.map(lot => lot.source)), ...basis.map(row => row.source)].filter(source => source.receiptSource === 'owner-attributed-readback').map(source => source.logicalKey + ':' + source.lineIndex)).size;
   return {version:1,status,ownerAttributedSourceLines:attributed,method:'FIFO',policyTrust:'retained-method-and-tax-policy-evidence',policyHash:expectation.policyHash,rootHash:expectation.rootHash,openingHash:expectation.opening.stateHash,stockSourceHash:stockSource?.sourceHash || null,checks,quantities,...(!openingOnly?{calculation}:{}),...(reason?{reason}:{}),limitation:'Managed original purchase layers and the selected inventory-asset/COGS accounts only. Method and fully recoverable purchase tax rely on the retained policy evidence, which may explicitly be a documented inference and selected test-business treatment. This comparison does not establish that the company setting was directly observed. Unsupported adjustments, returns, independent QuickBooks per-item valuation, physical counts and bank reconciliation are not certified.'};
 }
-module.exports = {startingStockState,fiscalYear,loadStockBasis,loadPurchaseOrigins,validateStockExpectation,createStockExpectation,compareStockCosts,assertQuantities};
+// General writes retain a separate, current-version line allocation. Never infer
+// this from Item.PurchaseCost, selling price or the ledger being compared.
+function generalStockLineCost(basis, entity, record, lineIndex) {
+  if (!basis?.records?.some(row => row.entity === entity && hash(row.record) === hash(record))) fail('The inventory posting has no exact current-version FIFO replay.');
+  const value = basis.replay?.costs?.get(hash({ entity, id: record.Id }) + ':' + lineIndex);
+  if (!Number.isSafeInteger(value)) fail('This inventory sales line has no independent FIFO cost allocation.');
+  return value;
+}
+module.exports = {generalStockLineCost,startingStockState,fiscalYear,loadStockBasis,loadPurchaseOrigins,validateStockExpectation,createStockExpectation,compareStockCosts,assertQuantities};

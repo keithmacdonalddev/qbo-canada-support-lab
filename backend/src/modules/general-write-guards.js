@@ -66,19 +66,24 @@ function grossCents(entity, record, context, { saved = false } = {}) {
 }
 // Inventory the record moves: inventory item lines, inventory-type items, lines or
 // journal lines on the inventory asset account (general-write-v1 gates all of these off).
-function inventoryTouch(entity, record, local) {
+function inventoryTouch(entity, record, local, byRef = new Map()) {
   if (!record) return null;
+  const lookup = (kind, ref) => {
+    const name = ref?.$ref ?? ref?.value?.$ref;
+    return name ? byRef.get(name)?.after : local.get(kind, String(ref?.value));
+  };
   for (const key of ['FromAccountRef', 'ToAccountRef', 'AccountRef', 'DepositToAccountRef', 'AssetAccountRef']) {
     const accountId = record[key]?.value;
-    if (accountId != null && local.get('Account', String(accountId))?.AccountSubType === 'Inventory') return 'the inventory asset account';
+    if (record[key] && lookup('Account', record[key])?.AccountSubType === 'Inventory') return 'the inventory asset account';
   }
   if (entity === 'Item' && (record.Type === 'Inventory' || record.TrackQtyOnHand === true || record.QtyOnHand !== undefined)) return 'an inventory item';
+  let stockItem = null;
   for (const line of Array.isArray(record.Line) ? record.Line : []) {
     const detail = line?.[line?.DetailType], itemId = detail?.ItemRef?.value, accountId = detail?.AccountRef?.value;
-    if (itemId != null && !isRefObject(detail.ItemRef) && local.get('Item', String(itemId))?.Type === 'Inventory') return 'inventory item ' + itemId;
-    if (accountId != null && !isRefObject(detail.AccountRef) && local.get('Account', String(accountId))?.AccountSubType === 'Inventory') return 'the inventory asset account';
+    if (detail?.ItemRef && lookup('Item', detail.ItemRef)?.Type === 'Inventory') stockItem = 'inventory item ' + (itemId ?? 'from an earlier operation');
+    if (detail?.AccountRef && lookup('Account', detail.AccountRef)?.AccountSubType === 'Inventory') return 'the inventory asset account';
   }
-  return null;
+  return stockItem;
 }
 function checkGeneralWrite({ proposal, local, context }) {
   const problems = [], caps = { ...DEFAULT_CAPS, ...(context?.caps || {}) };
@@ -155,8 +160,14 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (line?.[type]?.TaxInclusiveAmt !== undefined || line?.[type]?.TaxAmount !== undefined) say(ref, 'Leave tax amounts out; QuickBooks computes tax from the TaxCodeRef.');
     }
     // Inventory is gated off in general-write-v1 (before or after the change).
-    const stock = inventoryTouch(op.entity, existing, local) || inventoryTouch(op.entity, after, local);
-    if (stock) say(ref, 'This touches ' + stock + '. Inventory is not in general-write-v1 yet; use receive-purchase-order, order-stock or the scheduled stock workflow.');
+    const stock = inventoryTouch(op.entity, existing, local, byRef) || inventoryTouch(op.entity, after, local, byRef);
+    if (stock) {
+      entry.stock = true;
+      if (context.inventory?.enabled !== true) say(ref, 'This touches ' + stock + '. Inventory is not in general-write-v1 unless GENERAL_WRITE_INVENTORY_ENABLED is enabled.');
+      else if (context.inventory.entities?.[op.entity] !== true) say(ref, op.entity + ' inventory is disabled by its entity allow-list flag.');
+      else if (!['create'].includes(op.op)) say(ref, 'Inventory changes and removals need downstream FIFO revaluation and are held; create a supported current-day record.');
+      else if (op.entity === 'Item' || op.entity === 'InventoryAdjustment' || stock === 'the inventory asset account') say(ref, 'Direct inventory adjustments and asset-account postings are held pending independently dated valuation proof.');
+    }
     // 2. Dates: new work on the open business day; history edits outside protected periods.
     if (spec.kind === 'transaction') {
       if (op.op === 'create' && payload.TxnDate !== context.day) say(ref, 'Date new records ' + context.day + ', the open business day.');
@@ -243,6 +254,10 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (cents(after.TotalAmt) !== sum) say(ref, 'TotalAmt must equal the applied lines minus applied credits ($' + sum / 100 + '); unapplied prepayments are not supported yet.');
     }
   });
+  if (!problems.length && [...byRef.values()].some(entry => entry.stock && !['Estimate', 'PurchaseOrder'].includes(entry.entity))) {
+    try { require('./business-stock-general').checkStockPlan([...byRef.values()], local, context.stock); }
+    catch (error) { say(error.ref || [...byRef.values()].find(entry => entry.stock)?.ref, error.message); }
+  }
   if (exposure > caps.operation) say(null, 'One operation moves at most $' + caps.operation / 100 + ' including tax (created, changed and removed amounts together).');
   // Batches: QuickBooks batch items are unordered and cannot reference each other, so
   // references and shared resources (records before and after, stock items) decide order.

@@ -40,6 +40,8 @@ async function readSameDayStockRows(models, active, session) {
     if (!equal(basis, evidence.proof.stockBasis) || evidence.proof.assertions.find(row => row.key === 'stock-costs')?.stockCosts.status !== 'passed') fail('Same-day stock differs from its accepted original evidence.');
     rows.push(...basis);
   }
+  const generalModels = models.GeneralWriteRuns ? models : models.Runs?.modelName === 'OperationRun' ? { ...models, GeneralWriteRuns: require('../models/GeneralWriteRun') } : null;
+  if (generalModels) rows.push(...await require('./business-stock-general-history').readGeneralStockRows(generalModels, active, session));
   return rows.sort((a,b) => a.source.logicalKey.localeCompare(b.source.logicalKey) || a.source.lineIndex - b.source.lineIndex);
 }
 // Adopted import history has no committed period: its carry is the FIFO replay of

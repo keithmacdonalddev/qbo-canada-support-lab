@@ -86,6 +86,8 @@ enabled.
 | Attachable (notes; file upload later) | yes | yes | — | yes |
 | Preferences | — | sparse update of a fixed safe list | — | — |
 
+**R2-2 implementation update:** see [inventory implementation and remaining return dependency](general-inventory-write-implementation-2026-10-31.md). Default-off current-day stock creates now have FIFO costing, partial PO receipt guards, original native receipt/audit provenance and combined period carry. Generic inventory returns remain disabled without authenticated native valuation evidence; R2-2 remains incomplete for that requested path. The following paragraph describes the original pre-implementation gate.
+
 **Inventory is gated off in general-write-v1 [R2-2].** Any operation is refused when its
 effective record (before or after) moves inventory: inventory item lines on any
 transaction, fractional stock quantities, inventory invoices or sales, returns, or
