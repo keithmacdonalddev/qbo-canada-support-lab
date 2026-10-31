@@ -304,6 +304,62 @@ Every item needs live proof: records in QuickBooks, a day closing, or a blocker 
 
 Full blocker audit, ranked by impact: `artifacts/blocker-audit-2026-10-31.md`. Most of its top items are now fixed; re-check it.
 
+### 7a. What "done" means (success measures, judged live)
+
+- **Volume and continuity:**
+  - about **220 records a day**, every day, spread across 24 hours;
+  - the calendar closes nightly without manual help;
+  - a stalled calendar or an idle accountant is a top defect.
+- **Breadth:** every major QBO record type, class and location appears every week:
+  - terms;
+  - partial, late and unapplied payments;
+  - credits;
+  - refunds;
+  - estimates → invoices;
+  - POs → receipts → bills;
+  - deposits;
+  - transfers;
+  - journals;
+  - month-end work;
+  - recurring billing.
+- **Coverage gaps are measured** (`/coverage` and the management review) and shrink over time.
+- **No stuck work:** `/blockers` is empty or each entry is actively being fixed. Nothing is blocked for more than 15 minutes unnoticed.
+- **Economy:** 3 or fewer metered QBO calls per saved record on average. Stay within 10,000 metered non-sync calls a day and 450,000 a month.
+- **Autonomy:** the accountant fixes problems itself and files exact build-list items. The owner is never asked for routine approvals.
+- **Visibility:** the first page shows honestly what is happening, live (R11, R12).
+
+### 7b. Known issues, bugs, limits and bottlenecks at hand-off
+
+Each item is a known current fact; verify it before relying on it.
+
+| Area | Issue | Status / next step |
+|---|---|---|
+| Sales | Accountant-added customers refused as "changed after creation" | Job W (in flight) |
+| Tax | General tool refuses taxable sales with code 16 (NS HST 14%) | Job W (in flight) |
+| Accountant memory | Retained notes go stale and contradict live state (it believed the six collections and the care-plan item were still blocked after they were fixed) | Current state now overrides some notes (`6f319c1`). Watch for it, and have Sol make retained "blocked" notes expire when the blocker clears. |
+| QBO economy | Fresh reads in verification (`50868c8`) added about 7–39 GETs per operation chain | Measure with `qboRequests.today.callers`, then have Sol trim it |
+| Inventory | General-tool inventory is off; returns unfinished | §7 item 5 |
+| History | Edits to verified history are allowed only for general-tool records; fixed-workflow and adopted records are refused | §7 item 6 |
+| Unsupported | Foreign-currency transactions (needs multicurrency, the owner's switch) | Owner decision |
+| UI | The "Record something" panel has not been inspected rendered; the landing page needs its overhaul (duplicate status panels, technical detail, no business-health or coverage view) | §7 items 7–8 |
+| UI | The Live panel shows completed items, not word-by-word streaming of the model's output | Not started (owner asked earlier for live streaming of reasoning and chat) |
+| Manage page | `/company/manage` still has panels from the owner-approval era (publication, saved-plan approvals, bulk history) that may be obsolete | Audit it with the landing-page work |
+| Legacy data | FOUNDEVER deposit 11004 (an owner contribution needing a supported correction); about 55 old open imported invoices; legacy credits and payments not applied | Build list: `legacy-record-corrections`, `legacy-credit-payment-application` |
+| Review limits | 400 reviews a day (failures count toward it); monthly AI caps; ChatGPT plan quota; an unreadable usage history halts reviews | See the blocker audit; size the limits so they never stop normal operation |
+| Runtime | Each `backend/src` save restarts the backend and kills the accountant's run in flight; `codex.sh cancel` is unreliable on Windows | Write once per job; let jobs finish |
+| Skills | Some QBO API facts in the skills are marked "verify" (batch size limits, void calls for some entities, fault codes) | Confirm against Intuit's docs as each is used |
+| Specialists | None enabled (R13/R14) | Only if measurably useful |
+| Deployment | `docs/deployment.md` is untested on a real server | Before deploying |
+| Tests | 2 request-economy tests are skipped as superseded by `50868c8` | Rewrite them for the fresh-read design when convenient |
+| Concurrency | Another session commits in this repo | Re-read files before editing, and stage only your own hunks |
+
+### 7c. Items carried over from Oct 29–30 still open
+
+- Six overdue imported invoices (CAD 1,591.44) need collecting. The six collections are free of the old key blocker.
+- The FOUNDEVER deposit 11004 correction and the old imported open invoices.
+- Multicurrency, specialists and deployment.
+- Proving tonight's close of Oct 31, and then the first full-volume day.
+
 ---
 
 ## 8. Lessons from this session (what cost the most, and the rule that prevents it)
