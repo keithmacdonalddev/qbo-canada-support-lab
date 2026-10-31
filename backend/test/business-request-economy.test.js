@@ -59,7 +59,8 @@ test('stale, wrong-generation, partial, deleted, failed and saturated mirror sou
   const h=harness();h.add('Account',{Id:'1',SyncToken:'0',Active:true,AccountType:'Bank'});mutate(h);assert.equal(await h.store.read(scope,'Account','1'),null);
  }
 });
-test('saved response verifies without GET, retains mirror record and keeps complete empty objects',async()=>{
+// Superseded by 50868c8: transaction verification now always reads current records (see business-operation-freshness.test.js).
+test.skip('saved response verifies without GET, retains mirror record and keeps complete empty objects',async()=>{
  const h=harness(),receipt=h.saved(),reader=createBusinessTransactionReader({...h.access,now:()=>h.now,observationStore:h.store});
  const observed=await reader(scope,'Bill','100');assert.equal(h.calls.length,0);assert.deepEqual(observed.record,receipt.savedResponse.Bill);assert.equal(observed.source.kind,'qbo-write-response');assert.equal(h.records[0].record.Empty.constructor,Object);assert.equal(h.agents[0].sync.sources.Bill.lastSuccessAt,iso(clock-10000));
 });
@@ -87,7 +88,8 @@ test('slow mirror retention still obeys deadline and authority checks',async()=>
  await assert.rejects(createBusinessTransactionReader({...h.access,now:()=>h.now,observationStore:store})(scope,'Bill','100'));
  }
 });
-test('changed parent reads are one full query per type, and partial pages fail closed',async()=>{
+// Superseded by 50868c8: graph records are read with exact GETs, not one batched query per type.
+test.skip('changed parent reads are one full query per type, and partial pages fail closed',async()=>{
  const h=harness(),steps=[{entity:'Invoice',qboId:'1'},{entity:'Invoice',qboId:'2'},{entity:'Bill',qboId:'3'}];
  h.response=async options=>{const q=new URL(options.url).searchParams.get('query'),entity=q.includes('FROM Invoice')?'Invoice':'Bill',ids=entity==='Invoice'?['1','2']:['3'];return{QueryResponse:{[entity]:ids.map(Id=>({Id,SyncToken:'1',Balance:0})),startPosition:1,maxResults:ids.length}};};
  const read=createBusinessTransactionBatchReader({access:h.access,observations:h.store,now:()=>h.now});const result=await read(scope,steps);assert.equal(result.size,3);assert.equal(h.calls.length,2);assert.ok(h.calls.every(call=>new URL(call.url).searchParams.get('query').startsWith('SELECT * FROM')));
@@ -128,4 +130,16 @@ test('known master updates invalidate reference mirrors before CDC, while financ
 });
 test('stale snapshot sources refuse report cache even if the stored status still says current',async()=>{
  const h=harness();h.add('CompanyInfo',{Id:'1',SyncToken:'0'});h.agents[0].sync.sources.CompanyInfo.lastSuccessAt=iso(clock-11*60000);assert.equal(await h.cache.snapshot(scope),null);
+});
+
+test('approval cache ignores stale nonposting monitoring sources and saves five of six metered reads on unchanged invoice evidence',async()=>{
+ const h=harness();h.add('CompanyInfo',{Id:'1',SyncToken:'0'});const {raw}=reports(h);
+ const requiredReports=require('../src/modules/business-report-source').approvalReportNames({activityBatch:{},records:[{entity:'Invoice'}]});
+ h.response=async options=>{const name=new URL(options.url).pathname.split('/').at(-1);assert.ok(!['AgedPayables','CashFlow'].includes(name));return name==='query'?{QueryResponse:{Account:[{Id:'1',SyncToken:'0',AccountType:'Accounts Receivable'},{Id:'2',SyncToken:'0',AccountType:'Accounts Payable'}],startPosition:1,maxResults:2}}:raw[name];};
+ const read=()=>createBusinessReportReader({access:h.access,now:()=>h.now,purpose:'preparation',requiredReports,cache:h.cache})(scope,period);
+ const first=await read();assert.equal(first.evaluation.status,'checks-passed');assert.equal(h.calls.length,6);
+ h.now+=2000;for(const s of Object.values(h.agents[0].sync.sources)){s.since=iso(h.now-1000);s.lastSuccessAt=iso(h.now);}
+ for(const entity of ['Employee','Estimate','PurchaseOrder','TimeActivity'])h.agents[0].sync.sources[entity].status='error';
+ const second=await read();assert.equal(second.evaluation.status,'checks-passed');assert.ok(second.reuse);assert.equal(h.calls.length,7,'unchanged repeat uses exactly one live ledger probe, saving five metered requests');
+ h.records[0].record.Name='Relevant changed company identity';assert.equal(await h.cache.load(scope,period,await h.cache.snapshot(scope),{requiredReports,readLedger:async()=>raw.GeneralLedger}),null);
 });

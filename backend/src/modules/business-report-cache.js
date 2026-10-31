@@ -5,10 +5,13 @@ const {ENTITIES,SNAPSHOT_ONLY}=require('./business-agent-sync');
 const {evaluateReportSources}=require('./book-evidence');
 const {reportComplete}=require('./business-financial-summary');
 const {canonicalReport}=require('./report-json');
-const {unpackReport,packReport}=require('./business-report-source');
+const {unpackReport,packReport,CRITICAL_REPORTS,evaluateApprovalReportSources}=require('./business-report-source');
 const ledgerDigest=report=>{const copy=JSON.parse(canonicalReport(report));if(copy.Header)delete copy.Header.Time;return hash(copy);};
 const {MAX_SOURCE_BYTES}=require('./business-report-source');
-const TRACKED=ENTITIES.filter(entity=>!SNAPSHOT_ONLY.includes(entity));
+// Nonposting monitoring sources cannot change these accounting reports. The live
+// ledger probe still covers report-affecting types that CDC cannot observe.
+const REPORT_ENTITIES=ENTITIES.filter(entity=>!['Estimate','PurchaseOrder','TimeActivity','Employee','Class','Department','Term','PaymentMethod'].includes(entity));
+const TRACKED=REPORT_ENTITIES.filter(entity=>!SNAPSHOT_ONLY.includes(entity));
 const clockOf=value=>value==null?NaN:new Date(value).getTime();
 const cacheDay=clock=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Halifax',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(clock));
 function originalSource(source){const {reuse,sourceHash,evaluation,...base}=source;return reuse?{...base,startedAt:reuse.startedAt,observedAt:reuse.observedAt}:base;}
@@ -34,19 +37,19 @@ function createBusinessReportCache({Records,Agents,Receipts,Writers,now=()=>Date
   }
   const writer=await db.Writers.findOne({environment:scope.environment,realmId:scope.realmId}).maxTimeMS(3000).lean();
   if(!writer||String(writer.connectionId)!==scope.connectionId||writer.unresolved)return null;
-  for(const entity of SNAPSHOT_ONLY){const s=sources[entity],completed=clockOf(s?.lastSuccessAt),cadence=Number.isSafeInteger(s?.everyMs)&&s.everyMs>=1000?s.everyMs:60000;if(s?.entity!==entity||s.mode!=='snapshot'||s.status!=='current'||s.phase!=='incremental'||!s.generation||s.error||!Number.isFinite(completed)||completed>clock||clock-completed>Math.max(120000,cadence*2))return null;generations[entity]=s.generation;}
-  const rows=await db.Records.find({...scope,entity:{$in:ENTITIES}}).select('entity qboId deleted generation record changedAt').sort({entity:1,qboId:1}).limit(50001).maxTimeMS(10000).lean();
+  for(const entity of SNAPSHOT_ONLY.filter(entity=>REPORT_ENTITIES.includes(entity))){const s=sources[entity],completed=clockOf(s?.lastSuccessAt),cadence=Number.isSafeInteger(s?.everyMs)&&s.everyMs>=1000?s.everyMs:60000;if(s?.entity!==entity||s.mode!=='snapshot'||s.status!=='current'||s.phase!=='incremental'||!s.generation||s.error||!Number.isFinite(completed)||completed>clock||clock-completed>Math.max(120000,cadence*2))return null;generations[entity]=s.generation;}
+  const rows=await db.Records.find({...scope,entity:{$in:REPORT_ENTITIES}}).select('entity qboId deleted generation record changedAt').sort({entity:1,qboId:1}).limit(50001).maxTimeMS(10000).lean();
   if(rows.length>50000||rows.some(row=>!row.deleted&&row.generation!==generations[row.entity]))return null;
-  for(const entity of ENTITIES)if(!Number.isSafeInteger(sources[entity]?.count)||sources[entity].count!==rows.filter(row=>row.entity===entity&&!row.deleted).length)return null;
+  for(const entity of REPORT_ENTITIES)if(!Number.isSafeInteger(sources[entity]?.count)||sources[entity].count!==rows.filter(row=>row.entity===entity&&!row.deleted).length)return null;
   const receipts=await db.Receipts.find({...scope,sentAt:{$gte:new Date(clock-2*86400000)}}).select('_id state observedAt observed.responseHash').sort({_id:1}).limit(10001).maxTimeMS(5000).lean();
   if(receipts.length>10000||receipts.some(row=>['possibly-sent','unknown'].includes(row.state)))return null;
   const signature=hash({generations,records:rows.map(row=>({entity:row.entity,id:row.qboId,deleted:row.deleted,recordHash:hash(row.record),changedAt:row.changedAt?new Date(row.changedAt).toISOString():null})),receipts:receipts.map(row=>({id:String(row._id),state:row.state,observedAt:row.observedAt?new Date(row.observedAt).toISOString():null,responseHash:row.observed?.responseHash||null}))});
   const token={version:1,scope,signature,observedThrough:new Date(through).toISOString(),checkedAt:new Date(clock).toISOString()};return{...token,contentHash:hash(token)};
  }
- async function load(scope,period,before,{readLedger}={}){
+ async function load(scope,period,before,{readLedger,requiredReports=CRITICAL_REPORTS}={}){
   if(!before||typeof readLedger!=='function')return null;const db=models();if(!db)return null;
   const row=await db.Records.findOne({...scope,entity:'CompanyInfo',deleted:false}).select('reportCache').maxTimeMS(3000).lean(),entry=row?.reportCache;
-  if(!entry||entry.version!==1||canonical(entry.scope)!==canonical(scope)||canonical(entry.source?.period)!==canonical(period)||entry.token?.signature!==before.signature||hash(entry.source)!==entry.sourceHash||cacheDay(clockOf(entry.source.observedAt))!==cacheDay(now())||clockOf(before.observedThrough)<clockOf(entry.source.observedAt))return null;
+  if(!entry||entry.version!==1||requiredReports.some(name=>!(entry.requiredReports||CRITICAL_REPORTS).includes(name))||canonical(entry.scope)!==canonical(scope)||canonical(entry.source?.period)!==canonical(period)||entry.token?.signature!==before.signature||hash(entry.source)!==entry.sourceHash||cacheDay(clockOf(entry.source.observedAt))!==cacheDay(now())||clockOf(before.observedThrough)<clockOf(entry.source.observedAt))return null;
   // CDC does not cover every report-affecting QBO type (for example tax
   // payments/inventory adjustments). One complete unchanged ledger probe closes
   // that gap; a changed probe is reused by the caller in its one refreshed set.
@@ -56,14 +59,14 @@ function createBusinessReportCache({Records,Agents,Receipts,Writers,now=()=>Date
   const original=originalSource(entry.source),observedAt=new Date(now()).toISOString();
   const detection={...after,checkedAt:observedAt};delete detection.contentHash;detection.contentHash=hash(detection);
   const source={...original,startedAt:observedAt,observedAt,reuse:{version:1,startedAt:original.startedAt,observedAt:original.observedAt,sourceHash:hash(original),ledgerProbe:packReport('GeneralLedger',ledger,3),detection}};
-  assertReportReuse(source);const evaluation=evaluateReportSources(source,{allowExplicitZero:true});if(evaluation.status!=='checks-passed'||!reportComplete(evaluation,source)||Buffer.byteLength(canonical(source))>MAX_SOURCE_BYTES)return null;
+  assertReportReuse(source);const evaluation=evaluateApprovalReportSources(source,requiredReports);if(evaluation.status!=='checks-passed'||Buffer.byteLength(canonical(source))>MAX_SOURCE_BYTES)return null;
   return{...source,sourceHash:hash(source),evaluation};
  }
- async function retain(scope,source,before){
+ async function retain(scope,source,before,{requiredReports=CRITICAL_REPORTS}={}){
   if(!before)return;const db=models();if(!db)return;
   const after=await snapshot(scope);if(!after||after.signature!==before.signature)return;
-  const evaluation=evaluateReportSources(source,{allowExplicitZero:true});if(evaluation.status!=='checks-passed'||!reportComplete(evaluation,source))return;
-  const entry={version:1,scope,source,sourceHash:hash(source),token:after};
+  const evaluation=evaluateApprovalReportSources(source,requiredReports);if(evaluation.status!=='checks-passed')return;
+  const entry={version:1,scope,source,requiredReports,sourceHash:hash(source),token:after};
   // Metadata beside CompanyInfo, never inside its QBO record. One bounded set per
   // company; no new collection, startup preparation, or unbounded report history.
   await db.Records.updateOne({...scope,entity:'CompanyInfo',deleted:false},{$set:{reportCache:entry}},{maxTimeMS:3000});

@@ -234,7 +234,7 @@ test('today’s activity states planned, saved, verified and in-progress counts 
   const item = byKey(work, 'todays-activity');
   assert.equal(item.owner, 'accountant');assert.equal(item.state, 'on-duty');
   assert.equal(item.facts, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
-  assert.equal(item.detail, 'Working continuously: today is 78 records behind schedule; the next batch of about 60 records of genuine business work runs now.');
+  assert.equal(item.detail, 'Working continuously: today is 78 records behind schedule; the next batch of about 60 records of genuine business work is prepared now. Independent batches continue while other operations run or recover.');
   assert.equal(item.next, 'Working continuously (today is 78 records behind schedule).');
   const paused = byKey(businessWork({ ...running, today: friday, cadence: { kind: 'idle', reason: 'nothing is due right now', nextReviewAt: '2026-10-30T17:30:00.000Z' } }), 'todays-activity');
   assert.equal(paused.next, 'Paused until 2:30 PM: nothing is due right now.');
@@ -260,4 +260,11 @@ test('rightNow carries the Today line, the cadence reason and any calendar lag',
   const behind = rightNow({ ...live, calendarClose: cadenceModule.nextClose({ verifiedThrough: '2026-10-28' }, '2026-10-30') });
   assert.deepEqual(behind.calendar, { closedThrough: 'Oct 28', closing: 'Oct 29', behindDays: 1 });
   assert.equal(rightNow({ ...live }).today, null, 'missing data omits the line');
+});
+
+test('current collection eligibility is plain in the work list and never claims a writer gate is cleared',()=>{
+ const readiness={eligibleInvoiceCount:6,reusableDecisionKeys:['old-key'],readyForNewBatch:false};
+ const work=businessWork({...running,business:{...running.business,collectionReadiness:readiness}});
+ const item=work.items.find(row=>row.key==='collections-eligible');assert.equal(item.state,'on-duty');assert.match(item.detail,/6 overdue imported invoices are currently eligible/);assert.match(item.detail,/normal writer\/calendar checks/);assert.match(item.detail,/decisions.*stale/);assert.match(item.next,/next review/);
+ for(const collectionReadiness of [{...readiness,unavailable:true},{...readiness,eligibleInvoiceCount:0},{...readiness,reusableDecisionKeys:[]}])assert.equal(businessWork({...running,business:{...running.business,collectionReadiness}}).items.some(row=>row.key==='collections-eligible'),false);
 });

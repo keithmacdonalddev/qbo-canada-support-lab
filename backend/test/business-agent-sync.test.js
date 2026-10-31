@@ -709,3 +709,19 @@ test('every pending comparison can require a fresh shared journal source, includ
   assert.equal(h.state().sources.JournalEntry.lastSuccessAt, new Date(now).toISOString());
   assert.equal(result.amountReconciliation.checks.receivables.status, 'waiting', 'the shared fresh read uses the allowance before any comparison');
 });
+
+test('write freshness refreshes only its required sources and leaves unrelated failures visible',async()=>{
+ const h=fixture(['Invoice','Bill']);h.replies.push(h.query('Invoice',[invoice(1)]),h.query('Bill',[invoice(2)]),h.cdc('Invoice',[]),h.cdc('Bill',[]));await h.sync.tick({maxRequests:4});
+ h.advance(150000);const state=h.state();state.sources.Bill.status='error';state.sources.Bill.nextAt=null;h.setState(state);
+ h.calls.length=0;h.queries.length=0;h.replies.push(h.cdc('Invoice',[]));
+ const view=await h.sync.tick({maxRequests:4,freshWithinMs:120000,requiredEntities:['Invoice']});
+ assert.equal(h.calls.length,1);assert.equal(new URLSearchParams(h.calls[0].endpoint.split('?')[1]).get('entities'),'Invoice');assert.equal(h.queries.length,0);assert.equal(view.sources.find(row=>row.entity==='Bill').status,'error');
+ const {sourceFreshness}=require('../src/modules/business-agent-sync');assert.equal(sourceFreshness(view,{entities:['Invoice'],now:h.now()}).ready,true);assert.equal(sourceFreshness(view,{entities:['Bill'],now:h.now()}).ready,false);assert.notEqual(view.status,'current');
+});
+test('dependency admission rejects missing/future sources and isolates unrelated amount reconciliation failures',()=>{
+ const {sourceFreshness,operationSourceEntities,activitySourceEntities}=require('../src/modules/business-agent-sync'),now=Date.parse('2026-10-23T12:00:00Z');
+ const view={status:'attention',sources:[{entity:'Invoice',status:'current',mode:'cdc',lastSuccessAt:new Date(now).toISOString()}],amountReconciliation:{checks:{ap:{entity:'Bill',status:'mismatched'}}}};
+ assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,true);assert.equal(sourceFreshness(view,{entities:['Customer'],now}).ready,false);
+ view.sources[0].lastSuccessAt=new Date(now+1).toISOString();assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,false);
+ const deps=operationSourceEntities({entries:[{step:{entity:'Payment',references:[{entity:'Customer',id:'42'}],dependencies:[{entity:'Invoice'}]}}]});assert.ok(deps.includes('Customer'));assert.ok(deps.includes('Invoice'));assert.ok(!deps.includes('Bill'));assert.ok(activitySourceEntities([{type:'invoice-on-terms',itemKey:'field-service-hour'}]).includes('TimeActivity'));
+});

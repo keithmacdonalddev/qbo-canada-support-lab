@@ -31,7 +31,7 @@ test('unfinished owned operations are found whether or not they hold the calenda
  const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a');
  assert.deepEqual([...query.$or[0].status.$in].sort(),['approved','awaiting-evidence','blocked','committing','reserved','running','stopped']);assert.equal(query['agentAuthority.agentId'],'a');
  // An activity preview from an earlier business day is found too, so it is retired unsent.
- assert.equal(query.$or[1].status,'previewed');assert.match(query.$or[1]['activityBatch.day'].$lt,/^\d{4}-\d{2}-\d{2}$/);
+ assert.equal(query.$or[1].status,'previewed');assert.match(query.$or[1]['activityBatch.day'].$lte,/^\d{4}-\d{2}-\d{2}$/);
  assert.deepEqual(runs,[{operationId:'7'.repeat(24),status:'approved',planHash:null,fromDate:'2026-10-30',throughDate:'2026-10-30',day:'2026-10-30',agentAuthority:{agentId:'a'},executionPending:false,completedRecords:0,holdsSlot:false,disposition:'continue'}]);
 });
 
@@ -55,4 +55,38 @@ test('unfinished work is filtered by grant in the query and classified from save
  const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a',{id:'g',authorityHash:'h'});
  assert.equal(query['agentAuthority.grantId'],'g');assert.equal(query['agentAuthority.authorityHash'],'h','older grants are excluded before the limit');
  assert.deepEqual(runs.map(run=>[run.operationId[0],run.disposition,run.holdsSlot]),[['1','unsent',false],['2','stranded',false],['3','continue',true],['4','stranded',false],['5','active',false]]);
+});
+
+test('current-day previews are retained as prepared capacity, without pretending they need recovery',async()=>{
+ const chain=value=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>value});
+ const rows=[{_id:'prepared',status:'previewed',activityBatch:{day:'2026-10-31'}},{_id:'old',status:'previewed',activityBatch:{day:'2026-10-30'}}];
+ const models={Agents:{},Events:{},Runs:{find:()=>chain(rows)},Receipts:{exists:()=>({maxTimeMS:async()=>null})},Steps:{exists:()=>({maxTimeMS:async()=>null})}};
+ const store=createBusinessAgentStore({models,connection:{},transaction:async work=>work({}),now:()=>Date.parse('2026-10-31T15:00:00Z')});
+ const result=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a');
+ assert.deepEqual(result.map(row=>row.disposition),['prepared','unsent']);
+});
+
+test('durable general plans from earlier days share capacity with specialized operations',async()=>{
+ const chain=value=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>value});let query;
+ const origin={agentId:'agent',grantId:'grant',authorityHash:'hash',ownerId:'owner'};
+ const models={Agents:{},Events:{},Runs:{find:()=>chain([])},GeneralWriteRuns:{find:filter=>{query=filter;return chain([{_id:'old-general',status:'held',day:'2026-10-30',decisionKey:'same-identity',agentAuthority:origin,plan:{operations:[{op:'create'}]},items:{},batches:[]}]);}}};
+ const store=createBusinessAgentStore({models,connection:{},transaction:async work=>work({}),now:()=>Date.parse('2026-10-31T15:00:00Z')});
+ const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'agent',{id:'grant',authorityHash:'hash'});
+ assert.equal(query.day,undefined,'previous-day plans still occupy capacity');assert.equal(query['agentAuthority.grantId'],'grant');assert.equal(runs[0].contract,'general-write-v1');assert.equal(runs[0].disposition,'prepared');assert.equal(runs[0].createCount,1);assert.equal(runs[0].admitted,false);
+});
+
+test('an old prepared general plan that saves now still uses the current rolling hour',async()=>{
+ const chain=value=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>value});
+ const now=Date.parse('2026-10-31T19:00:00Z'),saved=Array.from({length:50},(_,i)=>({ref:'record-'+i,op:'create',entity:'Customer'}));
+ const run={_id:'old-plan',status:'complete',decisionKey:'arbitrary-general-key',createdAt:new Date(now-2*3600000),updatedAt:new Date(now),plan:{operations:saved},items:Object.fromEntries(saved.map(row=>[row.ref,{entity:'Customer',outcome:'saved'}])),batches:[]};
+ const store=createBusinessAgentStore({models:{Agents:{},Events:{},Runs:{find:()=>chain([])},Plans:{find:()=>chain([])},Receipts:{find:()=>chain([])},GeneralWriteRuns:{find:()=>chain([run])}},connection:{},transaction:async work=>work({}),now:()=>now});
+ const raw=await store.todayActivity({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a','2026-10-31');
+ const cadence=require('../src/modules/business-agent-cadence'),today=cadence.summarizeToday({...raw,rhythm:cadence.dayRhythm('2026-10-31'),now});assert.equal(today.hourUsed,50);assert.equal(today.dueSlot.records,10,'only ten new creates remain in this hour');
+});
+
+test('an earlier completed batch receipt does not hide the current unsent sending batch',async()=>{
+ const chain=value=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>value});
+ const row={_id:'later-batch',status:'sending',day:'2026-10-31',agentAuthority:{agentId:'a'},plan:{operations:[{ref:'first',op:'create'},{ref:'next',op:'create'}]},items:{first:{outcome:'saved'}},batches:[{state:'answered',transport:{receiptId:'saved-first'}},{state:'sending'}]};
+ const store=createBusinessAgentStore({models:{Agents:{},Events:{},Runs:{find:()=>chain([])},GeneralWriteRuns:{find:()=>chain([row])}},connection:{},transaction:async work=>work({})});
+ const [run]=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a');assert.equal(run.admitted,false);assert.equal(run.executionPending,false);assert.equal(run.disposition,'prepared');assert.equal(run.createCount,1,'only the remaining create needs admission');assert.equal(run.completedRecords,1);
 });

@@ -64,6 +64,19 @@ function todayLine(today){
 // Cadence kinds that mean the accountant is working now or straight after the current review.
 const CONTINUOUS=new Set(['slice','obligations','recovery','catch-up','management','owner','poll']);
 const halifaxTime=value=>require('./business-agent-cadence').localTime(value);
+// Current saved eligibility outranks historical handoffs and decisions. It is not permission to
+// bypass fresh balances, operation ownership, writer coordination or calendar gates.
+function currentStateUpdates(business){
+  const ready=business?.collectionReadiness;
+  if(!ready||ready.unavailable||!(ready.eligibleInvoiceCount>0)||!ready.reusableDecisionKeys?.length)return [];
+  return [{key:'collections-eligible',state:'eligible',count:ready.eligibleInvoiceCount,readyForNewBatch:ready.readyForNewBatch===true,
+    message:'The old collection identifier hold is cleared. '+plural(ready.eligibleInvoiceCount,'overdue imported invoice')+(ready.eligibleInvoiceCount===1?' is':' are')+' currently eligible for collection, subject to fresh balance and normal writer/calendar checks. Retained handoffs or decisions saying these invoices are blocked by identifier repair are stale.',
+    next:'Use current collection choices at the next review and prepare eligible collections. Keep saved collections; never recreate them. Independent activity continues while other operations recover.'}];
+}
+function reconcileRetained(text,business){
+  const updates=currentStateUpdates(business);
+  return updates.length?[String(text||''),'Current saved state takes precedence over historical notes:',...updates.map(item=>item.message+' '+item.next)].filter(Boolean).join('\n'):text||'';
+}
 function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null,facts=null,today=null,calendarClose=null,cadence=null,owned=[],requests=null}={}){
   settings=settings||{};agent=agent||{};business=business||{};sync=sync||{};
   const items=[],blockers=Array.isArray(business.blockers)?business.blockers:[],codes=new Set(blockers.map(item=>item.code));
@@ -117,8 +130,8 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   const pending=(Array.isArray(owned)?owned:[]).filter(run=>run&&run.disposition!=='unsent'&&run.operationId!==operation?.operationId&&grant&&run.agentAuthority?.agentId===agent.id&&run.agentAuthority?.grantId===grant.id);
   const stranded=pending.some(run=>run.disposition==='stranded');
   if(pending.length)add({key:'finish-approved',owner:ACCOUNTANT,state:stranded?'blocked':!running?'waiting':pending.some(run=>run.executionPending||IN_PROGRESS.has(run.status))?'working':'waiting',title:'Finish approved accounting work',
-    detail:plural(pending.length,'approved operation')+' not finished yet ('+pending.slice(0,3).map(run=>run.status+(run.day?' for '+shortDate(run.day):'')).join(', ')+'). New periods and batches wait until it is done.',
-    next:stranded?'It stopped after saving records outside the business calendar. Continuing it needs a recovery capability that is being built; nothing is sent twice.':running?'Resumes it at the next review, without sending anything twice.':'Resumes once the accountant is running.',...(stranded?{capability:'stranded-recovery',href:'/company/manage'}:{})});
+    detail:plural(pending.length,'unfinished operation')+' ('+pending.slice(0,3).map(run=>run.status+(run.day?' for '+shortDate(run.day):'')).join(', ')+'). Calendar closes wait for their dependencies. Independent batches continue within the three-operation, hourly and daily limits.',
+    next:stranded?'It stopped after saving records outside the business calendar. Continuing it needs a recovery capability that is being built; nothing is sent twice. Independent activity can still be prepared.':running?'Resumes it at the next review, without sending anything twice.':'Resumes once the accountant is running.',...(stranded?{capability:'stranded-recovery',href:'/company/manage'}:{})});
   // Calendar catch-up and today's activity (continuous-business plan v2 §3b–§3c).
   const nextAt=cadence?.nextReviewAt?halifaxTime(cadence.nextReviewAt):null,held=cadence?.kind==='held'||cadence?.kind==='ceiling';
   if(published&&calendarClose){
@@ -134,13 +147,14 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
       :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
       :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
       :requests?.reached&&today.remaining>0?(reason=>reason.charAt(0).toUpperCase()+reason.slice(1)+'.')(require('./business-agent-cadence').requestBudgetReason(requests))
-      :due?'Working continuously: today is '+plural(Number.isSafeInteger(today.behind)?today.behind:due.records,'record')+' behind schedule; the next batch of about '+plural(due.records,'record')+' of genuine business work runs now.'
+      :today.inFlight>=3?'Three operations are prepared, queued or executing. New activity resumes when one finishes; recovery continues.':due?'Working continuously: today is '+plural(Number.isSafeInteger(today.behind)?today.behind:due.records,'record')+' behind schedule; the next batch of about '+plural(due.records,'record')+' of genuine business work is prepared now. Independent batches continue while other operations run or recover.'
       :today.remaining===0?'Today’s target is met.'
       :today.hourResetAt?'Paused: the hourly limit of '+today.hourCap+' new records is reached. Work continues at '+halifaxTime(today.hourResetAt)+'.'
       :today.nextSlotAt?'On schedule. More work is due at '+halifaxTime(today.nextSlotAt)+'.':'Today’s schedule is complete; any shortfall is not replayed.';
     add({key:'todays-activity',owner:ACCOUNTANT,state:stale||!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
       next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':CONTINUOUS.has(cadence?.kind)?'Working continuously'+(cadence?.reason?' ('+cadence.reason+')':'')+'.':nextAt?'Paused until '+nextAt+(cadence?.reason?': '+cadence.reason:'')+'.':'Works through the day in small batches.'});
   }
+  for(const update of currentStateUpdates(business))add({key:update.key,owner:ACCOUNTANT,state:running?'on-duty':'waiting',title:'Previously held collections are eligible now',detail:update.message,next:running?update.next:'Starts once the accountant is running. '+update.next});
   if(business.adoptedThrough)duty('inherited-obligations',['collect-adopted-invoice','pay-adopted-bill'],{title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',capability:'adopted-obligations'},'Collects and pays them at business reviews as customers pay and bills fall due.');
   for(const blocker of blockers)if(!KNOWN.has(blocker.code))add({key:'blocker-'+(blocker.code||'unknown'),owner:ACCOUNTANT,state:'blocked',title:blocker.title||'Business work is held',detail:blocker.detail||'',next:'Retried on the next review.',href:blocker.href||'/company/manage'});
 
@@ -190,4 +204,4 @@ function rightNow({configured=false,settings={},usage=null,reviewing=false,recov
   return base;
 }
 
-module.exports={businessWork,rightNow,oneLine,dutyFacts,todayLine,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};
+module.exports={currentStateUpdates,reconcileRetained,businessWork,rightNow,oneLine,dutyFacts,todayLine,coverageSignals,ACCOUNTANT_ENTITIES,ACCOUNTANT,OWNER};

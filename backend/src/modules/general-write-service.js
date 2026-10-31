@@ -159,6 +159,12 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       if (batch.sends > 10) { run = await save(run, { status: 'unknown', lastError: 'This batch used its transport attempts; its outcome must be attributed before anything else is sent.' }); return report(run); }
       try { response = await transport.sendBatch(scope, { runId: run._id, batch }); run = await refreshSettlement(run, batch); }
       catch (error) {
+        // A definitive admission refusal sent nothing. Retain this exact batch identity without
+        // spending a transport attempt; long writer contention must never exhaust replay safety.
+        if(error?.qboStage==='write_admission'&&error.outcomeUnknown!==true&&error.lost!==true){
+          run=await refreshSettlement(run,batch);
+          if(!run.batches.find(row=>row.index===batch.index)?.transport?.receiptId)run=await save(run,{status:'prepared',batches:run.batches.map(row=>row.index===batch.index?{...row,sends:Math.max(0,(row.sends||0)-1)}:row)});
+        }
         if (error?.lost !== true) throw error;
         run = await refreshSettlement(run, batch);
         run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, state: 'lost' } : row), status: 'unknown', lastError: 'The QuickBooks response was lost; the same request will be replayed with its original identity.' });

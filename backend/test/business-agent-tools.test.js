@@ -76,12 +76,12 @@ test('a same-day slice takes the due slot identity; duty and list batches keep t
  assert.equal(h.prepared[1].decisionKey,'list-additions-0001');
  // The slot's batch was prepared: another slice in the same slot is refused and points at that plan.
  h.today=cadence.summarizeToday({rhythm:cadence.dayRhythm('2026-10-30'),runs:[{id:operationId,status:'previewed',decisionKey:'slot-20261030-r2-s4',createdAt:NOON-60000,createCount:3}],now:NOON});
- await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/already has a prepared batch \(operation e{24}\)/);
+ await h.tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.at(-1).decisionKey,'slot-20261030-r2-s4-b2');
  h.today={...h.today,open:[],dueSlot:null};
  await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/No same-day activity is due now: today is on schedule; more is due at 12:30 PM \(Halifax\)/);
  h.today={...h.today,hourResetAt:new Date(NOON+20*60000).toISOString()};
  await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/hourly limit of 60 new records is reached; work continues at 12:20 PM \(Halifax\)/);
- await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,3,'standing duties stay available between slots');
+ await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,4,'standing duties stay available between slots');
 });
 test('the daily ceiling, a day with no planned activity and an unreadable count stop new discretionary slices',async()=>{
  const h=slotFixture();
@@ -166,4 +166,23 @@ test('at the daily QuickBooks request budget new slices are refused; duties and 
  await assert.rejects(tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/request budget of 10,000 is used/);
  await tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1,'list additions and obligations are not discretionary slices');
  read=500;await tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.length,2);
+});
+
+test('independent general batches prepare beside recovery and the fourth operation is refused before saving',async()=>{
+ const generalModule=require('../src/modules/general-write-service'),original=generalModule.createDefaultGeneralWrite;
+ let prepared=0,executed=0,owned=[],today={day:'2026-10-23',target:150,ceiling:300,saved:0,reserved:0,inFlight:0,open:[],hourCap:60,hourUsed:0};
+ generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return {runId:'new-general',status:'prepared',admitted:false};},dispatchEnabled:()=>true,execute:async()=>{executed++;return {status:'held'};}});
+ const row={_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},origin={version:1,agentId,grantId,authorityHash,ownerId};
+ let business={verifiedThrough:'2026-10-22',blockers:[{code:'current-operation'},{code:'uncertain-write'}],currentOperation:{operationId:'stuck',status:'blocked',agentAuthority:origin}};
+ const tools=createBusinessAgentTools({row,passId:'general-independent',scope,user:{id:ownerId},now:()=>Date.parse('2026-10-23T15:00:00Z'),guard:async()=>{},store:{models:{},business:async()=>business,unfinishedRuns:async()=>owned},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
+ const input={decisionKey:'independent-general-001',purpose:'Record an independent service estimate for a new customer.',operations:[{ref:'quote',op:'create',entity:'Estimate',payload:{}}]};
+ try{
+  owned=[{operationId:'stuck',status:'blocked',agentAuthority:origin,disposition:'continue'}];
+  const saved=await tools.execute('manageQboRecord',input);assert.equal(saved.success,true);assert.equal(saved.data.execution.status,'held');assert.deepEqual([prepared,executed],[1,1]);
+  owned=['one','two','three'].map(operationId=>({operationId,status:'prepared',agentAuthority:origin,disposition:'prepared'}));business={blockers:[],currentOperation:null};
+  await assert.rejects(tools.execute('manageQboRecord',{...input,decisionKey:'fourth-general-001'}),/Three operations/);assert.equal(prepared,1,'no fourth saved plan');
+  owned=[];today={...today,hourUsed:60};await assert.rejects(tools.execute('manageQboRecord',input),/hourly limit/);assert.equal(executed,1,'hourly admission precedes dispatch');
+  today={...today,hourUsed:0};business={blockers:[{code:'calendar-stopped',detail:'The owner stopped accounting.'}]};await assert.rejects(tools.execute('manageQboRecord',input),/owner stopped/);
+  business={blockers:[{code:'current-operation'}],currentOperation:{operationId:'foreign',agentAuthority:{...origin,grantId:'other'}}};await assert.rejects(tools.execute('manageQboRecord',input),/held|authorization/);
+ }finally{generalModule.createDefaultGeneralWrite=original;}
 });

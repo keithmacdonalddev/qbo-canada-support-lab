@@ -308,7 +308,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     }
   }
   async function perform() {
-    const state = await stateRead(); observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
+    const state = await stateRead(); const activeEntities = perform.requiredEntities || entities; observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
     const controller = new AbortController(), abort = () => controller.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
     const deadline = setTimeout(abort, perform.timeoutMs); deadline.unref?.();
@@ -321,11 +321,11 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     });
     const control = { signal: controller.signal, beforeAttempt: async () => { controller.signal.throwIfAborted(); await check(); if (attempts >= maxRequests) throw Object.assign(fail('This sync slice has used its request allowance.'), { allowance: true }); attempts++; }, onFailure: () => {} };
     try {
-      if (prepareAmounts(state)) await save(state);
+      if (!perform.requiredEntities && prepareAmounts(state)) await save(state);
       // One combined change read covers every incremental change-tracked source that is not
       // being read on its own. It runs when any of them is due, and each covered source is then
       // current as of that response; nothing is persisted from a response at the change limit.
-      const groupClock = now(), grouped = new Set(entities.filter(entity => {
+      const groupClock = now(), grouped = new Set(activeEntities.filter(entity => {
         const source = state.sources[entity];
         return source && !SNAPSHOT_ONLY.has(entity) && !badCursor(source, entity) && source.phase === 'incremental' && source.solo !== true && !cdcExpired(source, groupClock);
       }));
@@ -359,10 +359,10 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         }
       }
       // A slice that ran out of time during the combined read stops here; its cursors are kept.
-      let visited = controller.signal.aborted ? entities.length : 0;
-      while (requests < maxRequests && visited < entities.length) {
+      let visited = controller.signal.aborted ? activeEntities.length : 0;
+      while (requests < maxRequests && visited < activeEntities.length) {
         await check(); controller.signal.throwIfAborted();
-        const index = state.nextEntity % entities.length, entity = entities[index]; state.nextEntity = (index + 1) % entities.length; visited++;
+        const index = state.nextEntity % activeEntities.length, entity = activeEntities[index]; state.nextEntity = (index + 1) % activeEntities.length; visited++;
         let source = state.sources[entity]; const clock = now();
         if (grouped.has(entity)) continue;
         if (source && badCursor(source, entity)) throw fail('A saved source cursor is invalid.');
@@ -436,18 +436,19 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         } catch (error) { signal?.throwIfAborted(); state.summaryError = 'The company summary could not be refreshed. Earlier figures may be stale.'; await save(state); }
       }
       if (!changed && observedSource && state.company && state.summaryAt && !state.summaryError) { state.summaryAt = iso(now()); await save(state); }
-      await reconcileAmounts(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
-      await reconcile(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
+      if (!perform.requiredEntities) await reconcileAmounts(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
+      if (!perform.requiredEntities) await reconcile(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
       return publicSnapshot(state, entities, now(), intervalMs);
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   }
   // freshWithinMs: the write gate's demand that change-tracked sources were read within this long.
-  function tick({ maxRequests = 8, timeoutMs = 120000, freshWithinMs = null } = {}) {
+  function tick({ maxRequests = 8, timeoutMs = 120000, freshWithinMs = null, requiredEntities = null } = {}) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) return Promise.reject(new TypeError('Use a sync time allowance of 1–120 seconds.'));
     if (freshWithinMs !== null && (!Number.isInteger(freshWithinMs) || freshWithinMs < 1000 || freshWithinMs > 3600000)) return Promise.reject(new TypeError('Use a freshness demand of 1–3,600 seconds.'));
     if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 40) return Promise.reject(new TypeError('Use a bounded sync slice of 1–40 requests.'));
+    if (requiredEntities !== null && (!Array.isArray(requiredEntities) || !requiredEntities.length || new Set(requiredEntities).size !== requiredEntities.length || requiredEntities.some(entity => !entities.includes(entity)))) return Promise.reject(new TypeError('Use supported required synchronization sources.'));
     if (ticking) return ticking;
-    perform.maxRequests = maxRequests; perform.timeoutMs = timeoutMs; perform.freshWithinMs = freshWithinMs;
+    perform.maxRequests = maxRequests; perform.timeoutMs = timeoutMs; perform.freshWithinMs = freshWithinMs; perform.requiredEntities = requiredEntities;
     // Requests made by a sync slice are measured as background synchronization.
     ticking = require('./qbo-request-meter').runWithCategory('sync', () => perform()).finally(() => { ticking = null; }); return ticking;
   }
@@ -455,3 +456,55 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
   return { tick, snapshot };
 }
 module.exports = { recordSummary, createBusinessAgentSync, summarizeCompanyMirror, ENTITIES, SNAPSHOT_ONLY: Object.freeze([...SNAPSHOT_ONLY]), PAGE_SIZE, CDC_LIMIT };
+
+// Freshness admission is separate from the provisional whole-company dashboard.
+function operationSourceEntities(manifest) {
+ if (!Array.isArray(manifest?.entries) || !manifest.entries.length) return null;
+ const wanted = new Set();
+ for (const entry of manifest.entries) {
+  const step = entry.step || entry;
+  if (!ENTITIES.includes(step.entity)) return null;
+  wanted.add(step.entity);
+  for (const ref of [...(step.references || []), ...(step.dependencies || [])]) {
+   if (!ENTITIES.includes(ref.entity)) return null;
+   wanted.add(ref.entity);
+  }
+ }
+ // Preferences/currency and tax definitions protect every posting transaction.
+ if ([...wanted].some(entity => !['Customer','Vendor','Item','Estimate','PurchaseOrder','TimeActivity'].includes(entity))) {
+  for (const entity of ['Account','Preferences','CompanyInfo','TaxCode','TaxRate']) wanted.add(entity);
+ }
+ return ENTITIES.filter(entity => wanted.has(entity));
+}
+function activitySourceEntities(activities) {
+ const types = {
+  'settled-service-sale':['Estimate','TimeActivity','Invoice','Payment','Deposit','Customer','Item'],
+  'invoice-on-terms':['Invoice','Customer','Item'], 'bill-on-terms':['Bill','Vendor'],
+  'paid-operating-expense':['Bill','BillPayment','Vendor'], 'paid-cash-expense':['Purchase','Vendor'],
+  'supplier-credit':['VendorCredit','Vendor'], 'customer-credit':['CreditMemo','Customer','Item'],
+  'customer-refund':['RefundReceipt','Customer','Item'], 'bank-transfer':['Transfer'], 'journal-entry':['JournalEntry'],
+  'collect-own-invoice':['Invoice','Payment','Deposit','Customer'], 'collect-adopted-invoice':['Invoice','Payment','Deposit','Customer'],
+  'pay-own-bill':['Bill','BillPayment','Vendor'], 'pay-adopted-bill':['Bill','BillPayment','Vendor'],
+  'send-estimate':['Estimate','Customer','Item'], 'convert-own-estimate':['Estimate','TimeActivity','Invoice','Customer','Item'],
+  'order-stock':['PurchaseOrder','Vendor','Item'], 'receive-purchase-order':['PurchaseOrder','Bill','Vendor','Item'],
+  'add-customer':['Customer'], 'add-supplier':['Vendor'], 'add-item':['Item','Account']
+ };
+ if (!Array.isArray(activities) || !activities.length || activities.some(row => !types[row.type])) return null;
+ const entities = new Set(activities.flatMap(row => types[row.type]));
+ // Field service invoices also create an estimate and billable time.
+ if (activities.some(row => row.type === 'invoice-on-terms' && row.itemKey === 'field-service-hour')) { entities.add('Estimate'); entities.add('TimeActivity'); }
+ return operationSourceEntities({entries:[...entities].map(entity => ({step:{entity}}))});
+}
+function sourceFreshness(view, {entities = null, now = Date.now(), withinMs = 120000} = {}) {
+ const wanted = entities === null ? (view.sources || []).map(row => row.entity) : entities;
+ if (!Array.isArray(wanted) || wanted.some(entity => !ENTITIES.includes(entity))) throw new TypeError('Use supported source dependencies.');
+ const missing = wanted.filter(entity => {
+  const source = view.sources?.find(row => row.entity === entity), completed = stamp(source?.lastSuccessAt);
+  return !source || source.status !== 'current' || source.error || source.reconcileError || completed === null || completed > now || (source.mode !== 'snapshot' && now - completed > withinMs);
+ });
+ const amountProblem = Object.values(view.amountReconciliation?.checks || {}).some(check => wanted.includes(check.entity) && ['mismatched','error','unverified','resyncing'].includes(check.status));
+ return {ready: entities === null ? view.status === 'current' && !missing.length && !amountProblem : !missing.length && !amountProblem, entities: wanted, missing};
+}
+module.exports.operationSourceEntities = operationSourceEntities;
+module.exports.activitySourceEntities = activitySourceEntities;
+module.exports.sourceFreshness = sourceFreshness;

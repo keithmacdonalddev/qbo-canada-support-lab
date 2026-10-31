@@ -121,3 +121,7 @@ test('progressive disclosure: core schemas only, skills index in the instruction
  assert.equal(results[3].success,false,'useTool rejects input outside the schema');
  assert.deepEqual(calls,[{name:'runReport',input:{reportName:'AgedReceivables'}},{name:'runReport',input:{reportName:'ProfitAndLoss'}}],'discovery calls do not use the three-call allowance');
 });
+
+test('the accountant keeps independent work moving and acts on current saved eligibility',()=>{
+ const prompt=systemPrompt('accountant');assert.match(prompt,/manageQboRecord to prepare independent/);assert.match(prompt,/three operations/);assert.match(prompt,/current saved eligibility/);assert.doesNotMatch(prompt,/New periods and batches are refused until it is done/);
+});

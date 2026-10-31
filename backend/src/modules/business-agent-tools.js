@@ -89,6 +89,24 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     const open=(await unfinished()).filter(run=>run.operationId!==except&&run.disposition!=='unsent');
     if(open.length)fail(open[0].disposition==='stranded'?'Your operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') stopped outside the calendar after saving records. It must be continued before new periods or batches; that recovery capability is not available yet, so record it and continue independent work.':'Finish your unfinished operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') first with resumeBusinessOperation; new periods and batches wait until it is done.');
   }
+  // Calendar periods and specialized batches retain their immutable calendar fence. General
+  // batches can prepare independently; the transport checks exact resource conflicts (Job D).
+  async function requireActivityCapacity(business,decisionKey=null,except=null){
+    const open=(await unfinished()).filter(run=>run.disposition!=='unsent');
+    const own=run=>run?.agentAuthority?.agentId===String(row._id)&&run.agentAuthority.grantId===row.grant?.id&&run.agentAuthority.authorityHash===row.grant?.authorityHash;
+    const retained=business.currentOperation;
+    const scopedHold=(!retained||own(retained))&&(retained||open.length);
+    const blocker=(business.blockers||[]).find(item=>!scopedHold||!['current-operation','uncertain-write'].includes(item.code));
+    if(blocker)fail(blocker.detail||blocker.title||'Company activity is held.');
+    if(retained&&!own(retained))fail('Another authorization owns the current operation.');
+    const today=typeof todayFor==='function'?await todayFor({fresh:true}):null;
+    if(today?.unavailable)fail('Today’s activity count could not be read, so no new batch was prepared.');
+    const reuse=except||(today?.open||[]).find(run=>run.decisionKey===decisionKey)?.operationId;
+    const ids=new Set([...open.map(run=>run.operationId),...(today?.open||[]).map(run=>run.operationId),...(retained?[retained.operationId]:[])]);
+    if(reuse)ids.delete(reuse);
+    if(Math.max(ids.size,(Number(today?.inFlight)||0)-(reuse&&today?.open?.some(run=>run.operationId===reuse)?1:0))>=cadence.MAX_IN_FLIGHT)fail('Three operations are already prepared, queued or executing. Continue an existing operation before preparing another.');
+    return today;
+  }
   const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord'].includes(tool.name))];
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0,local=null;
   const localReads=()=>local||(local=require('./business-local-reads').createLocalReads({Records:store.models.Records,scope,freshness:()=>require('./business-agent-service').publicSync(row,now())}));
@@ -149,15 +167,31 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       await access.authorize(scope,'operations.preview',{signal});
       const general=require('./general-write-service').createDefaultGeneralWrite({now,access});
       const bound={scope,ownerId:String(row.ownerId),actorId:String(user.actorId||user.id),agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)}};
+      const capacity=await requireActivityCapacity(business,input.decisionKey);
+      // Reserve only work that fits before a NEW general plan is saved. Existing identities retain
+      // their original payload and are checked again below unless already admitted by the transport.
+      if(capacity&&!(capacity.open||[]).some(run=>run.decisionKey===input.decisionKey)){
+        const creates=input.operations.filter(op=>op.op==='create').length;
+        if(creates){
+          todayLimit(capacity);
+          if(capacity.saved+capacity.reserved+creates>capacity.ceiling)fail('Today’s activity ceiling does not have room for these general writes.');
+          if(Number.isSafeInteger(capacity.hourCap)&&(Number(capacity.hourUsed)||0)+creates>capacity.hourCap)fail('These general writes would exceed the hourly limit of '+capacity.hourCap+' new records.');
+          await requireRequestBudget();
+        }
+      }
       const prepared=await general.prepare(bound,input);
-      if(!prepared.admitted){if(business.blockers.length)fail(business.blockers[0].detail);await requireNoUnfinished();}
+      // Fresh admission under the worker lease; saved retries reuse their existing slot.
+      if(!prepared.admitted)await requireActivityCapacity(await store.business(scope),input.decisionKey,prepared.runId);
       if(prepared.status==='refused')result={success:false,refused:true,problems:prepared.problems,error:'Nothing was sent. Correct the listed operations and send again with the same decisionKey.'};
       else{
         if(general.dispatchEnabled())await access.authorize(scope,'operations.execute',{signal});
         if(typeof todayFor==='function'&&general.dispatchEnabled()&&!prepared.admitted){
           const today=await todayFor({fresh:true}),own=Number(today.reservedByRun?.[prepared.runId])||0;
           todayLimit({...today,reserved:Math.max(0,(today.reserved||0)-own),ceilingReached:(today.saved||0)+(today.reserved||0)-own>=today.ceiling});
-          if((today.saved||0)+(today.reserved||0)-own+input.operations.filter(op=>op.op==='create').length>today.ceiling)fail('Today’s activity ceiling does not have room for these general writes.');
+          const creates=input.operations.filter(op=>op.op==='create').length;
+          if((today.saved||0)+(today.reserved||0)-own+creates>today.ceiling)fail('Today’s activity ceiling does not have room for these general writes.');
+          const hourOther=(Number(today.hourUsed)||0)-(Number(today.hourByRun?.[prepared.runId])||0);
+          if(Number.isSafeInteger(today.hourCap)&&hourOther+creates>today.hourCap)fail('These general writes would exceed the hourly limit of '+today.hourCap+' new records.');
           await requireRequestBudget();
         }
         try{result={success:true,data:{...prepared,execution:await general.execute(bound,prepared.runId)}};}finally{forgetToday();}
@@ -167,14 +201,13 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       const batch = require('./business-activity-batch'); batch.validateChoices(input);
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
       await requireNoUnfinished();
+      await requireActivityCapacity(business,input.decisionKey);
       if(typeof todayFor==='function'&&cadence.isSlice(input.activities)){
         const today=await todayFor({fresh:true});todayLimit(today);await requireRequestBudget();
         // A scheduled slice takes the server-owned identity of today's due slot, so a repeated
         // review reuses that slot's batch instead of creating duplicate logical work.
         {
-          const prepared=(today.open||[]).find(run=>run.status==='previewed');
-          // A prepared slice is executed before another is prepared.
-          if(prepared)fail('Today already has a prepared batch (operation '+prepared.operationId+'). Inspect and execute that exact plan instead of preparing another.');
+          // Multiple prepared plans reserve their counts; capacity admission above allows at most three.
           if(!today.dueSlot)fail('No same-day activity is due now: '+(today.hourResetAt?'the hourly limit of '+today.hourCap+' new records is reached; work continues at '+cadence.localTime(today.hourResetAt)+' (Halifax)':today.nextSlotAt?'today is on schedule; more is due at '+cadence.localTime(today.nextSlotAt)+' (Halifax)':'today’s schedule is complete')+'. Today: '+today.target+' planned, '+today.saved+' in QuickBooks, '+today.reserved+' in progress. Receiving orders, settling adopted obligations, corrections and list additions remain available.');
           input={...input,decisionKey:today.dueSlot.decisionKey};
         }
@@ -192,7 +225,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       result={success:true,data:await governed(origin).prepare(user,{requestKey:hash({agentId:row._id,grantId:row.grant.id,passId,throughDate:input.throughDate}),throughDate:input.throughDate},{signal})};
     }else if(name==='executeBusinessPeriod'){
       await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only exact retained plans belonging to this agent grant can be executed.');
-      if(run.status==='previewed')await requireNoUnfinished(String(run._id));
+      if(run.status==='previewed'){await requireNoUnfinished(String(run._id));await requireActivityCapacity(await store.business(scope),null,String(run._id));}
       // Capacity admission for a new same-day slice: fresh counts (no cache), checked immediately
       // before approval. The agent's exclusive lease is the fence: guard(true) re-verifies it before
       // approve, and only the lease holder admits batches for this agent. Obligations and recovery

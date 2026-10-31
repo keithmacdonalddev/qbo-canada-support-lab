@@ -23,8 +23,8 @@ test('Production monitoring consent and owner identity are required before setup
 test('monitoring continues while autonomous decisions are paused',async()=>{
  const h=fixture({autonomous:false});h.row.nextSyncAt=new Date(h.clock);await h.service._worker(agentId,new AbortController());assert.equal(h.syncCalls,1);assert.equal(h.engineCalls,0);assert.equal(h.row.leaseToken,null);h.service.close();
 });
-test('partial sources prevent provider decisions and continue catch-up',async()=>{
- const h=fixture({current:false});h.row.nextSyncAt=new Date(h.clock);await h.service._worker(agentId,new AbortController());assert.equal(h.syncCalls,1);assert.equal(h.engineCalls,0);assert.equal(h.row.status,'catching-up');assert.equal(new Date(h.row.nextSyncAt).getTime(),h.clock+5000);h.service.close();
+test('partial monitoring permits read-only decisions while catch-up continues',async()=>{
+ const h=fixture({current:false});h.row.nextSyncAt=new Date(h.clock);await h.service._worker(agentId,new AbortController());assert.equal(h.syncCalls,1);assert.equal(h.engineCalls,1);assert.equal(publicSync(h.row,h.clock).company.provisional,true);assert.equal(new Date(h.row.nextSyncAt).getTime(),h.clock+5000);h.service.close();
 });
 test('restart resumes persisted cursors after expired lease and performs an actual decision pass',async()=>{
  const h=fixture();h.row.nextSyncAt=new Date(h.clock);h.row.leaseToken='old-process';h.row.leaseExpiresAt=new Date(h.clock-1);h.row.activePass={id:'retained-pass',role:'accountant',startedAt:new Date(h.clock-60000).toISOString()};
@@ -266,10 +266,10 @@ test('a failed retirement is reported and does not loop a model review',async()=
  assert.equal(h.events.find(event=>event.title==='Unsent work could not be retired').kind,'attention');assert.equal(h.engineCalls,0);
  h.service.close();
 });
-test('stranded work with saved records holds new work visibly and makes no model call',async()=>{
+test('stranded work stays visible while independent new activity is reviewed',async()=>{
  const h=fixture();h.owned=[strandedRun(h,'stranded')];
  await h.service._worker(agentId,new AbortController());
- assert.equal(h.engineCalls,0);assert.equal(h.row.cadence.kind,'held');assert.match(h.row.cadence.reason,/stopped work with saved records/);
+ assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'slice');assert.match(h.passContext.cadence.reason,/independent work/);
  const view=await h.service.status({id:ownerId});assert.equal(view.work.items.find(item=>item.key==='finish-approved').state,'blocked');
  h.service.close();
 });
@@ -386,5 +386,102 @@ test('a recorded failed review still counts toward no-progress backoff',async()=
  const h=fixture();h.onRun=async()=>{throw new Error('fixture review failure');};
  await h.service._worker(agentId,new AbortController());assert.equal(h.row.cadence.reviewPending,false);h.onRun=null;
  h.clock+=300001;h.row.nextSyncAt=new Date(h.clock+30000);h.row.syncView.summaryAt=new Date(h.clock).toISOString();h.row.syncView.sources[0].freshUntil=new Date(h.clock+120000).toISOString();
- await h.service._worker(agentId,new AbortController());assert.equal(h.row.cadence.misses,2,'the failed and completed no-progress attempts each count');h.service.close();
+ await h.service._worker(agentId,new AbortController());assert.equal(h.row.cadence.misses,1,'a completed no-progress review starts a new streak after a provider failure');h.service.close();
+});
+
+test('new activity is reviewed while automatic recovery is still pending, even inside its old backoff',async()=>{
+ const h=fixture();moveTo(h,'2026-10-31T17:00:00Z');h.business.verifiedThrough='2026-10-30';h.row.nextSyncAt=new Date(h.clock+30000);
+ const stuck={...heldRun(h),day:'2026-10-31'};h.owned=[stuck];h.business.currentOperation={...stuck};h.business.blockers=[{code:'current-operation'},{code:'uncertain-write'}];
+ h.row.cadence={day:'2026-10-31',lastKind:'recovery',misses:8,lastReviewAt:new Date(h.clock-60000).toISOString()};h.row.nextDecisionAt=new Date(h.clock+30*60000);
+ let release;const pending=new Promise(resolve=>{release=resolve;});let started=false,finished=false;
+ h.governance={resolveUnknownAutomatically:async()=>{started=true;await pending;finished=true;return {state:'ambiguous',message:'The original record remains held.'};},automaticRecoveryPending:async()=>({pending:false})};
+ h.onRun=async input=>{assert.equal(started,true);assert.equal(finished,false,'new work did not wait on recovery');assert.equal(input.context.cadence.kind,'slice');release();};
+ const worker=h.service._worker(agentId,new AbortController());
+ try{await Promise.race([worker,new Promise((_,reject)=>{const timer=setTimeout(()=>{release();reject(new Error('Independent review waited for recovery'));},1500);timer.unref();})]);}finally{release();await worker;h.service.close();}
+ assert.equal(h.engineCalls,1);assert.equal(finished,true);assert.equal(h.row.leaseToken,null);
+});
+test('workspace and the next review explicitly replace stale collection-blocked handoffs with saved eligibility',async()=>{
+ const h=fixture();h.row.memory='Hold the six collections for identifier repair.';h.row.summary='Collections remain blocked.';
+ h.business.collectionReadiness={eligibleInvoiceCount:6,eligibleBalanceCents:60000,reusableDecisionKeys:['old-collection-key'],readyForNewBatch:true};
+ h.store.decisions=async()=>[{id:'1'.repeat(24),detail:'Hold all collections.',status:'pending'}];
+ const view=await h.service.status({id:ownerId});assert.match(view.agent.summary,/hold is cleared/);assert.match(view.agent.memory,/decisions.*stale/);assert.equal(view.business.currentStateUpdates[0].count,6);assert.equal(view.decisions[0].currentStateUpdates[0].state,'eligible');assert.ok(view.work.items.some(row=>row.key==='collections-eligible'));
+ await h.service._worker(agentId,new AbortController());assert.match(h.passContext.memory,/Current saved state takes precedence/);assert.match(h.passContext.memory,/Use current collection choices at the next review/);assert.equal(h.passContext.currentStateUpdates[0].count,6);assert.equal(h.passContext.decisions[0].currentStateUpdates[0].state,'eligible');h.service.close();
+});
+
+test('automatic recovery receives cancellation and drains before releasing its lease',async()=>{
+ const h=fixture();moveTo(h,'2026-10-31T17:00:00Z');h.business.verifiedThrough='2026-10-30';h.row.nextSyncAt=new Date(h.clock+30000);h.owned=[heldRun(h)];h.business.currentOperation={...h.owned[0]};h.business.blockers=[{code:'current-operation'},{code:'uncertain-write'}];h.row.cadence={day:'2026-10-31',lastKind:'recovery',lastReviewAt:new Date(h.clock-60000).toISOString()};
+ const controller=new AbortController();let drained=false;
+ h.governance={resolveUnknownAutomatically:async(user,id,input,{signal})=>{assert.equal(signal,controller.signal);await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));drained=true;return {state:'ambiguous',message:'Cancelled recovery read.'};}};
+ h.onRun=async()=>controller.abort();await h.service._worker(agentId,controller);assert.equal(drained,true);assert.equal(h.row.leaseToken,null);h.service.close();
+});
+test('saved general plans resume by exact ID when the writer frees, without reconstructing a decision',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.row.nextSyncAt=new Date(h.clock+30000);
+ const origin={version:1,agentId,grantId:h.row.grant.id,authorityHash,ownerId};h.owned=[{operationId:'general-saved',contract:'general-write-v1',status:'held',createCount:1,day:'2026-10-23',agentAuthority:origin,disposition:'prepared'}];
+ const module=require('../src/modules/general-write-service'),original=module.createDefaultGeneralWrite;let calls=[];
+ module.createDefaultGeneralWrite=()=>({execute:async(bound,id)=>{calls.push({bound,id});h.owned=[];return {status:'complete'};}});
+ try{await h.service._worker(agentId,new AbortController());assert.equal(calls.length,1);assert.equal(calls[0].id,'general-saved');assert.deepEqual(calls[0].bound.agentAuthority,origin);assert.equal(h.engineCalls,0);assert.equal(h.row.leaseToken,null);}finally{module.createDefaultGeneralWrite=original;h.service.close();}
+});
+
+test('freshness failure streak kind survives the strict agent schema and resets across review kinds',async()=>{
+ const h=fixture();h.row.reviewYields=20;h.row.cadence={day:'2026-10-23',lastKind:'recovery',reviewYieldKind:'recovery:freshness'};
+ h.onRun=async()=>{throw Object.assign(new Error('Refresh sources first'),{code:'BUSINESS_FRESHNESS_YIELD'});};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.row.reviewYields,1);assert.equal(h.row.cadence.reviewYieldKind,'slice:freshness');
+ const Agent=require('../src/models/BusinessAgent'),persisted=new Agent({cadence:h.row.cadence}).toObject();assert.equal(persisted.cadence.reviewYieldKind,'slice:freshness');h.service.close();
+});
+
+test('automatic general continuation respects every global hold before refreshing write sources',async()=>{
+ for(const code of ['calendar-stopped','completion-pending','not-published','population-owned','history-uncommitted','coordination-paused']){
+  const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.row.nextSyncAt=new Date(h.clock+30000);h.business.blockers=[{code}];
+  h.row.syncView.sources[0]={...h.row.syncView.sources[0],mode:'cdc',lastSuccessAt:new Date(h.clock-180000).toISOString()};
+  h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
+  const module=require('../src/modules/general-write-service'),original=module.createDefaultGeneralWrite;let executed=0;module.createDefaultGeneralWrite=()=>({execute:async()=>{executed++;return {status:'complete'};}});
+  try{await h.service._worker(agentId,new AbortController());assert.equal(executed,0,code);assert.equal(h.syncCalls,0,'no write freshness read under '+code);}finally{module.createDefaultGeneralWrite=original;h.service.close();}
+ }
+});
+test('a general batch refused by a busy writer resumes its saved sending identity next wake',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.row.nextSyncAt=new Date(h.clock+30000);
+ const module=require('../src/modules/general-write-service'),original=module.createDefaultGeneralWrite,rows=new Map();
+ const query=value=>({select(){return this;},maxTimeMS(){return this;},lean:async()=>copy(value)});
+ const Runs={findOne:filter=>query(rows.get(filter._id)||null),create:async([row])=>rows.set(row._id,{revision:0,batches:[],items:{},owned:[],dirty:[],...copy(row)}),findOneAndUpdate:(filter,update)=>{const row=rows.get(filter._id);if(!row||row.revision!==filter.revision)return query(null);Object.assign(row,copy(update.$set));row.revision++;return query(row);}};
+ let attempts=0;const identities=[];
+ const api=module.createGeneralWriteService({dispatchEnabled:()=>true,models:{GeneralWriteRuns:Runs,Steps:{findOne:()=>query(null)}},copy:{read:async()=>null},contextFor:async()=>({day:'2026-10-23',verifiedThrough:'2026-10-22',protectedThrough:null,taxCodes:{sales:[],purchases:[]},taxPercent:{}}),retain:async()=>true,transport:{sendBatch:async(scope,{batch})=>{identities.push(batch.requestId);if(++attempts<=12)throw Object.assign(new Error('writer busy'),{qboStage:'write_admission'});return batch.items.map(item=>({bId:item.bId,Customer:{...item.payload,Id:'100',SyncToken:'0'}}));}}});
+ const origin={agentId,grantId:h.row.grant.id,authorityHash,ownerId};const prepared=await api.prepare({scope,ownerId,actorId:ownerId,agentAuthority:origin},{decisionKey:'busy-writer-customer',purpose:'Add the new customer that signed a service agreement.',operations:[{ref:'customer',op:'create',entity:'Customer',payload:{DisplayName:'Isolated customer'}}]});assert.equal(prepared.status,'prepared');
+ h.store.unfinishedRuns=async()=>[...rows.values()].filter(row=>row.status!=='complete').map(row=>({operationId:row._id,contract:'general-write-v1',status:row.status,createCount:1,agentAuthority:origin,disposition:'prepared',admitted:false}));
+ module.createDefaultGeneralWrite=()=>api;
+ try{await h.service._worker(agentId,new AbortController());assert.equal(rows.get(prepared.runId).status,'prepared');rows.get(prepared.runId).status='sending';for(let i=0;i<12;i++)await h.service._worker(agentId,new AbortController());assert.equal(rows.get(prepared.runId).status,'complete');assert.equal(attempts,13);assert.ok(identities.every(id=>id===identities[0]));assert.equal(identities[0],identities[1],'the exact saved request is reused');assert.equal(rows.size,1,'no replacement plan');}finally{module.createDefaultGeneralWrite=original;h.service.close();}
+});
+
+// The saved manifest has descriptors, not full entries. Bind every dependency to those hashes.
+function scopedWriteFixture() {
+ const h=writeFixture(),{hash}=require('../src/modules/business-calendar');
+ const entries=[{ordinal:0,step:{entity:'Invoice',references:[{entity:'Customer',id:'10'},{entity:'Item',id:'20'}],dependencies:[]}}];
+ const manifest={activityBatch:{day:'2026-10-23'},records:entries.map(entry=>({entity:entry.step.entity,fingerprint:hash(entry.step)}))};
+ const plan={_id:'8'.repeat(24),manifest,planHash:hash(manifest)};h.run.planHash=plan.planHash;
+ const query=value=>({sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>copy(value)});
+ h.store.models.Plans={findOne:()=>query(plan)};h.store.models.Intents={find:()=>query(entries)};
+ h.write=input=>input.execute('executeBusinessPeriod',{operationId:OPERATION,planHash:plan.planHash,reason:'Approve this exact scoped service invoice under standing authority.'});
+ h.setSources=()=>{const at=new Date(h.clock).toISOString();h.row.syncView={...h.row.syncView,status:'attention',sources:['Invoice','Customer','Item','Account','Preferences','CompanyInfo','TaxCode','TaxRate'].map(entity=>({entity,status:'current',mode:['Preferences','CompanyInfo','TaxCode','TaxRate'].includes(entity)?'snapshot':'cdc',lastSuccessAt:at,freshUntil:new Date(h.clock+120000).toISOString()})).concat([{entity:'Bill',status:'error',lastSuccessAt:at,error:'fixture unrelated outage'}])};};
+ h.entries=entries;h.setSources();return h;
+}
+test('an unrelated stale source neither blocks the review nor spends refresh requests before invoice approval',async()=>{
+ const h=scopedWriteFixture();let result;h.onRun=async input=>{result=await h.write(input);};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.engineCalls,1);assert.equal(result.success,true);assert.equal(h.approved,1);assert.equal(h.requested,1);assert.equal(h.syncCalls,0);assert.equal(publicSync(h.row,h.clock).company.provisional,true);h.service.close();
+});
+test('a touched party must refresh and only operation dependencies receive the shared freshness allowance',async()=>{
+ const h=scopedWriteFixture();h.row.syncView.sources.find(row=>row.entity==='Customer').status='stale';
+ h.onTick=async()=>h.setSources();h.onRun=async input=>{assert.equal((await h.write(input)).success,true);};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.approved,1);assert.equal(h.syncCalls,1);assert.ok(h.tickArgs[0].requiredEntities.includes('Customer'));assert.ok(!h.tickArgs[0].requiredEntities.includes('Bill'));h.service.close();
+});
+test('failure to refresh a touched party yields before approval; unrelated source progress cannot reset the yield',async()=>{
+ const h=scopedWriteFixture();h.row.syncView.sources.find(row=>row.entity==='Customer').status='error';
+ h.onTick=async()=>{h.row.syncView.sources.find(row=>row.entity==='Bill').lastSuccessAt=new Date(h.clock+1).toISOString();};
+ h.onRun=async input=>h.write(input);await h.service._worker(agentId,new AbortController());assert.equal(h.approved,undefined);assert.equal(h.requested,undefined);assert.equal(h.syncCalls,1);assert.equal(h.events.at(-1).kind,'review-yielded');h.service.close();
+});
+
+test('a recovery source-refresh yield does not cancel an independent review',async()=>{
+ const h=fixture();moveTo(h,'2026-10-31T17:00:00Z');h.business.verifiedThrough='2026-10-30';h.row.nextSyncAt=new Date(h.clock+30000);h.row.cadence={day:'2026-10-31',lastKind:'recovery',lastReviewAt:new Date(h.clock-60000).toISOString()};
+ h.row.syncView.sources[0]={...h.row.syncView.sources[0],mode:'cdc',lastSuccessAt:new Date(h.clock-180000).toISOString()};
+ h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
+ const controller=new AbortController();h.onRun=async input=>{await input.execute('rememberBusinessContext',{memory:'Keep independent activity moving.'});};
+ await h.service._worker(agentId,controller);assert.equal(h.engineCalls,1);assert.equal(controller.signal.aborted,false);assert.equal(h.row.lastError,null);assert.ok(h.events.some(event=>event.kind==='review-completed'));h.service.close();
 });

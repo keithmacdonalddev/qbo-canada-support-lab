@@ -5,13 +5,15 @@ const { hash, canonical } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
 const { scoped } = require('./qbo-write-contract');
 const { evaluateReportSources, validDate } = require('./book-evidence');
-const { CRITICAL_REPORTS: REPORTS, packReport, MAX_SOURCE_BYTES } = require('./business-report-source');
+const { CRITICAL_REPORTS: REPORTS, packReport, MAX_SOURCE_BYTES, evaluateApprovalReportSources } = require('./business-report-source');
 const ID = /^[a-f0-9]{24}$/, QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_REPORT_UNVERIFIED' }); }
 // Fixed read-only report/query surface. Raw bounded sources are retained for audit;
 // totals agreeing never means that the company is realistic or bank-reconciled.
-function createBusinessReportReader({ access, now = () => Date.now(), purpose = 'operation', onAttempt = () => {}, cache = createBusinessReportCache({ now }) }) {
+function createBusinessReportReader({ access, now = () => Date.now(), purpose = 'operation', onAttempt = () => {}, requiredReports = null, cache = createBusinessReportCache({ now }) }) {
   if (!['operation', 'baseline', 'preparation', 'book'].includes(purpose)) throw new TypeError('Choose an explicit report evidence purpose');
+  if (requiredReports !== null && (!['preparation', 'operation'].includes(purpose) || !Array.isArray(requiredReports) || new Set(requiredReports).size !== requiredReports.length || requiredReports.some(name => !REPORTS.includes(name)))) throw new TypeError('Use supported approval reports only for preparation.');
+  const reportNames = requiredReports || REPORTS;
   const action = purpose === 'book' ? 'reports.observe' : purpose === 'baseline' ? 'baseline.capture' : purpose === 'preparation' ? 'operations.preview' : 'operations.verify';
   if ([access?.authorize, access?.resolveClient, now, onAttempt].some(fn => typeof fn !== 'function')) throw new TypeError('Report evidence needs scoped company access');
   return async function read(scope, period, { signal } = {}) {
@@ -53,7 +55,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
         } catch (error) { stopReads(error); throw failure || error; }
       }
       let cacheToken = null;
-      try { cacheToken = await call(() => cache.snapshot(scope)); } catch { check(); }
+      try { if (reportNames.length) cacheToken = await call(() => cache.snapshot(scope, { requiredReports: reportNames })); } catch { check(); }
       const readControl = { signal: controller.signal, onFailure: stopReads, beforeAttempt: async () => {
         await authorizeCurrent(); check(); guard();
         if (attempts >= 12) fail('Report observation exceeds its twelve-request budget.');
@@ -64,7 +66,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       }
       let ledgerProbe = null;
       if (cacheToken) {
-        let cached; try { cached = await call(() => cache.load(scope, { fromDate, throughDate }, cacheToken, { readLedger: async () => {
+        let cached; try { cached = await call(() => cache.load(scope, { fromDate, throughDate }, cacheToken, { requiredReports: reportNames, readLedger: async () => {
           const params = new URLSearchParams({ accounting_method: 'Accrual', start_date: fromDate, end_date: throughDate });
           ledgerProbe = await readCurrent(() => runWithCaller('business-report-' + purpose, () => client.apiCall('GET', 'reports/GeneralLedger?' + params, undefined, 0, 0, readControl)));
           return ledgerProbe;
@@ -73,7 +75,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       }
       const reports = {}, accounts = [], seen = new Set(); let bytes = 0, declared = null;
       const retain = value => { const text = canonical(value); bytes += Buffer.byteLength(text); if (bytes > MAX_SOURCE_BYTES) fail('Report sources exceed the retained evidence budget.'); return JSON.parse(text); };
-      const jobs = REPORTS.map(name => async () => {
+      const jobs = reportNames.map(name => async () => {
         try {
           const params = new URLSearchParams({ accounting_method: 'Accrual', start_date: fromDate, end_date: throughDate });
           if (name.startsWith('Aged')) params.set('report_date', throughDate);
@@ -83,7 +85,7 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
           catch (error) { if (error?.code === 'BUSINESS_REPORT_UNVERIFIED') fail(name + ': ' + error.message); throw error; }
         } catch (error) { stopReads(error); throw failure || error; }
       });
-      jobs.push(async () => {
+      if (reportNames.length) jobs.push(async () => {
         try {
           for (let start = 1; start <= 4001; start += 1000) {
             check(); guard(); const body = await readCurrent(() => runWithCaller('business-report-' + purpose, () => client.query('SELECT * FROM Account WHERE Active IN (true, false) ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000', readControl))); check(); guard();
@@ -107,9 +109,9 @@ function createBusinessReportReader({ access, now = () => Date.now(), purpose = 
       if (Buffer.byteLength(canonical(source)) > MAX_SOURCE_BYTES) fail('The complete report source exceeds its retained evidence budget.');
       // A changed closing still gets its own report proof. Reuse is possible only
       // after a later CDC proves the cached set's company state did not change.
-      if (cacheToken) try { await call(() => cache.retain(scope, source, cacheToken)); } catch { check(); }
+      if (cacheToken) try { await call(() => cache.retain(scope, source, cacheToken, { requiredReports: reportNames })); } catch { check(); }
       if (cacheToken) await authorizeCurrent();
-      return { ...source, sourceHash: hash(source), evaluation: evaluateReportSources(source) };
+      return { ...source, sourceHash: hash(source), evaluation: requiredReports === null ? evaluateReportSources(source) : evaluateApprovalReportSources(source, reportNames) };
     } catch (error) { stopReads(error); throw failure || error; }
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
   };

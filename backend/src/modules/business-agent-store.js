@@ -130,7 +130,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     // Count unique general creates by run/ref, including known saved mismatches.
     // Unanswered work reserves the rest once; a repeated decision never doubles it.
     if(models.GeneralWriteRuns){
-      const general=await inSession(models.GeneralWriteRuns.find({...scope,contract:'general-write-v1',day,'agentAuthority.agentId':agentId})).select('_id status decisionKey createdAt plan items batches').sort({_id:1}).limit(5001).maxTimeMS(3000).lean();
+      const general=await inSession(models.GeneralWriteRuns.find({...scope,contract:'general-write-v1',day,'agentAuthority.agentId':agentId})).select('_id status decisionKey createdAt updatedAt plan items batches').sort({_id:1}).limit(5001).maxTimeMS(3000).lean();
       if(general.length>5000||rows.length>=200||receipts.length>=5000)throw new Error('Today’s record count exceeds its enumeration budget.');
       for(const run of general){
         const id=String(run._id),answered=new Map(),creates=(run.plan?.operations||[]).filter(op=>op.op==='create'),createRefs=new Set(creates.map(op=>op.ref));
@@ -139,7 +139,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         for(const [ref,entity]of answered)value.receipts.push({operationId:id,entity,logicalKey:ref});
         const unsent=!(run.batches||[]).length,terminal=run.status==='complete'||run.status==='needs-correction';
         const count=terminal?answered.size:creates.length;
-        value.runs.push({id,status:terminal?'retired':unsent?'previewed':'blocked',decisionKey:run.decisionKey,createdAt:new Date(run.createdAt).getTime(),recordCount:count,createCount:count});
+        value.runs.push({id,status:terminal?'retired':unsent?'prepared':'blocked',decisionKey:run.decisionKey,createdAt:new Date(run.createdAt).getTime(),recordCount:count,createCount:count,hourlyActivity:true,hourAt:terminal?Math.max(new Date(run.createdAt).getTime(),new Date(run.updatedAt||run.createdAt).getTime(),...(run.batches||[]).map(batch=>Date.parse(batch.transport?.observedAt||batch.savedAt||'')||0)):now()});
       }
     }
     if(!session&&todayCache.size>=50)todayCache.clear();
@@ -161,17 +161,18 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     if(!agentId)return [];
     // An activity preview from an earlier business day was never approved and can never run
     // (approval fences the calendar revision it was prepared against): retire it unsent.
+    // Current-day prepared plans are returned too: they occupy one of the three operation slots.
     const today=require('./business-activity-preview').businessDate(new Date(now()));
-    const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,$or:[{status:{$in:UNFINISHED}},{status:'previewed','activityBatch.day':{$lt:today}}],...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
+    const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,$or:[{status:{$in:UNFINISHED}},{status:'previewed','activityBatch.day':{$lte:today}}],...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
     const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending nextOrdinal deferredSteps').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
-    if(!rows.length)return [];
+
     const calendar=models.Calendars?await models.Calendars.findOne(scope).select('currentOperationId').maxTimeMS(3000).lean():null;
     const writer=models.Writers?await models.Writers.findOne({environment:scope.environment,realmId:scope.realmId}).select('operationId').maxTimeMS(3000).lean():null;
     const holders=new Set([calendar?.currentOperationId,writer?.operationId].filter(Boolean).map(String));
     const out=[];
     for(const row of rows){
       const id=String(row._id),pending=row.executionRequest?.pending===true,holds=holders.has(id);
-      let disposition=['running','committing'].includes(row.status)||pending?'active':holds||['approved','reserved'].includes(row.status)?'continue':null;
+      let disposition=['running','committing'].includes(row.status)||pending?'active':holds||['approved','reserved'].includes(row.status)?'continue':row.status==='previewed'&&row.activityBatch?.day===today?'prepared':null;
       if(!disposition){
         // Same evidence the governed retirement checks: any transport receipt or non-claimed/dispatched step is a saved effect.
         const receipt=models.Receipts?await models.Receipts.exists({environment:scope.environment,realmId:scope.realmId,operationId:row._id}).maxTimeMS(3000):null;
@@ -179,6 +180,10 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         disposition=effect?'stranded':'unsent';
       }
       out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,agentAuthority:row.agentAuthority||null,executionPending:pending,completedRecords:Math.max(0,(row.nextOrdinal||0)-(row.deferredSteps||[]).length),holdsSlot:holds,disposition});
+    }
+    if(models.GeneralWriteRuns){
+      const general=await models.GeneralWriteRuns.find({...scope,contract:'general-write-v1','agentAuthority.agentId':agentId,...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{}),status:{$in:['prepared','sending','held','unknown']}}).select('_id status day decisionKey agentAuthority items plan.operations.op plan.operations.ref batches.state batches.transport.receiptId').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
+      for(const run of general)out.push({operationId:String(run._id),contract:'general-write-v1',status:run.status,day:run.day,decisionKey:run.decisionKey,createCount:(run.plan?.operations||[]).filter(op=>op.op==='create'&&!['saved','mismatch'].includes(run.items?.[op.ref]?.outcome)).length,admitted:Boolean((run.batches||[]).find(batch=>batch.state!=='answered')?.transport?.receiptId),agentAuthority:run.agentAuthority,executionPending:run.status==='sending'&&Boolean((run.batches||[]).find(batch=>batch.state!=='answered')?.transport?.receiptId),completedRecords:Object.values(run.items||{}).filter(item=>item.outcome==='saved').length,holdsSlot:false,disposition:run.status==='sending'&&(run.batches||[]).find(batch=>batch.state!=='answered')?.transport?.receiptId?'active':run.status==='unknown'?'stranded':'prepared'});
     }
     return out;
   }

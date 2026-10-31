@@ -34,6 +34,8 @@ const HOURLY_CAP = 60;
 // Under the all-day rhythm a review starts once at least this many records are due (or the rest of the day's
 // target, if fewer remain), so the accountant keeps pace through the hour instead of waiting for a slot.
 const MIN_DUE = 5;
+// Prepared, queued and executing batches share this capacity; recovery never removes their reservations.
+const MAX_IN_FLIGHT = 3;
 // The daily management review (business-management-review.js): 00:10 Halifax every day, right after
 // the previous day's close and before the first slice. At most two attempts a day; the day's saved plan ends it.
 const MANAGEMENT_MINUTES = Object.freeze({ everyDay: 10 });
@@ -203,16 +205,18 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
     if (['verified', 'retired'].includes(run.status) || !live(run)) continue;
     const planned = plannedOf(run);
     const left = Math.max(0, planned - (savedByRun.get(String(run.id))?.size || 0));
-    if (left) { reserved += left; inFlight++; reservedByRun[String(run.id)] = left; }
+    inFlight++;
+    if (left) { reserved += left; reservedByRun[String(run.id)] = left; }
   }
   const used = saved + reserved, local = localParts(now);
   // The rolling hour: live slices created in the last 60 minutes, by their planned or saved records.
   const hourByRun = {};let hourUsed = 0, hourFirst = Infinity;
   for (const run of runs) {
-    if (!live(run) || !isSliceKey(run.decisionKey, rhythm) || !(Number(run.createdAt) > now - 60 * MINUTE)) continue;
-    const records = Math.max(run.status === 'verified' ? 0 : plannedOf(run), savedByRun.get(String(run.id))?.size || 0);
+    const hourAt = Number(run.hourAt ?? run.createdAt);
+    if ((!live(run) && !run.hourlyActivity) || !(run.hourlyActivity || isSliceKey(run.decisionKey, rhythm)) || !(hourAt > now - 60 * MINUTE)) continue;
+    const records = Math.max(run.status === 'verified' || run.status === 'retired' ? 0 : plannedOf(run), savedByRun.get(String(run.id))?.size || 0);
     if (!records) continue;
-    hourByRun[String(run.id)] = records;hourUsed += records;hourFirst = Math.min(hourFirst, Number(run.createdAt));
+    hourByRun[String(run.id)] = records;hourUsed += records;hourFirst = Math.min(hourFirst, hourAt);
   }
   const hourLeft = Math.max(0, HOURLY_CAP - hourUsed);
   const slots = rhythm.slots.map((slot, index) => {
@@ -230,7 +234,7 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   const behind = Math.max(0, expectedNow - used), enough = Math.max(1, Math.min(hourly ? MIN_DUE : 1, rhythm.target - used));
   // Work is due whenever today is behind its expected count, batch after batch, within the daily ceiling and the
   // rolling hourly cap; a v2 shortfall is never replayed after that day's hours.
-  const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0
+  const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0 && inFlight < MAX_IN_FLIGHT
     ? { n: elapsed.n, records: Math.min(behind, rhythm.ceiling - used, hourLeft), decisionKey: slotKey(rhythm.day, rhythm.version, elapsed.n, elapsed.batches + 1) } : null;
   // Behind but at the hourly cap: work continues when the oldest slice of the hour leaves the window.
   const hourResetAt = elapsed && behind >= enough && !ceilingReached && !hourLeft && Number.isFinite(hourFirst) ? new Date(hourFirst + 60 * MINUTE).toISOString() : null;
@@ -240,7 +244,7 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   else if (!hourly) next = slots.find(slot => Date.parse(slot.at) > now) || null;
   // Prepared or unfinished batches of today: a prepared slice is executed, never prepared again.
   const open = runs.filter(run => live(run) && run.status !== 'verified').slice(0, 10).map(run => ({ operationId: String(run.id), status: run.status, decisionKey: run.decisionKey || null }));
-  return { day: rhythm.day, label: dayLabel(rhythm.day), rhythmVersion: rhythm.version, target: rhythm.target, ceiling: rhythm.ceiling, saved, verified, reserved, inFlight, byEntity,
+  return { day: rhythm.day, label: dayLabel(rhythm.day), rhythmVersion: rhythm.version, target: rhythm.target, ceiling: rhythm.ceiling, saved, verified, reserved, inFlight, inFlightLimit: MAX_IN_FLIGHT, byEntity,
     reservedByRun, plannedByRun, sliceCap, hourCap: HOURLY_CAP, hourUsed, hourByRun, hourResetAt, behind, expectedNow, open, currentSlot: elapsed ? elapsed.n : null, slotCount: count, remaining: Math.max(0, rhythm.target - used), ceilingReached, businessHours: inHours(rhythm, local), slots, dueSlot: due, nextSlotAt: next ? next.at : null };
 }
 
@@ -288,7 +292,11 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // queued execution finishing) is progress and clears the backoff.
   if (typeof s.reviewSignature === 'string') {
     if (s.reviewSignature !== signature) s.misses = 0;
-    else if (s.reviewPending !== true) s.misses = (Number(s.misses) || 0) + 1;
+    else if (s.reviewPending !== true) {
+      const failureKind = (s.lastKind || 'review') + ':' + (s.reviewFailureKind || 'no-progress');
+      s.misses = s.missKind && s.missKind !== failureKind ? 1 : (Number(s.misses) || 0) + 1;
+      s.missKind = failureKind;
+    }
     s.reviewSignature = null; s.reviewPending = false;
   }
   else if (typeof s.lastSignature === 'string' && s.lastSignature !== signature) s.misses = 0;
@@ -299,6 +307,16 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const result = (kind, callModel, at, reason) => ({ kind, callModel, nextReviewAt: new Date(Math.max(now + (callModel ? 0 : 1000), at)).toISOString(), reason, state: s });
   const capped = (Number(s.reviews) || 0) >= ceiling, limit = 'today’s limit of ' + ceiling + ' reviews is reached; reviews resume after midnight';
   const op = business.currentOperation, blockers = Array.isArray(business.blockers) ? business.blockers : [];
+  const flight = new Set([...(today?.open || []).map(run => run.operationId), ...(Array.isArray(owned) ? owned : []).filter(run => ownRetained(run, agent) && run.disposition !== 'unsent').map(run => run.operationId), ...(op && ownRetained(op, agent) ? [op.operationId] : [])]);
+  const capacity = Math.max(Number(today?.inFlight) || 0, flight.size) < MAX_IN_FLIGHT;
+  // A writer or uncertain request belongs to its exact operation. Stops, publication, imports,
+  // calendar completion and coordination still hold the whole company. The tools prove resource independence.
+  const operationHold = (!op || ownRetained(op, agent)) && blockers.every(item => item.code === 'current-operation' || item.code === 'uncertain-write') && (op || (owned || []).some(run => ownRetained(run, agent)));
+  const newActivity = (!op || ownRetained(op, agent)) && capacity && today && !today.unavailable && today.dueSlot && !requests?.reached && !nextClose(business, day) && (!blockers.length || operationHold);
+  const independentDuties = (!op || ownRetained(op, agent)) && capacity && !nextClose(business, day) && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
+  const independentKind = newActivity ? 'slice' : independentDuties ? 'obligations' : null;
+  const independentReason = () => newActivity ? sliceReason() : 'settling currently eligible invoices and bills while other operations continue or recover';
+  const sliceReason = () => 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule' + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
   const ownRuns = (Array.isArray(owned) ? owned : []).filter(run => ownRetained(run, agent) && run.operationId !== op?.operationId && dispositionOf(run) !== 'unsent');
   const behind = nextClose(business, day);
 
@@ -306,8 +324,11 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   let kind = null, reason = '';
   if (isActive(op) || ownRuns.some(run => dispositionOf(run) === 'active')) {
     if (s.pollSignature !== signature) { s.pollSignature = signature; s.pollSince = new Date(now).toISOString(); }
-    if (now - (Date.parse(s.pollSince) || now) < STALLED_POLL_MS) return result('poll', false, now + SPACING_MINUTES.poll * MINUTE, 'sending records to QuickBooks');
-    kind = 'recovery'; reason = 'its current operation has not advanced';
+    if (now - (Date.parse(s.pollSince) || now) < STALLED_POLL_MS) {
+      if (independentKind) { kind = independentKind; reason = independentReason(); }
+      else return result('poll', false, now + SPACING_MINUTES.poll * MINUTE, 'sending records to QuickBooks');
+    }
+    if (!kind) { kind = 'recovery'; reason = 'its current operation has not advanced'; }
   } else { s.pollSignature = null; s.pollSince = null; }
   // A held state waits for the daily management review, which plans and files build requests without writing.
   let held = null;
@@ -317,6 +338,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   }
   // An approved plan that never started holds no calendar slot, so it is found here; it runs
   // before any calendar close, which must never close a date such a plan targets.
+  if (!kind && !held && ownRuns.some(run => dispositionOf(run) === 'prepared' && run.contract !== 'general-write-v1') && !blockers.length) { kind = 'slice'; reason = 'dispatching its prepared independent work'; }
   if (!kind && !held && ownRuns.some(run => dispositionOf(run) === 'continue')) { kind = 'recovery'; reason = 'finishing approved work that has not started'; }
   // Stopped outside the calendar slot after saving records: no tool can continue it yet, so no model
   // call; it keeps holding new work (and the calendar) until it is continued.
@@ -328,16 +350,22 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   if (!kind && !held && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
   const budgetSpent = Boolean(requests?.reached), budgetReason = requestBudgetReason(requests, '');
   if (!kind && !budgetSpent && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
+  // Alternate recovery reviews with new activity; a failed/held recovery cannot consume the
+  // next slice's delay. Automatic recovery also runs between model reviews in the worker.
+  if (independentKind && (!kind && held || kind === 'recovery' && (s.lastKind === 'recovery' || misses > 0))) { kind = independentKind; reason = independentReason(); held = null; }
   if (!kind && held) return held;
-  if (!kind && today && !today.unavailable && today.dueSlot && !budgetSpent) { kind = 'slice'; reason = 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule'; }
+  if (!kind && newActivity) { kind = 'slice'; reason = sliceReason(); }
   const open = rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close;
   // Due saved obligations are actionable in activity hours (all day under v3), spaced and backed off like any review,
   // so an obligation that cannot be settled never loops.
   if (!kind && open && obligations && obligations.count > 0) { kind = 'obligations'; reason = 'settling ' + obligations.count + ' due ' + (obligations.count === 1 ? 'invoice or bill' : 'invoices and bills'); }
 
   if (kind) {
-    const wait = misses > 0 ? Math.max(SPACING_MINUTES[kind], BACKOFF_MINUTES[Math.min(misses, BACKOFF_MINUTES.length) - 1]) : SPACING_MINUTES[kind];
-    if (misses > 0) reason += ' · no progress on the last ' + (misses === 1 ? 'review' : misses + ' reviews') + ', waiting ' + wait + ' min';
+    const sameKind = !s.lastKind || s.lastKind === kind;
+    const failures = sameKind ? misses : 0;
+    const behindTarget = today && !today.unavailable && today.saved < today.target;
+    const wait = failures > 0 ? Math.min(behindTarget ? 5 : Infinity, Math.max(SPACING_MINUTES[kind], BACKOFF_MINUTES[Math.min(failures, BACKOFF_MINUTES.length) - 1])) : SPACING_MINUTES[kind];
+    if (failures > 0) reason += ' · no progress on the last ' + (misses === 1 ? 'review' : misses + ' reviews') + ', waiting ' + wait + ' min';
     if (capped) return result('ceiling', false, tomorrow, limit);
     const earliest = last ? last + wait * MINUTE : now;
     return result(kind, earliest <= now, earliest, reason);
@@ -346,7 +374,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const nextSlot = today?.nextSlotAt && !today.unavailable && !today.ceilingReached && today.remaining > 0 && !budgetSpent ? Date.parse(today.nextSlotAt) : Infinity;
   const hours = open;
   const hourReset = today && !today.unavailable && today.hourResetAt && !budgetSpent ? Date.parse(today.hourResetAt) : Infinity;
-  const why = capped ? limit : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s target is met' : Number.isFinite(hourReset) ? 'the hourly limit of ' + (today.hourCap || HOURLY_CAP) + ' new records is reached; work continues at ' + localTime(hourReset) : '') : '';
+  const why = capped ? limit : !capacity ? 'three operations are already prepared, queued or executing; new activity resumes as capacity frees' : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s target is met' : Number.isFinite(hourReset) ? 'the hourly limit of ' + (today.hourCap || HOURLY_CAP) + ' new records is reached; work continues at ' + localTime(hourReset) : '') : '';
   if (hours) {
     // An all-day rhythm (v3) runs to the close just after midnight. Paused: nothing is due, so saved state is
     // re-checked at the next share, the hourly window or within 15 minutes.
@@ -365,13 +393,13 @@ function countReview(state, now) {
 // A main review also fixes the progress baseline that the next decision compares against.
 // A management review plans rather than writes, so it never counts as a review without progress.
 function beginReview(state, { now, signature, kind }) {
-  const next = { ...countReview(state, now), reviewSignature: kind === 'management' ? null : signature, reviewPending: true, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
+  const next = { ...countReview(state, now), ...(state?.lastKind && state.lastKind !== kind ? { misses: 0, missKind: null } : {}), reviewFailureKind: null, reviewSignature: kind === 'management' ? null : signature, reviewPending: true, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
   if (kind === 'management') { const day = localParts(now).date, prior = next.management?.day === day ? Number(next.management.attempts) || 0 : 0; next.management = { day, attempts: prior + 1 }; }
   return next;
 }
 // Only a recorded terminal outcome makes a review eligible for no-progress backoff.
 // A crash leaves the baseline pending; it still consumes its daily review allowance.
-function finishReview(state) { return { ...(state || {}), reviewPending: false }; }
+function finishReview(state, { failureKind = 'no-progress' } = {}) { return { ...(state || {}), reviewPending: false, reviewFailureKind: failureKind }; }
 const timeFormat = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, hour: 'numeric', minute: '2-digit', hour12: true });
 // "2:15 PM" in Halifax time, for text the accountant and the work list read.
 const localTime = value => { const ms = typeof value === 'number' ? value : Date.parse(value || ''); return Number.isFinite(ms) ? timeFormat.format(new Date(ms)).replace(/\s*a\.m\./i, ' AM').replace(/\s*p\.m\./i, ' PM') : null; };
@@ -384,5 +412,5 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
   return { allowed: false, nextAt: new Date(now + 86400000).toISOString() };
 }
 
-module.exports = { MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
+module.exports = { MAX_IN_FLIGHT, MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
   localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

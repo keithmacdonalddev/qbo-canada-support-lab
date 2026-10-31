@@ -33,3 +33,13 @@ test('concatenated gzip members share the same decompression output limit',()=>{
 test('retained digest cannot turn malformed UTF-8 bytes into a different canonical JSON value',()=>{
  for(const invalid of [Buffer.from([255]),Buffer.from([192,175]),Buffer.from([226,130])]){const bytes=Buffer.concat([Buffer.from('{"value":"'),invalid,Buffer.from('"}')]),packed={encoding:'gzip-canonical-json-v1',byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),body:gzipSync(bytes).toString('base64')};assert.throws(()=>unpackReport('GeneralLedger',packed,2),{code:'BUSINESS_REPORT_UNVERIFIED'});}
 });
+
+test('approval report requirements follow immutable account effects, with conservative unknown and calendar close fallbacks',()=>{
+ const {approvalReportNames}=require('../src/modules/business-report-source');
+ const manifest=entity=>({activityBatch:{activities:[]},records:[{entity}]});
+ assert.deepEqual(approvalReportNames(manifest('Invoice')),['TrialBalance','BalanceSheet','ProfitAndLoss','AgedReceivables','GeneralLedger']);
+ assert.deepEqual(approvalReportNames(manifest('Bill')),['TrialBalance','BalanceSheet','ProfitAndLoss','AgedPayables','GeneralLedger']);
+ assert.deepEqual(approvalReportNames(manifest('Transfer')),['TrialBalance','BalanceSheet','ProfitAndLoss','GeneralLedger','CashFlow']);
+ assert.deepEqual(approvalReportNames(manifest('Customer')),[]);assert.equal(approvalReportNames({records:[{entity:'Invoice'}]}).length,7);assert.equal(approvalReportNames(manifest('Unknown')).length,7);
+ const journal=manifest('JournalEntry');journal.activityBatch.activities=[{type:'journal-entry',lines:[{accountKey:'serviceIncome'},{accountKey:'operatingExpense'}]}];assert.equal(approvalReportNames(journal).length,4);
+});

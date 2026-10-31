@@ -81,3 +81,16 @@ test('genuine version2 retained approval sources keep their original seven-repor
   const reads = h.reads, original = hash(row.payload); const evidence = await readApprovalReports({ models: h.models, run, ownerId: h.user.id });
   assert.equal(evidence.sourceVersion, 2); assert.equal(evidence.available, 7); assert.equal(hash(row.payload), original); assert.equal(h.reads, reads); assert.equal(h.posts, 0);
 });
+
+test('same-day invoice preparation, approval and first write survive irrelevant report outages with exact retained subset',async()=>{
+ const h=fixture({activityTemplateVersion:3,openingDate:'2026-11-01'});h.clock=Date.parse('2026-11-02T15:00:00Z');await h.publish();
+ const history=await h.service.prepare(h.user,{requestKey:'scoped-report-history-0001',throughDate:'2026-11-01'});await h.service.approve(h.user,history.operationId,{planHash:history.planHash});assert.equal((await h.runtime(history.operationId).execute()).complete,true);
+ const read=h.reportSources;h.reportSources=period=>{const source=read(period);for(const name of ['AgedPayables','CashFlow'])delete source.reports[name];return source;};
+ const input={decisionKey:'scoped-invoice-report-001',purpose:'Invoice a care-plan customer on terms without touching payables or cash.',activities:[{type:'invoice-on-terms',customerKey:'care-client-002',itemKey:'care-plan-1',quantity:1,unitPriceCents:25000,termsDays:30,purpose:'Monthly service delivered on customer credit terms.'}]};
+ const p=await h.service.prepareActivityBatch(h.user,input);await h.service.approve(h.user,p.operationId,{planHash:p.planHash});
+ const run=h.data.Runs.find(run=>run._id===p.operationId),row=retained(h).find(row=>row.payload.operationId===p.operationId);
+ assert.equal(row.payload.version,2);assert.deepEqual(row.payload.requiredReports,['TrialBalance','BalanceSheet','ProfitAndLoss','AgedReceivables','GeneralLedger']);
+ assert.equal((await h.service.reviewOperation(h.user,p.operationId)).approvalReports.available,5);
+ const posts=h.posts;const runtime=h.runtime(p.operationId);h.afterPost=async()=>{h.afterPost=null;await runtime.stop();};await runtime.execute();assert.ok(h.posts>posts,'the relevant preflight permits the first POST despite irrelevant report outage');
+ const savedRow=retained(h).find(row=>row.payload.operationId===p.operationId),original=savedRow.payload.requiredReports;savedRow.payload.requiredReports=[];await assert.rejects(h.service.reviewOperation(h.user,p.operationId));savedRow.payload.requiredReports=original;
+});

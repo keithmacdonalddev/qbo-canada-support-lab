@@ -83,3 +83,16 @@ test('a complete4000-account observation makes exactly twelve controlled SDK req
  const source=await createBusinessReportReader({access:h.access,now:()=>h.clock,onAttempt:count=>admitted.push(count)})(scope,period);assert.equal(h.calls.length,12);assert.deepEqual(admitted,Array.from({length:12},(_,i)=>i+1));assert.equal(source.accounts.length,4000);assert.ok(h.calls.every(options=>options.maxRetries===1));
  const {sourceHash,evaluation,...raw}=source;assert.equal(Object.keys(raw).sort().join(','),'accounts,observedAt,period,reports,scope,startedAt,version');assert.equal(hash(raw),sourceHash);
 });
+
+test('invoice approval reads only relevant reports and never requests unavailable payables or cash flow',async()=>{
+ const h=harness(),{approvalReportNames,evaluateApprovalReportSources}=require('../src/modules/business-report-source');
+ const requiredReports=approvalReportNames({activityBatch:{},records:[{entity:'Invoice'}]});
+ h.access.authorize=async()=>({actorId,ownerId});h.onRead=options=>{assert.ok(!/AgedPayables|CashFlow/.test(options.url));};
+ delete h.reports.AgedPayables;delete h.reports.CashFlow;
+ const result=await createBusinessReportReader({access:h.access,now:()=>h.clock,purpose:'preparation',requiredReports})(scope,period);
+ assert.equal(h.calls.length,6);assert.equal(result.evaluation.status,'checks-passed');assert.equal(result.evaluation.reportCoverage.required,5);assert.ok(result.evaluation.checks.some(check=>check.key==='receivables'));
+ const raw=require('../src/modules/business-report-source').unpackReport('TrialBalance',result.reports.TrialBalance,3);raw.Header.Currency='USD';result.reports.TrialBalance=require('../src/modules/business-report-source').packReport('TrialBalance',raw,3);assert.notEqual(evaluateApprovalReportSources(result,requiredReports).status,'checks-passed');
+});
+test('nonposting approval transports no financial reports or account query',async()=>{
+ const h=harness();h.access.authorize=async()=>({actorId,ownerId});const result=await createBusinessReportReader({access:h.access,now:()=>h.clock,purpose:'preparation',requiredReports:[]})(scope,period);assert.equal(h.calls.length,0);assert.equal(result.evaluation.status,'checks-passed');
+});

@@ -95,10 +95,12 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
       if (require('./business-calendar').canonical(origins) !== require('./business-calendar').canonical(expected.purchaseOrigins)) fail('Original stock purchase costs changed before the first write.');
       stockSource = await require('./business-stock-source').createBusinessStockReader({ access, now })(scope, startingState, { signal });
     }
-    const source = await createBusinessReportReader({ access, now, purpose: 'operation' })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
+    const { approvalReportNames, evaluateApprovalReportSources } = require('./business-report-source');
+    const requiredReports = [...new Set([...approvalReportNames(plan.manifest), ...(plan.manifest.financialExpectation || plan.manifest.incomeExpectation ? ['TrialBalance','BalanceSheet','ProfitAndLoss','GeneralLedger'] : [])])];
+    const source = await createBusinessReportReader({ access, now, purpose: 'operation', requiredReports })(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal });
     require('./business-financial-movements').assertMovementCapacity(plan.manifest, source);
-    const evaluation = require('./book-evidence').evaluateReportSources(source, { allowExplicitZero: true });
-    if (![2, 3].includes(source.version) || evaluation.status !== 'checks-passed' || !require('./business-financial-summary').reportComplete(evaluation, source)) fail('All seven critical reports and the named accounting checks must be available before the first business write.');
+    const evaluation = evaluateApprovalReportSources(source, requiredReports);
+    if (![2, 3].includes(source.version) || evaluation.status !== 'checks-passed') fail('All ' + (requiredReports.length === 7 ? 'seven critical' : 'relevant') + ' reports and the named accounting checks must be available before the first business write.');
     const actual = plan.manifest.incomeExpectation ? require('./business-income-evidence').incomeCents(require('./business-report-source').unpackReport('ProfitAndLoss', source.reports.ProfitAndLoss, source.version), { fromDate: run.fromDate, throughDate: run.throughDate }, source.version) : null;
     if (plan.manifest.incomeExpectation && actual !== plan.manifest.incomeExpectation.openingIncomeCents) fail('Period income changed after preparation. Nothing was sent by this operation. Retire this unsent plan and prepare it again.');
     if (plan.manifest.financialExpectation) {

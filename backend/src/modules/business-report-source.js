@@ -55,3 +55,37 @@ function unpackReports(sources){
  return Object.fromEntries(names.map(name=>[name,unpackReport(name,reports[name],version)]));
 }
 module.exports={LEGACY_REPORTS,CRITICAL_REPORTS,DETAIL_REPORTS,MAX_DETAIL_BYTES,MAX_SOURCE_BYTES,MAX_DECODED_BYTES,namesFor,packReport,unpackReport,unpackReports};
+
+// Approval alone may use a subset. Full book/closing observations keep unpackReports' exact contract.
+function approvalReportNames(manifest) {
+ if (!manifest?.activityBatch || !(manifest.entries || manifest.records)?.length) return [...CRITICAL_REPORTS];
+ const entities = (manifest.entries || manifest.records).map(entry => entry.step?.entity || entry.entity);
+ const nonposting = ['Customer','Vendor','Item','Estimate','PurchaseOrder','TimeActivity'];
+ const known = [...nonposting,'Invoice','Bill','Payment','BillPayment','SalesReceipt','CreditMemo','VendorCredit','RefundReceipt','Purchase','Deposit','Transfer','JournalEntry'];
+ if (entities.some(entity => !known.includes(entity))) return [...CRITICAL_REPORTS];
+ if (entities.every(entity => nonposting.includes(entity))) return [];
+ const broadJournal = entities.includes('JournalEntry') && !(manifest.activityBatch.activities?.length && manifest.activityBatch.activities.every(row => row.type === 'journal-entry' && row.lines?.every(line => ['serviceIncome','supplyIncome','careIncome','operatingExpense'].includes(line.accountKey))));
+ const names = new Set(['TrialBalance','BalanceSheet','ProfitAndLoss','GeneralLedger']);
+ if (broadJournal || entities.some(entity => ['Invoice','Payment','CreditMemo'].includes(entity))) names.add('AgedReceivables');
+ if (broadJournal || entities.some(entity => ['Bill','BillPayment','VendorCredit'].includes(entity))) names.add('AgedPayables');
+ if (broadJournal || entities.some(entity => ['Payment','BillPayment','SalesReceipt','RefundReceipt','Purchase','Deposit','Transfer'].includes(entity))) names.add('CashFlow');
+ return CRITICAL_REPORTS.filter(name => names.has(name));
+}
+function evaluateApprovalReportSources(source, required) {
+ if (!Array.isArray(required) || new Set(required).size !== required.length || required.some(name => !CRITICAL_REPORTS.includes(name))) fail('Unsupported approval report requirements.');
+ const names = Object.keys(source.reports || {});
+ if (names.some(name => !CRITICAL_REPORTS.includes(name)) || required.some(name => !names.includes(name))) fail('Every relevant approval report is required.');
+ // Retain the aggregate decompression bound even for a smaller approval observation.
+ let decoded = 0;
+ for (const name of names) { const value = source.reports[name]; const size = source.version === 3 || DETAIL_REPORTS.has(name) ? value?.byteLength : Buffer.byteLength(canonical(value)); if (!Number.isSafeInteger(size) || size < 2 || size > MAX_DETAIL_BYTES || (decoded += size) > MAX_DECODED_BYTES) fail('Approval report decoded budget exceeded.'); }
+ require('./business-report-cache').assertReportReuse(source);
+ const reports = Object.fromEntries(names.map(name => [name, unpackReport(name, source.reports[name], source.version)]));
+ const { evaluateBooks } = require('./book-evidence');
+ const evaluation = evaluateBooks(reports, source.period, {}, {records: source.accounts}, {allowExplicitZero: true, includeCritical: true, sourceVersion: source.version});
+ const keys = required.length ? ['trial-balance','balance-sheet', ...(required.includes('AgedReceivables') ? ['receivables'] : []), ...(required.includes('AgedPayables') ? ['payables'] : [])] : [];
+ const checks = evaluation.checks.filter(check => keys.includes(check.key));
+ const missing = evaluation.reportCoverage.missing.filter(name => required.includes(name));
+ return {...evaluation, checks, reportCoverage: {...evaluation.reportCoverage, required: required.length, available: required.length - missing.length, missing, complete: !missing.length}, status: checks.some(check => check.status === 'failed') ? 'differences-found' : checks.every(check => check.status === 'passed') && !missing.length ? 'checks-passed' : 'verification-incomplete'};
+}
+module.exports.approvalReportNames = approvalReportNames;
+module.exports.evaluateApprovalReportSources = evaluateApprovalReportSources;

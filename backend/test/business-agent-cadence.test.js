@@ -119,7 +119,7 @@ test('cadence precedence: owner, active execution, recovery, held, catch-up, sli
   const decide = (extra = {}) => c.decide({ now, settings, agent, today, state: {}, business: current(day), ...extra });
   assert.deepEqual([decide({ ownerRequested: true, business: current(day, { blockers: [{ code: 'calendar-stopped', title: 'Stopped' }] }) }).kind, decide({ ownerRequested: true }).callModel], ['owner', true]);
   const active = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'running', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }) });
-  assert.deepEqual([active.kind, active.callModel, Date.parse(active.nextReviewAt) - now], ['poll', false, 2 * MIN], 'executing work is polled without a model');
+  assert.deepEqual([active.kind, active.callModel, Date.parse(active.nextReviewAt) - now], ['slice', true, 0], 'independent activity is reviewed while execution continues');
   const retained = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }) });
   assert.deepEqual([retained.kind, retained.callModel], ['recovery', true], 'retained own work gets a recovery review before anything else');
   const foreign = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: { ...own, grantId: 'z' } }, blockers: [{ code: 'current-operation' }] }) });
@@ -158,7 +158,7 @@ test('catch-up is spaced while it progresses and backs off durably when it does 
   let next = run(start + MIN, state);
   assert.deepEqual([next.kind, next.callModel, Date.parse(next.nextReviewAt) - start], ['catch-up', false, 5 * MIN], 'no progress: wait 5 minutes');
   assert.match(next.reason, /no progress on the last review, waiting 5 min/);
-  const waits = [15, 30, 30, 30];
+  const waits = [5, 5, 5, 5];
   for (const wait of waits) {
     const now = Date.parse(next.nextReviewAt);
     assert.equal(run(now, next.state).callModel, true);
@@ -178,7 +178,7 @@ test('catch-up is spaced while it progresses and backs off durably when it does 
 test('an execution that stops advancing gets a bounded recovery review', () => {
   const day = '2026-10-30', start = at(day, '09:00'), business = current(day, { currentOperation: { operationId: 'o', status: 'running', agentAuthority: own, completedRecords: 2 }, blockers: [{ code: 'current-operation' }] });
   const first = c.decide({ now: start, settings, agent, business, today: todayAt(start), state: {} });
-  assert.equal(first.kind, 'poll');
+  assert.equal(first.kind, 'slice');
   const later = c.decide({ now: start + 21 * MIN, settings, agent, business, today: todayAt(start + 21 * MIN), state: first.state });
   assert.deepEqual([later.kind, later.callModel], ['recovery', true]);assert.match(later.reason, /has not advanced/);
 });
@@ -315,4 +315,48 @@ test('an interrupted review does not add a no-progress miss, but completed revie
  assert.equal(interrupted.state.misses,1);assert.equal(interrupted.state.reviews,1);
  const terminal=c.decide({now:now+60000,business,state:c.finishReview(pending)});assert.equal(terminal.state.misses,2);
  const progressed=c.decide({now:now+60000,business:{...business,verifiedThrough:'2026-10-30'},state:pending});assert.equal(progressed.state.misses,0);
+});
+
+// Job E: independent activity, scoped failure streaks and bounded concurrency.
+test('a blocked recovery does not delay an independent slice, but company-wide holds still apply',()=>{
+ const day='2026-10-31',now=at(day,'14:00'),business=current(day,{currentOperation:{operationId:'stuck',status:'blocked',agentAuthority:own},blockers:[{code:'current-operation'},{code:'uncertain-write'}]});
+ const input={now,settings,agent,business,today:todayAt(now),state:{day,lastKind:'recovery',misses:20,lastReviewAt:new Date(now-MIN).toISOString()}};
+ const next=c.decide(input);assert.deepEqual([next.kind,next.callModel],['slice',true]);assert.doesNotMatch(next.reason,/no progress/);
+ for(const code of ['calendar-stopped','coordination-paused','population-owned','completion-pending']){
+  const held=c.decide({...input,business:{...business,currentOperation:null,blockers:[{code}]},owned:[]});assert.equal(held.kind,'held',code);
+ }
+ const spent=c.decide({...input,requests:{reached:true,unavailable:true}});assert.equal(spent.kind,'recovery');
+});
+test('only consecutive failures of the same review and failure kind back off, capped at five minutes behind target',()=>{
+ const day='2026-10-31',now=at(day,'14:00'),business=current(day),today=todayAt(now),signature=c.progressSignature(business,today);
+ let state={day,misses:9,missKind:'recovery:failed',lastKind:'recovery'};
+ state=completedReview(state,{now,signature,kind:'slice'});
+ let next=c.decide({now:now+MIN,settings,agent,business,today,state});assert.equal(next.state.misses,1);assert.equal(Date.parse(next.nextReviewAt)-now,5*MIN);
+ state=c.finishReview(c.beginReview(next.state,{now:now+5*MIN,signature,kind:'slice'}),{failureKind:'provider-timeout'});
+ next=c.decide({now:now+6*MIN,settings,agent,business,today,state});assert.equal(next.state.misses,1,'different failure category resets the streak');
+ for(let i=0;i<5;i++){
+  const start=Date.parse(next.nextReviewAt);state=c.finishReview(c.beginReview(next.state,{now:start,signature,kind:'slice'}),{failureKind:'provider-timeout'});
+  next=c.decide({now:start+MIN,settings,agent,business,today,state});assert.equal(Date.parse(next.nextReviewAt)-start,5*MIN);
+ }
+});
+test('up to three prepared, queued or executing operations reserve capacity without exceeding record limits',()=>{
+ const day='2026-10-31',now=at(day,'17:00'),make=(id,status,n=3)=>({id,status,decisionKey:c.slotKey(day,3,17,Number(id)+1),createdAt:now-MIN,createCount:n});
+ const runs=[make('1','previewed'),make('2','approved'),make('3','running')];
+ for(let n=0;n<3;n++){const today=todayAt(now,runs.slice(0,n));assert.equal(today.inFlight,n);assert.ok(today.dueSlot);assert.ok(today.dueSlot.records+today.hourUsed<=60);assert.ok(today.dueSlot.records+today.saved+today.reserved<=today.ceiling);}
+ const full=todayAt(now,runs);assert.equal(full.inFlight,3);assert.equal(full.inFlightLimit,3);assert.equal(full.dueSlot,null);
+ const done=todayAt(now,[...runs.slice(0,2),{...runs[2],status:'verified'}],[{operationId:'3',entity:'Invoice',logicalKey:'saved'}]);assert.equal(done.inFlight,2);assert.ok(done.dueSlot);
+ const savedButVerifying=todayAt(now,[make('1','running',1)],[{operationId:'1',entity:'Invoice',logicalKey:'saved'}]);assert.equal(savedButVerifying.inFlight,1,'verification in progress still occupies its operation slot');
+ const capped=todayAt(now,[make('1','approved',60)]);assert.equal(capped.dueSlot,null,'the hourly limit still stops a second operation');
+});
+
+test('general batches use the rolling hour regardless of decision key and prepared plans do not expire',()=>{
+ const day='2026-10-31',now=at(day,'16:00');
+ const batch={id:'general',status:'prepared',decisionKey:'arbitrary-decision-key',hourlyActivity:true,createdAt:now-31*MIN,createCount:60};
+ const today=todayAt(now,[batch]);assert.equal(today.inFlight,1);assert.equal(today.hourUsed,60);assert.equal(today.dueSlot,null);assert.equal(today.hourResetAt,new Date(now+29*MIN).toISOString());
+});
+test('eligible collections receive an independent obligations review even when no slice is due',()=>{
+ const day='2026-10-31',now=at(day,'16:00'),business=current(day,{currentOperation:{operationId:'stuck',status:'blocked',agentAuthority:own},blockers:[{code:'current-operation'}],collectionReadiness:{eligibleInvoiceCount:6,reusableDecisionKeys:['cleared']}});
+ const today={...todayAt(now),dueSlot:null,remaining:0};
+ const next=c.decide({now,settings,agent,business,today,state:{day,lastKind:'recovery',misses:9,lastReviewAt:new Date(now-MIN).toISOString()}});
+ assert.deepEqual([next.kind,next.callModel],['obligations',true]);assert.match(next.reason,/currently eligible/);
 });
