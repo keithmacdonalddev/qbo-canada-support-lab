@@ -67,7 +67,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
   async function requireRequestBudget(){
     if(typeof requestsFor!=='function')return;
     const budget=cadence.requestBudget(await requestsFor().catch(()=>null));
-    if(budget.reached)fail(budget.unavailable?'Today\u2019s QuickBooks request count could not be read, so no new same-day sales or expenses were started. Recovery, obligations and calendar closes continue.':'Today\u2019s QuickBooks request budget of '+budget.limit.toLocaleString('en-CA')+' is used ('+budget.used.toLocaleString('en-CA')+' requests). New same-day sales and expenses resume after midnight UTC; recovery, obligations and calendar closes continue.');
+    if(budget.reached){const reason=cadence.requestBudgetReason(budget);fail(reason.charAt(0).toUpperCase()+reason.slice(1)+'. No new same-day sales or expenses were started.');}
   }
   async function requireNoUnfinished(except=null){
     const open=(await unfinished()).filter(run=>run.operationId!==except&&run.disposition!=='unsent');

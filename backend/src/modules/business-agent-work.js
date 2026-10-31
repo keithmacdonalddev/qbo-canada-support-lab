@@ -130,7 +130,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
       :!today.target?'The business is closed today. New sales and expenses resume on the next business day; obligations and corrections continue.'
       :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
       :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
-      :requests?.reached&&today.remaining>0?(requests.unavailable?'Today’s QuickBooks request count could not be read, so new sales and expenses wait. Recovery, obligations and calendar closes continue.':'Today’s QuickBooks request budget of '+requests.limit.toLocaleString('en-CA')+' is used ('+requests.used.toLocaleString('en-CA')+' requests). New sales and expenses resume after midnight UTC; recovery, obligations and calendar closes continue.')
+      :requests?.reached&&today.remaining>0?(reason=>reason.charAt(0).toUpperCase()+reason.slice(1)+'.')(require('./business-agent-cadence').requestBudgetReason(requests))
       :due?'Activity slot '+due.n+' of '+today.slotCount+' is due now: about '+plural(due.records,'record')+' of genuine business work.'
       :today.remaining===0?'Today’s planned activity is in QuickBooks.'
       :today.nextSlotAt?'Next activity slot at '+halifaxTime(today.nextSlotAt)+'.':'Today’s activity slots are finished; any shortfall is not replayed.';
@@ -168,7 +168,7 @@ function rightNow({configured=false,settings={},usage=null,reviewing=false,recov
   // Today's counts, why the next review is when it is, and any calendar lag, for the "Today" line.
   const extra={today:today&&today.label?{label:today.label,target:today.target,saved:today.saved??null,verified:today.verified??null,reserved:today.reserved??null,ceiling:today.ceiling,ceilingReached:Boolean(today.ceilingReached),unavailable:Boolean(today.unavailable),line:todayLine(today)}:null,
     cadence:cadence&&cadence.kind?{kind:cadence.kind,reason:String(cadence.reason||'')}:null,
-    requests:requests?{used:requests.used,limit:requests.limit,reached:Boolean(requests.reached),unavailable:Boolean(requests.unavailable)}:null,
+    requests:requests?{used:requests.used,limit:requests.limit,reached:Boolean(requests.reached),unavailable:Boolean(requests.unavailable),scope:requests.scope||null,sync:requests.sync??null,meteredToday:requests.meteredToday??null,meteredMonth:requests.meteredMonth??null,monthlyLimit:requests.monthlyLimit??null,allowance:requests.allowance??null}:null,
     calendar:calendarClose?{closedThrough:shortDate(calendarClose.closedThrough||null)||null,closing:shortDate(calendarClose.fromDate)+(calendarClose.throughDate!==calendarClose.fromDate?'–'+shortDate(calendarClose.throughDate):''),behindDays:calendarClose.behindDays}:null};
   const last=(Array.isArray(events)?events:[]).filter(event=>event&&event.kind==='review-completed').sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')))[0]||null;
   const base={state:'idle',role:null,startedAt:null,nextReviewAt:nextDecisionAt||null,lastReviewAt:last?.at||lastDecisionAt||null,lastSummary:last?oneLine(last.detail):'',steps:[],earlierSteps:0,pause:null,...extra};

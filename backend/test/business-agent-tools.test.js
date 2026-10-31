@@ -154,12 +154,12 @@ test('approval refuses a slice whose saved plan exceeds the slot allowance; obli
  await duty.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Pay the adopted bill that fell due today.'});assert.equal(duty.approved,1);
 });
 test('at the daily QuickBooks request budget new slices are refused; duties and recovery continue',async()=>{
- const h=slotFixture();let total=12000;
+ const h=slotFixture();let read=10000;
  const tools=createBusinessAgentTools({row:{_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},passId:'budget-pass',scope,user:{id:ownerId},signal:new AbortController().signal,now:()=>NOON,
   store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough:'2026-10-29',blockers:[]}),run:async()=>h.run,event:async()=>({id:'2'.repeat(24)}),unfinishedRuns:async()=>[]},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
-  governanceFor:()=>({prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},approve:async()=>{h.approved++;}}),execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async()=>h.today,requestsFor:async()=>({today:{total}})});
- await assert.rejects(tools.execute('prepareBusinessActivity',sale),/request budget of 12,000 is used \(12,000 requests\)/);
- await assert.rejects(tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/request budget of 12,000 is used/);
+  governanceFor:()=>({prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},approve:async()=>{h.approved++;}}),execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async()=>h.today,requestsFor:async()=>{const attempts={sync:30000,report:0,query:0,read,write:5000};return {today:{attempts},month:{attempts}};}});
+ await assert.rejects(tools.execute('prepareBusinessActivity',sale),/request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\)/);
+ await assert.rejects(tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/request budget of 10,000 is used/);
  await tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1,'list additions and obligations are not discretionary slices');
- total=500;await tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.length,2);
+ read=500;await tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.length,2);
 });

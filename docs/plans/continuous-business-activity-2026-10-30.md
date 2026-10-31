@@ -17,7 +17,7 @@ The fix, in order:
 - **Phase 0 — reviews can actually write (done in source).** A review now refreshes stale company data itself, within a fixed allowance, before it writes. If it cannot, it stops cleanly and tries again shortly. QuickBooks requests are counted per day.
 - **Phase 1 — recovery and catch-up first.** Restart stuck work before anything else, then close the calendar through yesterday (including days with no scheduled activity), then add today's work in small slices with a daily ceiling and a hard review limit.
 - **Phase 2 — a daily rhythm** using only the workflows that exist today.
-- **Phase 3 — measured tuning** of sync and cadence before any acceleration.
+- **Phase 3 — measured tuning** of sync and cadence before any acceleration. *Sync tuning and the request budget were pulled forward on 2026-10-31 (§3f).*
 - **Phase 4 — new realism workflows** (invoices on terms, grouped deposits, transfers, accruals).
 
 All existing safety checks stay: one writer, protected periods, exact plans, receipts and uncertain-write blocks.
@@ -37,7 +37,7 @@ Terms:
 | Next review after a pass | `business-agent-service.js` worker | complete → +interval; incomplete → +5 min |
 | Worker scan / lease | `business-agent-service.js` | 5 s scan; 240 s lease |
 | Per-review bounds | `business-agent-service.js` | 120 s, 8 rounds, 24 tool calls |
-| Sync slice | `business-agent-sync.js:7`, service | ≤12 requests/tick over 28 sources; 30 s when current, else 5 s; a source is current for max(2×cadence, 120 s) |
+| Sync slice | `business-agent-sync.js:7`, service | Before 2026-10-31: ≤12 requests/tick over 28 sources; 30 s when current, else 5 s; a source is current for max(2×cadence, 120 s). Since: see §3f sync tuning |
 | Same-day gate | `business-governance-service.js:406`, enforced again in `business-activity-batch.js:485` | `verifiedThrough === yesterday` and idle writer |
 | Calendar close bounds | `business-agent-tools.js:85` | next uninterrupted period through yesterday, ≤31 days |
 | Monthly schedule | `business-activity-preview.js` | 278 (template v2) records/month ≈ 9.5/day; v3 (288) is rejected for Production at `:14` |
@@ -106,8 +106,11 @@ Targets use only what policy v7 can do today: same-day settled sales (with their
 ### f. Resource controls
 
 - **QBO requests (Phase 0, done):** a daily per-company counter of actual transport attempts and HTTP 2xx successes by category — sync, report, query, read, write — recorded from the single client transport path (`qbo-client.js` `apiCall`). Counts batch in memory and flush every 15 s with `$inc` into `QboRequestDay` (UTC day). Token refreshes are not counted. Today's and the month's totals appear read-only in the business-agent status (`qboRequests`) and on one line of the AI usage panel.
-- **Daily request budget (Phase 1, enforced since 2026-10-30):** 12,000 QuickBooks attempts per UTC day stop new discretionary slices; it is a ceiling, not a rate limiter.
-- **Sync tuning (Phase 3; still required):** from measurements, slow lists and singletons to 60–300 s, keep transaction CDC at 30 s, and set a monthly request budget with room for verification and recovery (at least 30% headroom under the confirmed Intuit allowance). Add a shared per-realm rate limiter, since average per-minute rates do not prove instantaneous compliance.
+- **Daily request budget (Phase 1, enforced since 2026-10-30; revised 2026-10-31):** the first version counted every attempt (12,000/UTC day). Measured on 2026-10-31 after about two hours: sync 1,845, read 212, report 38, query 27, write 3. Sync alone ran at about 1,000/hour (≈24,000/day, ≈720,000/month), over Intuit's 500,000-call Builder allowance by itself, and would have used the 12,000 budget by midday UTC and blocked every Saturday slice.
+- **Request budget (since 2026-10-31, `business-agent-cadence.js` `requestBudget`):** Intuit meters only "CorePlus" calls (reads, queries, reports); "Core" data-in calls (creates, updates) are not metered, so writes never count. New discretionary slices stop at **10,000 non-sync metered attempts** (read + query + report) per UTC day, or when the month's **metered total including sync reaches 450,000** (50,000 under the free allowance). Background sync is outside the daily figure, so it can never starve the business. Unreadable counts stop new slices (fail closed); recovery, obligations, calendar closes and continuation always proceed. 31 × (10,000 + ~300 sync) ≈ 319,000/month, so the monthly guard is a backstop against runaway use. The AI usage panel shows today's and the month's metered totals against the 500,000 allowance and the daily activity figure.
+- **Sync tuning (pulled forward from Phase 3, 2026-10-31, `business-agent-sync.js`):** the app makes almost every change itself, so sync is adaptive. (1) Every incremental change-tracked source (23 of the 28) is read in **one combined change-data-capture (CDC) call**, every 5 minutes in Halifax business hours and every 15 outside. (2) A write-bearing step needs every change-tracked source read within the last 2 minutes; if not, the bounded pre-write refresh makes that one combined call (charged as 2 of the 40-request allowance), and that call is what admits the write. (3) A combined response at the 1,000-object limit persists nothing and each source is read on its own (its own CDC call, then a full re-read if that is saturated too); a malformed or rejected combined response does the same, while a transient failure (429, 5xx, network) retries combined with per-source backoff (1, 2, 4… intervals, at most 30 minutes). (4) Snapshot sources: TimeActivity every 30 minutes in business hours and 2 hours outside; tax codes, tax rates, company info and preferences every 6 hours; pages are 1,000 rows. (5) From 02:00 Halifax a nightly sweep compares each change-tracked source's QuickBooks `COUNT(*)` with the mirror's undeleted records and fully re-reads (with tombstoning) any source that differs; a cursor older than 29 days is always fully re-read. Freshness stays truthful: a source is current for twice the cadence it was read under (at least 2 minutes), and a successful combined read makes every covered source current as of that response.
+  - *Expected sync requests:* weekday — CDC 10 business hours × 12 + 14 h × 4 = 176; pre-write reads ≈ 40 (about 20 write-bearing reviews, most needing one call); TimeActivity 20 + 7 = 27; reference snapshots 4 × 4 = 16; nightly sweep 23 → **≈ 280/day**. Saturday ≈ 48 + 80 + 10 + 18 + 16 + 23 ≈ 195; Sunday ≈ 96 + 12 + 16 + 23 ≈ 147. About **7,700 a month**, versus ≈ 720,000 before. Snapshot pages grow by one per 1,000 records of a source.
+  - *Still open:* a shared per-realm rate limiter (average rates do not prove instantaneous compliance), and a week of measured requests as the Phase 3 proof.
 - **Model use:** the hard daily review ceiling (§3a). Cached-token totals are not converted into ChatGPT plan headroom; the plan-limit pause stays the authority.
 
 ### g. Authority
@@ -146,7 +149,7 @@ Phases 0–3 need no grant renewal. Adding a v8 workflow known to the code does 
 
 ## 5. Risks
 
-- **API allowance:** unknown for this app (D06). Sync alone may exceed a Builder allowance; Phase 3 must run before any acceleration.
+- **API allowance:** the Builder tier allows 500,000 metered calls a month (D06). Polling sync alone exceeded it until the 2026-10-31 sync tuning (§3f); the budget now counts only metered calls and keeps a monthly guard. A week of measured requests is still the proof before any acceleration.
 - **Plan quota:** weekly ChatGPT limits are unpublished; the review ceiling bounds use but cannot prove sustainability.
 - **Rework:** more slices mean more seven-report checks. A failed slice holds the writer until recovered; recovery runs first and backs off rather than loops.
 - **Calendar ramp:** post-adoption months may stay below 9.5 records/day; same-day targets fill the gap without duplicating calendar obligations.

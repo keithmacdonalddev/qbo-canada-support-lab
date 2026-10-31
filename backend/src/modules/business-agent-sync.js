@@ -1,21 +1,42 @@
 'use strict';
 const { randomUUID, createHash } = require('node:crypto');
 const { scoped } = require('./qbo-write-contract');
+const { localParts, dayRhythm } = require('./business-agent-cadence');
 
 // These sources match the current app's structured read-tool surface. Unsupported
 // CDC entities and singleton preferences use complete replacement observations.
+// Request economy (docs/plans/continuous-business-activity-2026-10-30.md, sync tuning). The app
+// makes almost every change itself, so the cadence is adaptive:
+// - every incremental change-tracked source is read together in ONE change (CDC) call, every
+//   5 minutes in business hours (America/Halifax, business-agent-cadence.js) and every 15 outside;
+// - a write-bearing step asks for a read within the last two minutes (tick freshWithinMs), and
+//   that combined call is what satisfies the write gate;
+// - a combined response at the change limit, or one QuickBooks rejects, falls back to per-source
+//   reads (each source's own CDC call, and a full re-read if that is saturated too);
+// - snapshot sources are re-read every 30 minutes in business hours and 2 hours outside
+//   (TimeActivity) or every 6 hours (tax codes and rates, company info, preferences);
+// - from 02:00 Halifax a nightly sweep compares each change-tracked source's QuickBooks COUNT
+//   with the mirror and fully re-reads any source that differs; a cursor older than 29 days
+//   is always fully re-read.
+// Steady state is about 280 requests on a weekday, fewer on weekends.
 const ENTITIES = Object.freeze(['Preferences', 'CompanyInfo', 'Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
 const SNAPSHOT_ONLY = new Set(['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']);
 const SINGLETONS = new Set(['CompanyInfo', 'Preferences']);
 const LISTS = new Set(['Customer', 'Vendor', 'Item', 'Account', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
-const PAGE_SIZE = 100, CDC_LIMIT = 1000, MAX_AGE_MS = 29 * 86400000, OVERLAP_MS = 60000;
+const PAGE_SIZE = 1000, CDC_LIMIT = 1000, MAX_AGE_MS = 29 * 86400000, OVERLAP_MS = 60000;
 const QID = /^[A-Za-z0-9_-]{1,64}$/;
 const plain = value => value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
 const copy = value => JSON.parse(JSON.stringify(value));
 const fail = message => Object.assign(new Error(message), { status: 409, code: 'BUSINESS_SYNC_INCOMPLETE' });
 const stamp = value => { const n = typeof value === 'string' ? Date.parse(value) : NaN; return Number.isFinite(n) ? n : null; };
 const iso = value => new Date(value).toISOString();
-const refreshInterval = (entity, intervalMs) => entity === 'TimeActivity' ? Math.max(intervalMs, 300000) : intervalMs;
+// Refresh cadence per source kind at an instant; the configured monitoring interval can only slow them.
+const MINUTE = 60000, CDC_OPEN_MS = 5 * MINUTE, CDC_CLOSED_MS = 15 * MINUTE, TIME_OPEN_MS = 30 * MINUTE, TIME_CLOSED_MS = 120 * MINUTE, REFERENCE_EVERY_MS = 360 * MINUTE;
+const RECONCILE_FROM_MINUTES = 120; // nightly sweep from 02:00 Halifax
+function inBusinessHours(clock) { const local = localParts(clock), rhythm = dayRhythm(local.date); return rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close; }
+const refreshInterval = (entity, intervalMs, clock) => { const open = inBusinessHours(clock); return Math.max(intervalMs, entity === 'TimeActivity' ? (open ? TIME_OPEN_MS : TIME_CLOSED_MS) : SNAPSHOT_ONLY.has(entity) ? REFERENCE_EVERY_MS : open ? CDC_OPEN_MS : CDC_CLOSED_MS); };
+// A source stays current for twice the cadence it was read under (saved as everyMs), at least two minutes.
+const cadenceOf = (row, entity, intervalMs, clock) => Number.isSafeInteger(row?.everyMs) && row.everyMs >= 1000 ? row.everyMs : refreshInterval(entity, intervalMs, clock);
 const safeText = (value, max = 160) => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, max) : '';
 function cents(value) { const n = typeof value === 'number' ? value : NaN; return Number.isFinite(n) && Number.isSafeInteger(Math.round(n * 100)) ? Math.round(n * 100) : null; }
 function recordSummary(entity, record, homeCurrency) {
@@ -31,10 +52,13 @@ function recordSummary(entity, record, homeCurrency) {
     homeBalanceCents: homeBalance, bankBalanceCents: accountBalance,
     status: record.status === 'Deleted' ? 'Deleted' : balance !== null ? balance === 0 ? 'Paid' : amount !== null && balance < amount ? 'Partly paid' : 'Open' : record.Active === false ? 'Inactive' : 'Recorded' };
 }
+// entity: one source name, or for a change (CDC) response the list of requested sources.
+// Returns { rows, byEntity, serverTime, saturated }; CDC identities are unique per entity.
 function parseBody(body, entity, cdc, clock) {
   if (!plain(body) || body.Fault || body.fault) throw fail('QuickBooks returned an incomplete source response.');
   const serverTime = stamp(body.time);
   if (serverTime === null || serverTime > clock + 300000 || serverTime < clock - 300000) throw fail('QuickBooks source time is missing or ahead of this server.');
+  const wanted = cdc ? [].concat(entity) : [entity];
   let blocks;
   if (cdc) {
     if (!Array.isArray(body.CDCResponse) || body.CDCResponse.length !== 1 || !plain(body.CDCResponse[0]) || body.CDCResponse[0].Fault || !Array.isArray(body.CDCResponse[0].QueryResponse)) throw fail('The change response is incomplete.');
@@ -43,49 +67,76 @@ function parseBody(body, entity, cdc, clock) {
     if (!plain(body.QueryResponse)) throw fail('The source query response is missing.');
     blocks = [body.QueryResponse];
   }
-  const rows = [], ids = new Set(); let declared = 0;
+  const rows = [], byEntity = Object.fromEntries(wanted.map(name => [name, []])), ids = new Set(), named = new Set(); let declared = 0;
   for (const block of blocks) {
-    if (!plain(block) || block.Fault || block.fault || Object.keys(block).some(key => ![entity, 'startPosition', 'maxResults', 'totalCount'].includes(key))) throw fail('The source response contains an unexpected or failed entity.');
-    if (block[entity] !== undefined && !Array.isArray(block[entity])) throw fail('The source record list is malformed.');
-    const members = block[entity] || [];
+    if (!plain(block) || block.Fault || block.fault) throw fail('The source response contains an unexpected or failed entity.');
+    // Each block carries at most one requested source; a block with none has no changes.
+    const names = Object.keys(block).filter(key => !['startPosition', 'maxResults', 'totalCount'].includes(key));
+    if (names.length > 1 || names.some(name => !wanted.includes(name) || named.has(name))) throw fail('The source response contains an unexpected or failed entity.');
+    const name = names[0]; if (name) named.add(name);
+    if (name && !Array.isArray(block[name])) throw fail('The source record list is malformed.');
+    const members = name ? block[name] : [];
     if (block.maxResults !== undefined && (!Number.isInteger(block.maxResults) || block.maxResults !== members.length)) throw fail('The source page size does not match its records.');
     if (block.startPosition !== undefined && block.startPosition !== 1) throw fail('The source did not start at the requested keyset.');
     if (block.totalCount !== undefined && (!Number.isInteger(block.totalCount) || block.totalCount < members.length)) throw fail('The declared source count is incomplete.');
     declared += block.totalCount ?? members.length;
     for (const record of members) {
-      if (!plain(record) || !QID.test(record.Id || '') || ids.has(record.Id) || (record.sparse === true && record.status !== 'Deleted') || (!cdc && record.status === 'Deleted')) throw fail('Source record identities are missing, partial or repeated.');
+      if (!plain(record) || !QID.test(record.Id || '') || ids.has(name + ':' + record.Id) || (record.sparse === true && record.status !== 'Deleted') || (!cdc && record.status === 'Deleted')) throw fail('Source record identities are missing, partial or repeated.');
       if (Buffer.byteLength(JSON.stringify(record)) > 2000000) throw fail('A source record exceeds the observation size budget.');
-      ids.add(record.Id); rows.push(record);
+      ids.add(name + ':' + record.Id); rows.push(record); byEntity[name].push(record);
     }
   }
   if (rows.length > (cdc ? CDC_LIMIT : PAGE_SIZE) || (!cdc && declared > rows.length && rows.length < PAGE_SIZE)) throw fail('The source page omitted declared records.');
+  // The change limit applies to the whole response, across every requested source.
   const saturated = cdc && (rows.length >= CDC_LIMIT || declared >= CDC_LIMIT);
   if (cdc && !saturated && declared > rows.length) throw fail('The change response omitted declared records.');
-  return { rows, serverTime, saturated };
+  return { rows, byEntity, serverTime, saturated };
 }
+// A COUNT query response: { QueryResponse: { totalCount } }; an empty QueryResponse means zero.
+function parseCount(body, clock) {
+  if (!plain(body) || body.Fault || body.fault || !plain(body.QueryResponse)) throw fail('QuickBooks returned an incomplete count response.');
+  const serverTime = stamp(body.time);
+  if (serverTime === null || serverTime > clock + 300000 || serverTime < clock - 300000) throw fail('QuickBooks source time is missing or ahead of this server.');
+  const keys = Object.keys(body.QueryResponse);
+  if (keys.some(key => key !== 'totalCount')) throw fail('The count response contains unexpected data.');
+  const count = body.QueryResponse.totalCount ?? 0;
+  if (!Number.isSafeInteger(count) || count < 0) throw fail('The count response is malformed.');
+  return count;
+}
+const badCursor = (source, entity) => !plain(source) || source.entity !== entity || !['bootstrap', 'catchup', 'incremental'].includes(source.phase) || typeof source.generation !== 'string' || stamp(source.startedAt) === null || (source.lastId !== null && !QID.test(source.lastId || '')) || (source.since !== null && stamp(source.since) === null);
+// Consecutive failures of one source wait one, two, four... monitoring intervals, at most 30 minutes,
+// so a persistent rejection cannot keep spending requests.
+const retryAt = (source, clock, intervalMs) => iso(clock + Math.min(intervalMs * 2 ** Math.min(Math.max(0, (Number(source?.failures) || 0) - 1), 10), 30 * 60000));
+const sourceError = error => error.code === 'BUSINESS_SYNC_INCOMPLETE' ? error.message : error.status === 429 ? 'QuickBooks is limiting requests. This source will retry after the wait.' : Number.isInteger(error.status) ? 'QuickBooks could not read this source (HTTP ' + error.status + '). Its last complete observation is retained.' : 'This source could not be synchronized. Its last complete observation is retained.';
 function sourceStart(entity, clock, previous) {
   return { entity, mode: SNAPSHOT_ONLY.has(entity) ? 'snapshot' : 'cdc', phase: 'bootstrap', status: 'bootstrap', generation: randomUUID(),
     startedAt: iso(clock), since: null, lastId: null, observed: 0, count: previous?.count ?? 0,
-    lastSuccessAt: previous?.lastSuccessAt || null, nextAt: null, error: null };
+    lastSuccessAt: previous?.lastSuccessAt || null, ...(Number.isSafeInteger(previous?.everyMs) ? { everyMs: previous.everyMs } : {}), nextAt: null, error: null };
 }
 function publicSnapshot(state, entities, clock, intervalMs) {
   const sources = entities.map(entity => {
     const row = state.sources?.[entity];
     if (!row) return { entity, status: 'waiting', count: 0, lastSuccessAt: null, error: null };
-    const cadence = refreshInterval(entity, intervalMs), completedAt = stamp(row.lastSuccessAt), freshFor = Math.max(cadence * 2, 120000);
+    const cadence = cadenceOf(row, entity, intervalMs, clock), completedAt = stamp(row.lastSuccessAt), freshFor = Math.max(cadence * 2, 120000);
     const recentComplete = completedAt !== null && completedAt <= clock && clock - completedAt <= freshFor;
     const refreshing = row.mode === 'snapshot' && row.status === 'bootstrap' && recentComplete;
     const current = recentComplete && (row.status === 'current' || refreshing);
     return { entity, status: current ? 'current' : row.status === 'current' ? 'stale' : row.status, mode: row.mode, refreshing, refreshEverySeconds: cadence / 1000, freshUntil: completedAt === null ? null : iso(completedAt + freshFor), count: row.count || 0,
-      observed: row.observed || 0, lastSuccessAt: row.lastSuccessAt || null, error: row.error || null };
+      observed: row.observed || 0, lastSuccessAt: row.lastSuccessAt || null, error: row.error || null, ...(row.reconcileError ? { reconcileError: row.reconcileError } : {}) };
   });
   const complete = sources.every(row => row.status === 'current');
-  const summaryFresh = stamp(state.summaryAt) !== null && stamp(state.summaryAt) <= clock && clock - stamp(state.summaryAt) <= Math.max(intervalMs * 4, 120000);
+  // The company summary is refreshed after every observation, so it shares the change-read window
+  // (or, with no change-tracked sources, the longest snapshot window).
+  const windows = sources.filter(row => row.refreshEverySeconds).map(row => ({ cdc: row.mode !== 'snapshot', ms: row.refreshEverySeconds * 2000 }));
+  const summaryWindow = Math.max(intervalMs * 4, 120000, ...(windows.some(row => row.cdc) ? windows.filter(row => row.cdc) : windows).map(row => row.ms));
+  const summaryFresh = stamp(state.summaryAt) !== null && stamp(state.summaryAt) <= clock && clock - stamp(state.summaryAt) <= summaryWindow;
+  // When the next source read is due (a source without a saved schedule is due now).
+  const nextDueAt = entities.reduce((min, entity) => Math.min(min, stamp(state.sources?.[entity]?.nextAt) ?? clock), Infinity);
   const error = sources.some(row => ['error', 'saturated'].includes(row.status)) || Boolean(state.summaryError);
   return { status: complete && summaryFresh ? 'current' : error ? 'attention' : sources.some(row => row.status === 'stale') ? 'stale' : 'catching-up',
     lastSuccessAt: complete ? sources.map(row => row.lastSuccessAt).sort()[0] : null, sources,
     company: { ...(state.company || { counts: {}, totals: {}, recent: [] }), provisional: !complete || !summaryFresh },
-    summaryAt: state.summaryAt || null, summaryError: state.summaryError || null };
+    summaryAt: state.summaryAt || null, summaryFreshUntil: stamp(state.summaryAt) === null ? null : iso(stamp(state.summaryAt) + summaryWindow), summaryError: state.summaryError || null, nextDueAt: Number.isFinite(nextDueAt) ? iso(nextDueAt) : null };
 }
 async function summarizeCompanyMirror({ Records, scope, homeCurrency = null, now = () => Date.now() }) {
   scope = scoped(scope);
@@ -147,6 +198,30 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
       { $set: { deleted: true, lastObservedAt: new Date(clock) } });
     await check();
   }
+  // Nightly reconciliation (from 02:00 Halifax, once per Halifax day per source): a COUNT per
+  // current change-tracked source against the mirror's undeleted records, using the summary just
+  // refreshed. A difference starts a full re-read (with tombstoning) of that source only. A count
+  // that cannot be read is recorded and retried the next night.
+  async function reconcile(state, canRequest, charge, control, readCurrent) {
+    const local = localParts(now());
+    if (local.minutes < RECONCILE_FROM_MINUTES || !plain(state.company?.entityCounts) || !state.summaryAt || state.summaryError) return;
+    const summaryAt = stamp(state.summaryAt);
+    for (const entity of entities) {
+      const source = state.sources[entity];
+      if (SNAPSHOT_ONLY.has(entity) || !source || source.phase !== 'incremental' || source.status !== 'current' || source.reconciledOn === local.date || !source.reconciledOn) continue;
+      // The comparison needs a summary computed after this source's latest observation.
+      if (!(summaryAt >= stamp(source.lastSuccessAt))) continue;
+      if (!canRequest()) return;
+      await check(); charge();
+      let count;
+      try { count = parseCount(await readCurrent(() => client.query('SELECT COUNT(*) FROM ' + entity + (LISTS.has(entity) ? ' WHERE Active IN (true, false)' : ''), control)), now()); await check(); }
+      catch (error) { signal?.throwIfAborted(); if (control.signal.aborted) return; state.sources[entity] = { ...source, reconciledOn: local.date, reconcileError: 'The nightly count check could not be read; it retries tomorrow night.' }; await save(state); continue; }
+      const mirrored = Number(state.company.entityCounts[entity]) || 0;
+      if (count === mirrored) { const { reconcileError, ...kept } = source; state.sources[entity] = { ...kept, reconciledOn: local.date }; }
+      else { state.sources[entity] = { ...sourceStart(entity, now(), source), reconcileError: 'The nightly check found ' + count + ' records in QuickBooks and ' + mirrored + ' here, so this source is being fully re-read.' }; }
+      await save(state);
+    }
+  }
   async function perform() {
     const state = await stateRead(); observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
     const controller = new AbortController(), abort = () => controller.abort();
@@ -159,15 +234,55 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
       controller.signal.addEventListener('abort', aborted, { once: true });
       Promise.resolve().then(() => { controller.signal.throwIfAborted(); return factory(); }).then(resolve, reject).finally(() => controller.signal.removeEventListener('abort', aborted));
     });
-    const control = { signal: controller.signal, beforeAttempt: async () => { controller.signal.throwIfAborted(); await check(); if (attempts >= maxRequests) throw fail('This sync slice has used its request allowance.'); attempts++; }, onFailure: () => {} };
+    const control = { signal: controller.signal, beforeAttempt: async () => { controller.signal.throwIfAborted(); await check(); if (attempts >= maxRequests) throw Object.assign(fail('This sync slice has used its request allowance.'), { allowance: true }); attempts++; }, onFailure: () => {} };
     try {
-      let visited = 0;
+      // One combined change read covers every incremental change-tracked source that is not
+      // being read on its own. It runs when any of them is due, and each covered source is then
+      // current as of that response; nothing is persisted from a response at the change limit.
+      const groupClock = now(), grouped = new Set(entities.filter(entity => {
+        const source = state.sources[entity];
+        return source && !SNAPSHOT_ONLY.has(entity) && !badCursor(source, entity) && source.phase === 'incremental' && source.solo !== true && stamp(source.since) !== null && groupClock - stamp(source.since) <= MAX_AGE_MS;
+      }));
+      const members = [...grouped];
+      // freshWithinMs (write gate): also read when any covered source was last read longer ago.
+      const tooOld = entity => perform.freshWithinMs && !(groupClock - (stamp(state.sources[entity].lastSuccessAt) ?? -Infinity) <= perform.freshWithinMs);
+      if (members.length && members.some(entity => !(stamp(state.sources[entity].nextAt) > groupClock) || tooOld(entity))) {
+        const originals = Object.fromEntries(members.map(entity => [entity, copy(state.sources[entity])]));
+        const since = iso(Math.min(...members.map(entity => stamp(originals[entity].since)))), started = now(); requests++;
+        // Sources handed to their own reads are read in this same slice when its allowance permits.
+        const split = fields => { for (const entity of members) { state.sources[entity] = { ...originals[entity], ...fields, solo: true, nextAt: null }; grouped.delete(entity); } };
+        try {
+          const params = new URLSearchParams({ entities: members.join(','), changedSince: since });
+          const body = await readCurrent(() => client.apiCall('GET', 'cdc?' + params, undefined, 0, 0, control)); await check();
+          const parsed = parseBody(body, members, true, now());
+          if (parsed.saturated) { split({ status: 'saturated', error: 'The combined change response reached its limit. Each source is being read on its own before it can be current.' }); await save(state); }
+          else {
+            for (const entity of members) { await persistRows(entity, parsed.byEntity[entity], originals[entity], started, now()); changed ||= parsed.byEntity[entity].length > 0; }
+            const clock = now(), nextSince = iso(Math.min(started, parsed.serverTime) - OVERLAP_MS), success = iso(clock), everyMs = refreshInterval(members[0], intervalMs, clock), next = iso(clock + everyMs);
+            for (const entity of members) { const { failures, ...kept } = originals[entity]; state.sources[entity] = { ...kept, phase: 'incremental', status: 'current', error: null, since: nextSince, lastSuccessAt: success, everyMs, nextAt: next, reconciledOn: kept.reconciledOn || localParts(clock).date }; }
+            await save(state); observedSource = true;
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Every original cursor is kept. A malformed or rejected combined response is retried
+          // per source (which finds the failing one); a transient failure retries combined.
+          const perSource = !controller.signal.aborted && !error.allowance && (error.code === 'BUSINESS_SYNC_INCOMPLETE' || (Number.isInteger(error.status) && error.status >= 400 && error.status < 500 && ![401, 403, 429].includes(error.status)));
+          if (perSource) split({ status: 'error', error: sourceError(error) });
+          else for (const entity of members) { const failures = (Number(originals[entity].failures) || 0) + 1; state.sources[entity] = { ...originals[entity], status: 'error', error: sourceError(error), failures, nextAt: retryAt({ failures }, now(), intervalMs) }; }
+          await save(state);
+        }
+      }
+      // A slice that ran out of time during the combined read stops here; its cursors are kept.
+      let visited = controller.signal.aborted ? entities.length : 0;
       while (requests < maxRequests && visited < entities.length) {
         await check(); controller.signal.throwIfAborted();
         const index = state.nextEntity % entities.length, entity = entities[index]; state.nextEntity = (index + 1) % entities.length; visited++;
         let source = state.sources[entity]; const clock = now();
-        if (source && (!plain(source) || source.entity !== entity || !['bootstrap', 'catchup', 'incremental'].includes(source.phase) || typeof source.generation !== 'string' || stamp(source.startedAt) === null || (source.lastId !== null && !QID.test(source.lastId || '')) || (source.since !== null && stamp(source.since) === null))) throw fail('A saved source cursor is invalid.');
-        if (stamp(source?.nextAt) !== null && stamp(source.nextAt) > clock) continue;
+        if (grouped.has(entity)) continue;
+        if (source && badCursor(source, entity)) throw fail('A saved source cursor is invalid.');
+        // A source read on its own also answers the write gate's freshness demand.
+        const demanded = source && source.phase === 'incremental' && !SNAPSHOT_ONLY.has(entity) && perform.freshWithinMs && !(clock - (stamp(source.lastSuccessAt) ?? -Infinity) <= perform.freshWithinMs);
+        if (stamp(source?.nextAt) !== null && stamp(source.nextAt) > clock && !demanded) continue;
         if (!source || clock - stamp(source.startedAt) > MAX_AGE_MS && source.phase !== 'incremental' || source.phase === 'incremental' && (stamp(source.since) === null || clock - stamp(source.since) > MAX_AGE_MS) || SNAPSHOT_ONLY.has(entity) && source.phase === 'incremental') source = sourceStart(entity, clock, source);
         else source = copy(source);
         state.sources[entity] = source;
@@ -199,7 +314,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
             else if (!SNAPSHOT_ONLY.has(entity)) { source.phase = 'catchup'; source.status = 'catching-up'; source.lastId = null; }
             else {
               await finishGeneration(entity, source, now()); source.phase = 'incremental'; source.status = 'current'; source.count = source.observed;
-              source.lastSuccessAt = iso(now()); source.nextAt = iso(now() + refreshInterval(entity, intervalMs)); changed = true;
+              const clock = now(); source.everyMs = refreshInterval(entity, intervalMs, clock); source.lastSuccessAt = iso(clock); source.nextAt = iso(clock + source.everyMs); changed = true;
             }
           } else {
             const params = new URLSearchParams({ entities: entity, changedSince: source.since });
@@ -211,16 +326,19 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
               state.sources[entity] = replacement; await save(state); continue;
             }
             await persistRows(entity, parsed.rows, source, started, now()); changed ||= parsed.rows.length > 0;
-            if (source.phase === 'catchup') { await finishGeneration(entity, source, now()); changed = true; }
-            source.phase = 'incremental'; source.status = 'current'; source.error = null;
+            // A completed full read counts as reconciled for its Halifax day.
+            if (source.phase === 'catchup') { await finishGeneration(entity, source, now()); changed = true; source.reconciledOn = localParts(now()).date; delete source.reconcileError; }
+            source.phase = 'incremental'; source.status = 'current'; source.error = null; delete source.solo;
             source.since = iso(Math.min(started, parsed.serverTime) - OVERLAP_MS);
-            source.lastSuccessAt = iso(now()); source.nextAt = iso(now() + intervalMs);
+            const clock = now(); source.everyMs = refreshInterval(entity, intervalMs, clock); source.lastSuccessAt = iso(clock); source.nextAt = iso(clock + source.everyMs);
+            source.reconciledOn ||= localParts(clock).date;
           }
+          delete source.failures;
           await save(state); observedSource = true;
         } catch (error) {
           signal?.throwIfAborted();
           // Keep original cursor and never claim a partially persisted source current.
-          const retained = { ...originalSource, status: 'error' }; state.sources[entity] = retained; retained.nextAt = iso(now() + intervalMs); retained.error = error.code === 'BUSINESS_SYNC_INCOMPLETE' ? error.message : error.status === 429 ? 'QuickBooks is limiting requests. This source will retry after the wait.' : Number.isInteger(error.status) ? 'QuickBooks could not read this source (HTTP ' + error.status + '). Its last complete observation is retained.' : 'This source could not be synchronized. Its last complete observation is retained.';
+          const retained = { ...originalSource, status: 'error', failures: (Number(originalSource.failures) || 0) + 1 }; state.sources[entity] = retained; retained.nextAt = retryAt(retained, now(), intervalMs); retained.error = sourceError(error);
           await save(state); if (controller.signal.aborted) break;
         }
       }
@@ -232,14 +350,17 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         } catch (error) { signal?.throwIfAborted(); state.summaryError = 'The company summary could not be refreshed. Earlier figures may be stale.'; await save(state); }
       }
       if (!changed && observedSource && state.company && state.summaryAt && !state.summaryError) { state.summaryAt = iso(now()); await save(state); }
+      await reconcile(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
       return publicSnapshot(state, entities, now(), intervalMs);
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   }
-  function tick({ maxRequests = 8, timeoutMs = 120000 } = {}) {
+  // freshWithinMs: the write gate's demand that change-tracked sources were read within this long.
+  function tick({ maxRequests = 8, timeoutMs = 120000, freshWithinMs = null } = {}) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) return Promise.reject(new TypeError('Use a sync time allowance of 1–120 seconds.'));
+    if (freshWithinMs !== null && (!Number.isInteger(freshWithinMs) || freshWithinMs < 1000 || freshWithinMs > 3600000)) return Promise.reject(new TypeError('Use a freshness demand of 1–3,600 seconds.'));
     if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 40) return Promise.reject(new TypeError('Use a bounded sync slice of 1–40 requests.'));
     if (ticking) return ticking;
-    perform.maxRequests = maxRequests; perform.timeoutMs = timeoutMs;
+    perform.maxRequests = maxRequests; perform.timeoutMs = timeoutMs; perform.freshWithinMs = freshWithinMs;
     // Requests made by a sync slice are measured as background synchronization.
     ticking = require('./qbo-request-meter').runWithCategory('sync', () => perform()).finally(() => { ticking = null; }); return ticking;
   }

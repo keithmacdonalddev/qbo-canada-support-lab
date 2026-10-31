@@ -23,15 +23,48 @@ const BACKOFF_MINUTES = Object.freeze([5, 15, 30, 60]);
 // recovery, catch-up and obligations with room for backoff retries.
 const REVIEW_CEILING = 80;
 const MIDNIGHT_CLOSE_MINUTES = 5;
-// Enforced daily QuickBooks request budget (Phase 0 meter, UTC day, attempts including unsaved counts).
-// 12,000/day is about 360,000/month, under Intuit's 500,000-call Builder allowance. At the budget no new
-// discretionary slice is scheduled or admitted; recovery, obligations, calendar closes and continuation are.
-const DAILY_REQUEST_BUDGET = 12000;
-// requests: the meter summary ({ today: { total } }) or null when it could not be read (treated as reached).
-function requestBudget(summary, limit = DAILY_REQUEST_BUDGET) {
-  const used = Number(summary?.today?.total);
-  if (!summary || summary.unavailable || !Number.isFinite(used)) return { used: null, limit, reached: true, unavailable: true };
-  return { used, limit, reached: used >= limit, unavailable: false };
+// QuickBooks request budget (Phase 0 meter: transport attempts by UTC day, unsaved counts included).
+// Intuit's Builder tier allows 500,000 metered ("CorePlus") calls a month: reads, queries and reports.
+// Creates and updates ("Core" data-in calls) are not metered, so writes never count here.
+// Scheme (sync tuning, 2026-10-31):
+// - Activity budget: 10,000 metered NON-sync attempts (read + query + report) per UTC day. At it, no
+//   new discretionary slice is scheduled or admitted; recovery, obligations, calendar closes and
+//   continuation proceed. Background sync is excluded, so it can never starve the business.
+// - Sync is expected at about 300 a day (an adaptive combined change read, one before writes, snapshot
+//   re-reads and a nightly count sweep; business-agent-sync.js), shown separately but not limited here.
+// - Monthly guard: 450,000 metered attempts (sync included) month to date also stops new slices,
+//   leaving 50,000 of the free allowance for sync, recovery and verification.
+// 31 x (10,000 + ~300) is about 319,000, so the monthly guard is a backstop against runaway use.
+const METERED_CATEGORIES = Object.freeze(['sync', 'read', 'query', 'report']);
+const ACTIVITY_CATEGORIES = Object.freeze(['read', 'query', 'report']);
+const DAILY_REQUEST_BUDGET = 10000;
+const MONTHLY_METERED_BUDGET = 450000;
+const FREE_MONTHLY_ALLOWANCE = 500000;
+const EXPECTED_DAILY_SYNC = 300;
+// summary: the meter summary ({ today: { attempts }, month: { attempts } }) or null when it could not be
+// read. Any unreadable or malformed count is treated as reached (fail closed).
+function requestBudget(summary, { limit = DAILY_REQUEST_BUDGET, monthlyLimit = MONTHLY_METERED_BUDGET } = {}) {
+  const counts = attempts => {
+    if (!attempts || typeof attempts !== 'object') return null;
+    const values = METERED_CATEGORIES.map(key => Number(attempts[key]));
+    return values.every(value => Number.isFinite(value) && value >= 0) ? Object.fromEntries(METERED_CATEGORIES.map((key, i) => [key, values[i]])) : null;
+  };
+  const day = counts(summary?.today?.attempts), month = counts(summary?.month?.attempts);
+  const base = { limit, monthlyLimit, allowance: FREE_MONTHLY_ALLOWANCE, expectedDailySync: EXPECTED_DAILY_SYNC };
+  if (!summary || summary.unavailable || !day || !month) return { ...base, used: null, sync: null, meteredToday: null, meteredMonth: null, reached: true, unavailable: true, scope: null };
+  const sum = (row, keys) => keys.reduce((total, key) => total + row[key], 0);
+  const used = sum(day, ACTIVITY_CATEGORIES), meteredToday = sum(day, METERED_CATEGORIES), meteredMonth = sum(month, METERED_CATEGORIES);
+  const monthly = meteredMonth >= monthlyLimit, daily = used >= limit;
+  return { ...base, used, sync: day.sync, meteredToday, meteredMonth, reached: daily || monthly, unavailable: false, scope: monthly ? 'month' : daily ? 'day' : null };
+}
+// Plain-language reason a reached budget gives, for the cadence, the tools and the work list.
+// tail: what continues, appended after the reason.
+function requestBudgetReason(budget, tail = 'recovery, obligations and calendar closes continue') {
+  const n = value => Number(value).toLocaleString('en-CA');
+  if (!budget?.reached) return '';
+  if (budget.unavailable) return 'today’s QuickBooks request count could not be read, so new sales and expenses wait' + (tail ? '; ' + tail : '');
+  if (budget.scope === 'month') return 'this month’s metered QuickBooks requests reached the ' + n(budget.monthlyLimit) + ' guard (' + n(budget.meteredMonth) + ' of the ' + n(budget.allowance) + ' free allowance); new sales and expenses resume next month (UTC)' + (tail ? '; ' + tail : '');
+  return 'today’s QuickBooks request budget of ' + n(budget.limit) + ' is used (' + n(budget.used) + ' reads, queries and reports; sync and writes are not counted); new sales and expenses resume after midnight UTC' + (tail ? '; ' + tail : '');
 }
 // A prepared (previewed) slice holds its planned records against the day only briefly.
 const PREVIEW_HOLD_MS = 30 * 60000;
@@ -222,7 +255,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
     return result('held', false, Math.min(now + interval, midnight), 'held: ' + String(blockers[0].title || 'business work is blocked').replace(/^./, c => c.toLowerCase()));
   }
   if (!kind && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
-  const budgetSpent = Boolean(requests?.reached), budgetReason = 'today\u2019s QuickBooks request budget of ' + (requests?.limit ?? DAILY_REQUEST_BUDGET).toLocaleString('en-CA') + ' is used; new activity resumes after midnight UTC';
+  const budgetSpent = Boolean(requests?.reached), budgetReason = requestBudgetReason(requests, '');
   if (!kind && today && !today.unavailable && today.dueSlot && !budgetSpent) { kind = 'slice'; reason = 'business hours'; }
   const open = rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close;
   // Due saved obligations are actionable in business hours, spaced and backed off like any review,
@@ -268,5 +301,5 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
   return { allowed: false, nextAt: new Date(now + 86400000).toISOString() };
 }
 
-module.exports = { DAILY_REQUEST_BUDGET, requestBudget, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
+module.exports = { DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
   localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

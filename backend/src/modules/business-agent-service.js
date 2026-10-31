@@ -15,7 +15,7 @@ const cadence = require('./business-agent-cadence');
 const iso=value=>value?new Date(value).toISOString():null;
 const at=value=>value?new Date(value).getTime():0;
 // Bounded source refresh before writes: one allowance per review attempt, never replenished by later checks.
-const FRESHNESS=Object.freeze({requests:40,ms:60000,tickRequests:12});
+const FRESHNESS=Object.freeze({requests:40,ms:60000,tickRequests:12,writeWithinMs:120000});
 // Consecutive freshness yields wait 1, 2, 5, then 15 minutes before the next review; a completed review resets the count.
 const YIELD_RETRY_MINUTES=Object.freeze([1,2,5,15]);
 const yieldDelayMs=count=>YIELD_RETRY_MINUTES[Math.min(Math.max(count,1),YIELD_RETRY_MINUTES.length)-1]*60000;
@@ -25,7 +25,9 @@ function publicSync(row,clock){
   const settings={...DEFAULT_SETTINGS,...(row?.settings||{})},view=row?.syncView;
   if(!view)return {status:settings.monitoring?'initializing':'not-configured',lastSuccessAt:null,sources:[],company:{counts:{},totals:{currency:'CAD'},recent:[]}};
   const age=Math.max(settings.syncIntervalSeconds*4000,120000),sources=(view.sources||[]).map(source=>({...source,status:source.status==='current'&&(source.freshUntil?clock>at(source.freshUntil):clock-at(source.lastSuccessAt)>age)?'stale':source.status}));
-  const stale=!settings.monitoring||!view.lastSuccessAt||sources.some(source=>source.status!=='current')||clock-at(view.summaryAt||view.company?.observedAt||row.sync?.summaryAt||view.lastSuccessAt)>age;
+  // The sync publishes how long its summary stays fresh under the adaptive cadence (summaryFreshUntil).
+  const summaryStale=view.summaryFreshUntil?clock>at(view.summaryFreshUntil):clock-at(view.summaryAt||view.company?.observedAt||row.sync?.summaryAt||view.lastSuccessAt)>age;
+  const stale=!settings.monitoring||!view.lastSuccessAt||sources.some(source=>source.status!=='current')||summaryStale;
   return {...view,sources,status:view.status==='current'&&stale?'stale':view.status,company:{...(view.company||{}),provisional:stale||view.status!=='current'}};
 }
 function createBusinessAgentService(options={}) {
@@ -86,7 +88,7 @@ function createBusinessAgentService(options={}) {
     let facts=null;if(row&&business.published&&typeof store.workFacts==='function'){try{facts=await store.workFacts(bound.scope);}catch{facts=null;}}
     const requests=cadence.requestBudget(qboRequests);
     const today=row&&business.published?await todayFor(bound.scope,row):null,calendarClose=business.published?cadence.nextClose(business,cadence.localParts(now()).date):null,owned=row&&business.published?await ownedFor(bound.scope,row):[];
-    return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
+    return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
       agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':row.status||'ready',summary:row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),memory:row?.memory||'',currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:row?.lastError||lastScanError,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
       sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities(),
       work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
@@ -132,22 +134,29 @@ function createBusinessAgentService(options={}) {
       if(!syncer){const client=await access.resolveClient(scope,{signal:controller.signal});syncer=makeSync({client,scope,Records:store.models.Records,loadState:async()=>row.sync,saveState:async next=>{await update({sync:next});},authorize:async()=>{await guard();},signal:controller.signal,now,intervalMs:row.settings.syncIntervalSeconds*1000});}
       return syncer;
     };
-    const syncSlice=async(maxRequests,timeoutMs)=>{const view=await (await syncFor()).tick({maxRequests,...(timeoutMs?{timeoutMs}:{})});await update({syncView:view,nextSyncAt:new Date(now()+(view.status==='current'?row.settings.syncIntervalSeconds*1000:5000))});return view;};
+    // When current, the next sync waits for the earliest due source (the combined change read is due every
+    // 5 minutes in business hours, 15 outside), never sooner than the monitoring interval nor later than 15 minutes.
+    const nextSyncAt=view=>{const clock=now(),interval=row.settings.syncIntervalSeconds*1000;if(view.status!=='current')return new Date(clock+5000);return new Date(Math.min(clock+900000,Math.max(clock+interval,at(view.nextDueAt))));};
+    const syncSlice=async(maxRequests,timeoutMs,freshWithinMs)=>{const view=await (await syncFor()).tick({maxRequests,...(timeoutMs?{timeoutMs}:{}),...(freshWithinMs?{freshWithinMs}:{})});await update({syncView:view,nextSyncAt:nextSyncAt(view)});return view;};
+    // A write needs every source current and every change-tracked source read within the last two minutes;
+    // that one combined change read is what admits the write.
+    const writeReady=view=>view.status==='current'&&(view.sources||[]).every(source=>source.mode!=='cdc'||now()-at(source.lastSuccessAt)<=FRESHNESS.writeWithinMs);
     const yieldError=detail=>Object.assign(new Error(detail+' Saved work is retained; the accountant continues after the next synchronization.'),{code:'BUSINESS_FRESHNESS_YIELD',status:409});
     // Bring every required source current within this attempt's refresh allowance, or yield before the write.
     const freshen=async current=>{
       let view=publicSync(current,now());
       const exhausted=()=>yieldError('Company sources could not be brought current within this review’s refresh allowance, so the next write was not started.');
-      while(view.status!=='current'){
+      while(!writeReady(view)){
         const left=FRESHNESS.requests-refresh.requests,remainingMs=FRESHNESS.ms-refresh.ms;
         if(left<1||remainingMs<1000)throw exhausted();
-        const before=sourceSignature(view),started=now(),slice=Math.min(FRESHNESS.tickRequests,left);
+        // Current but older than the write window needs only the combined change read (plus one spare).
+        const before=sourceSignature(view),started=now(),slice=Math.min(view.status==='current'?2:FRESHNESS.tickRequests,left);
         // Charge the slice's full request allowance so the bound holds however many requests it used.
         refresh.requests+=slice;refresh.ticks++;
         // The slice may use only the time left in the allowance.
-        try{await syncSlice(slice,Math.min(120000,Math.floor(remainingMs)));}finally{refresh.ms+=Math.max(0,now()-started);}
+        try{await syncSlice(slice,Math.min(120000,Math.floor(remainingMs)),FRESHNESS.writeWithinMs);}finally{refresh.ms+=Math.max(0,now()-started);}
         current=await store.current(row,token);view=publicSync(current,now());
-        if(view.status!=='current'&&sourceSignature(view)===before)throw yieldError('Company sources did not advance during this review’s refresh, so the next write was not started.');
+        if(!writeReady(view)&&sourceSignature(view)===before)throw yieldError('Company sources did not advance during this review’s refresh, so the next write was not started.');
       }
       // Recheck before admitting the write: a refresh that overran its time allowance does not admit it.
       if(refresh.ms>FRESHNESS.ms)throw exhausted();

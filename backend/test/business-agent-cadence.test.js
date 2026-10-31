@@ -245,14 +245,28 @@ test('an oversized prepared slice neither fills its slot nor reserves, so a smal
   assert.deepEqual(today.dueSlot, { n: 1, records: 15, decisionKey: 'slot-20261030-r2-s1-b2' });
   assert.equal(c.dayRhythm('2026-10-31').slots.length && todayAt(at('2026-10-31', '10:40')).sliceCap, 16, 'Saturday: twice ceil(30 / 4)');
 });
+// Sync tuning (2026-10-31): only metered (CorePlus) categories count; sync never starves activity.
+const meter = (today = {}, month = today) => ({ today: { attempts: { sync: 0, read: 0, query: 0, report: 0, write: 0, ...today } }, month: { attempts: { sync: 0, read: 0, query: 0, report: 0, write: 0, ...month } } });
+test('the request budget counts metered reads, queries and reports daily, never writes, and sync only toward the monthly guard', () => {
+  const spent = c.requestBudget(meter({ read: 6000, query: 2000, report: 2000, sync: 1700, write: 900 }, { read: 60000, query: 20000, report: 20000, sync: 17000, write: 9000 }));
+  assert.deepEqual([spent.used, spent.limit, spent.reached, spent.scope, spent.sync, spent.meteredToday, spent.meteredMonth, spent.allowance], [10000, 10000, true, 'day', 1700, 11700, 117000, 500000]);
+  assert.equal(c.requestBudget(meter({ read: 9999, write: 50000 })).reached, false, 'writes (Core data-in calls) are not metered');
+  assert.equal(c.requestBudget(meter({ read: 10, sync: 40000 })).reached, false, 'background sync cannot use up the activity budget');
+  const monthly = c.requestBudget(meter({ read: 10 }, { sync: 60000, read: 390000, write: 100000 }));
+  assert.deepEqual([monthly.reached, monthly.scope, monthly.meteredMonth], [true, 'month', 450000]);
+  assert.equal(c.requestBudget(meter({}, { read: 449999 })).reached, false);
+  for (const unreadable of [null, { unavailable: true }, { today: { total: 0 } }, { today: { attempts: { sync: 0, read: 0, query: 0, report: 0 } } }, meter({ read: 'x' })]) assert.deepEqual([c.requestBudget(unreadable).reached, c.requestBudget(unreadable).unavailable], [true, true], 'an unreadable count stops new slices (fail closed)');
+  assert.ok(31 * (c.DAILY_REQUEST_BUDGET + c.EXPECTED_DAILY_SYNC) < c.MONTHLY_METERED_BUDGET && c.MONTHLY_METERED_BUDGET < c.FREE_MONTHLY_ALLOWANCE, 'daily limits fit the month with headroom under the free allowance');
+  assert.match(c.requestBudgetReason(monthly), /^this month’s metered QuickBooks requests reached the 450,000 guard \(450,000 of the 500,000 free allowance\); new sales and expenses resume next month \(UTC\); recovery/);
+});
 test('the daily QuickBooks request budget stops discretionary slices only, with a visible reason', () => {
-  const day = '2026-10-30', now = at(day, '11:35'), spent = c.requestBudget({ today: { total: c.DAILY_REQUEST_BUDGET } });
-  assert.deepEqual(spent, { used: 12000, limit: 12000, reached: true, unavailable: false });
-  assert.equal(c.requestBudget({ today: { total: 11999 } }).reached, false);
+  const day = '2026-10-30', now = at(day, '11:35'), spent = c.requestBudget(meter({ read: c.DAILY_REQUEST_BUDGET }));
+  assert.equal(spent.reached, true);
+  assert.equal(c.requestBudget(meter({ read: 9999 })).reached, false);
   assert.equal(c.requestBudget(null).reached, true, 'an unreadable count stops new slices (fail closed)');
   const slice = c.decide({ now, settings, agent, business: current(day), today: todayAt(now), requests: spent, state: {} });
   assert.deepEqual([slice.kind, slice.callModel], ['idle', false]);
-  assert.match(slice.reason, /QuickBooks request budget of 12,000 is used; new activity resumes after midnight UTC/);
+  assert.match(slice.reason, /QuickBooks request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\); new sales and expenses resume after midnight UTC$/);
   assert.equal(c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-27' }), today: todayAt(now), requests: spent, state: {} }).kind, 'catch-up', 'calendar closes continue');
   assert.equal(c.decide({ now, settings, agent, business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }), today: todayAt(now), requests: spent, state: {} }).kind, 'recovery', 'recovery continues');
   assert.equal(c.decide({ now, settings, agent, business: current(day), today: todayAt(now), obligations: { count: 2 }, requests: spent, state: {} }).kind, 'obligations', 'obligations continue');
