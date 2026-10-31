@@ -13,7 +13,7 @@ function createActivityChoiceClient({ scope, Records = require('../models/Compan
     check();
     if (!ENTITIES.has(entity)) throw new Error('Unsupported advisory record type.');
     if (!snapshots.has(entity)) snapshots.set(entity, (async () => {
-      sources ||= Agents.findOne(scope).select('sync.sources').maxTimeMS(3000).lean();
+      sources ||= Agents.findOne(scope).select('sync.sources').maxTimeMS(3000).lean().exec();
       const syncSource = (await sources)?.sync?.sources?.[entity], completed = Date.parse(syncSource?.lastSuccessAt);
       const ageLimit = Math.min(86400000, Math.max(300000, (Number(syncSource?.everyMs) || 60000) * 2));
       if (syncSource?.status !== 'current' || !syncSource.generation || !Number.isFinite(completed) || completed > now() || now() - completed > ageLimit) throw new Error('The synchronized ' + entity + ' choices are unavailable; preparation will recheck selected records.');
@@ -21,7 +21,8 @@ function createActivityChoiceClient({ scope, Records = require('../models/Compan
       check();
       if (found.length > 16000 || found.some(row => !row.record || row.record.Id !== row.qboId || row.record.sparse === true || row.record.status === 'Deleted')) throw new Error('The synchronized choices are incomplete.');
       source.completedAt[entity] = new Date(completed).toISOString();
-      return found.map(row => structuredClone(row.record));
+      // Match the JSON payload returned by the QBO transport, excluding Mongo metadata.
+      return found.map(row => JSON.parse(JSON.stringify(row.record)));
     })());
     try { return await snapshots.get(entity); }
     catch (error) { if (!source.unavailable.includes(entity)) source.unavailable.push(entity); throw error; }

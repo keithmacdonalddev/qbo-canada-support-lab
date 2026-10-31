@@ -7,18 +7,34 @@ const { callerForRequest, runWithCaller, runWithCategory } = require('../src/mod
 const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) };
 const clock = Date.now();
 function fixture() {
- const h = { reads: 0, rows: [], sources: {} };
+ const h = { reads: 0, sourceQueries: 0, rows: [], sources: {} };
  for (const entity of ['Account','TaxCode','Preferences','Customer','Vendor','Employee','Item','Invoice','Payment']) h.sources[entity] = { status:'current',generation:'g',lastSuccessAt:new Date(clock).toISOString(),everyMs:60000 };
- const q = value => ({ select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>structuredClone(value) });
+ // Mongoose queries are thenable and single-use; lean() does not execute them.
+ const q = value => { let executed = false; return { select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean(){return this;},exec(){if(executed)return Promise.reject(Error('Query was already executed'));executed=true;return Promise.resolve(value);},then(resolve,reject){return this.exec().then(resolve,reject);} }; };
  h.Records = { find: filter => { h.reads++; assert.equal(filter.connectionId,scope.connectionId); assert.equal(filter.deleted,false); return q(h.rows.filter(row=>row.entity===filter.entity && row.generation===filter.generation)); } };
- h.Agents = { findOne: filter => { assert.deepEqual(filter,scope); return q({ sync:{sources:h.sources} }); } };
+ h.Agents = { findOne: filter => { h.sourceQueries++; assert.deepEqual(filter,scope); return q({ sync:{sources:h.sources} }); } };
  h.add = (entity,record) => h.rows.push({entity,qboId:record.Id,record,generation:'g'});
  h.client = createActivityChoiceClient({scope,Records:h.Records,Agents:h.Agents,now:()=>clock}); return h;
 }
 test('activity choices run existing master/setup readers from the mirror with no provider client', async()=>{
  const h=fixture(); h.add('Account',{Id:'1',SyncToken:'0',Active:true,AccountType:'Bank'}); h.add('Preferences',{Id:'1',AccountingInfoPrefs:{},CurrencyPrefs:{HomeCurrency:{value:'CAD'}}});
  const masters=await readBusinessMasters(h.client,scope),setup=await readDraftSetup(h.client,scope);
- assert.ok(Object.values(masters.completeness).every(Boolean)); assert.equal(setup.complete,true); assert.equal(setup.options.accounts[0].id,'1'); assert.equal(h.reads,7); assert.equal(h.client.source.provisional,true);
+ assert.ok(Object.values(masters.completeness).every(Boolean)); assert.equal(setup.complete,true); assert.equal(setup.options.accounts[0].id,'1'); assert.equal(h.reads,7); assert.equal(h.client.source.provisional,true); assert.equal(h.sourceQueries,1); assert.deepEqual(h.client.source.unavailable,[]);
+});
+
+test('lean Mongo rows return only the QBO JSON payload for concurrent query and entity reads',async()=>{
+ const h=fixture(),{Types}=require('mongoose'),{canonical}=require('../src/modules/business-calendar');
+ const stamp=new Date('2026-10-31T23:00:00.000Z');
+ h.add('Customer',{Id:'1',SyncToken:'0',Active:true,DisplayName:'Fixture customer',MetaData:{CreateTime:stamp},optional:undefined});
+ h.add('Invoice',{Id:'11024',SyncToken:'0',Balance:10,MetaData:{LastUpdatedTime:stamp},optional:undefined});
+ for(const row of h.rows)Object.assign(row,{_id:'synced-'+row.qboId,connectionId:new Types.ObjectId(scope.connectionId),createdAt:stamp,lastObservedAt:stamp});
+ assert.throws(()=>canonical(h.rows[0]),/plain JSON/);
+ const [query,read,api]=await Promise.all([h.client.query('SELECT * FROM Customer'),h.client.read('Invoice','11024'),h.client.apiCall('GET','invoice/11024')]);
+ const customer={Id:'1',SyncToken:'0',Active:true,DisplayName:'Fixture customer',MetaData:{CreateTime:stamp.toISOString()}};
+ const invoice={Id:'11024',SyncToken:'0',Balance:10,MetaData:{LastUpdatedTime:stamp.toISOString()}};
+ assert.deepEqual(query.QueryResponse.Customer,[customer]);assert.deepEqual(read,{Invoice:invoice});assert.deepEqual(api,read);
+ assert.doesNotThrow(()=>canonical(query));assert.doesNotThrow(()=>canonical(read));assert.equal(h.sourceQueries,1);assert.equal(h.reads,2);assert.deepEqual(h.client.source.unavailable,[]);
+ assert.ok(h.rows[0].record.MetaData.CreateTime instanceof Date);assert.equal(h.rows[0].connectionId._bsontype,'ObjectId');
 });
 test('one advisory snapshot reuses records and cannot escape into live endpoints',async()=>{
  const h=fixture();h.add('Invoice',{Id:'11024',SyncToken:'0',Balance:0});
