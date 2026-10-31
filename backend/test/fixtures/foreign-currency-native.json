@@ -1,0 +1,1713 @@
+{
+  "observedAt": "2026-10-31T23:00:00Z",
+  "records": [
+    {
+      "entity": "Preferences",
+      "qboId": "1",
+      "record": {
+        "CurrencyPrefs": {
+          "MultiCurrencyEnabled": true,
+          "HomeCurrency": {
+            "value": "CAD"
+          }
+        },
+        "Id": "1",
+        "SyncToken": "64",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:20-07:00",
+          "LastUpdatedTime": "2026-10-27T13:07:21-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Customer",
+      "qboId": "15",
+      "record": {
+        "Taxable": false,
+        "Balance": 0,
+        "CurrencyRef": {
+          "value": "GBP"
+        },
+        "Id": "15",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T07:15:13-07:00",
+          "LastUpdatedTime": "2023-08-15T08:32:30-07:00"
+        },
+        "Active": true,
+        "DisplayName": "Currency party 15"
+      }
+    },
+    {
+      "entity": "Customer",
+      "qboId": "41",
+      "record": {
+        "Taxable": false,
+        "Balance": 1412.5,
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "41",
+        "SyncToken": "2",
+        "MetaData": {
+          "CreateTime": "2023-10-05T15:18:56-07:00",
+          "LastUpdatedTime": "2026-08-28T17:42:05-07:00"
+        },
+        "Active": true,
+        "DisplayName": "Currency party 41"
+      }
+    },
+    {
+      "entity": "Vendor",
+      "qboId": "16",
+      "record": {
+        "Balance": 0,
+        "CurrencyRef": {
+          "value": "EUR"
+        },
+        "Id": "16",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T07:26:08-07:00",
+          "LastUpdatedTime": "2023-08-15T08:34:25-07:00"
+        },
+        "Active": true,
+        "DisplayName": "Currency party 16"
+      }
+    },
+    {
+      "entity": "Vendor",
+      "qboId": "69",
+      "record": {
+        "Balance": 0,
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "69",
+        "SyncToken": "2",
+        "MetaData": {
+          "CreateTime": "2026-03-03T11:16:16-08:00",
+          "LastUpdatedTime": "2026-08-12T20:55:34-07:00"
+        },
+        "Active": true,
+        "DisplayName": "Currency party 69"
+      }
+    },
+    {
+      "entity": "Item",
+      "qboId": "1",
+      "record": {
+        "Active": true,
+        "Taxable": false,
+        "Type": "Service",
+        "IncomeAccountRef": {
+          "value": "9"
+        },
+        "Id": "1",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:26-07:00",
+          "LastUpdatedTime": "2025-04-01T06:23:40-07:00"
+        },
+        "Name": "Currency item 1"
+      }
+    },
+    {
+      "entity": "Item",
+      "qboId": "13",
+      "record": {
+        "Active": true,
+        "Taxable": false,
+        "Type": "Service",
+        "IncomeAccountRef": {
+          "value": "9"
+        },
+        "Id": "13",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-14T06:42:27-07:00",
+          "LastUpdatedTime": "2023-08-14T06:42:27-07:00"
+        },
+        "Name": "Currency item 13"
+      }
+    },
+    {
+      "entity": "Item",
+      "qboId": "23",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "Type": "Service",
+        "IncomeAccountRef": {
+          "value": "93"
+        },
+        "Id": "23",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2025-12-01T07:36:35-08:00",
+          "LastUpdatedTime": "2025-12-01T07:36:35-08:00"
+        },
+        "Name": "Currency item 23"
+      }
+    },
+    {
+      "entity": "Item",
+      "qboId": "26",
+      "record": {
+        "Active": true,
+        "Taxable": false,
+        "Type": "NonInventory",
+        "IncomeAccountRef": {
+          "value": "9"
+        },
+        "Id": "26",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-02-03T12:35:57-08:00",
+          "LastUpdatedTime": "2026-02-03T12:35:57-08:00"
+        },
+        "Name": "Currency item 26"
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "5",
+      "record": {
+        "Active": true,
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "UndepositedFunds",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "5",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:23-07:00",
+          "LastUpdatedTime": "2026-10-31T15:17:49-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "9",
+      "record": {
+        "Active": true,
+        "AccountType": "Income",
+        "AccountSubType": "SalesOfProductIncome",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "9",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:23-07:00",
+          "LastUpdatedTime": "2023-08-03T11:20:23-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "17",
+      "record": {
+        "Active": true,
+        "AccountType": "Expense",
+        "AccountSubType": "AdvertisingPromotional",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "17",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:23-07:00",
+          "LastUpdatedTime": "2026-08-12T19:57:13-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "34",
+      "record": {
+        "Active": true,
+        "AccountType": "Expense",
+        "AccountSubType": "RentOrLeaseOfBuildings",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "34",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-03T11:20:24-07:00",
+          "LastUpdatedTime": "2023-08-03T11:20:24-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "52",
+      "record": {
+        "Active": true,
+        "AccountType": "Equity",
+        "AccountSubType": "OpeningBalanceEquity",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "52",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-03T12:57:01-07:00",
+          "LastUpdatedTime": "2026-10-16T18:42:18-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "59",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Payable",
+        "AccountSubType": "AccountsPayable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "59",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-03T13:54:10-07:00",
+          "LastUpdatedTime": "2026-10-30T22:58:12-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "60",
+      "record": {
+        "Active": true,
+        "AccountType": "Bank",
+        "AccountSubType": "Checking",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "60",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-04T09:40:23-07:00",
+          "LastUpdatedTime": "2026-10-22T15:44:12-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "63",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "63",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-04T12:16:53-07:00",
+          "LastUpdatedTime": "2026-10-31T15:17:37-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "66",
+      "record": {
+        "Active": true,
+        "AccountType": "Bank",
+        "AccountSubType": "Checking",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "66",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-10T09:34:50-07:00",
+          "LastUpdatedTime": "2026-10-16T18:24:01-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "68",
+      "record": {
+        "Active": true,
+        "AccountType": "Bank",
+        "AccountSubType": "CashOnHand",
+        "CurrencyRef": {
+          "value": "AUD"
+        },
+        "Id": "68",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2023-08-15T06:53:22-07:00",
+          "LastUpdatedTime": "2023-11-16T12:42:24-08:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "69",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "GBP"
+        },
+        "Id": "69",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T07:56:47-07:00",
+          "LastUpdatedTime": "2023-08-15T08:32:30-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "71",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Payable",
+        "AccountSubType": "AccountsPayable",
+        "CurrencyRef": {
+          "value": "EUR"
+        },
+        "Id": "71",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T08:00:10-07:00",
+          "LastUpdatedTime": "2023-08-15T08:34:25-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "73",
+      "record": {
+        "Active": true,
+        "AccountType": "Other Expense",
+        "AccountSubType": "ExchangeGainOrLoss",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "73",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T08:32:30-07:00",
+          "LastUpdatedTime": "2023-08-15T08:32:30-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "88",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "88",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-11-13T10:44:02-08:00",
+          "LastUpdatedTime": "2026-08-28T17:42:04-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "93",
+      "record": {
+        "Active": true,
+        "AccountType": "Other Income",
+        "AccountSubType": "OtherMiscellaneousIncome",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "Id": "93",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2025-09-30T13:30:34-07:00",
+          "LastUpdatedTime": "2025-09-30T13:30:34-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "102",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Receivable",
+        "AccountSubType": "AccountsReceivable",
+        "CurrencyRef": {
+          "value": "CNY"
+        },
+        "Id": "102",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-06-04T14:55:19-07:00",
+          "LastUpdatedTime": "2026-06-06T04:37:31-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "103",
+      "record": {
+        "Active": true,
+        "AccountType": "Accounts Payable",
+        "AccountSubType": "AccountsPayable",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "103",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-08-12T19:54:35-07:00",
+          "LastUpdatedTime": "2026-08-12T20:55:34-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Invoice",
+      "qboId": "22",
+      "record": {
+        "Id": "22",
+        "SyncToken": "3",
+        "MetaData": {
+          "CreateTime": "2023-08-15T07:56:47-07:00",
+          "LastUpdatedTime": "2023-09-13T20:19:02-07:00"
+        },
+        "TxnDate": "2023-08-15",
+        "CurrencyRef": {
+          "value": "GBP"
+        },
+        "ExchangeRate": 1.714266,
+        "LinkedTxn": [
+          {
+            "TxnId": "26",
+            "TxnType": "Payment"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 2000,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "1"
+              },
+              "UnitPrice": 2000,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "9"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Amount": 2000,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 0
+        },
+        "CustomerRef": {
+          "value": "15"
+        },
+        "GlobalTaxCalculation": "NotApplicable",
+        "TotalAmt": 2000,
+        "HomeTotalAmt": 3428.53,
+        "Balance": 0,
+        "HomeBalance": 0
+      }
+    },
+    {
+      "entity": "Invoice",
+      "qboId": "170",
+      "record": {
+        "Id": "170",
+        "SyncToken": "3",
+        "MetaData": {
+          "CreateTime": "2023-11-13T10:44:02-08:00",
+          "LastUpdatedTime": "2023-11-16T12:22:47-08:00"
+        },
+        "TxnDate": "2023-11-13",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.379948,
+        "LinkedTxn": [
+          {
+            "TxnId": "195",
+            "TxnType": "Payment"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 4500,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "1"
+              },
+              "UnitPrice": 4500,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "9"
+              },
+              "TaxCodeRef": {
+                "value": "4"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Amount": 4500,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 0,
+          "TaxLine": [
+            {
+              "Amount": 0,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "6"
+                },
+                "PercentBased": true,
+                "TaxPercent": 0,
+                "NetAmountTaxable": 4500
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "41"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 4500,
+        "HomeTotalAmt": 6209.77,
+        "Balance": 0,
+        "HomeBalance": 0
+      }
+    },
+    {
+      "entity": "Invoice",
+      "qboId": "188",
+      "record": {
+        "Id": "188",
+        "SyncToken": "2",
+        "MetaData": {
+          "CreateTime": "2023-11-13T16:52:48-08:00",
+          "LastUpdatedTime": "2023-11-16T12:22:47-08:00"
+        },
+        "TxnDate": "2023-11-13",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.380253,
+        "LinkedTxn": [
+          {
+            "TxnId": "195",
+            "TxnType": "Payment"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 150,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "13"
+              },
+              "UnitPrice": 150,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "9"
+              },
+              "TaxCodeRef": {
+                "value": "11"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Amount": 150,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 19.5,
+          "TaxLine": [
+            {
+              "Amount": 19.5,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "24"
+                },
+                "PercentBased": true,
+                "TaxPercent": 13,
+                "NetAmountTaxable": 150
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "41"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 169.5,
+        "HomeTotalAmt": 233.95,
+        "Balance": 0,
+        "HomeBalance": 0
+      }
+    },
+    {
+      "entity": "Invoice",
+      "qboId": "566",
+      "record": {
+        "Id": "566",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2026-08-26T12:32:55-07:00",
+          "LastUpdatedTime": "2026-08-26T12:33:30-07:00"
+        },
+        "TxnDate": "2026-04-15",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.373051,
+        "LinkedTxn": [
+          {
+            "TxnId": "567",
+            "TxnType": "Payment"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 1000,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "26"
+              },
+              "UnitPrice": 1000,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "9"
+              },
+              "TaxCodeRef": {
+                "value": "11"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Amount": 1000,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 130,
+          "TaxLine": [
+            {
+              "Amount": 130,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "24"
+                },
+                "PercentBased": true,
+                "TaxPercent": 13,
+                "NetAmountTaxable": 1000
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "41"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 1130,
+        "HomeTotalAmt": 1551.55,
+        "Balance": 0,
+        "HomeBalance": 0
+      }
+    },
+    {
+      "entity": "Invoice",
+      "qboId": "568",
+      "record": {
+        "Id": "568",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2026-08-26T12:54:13-07:00",
+          "LastUpdatedTime": "2026-08-28T17:42:04-07:00"
+        },
+        "TxnDate": "2026-08-26",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.38807,
+        "LinkedTxn": [],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 1000,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "26"
+              },
+              "UnitPrice": 1000,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "9"
+              },
+              "TaxCodeRef": {
+                "value": "11"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Id": "3",
+            "LineNum": 3,
+            "Amount": 282.5,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "23"
+              },
+              "ItemAccountRef": {
+                "value": "93"
+              },
+              "TaxCodeRef": {
+                "value": "5"
+              }
+            },
+            "CustomExtensions": []
+          },
+          {
+            "Amount": 1282.5,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 130,
+          "TaxLine": [
+            {
+              "Amount": 130,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "24"
+                },
+                "PercentBased": true,
+                "TaxPercent": 13,
+                "NetAmountTaxable": 1000
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "41"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 1412.5,
+        "HomeTotalAmt": 1960.65,
+        "Balance": 1412.5,
+        "HomeBalance": 1960.65
+      }
+    },
+    {
+      "entity": "Bill",
+      "qboId": "24",
+      "record": {
+        "Balance": 0,
+        "HomeBalance": 0,
+        "Id": "24",
+        "SyncToken": "1",
+        "MetaData": {
+          "CreateTime": "2023-08-15T08:00:10-07:00",
+          "LastUpdatedTime": "2023-08-15T08:34:25-07:00"
+        },
+        "TxnDate": "2020-09-15",
+        "CurrencyRef": {
+          "value": "EUR"
+        },
+        "ExchangeRate": 1.560549,
+        "LinkedTxn": [
+          {
+            "TxnId": "27",
+            "TxnType": "BillPaymentCheck"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 1000,
+            "LinkedTxn": [],
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "AccountBasedExpenseLineDetail": {
+              "AccountRef": {
+                "value": "34"
+              },
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "NON"
+              }
+            },
+            "CustomExtensions": []
+          }
+        ],
+        "VendorRef": {
+          "value": "16"
+        },
+        "APAccountRef": {
+          "value": "71"
+        },
+        "TotalAmt": 1000,
+        "GlobalTaxCalculation": "NotApplicable"
+      }
+    },
+    {
+      "entity": "Bill",
+      "qboId": "546",
+      "record": {
+        "Balance": 0,
+        "HomeBalance": 0,
+        "Id": "546",
+        "SyncToken": "3",
+        "MetaData": {
+          "CreateTime": "2026-08-12T19:54:35-07:00",
+          "LastUpdatedTime": "2026-08-12T20:29:04-07:00"
+        },
+        "TxnDate": "2023-11-30",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.354711,
+        "LinkedTxn": [
+          {
+            "TxnId": "561",
+            "TxnType": "BillPaymentCheck"
+          }
+        ],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 904.94,
+            "LinkedTxn": [],
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "AccountBasedExpenseLineDetail": {
+              "AccountRef": {
+                "value": "17"
+              },
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "4"
+              }
+            },
+            "CustomExtensions": []
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 0,
+          "TaxLine": [
+            {
+              "Amount": 0,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "5"
+                },
+                "PercentBased": true,
+                "TaxPercent": 0,
+                "NetAmountTaxable": 904.94
+              }
+            }
+          ]
+        },
+        "VendorRef": {
+          "value": "69"
+        },
+        "APAccountRef": {
+          "value": "103"
+        },
+        "TotalAmt": 904.94,
+        "GlobalTaxCalculation": "TaxExcluded"
+      }
+    },
+    {
+      "entity": "Bill",
+      "qboId": "547",
+      "record": {
+        "Balance": 20,
+        "HomeBalance": 26.51,
+        "Id": "547",
+        "SyncToken": "6",
+        "MetaData": {
+          "CreateTime": "2026-08-12T19:56:00-07:00",
+          "LastUpdatedTime": "2026-08-12T21:20:56-07:00"
+        },
+        "TxnDate": "2024-01-01",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.325601,
+        "LinkedTxn": [],
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 20,
+            "LinkedTxn": [],
+            "DetailType": "AccountBasedExpenseLineDetail",
+            "AccountBasedExpenseLineDetail": {
+              "AccountRef": {
+                "value": "1150040010"
+              },
+              "BillableStatus": "NotBillable",
+              "TaxCodeRef": {
+                "value": "4"
+              }
+            },
+            "CustomExtensions": []
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 0,
+          "TaxLine": [
+            {
+              "Amount": 0,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "5"
+                },
+                "PercentBased": true,
+                "TaxPercent": 0,
+                "NetAmountTaxable": 20
+              }
+            }
+          ]
+        },
+        "VendorRef": {
+          "value": "69"
+        },
+        "APAccountRef": {
+          "value": "103"
+        },
+        "TotalAmt": 20,
+        "GlobalTaxCalculation": "TaxExcluded"
+      }
+    },
+    {
+      "entity": "Payment",
+      "qboId": "26",
+      "record": {
+        "CustomerRef": {
+          "value": "15"
+        },
+        "DepositToAccountRef": {
+          "value": "60"
+        },
+        "TotalAmt": 2000,
+        "UnappliedAmt": 0,
+        "Id": "26",
+        "SyncToken": "2",
+        "MetaData": {
+          "CreateTime": "2023-08-15T08:32:30-07:00",
+          "LastUpdatedTime": "2023-11-16T12:36:13-08:00"
+        },
+        "TxnDate": "2023-08-25",
+        "CurrencyRef": {
+          "value": "GBP"
+        },
+        "ExchangeRate": 1.711743,
+        "Line": [
+          {
+            "Amount": 2000,
+            "LinkedTxn": [
+              {
+                "TxnId": "22",
+                "TxnType": "Invoice"
+              }
+            ],
+            "LineEx": {
+              "any": [
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "22"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "2000.00"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "1006"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "entity": "Payment",
+      "qboId": "195",
+      "record": {
+        "CustomerRef": {
+          "value": "41"
+        },
+        "DepositToAccountRef": {
+          "value": "66"
+        },
+        "TotalAmt": 4669.5,
+        "UnappliedAmt": 0,
+        "Id": "195",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-11-16T12:22:47-08:00",
+          "LastUpdatedTime": "2023-11-16T12:22:47-08:00"
+        },
+        "TxnDate": "2023-11-16",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.376301,
+        "Line": [
+          {
+            "Amount": 4500,
+            "LinkedTxn": [
+              {
+                "TxnId": "170",
+                "TxnType": "Invoice"
+              }
+            ],
+            "LineEx": {
+              "any": [
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "170"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "4500.00"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "101"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                }
+              ]
+            }
+          },
+          {
+            "Amount": 169.5,
+            "LinkedTxn": [
+              {
+                "TxnId": "188",
+                "TxnType": "Invoice"
+              }
+            ],
+            "LineEx": {
+              "any": [
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "188"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "169.50"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "103"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "entity": "Payment",
+      "qboId": "567",
+      "record": {
+        "CustomerRef": {
+          "value": "41"
+        },
+        "DepositToAccountRef": {
+          "value": "1150040002"
+        },
+        "TotalAmt": 1130,
+        "UnappliedAmt": 0,
+        "Id": "567",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-08-26T12:33:30-07:00",
+          "LastUpdatedTime": "2026-08-26T12:33:30-07:00"
+        },
+        "TxnDate": "2026-04-15",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "ExchangeRate": 1.373051,
+        "Line": [
+          {
+            "Amount": 1130,
+            "LinkedTxn": [
+              {
+                "TxnId": "566",
+                "TxnType": "Invoice"
+              }
+            ],
+            "LineEx": {
+              "any": [
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "566"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "1130.00"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                },
+                {
+                  "declaredType": "com.intuit.schema.finance.v3.NameValue",
+                  "scope": "javax.xml.bind.JAXBElement$GlobalScope",
+                  "value": {
+                    "Name": "Sanitized record",
+                    "Value": "111055"
+                  },
+                  "nil": false,
+                  "globalScope": true,
+                  "typeSubstituted": false
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "entity": "BillPayment",
+      "qboId": "27",
+      "record": {
+        "VendorRef": {
+          "value": "16"
+        },
+        "PayType": "Check",
+        "CheckPayment": {
+          "BankAccountRef": {
+            "value": "60"
+          },
+          "PrintStatus": "NotSet"
+        },
+        "TotalAmt": 1000,
+        "Id": "27",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T08:34:25-07:00",
+          "LastUpdatedTime": "2023-08-15T08:34:25-07:00"
+        },
+        "TxnDate": "2020-09-30",
+        "CurrencyRef": {
+          "value": "EUR"
+        },
+        "ExchangeRate": 1.632585,
+        "Line": [
+          {
+            "Amount": 1000,
+            "LinkedTxn": [
+              {
+                "TxnId": "24",
+                "TxnType": "Bill"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "entity": "Deposit",
+      "qboId": "21",
+      "record": {
+        "DepositToAccountRef": {
+          "value": "68"
+        },
+        "GlobalTaxCalculation": "NotApplicable",
+        "TotalAmt": 5000,
+        "HomeTotalAmt": 4365.58,
+        "Id": "21",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T06:53:22-07:00",
+          "LastUpdatedTime": "2023-08-15T06:53:22-07:00"
+        },
+        "TxnDate": "2023-08-15",
+        "CurrencyRef": {
+          "value": "AUD"
+        },
+        "ExchangeRate": 0.873115,
+        "Line": [
+          {
+            "Id": "1",
+            "LineNum": 1,
+            "Amount": 5000,
+            "DetailType": "DepositLineDetail",
+            "DepositLineDetail": {
+              "AccountRef": {
+                "value": "52"
+              }
+            },
+            "CustomExtensions": []
+          }
+        ],
+        "TxnTaxDetail": {}
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "qboId": "4",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "6"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "5"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "4",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:09:02-07:00",
+          "LastUpdatedTime": "2023-08-15T09:09:02-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "qboId": "5",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "22"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "21"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "5",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:09:02-07:00",
+          "LastUpdatedTime": "2023-08-15T09:09:02-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "qboId": "11",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "24"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "23"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "11",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:45:21-07:00",
+          "LastUpdatedTime": "2023-08-15T09:45:21-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "qboId": "16",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "34"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "35"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "16",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2025-04-01T01:03:38-07:00",
+          "LastUpdatedTime": "2025-04-01T01:03:38-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "5",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "5",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:09:01-07:00",
+          "LastUpdatedTime": "2023-08-15T09:09:01-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "6",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "6",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:09:01-07:00",
+          "LastUpdatedTime": "2023-08-15T09:09:01-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "23",
+      "record": {
+        "Active": true,
+        "RateValue": 13,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 13,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "23",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:45:21-07:00",
+          "LastUpdatedTime": "2023-08-15T09:45:21-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "24",
+      "record": {
+        "Active": true,
+        "RateValue": 13,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 13,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "24",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2023-08-15T09:45:21-07:00",
+          "LastUpdatedTime": "2023-08-15T09:45:21-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "34",
+      "record": {
+        "Active": true,
+        "RateValue": 14,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 14,
+            "EffectiveDate": "2025-04-01T00:00:00-07:00"
+          }
+        ],
+        "Id": "34",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2025-04-01T01:03:38-07:00",
+          "LastUpdatedTime": "2025-04-01T01:03:38-07:00"
+        }
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "35",
+      "record": {
+        "Active": true,
+        "RateValue": 14,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 14,
+            "EffectiveDate": "2025-04-01T00:00:00-07:00"
+          }
+        ],
+        "Id": "35",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2025-04-01T01:03:38-07:00",
+          "LastUpdatedTime": "2025-04-01T01:03:38-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "1150040002",
+      "record": {
+        "Active": true,
+        "AccountType": "Bank",
+        "AccountSubType": "Checking",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "1150040002",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-01-15T15:46:44-08:00",
+          "LastUpdatedTime": "2026-08-26T12:33:30-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "1150040004",
+      "record": {
+        "Active": true,
+        "AccountType": "Other Current Asset",
+        "AccountSubType": "Inventory",
+        "CurrencyRef": {
+          "value": "GBP"
+        },
+        "Id": "1150040004",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-05-04T13:17:30-07:00",
+          "LastUpdatedTime": "2026-05-04T13:17:30-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "1150040008",
+      "record": {
+        "Active": true,
+        "AccountType": "Bank",
+        "AccountSubType": "Checking",
+        "CurrencyRef": {
+          "value": "CNY"
+        },
+        "Id": "1150040008",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-06-04T14:52:11-07:00",
+          "LastUpdatedTime": "2026-06-04T14:52:11-07:00"
+        }
+      }
+    },
+    {
+      "entity": "Account",
+      "qboId": "1150040010",
+      "record": {
+        "Active": true,
+        "AccountType": "Long Term Liability",
+        "AccountSubType": "NotesPayable",
+        "CurrencyRef": {
+          "value": "USD"
+        },
+        "Id": "1150040010",
+        "SyncToken": "0",
+        "MetaData": {
+          "CreateTime": "2026-08-12T21:14:40-07:00",
+          "LastUpdatedTime": "2026-08-12T21:20:56-07:00"
+        }
+      }
+    }
+  ]
+}

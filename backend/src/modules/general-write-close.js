@@ -76,10 +76,10 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         const requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
         if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, requestedView)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
-        const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, ctx), ledger[key] || []);
+        const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });
-        if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, ctx));
+        if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, { ...ctx, postingSources: proof?.postingSources }));
       } catch (error) { failures.push({ key, reason: error.message }); }
     }
     results.push(result);

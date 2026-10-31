@@ -20,9 +20,17 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     const items = new Map(), wanted = new Set();
     for (const row of records) for (const record of [row.current, row.before]) for (const line of record?.Line || []) { const id = line?.[line?.DetailType]?.ItemRef?.value; if (id != null) wanted.add(String(id)); }
     for (const id of wanted) { const record = await copy.read(scope, 'Item', id); if (record) items.set(id, record); }
-    const accounts = await Records.find({ ...company(scope), entity: 'Account', deleted: false, 'record.AccountSubType': { $in: TAX_SUBTYPES } }).select('qboId record').limit(201).maxTimeMS(3000).lean();
-    if (accounts.length > 200) fail('Tax-account enumeration exceeds its proof budget; close is incomplete.');
-    const tax = accounts.filter(row => row.record?.AccountSubType !== 'OtherCurrentLiabilities' || /\b(GST|HST|PST|QST|tax)\b/i.test(row.record?.Name || '')).map(row => String(row.qboId));
+    const accounts = await Records.find({ ...company(scope), entity: 'Account', deleted: false }).select('qboId record').limit(501).maxTimeMS(3000).lean();
+    if (accounts.length > 500) fail('Posting-account enumeration exceeds its proof budget; close is incomplete.');
+    const tax = accounts.filter(row => TAX_SUBTYPES.includes(row.record?.AccountSubType) && (row.record.AccountSubType !== 'OtherCurrentLiabilities' || /\b(GST|HST|PST|QST|tax)\b/i.test(row.record?.Name || ''))).map(row => String(row.qboId));
+    const sources = new Map();
+    for (const row of records) for (const record of [row.current, row.before]) for (const line of record?.Line || []) for (const link of line.LinkedTxn || []) {
+      if (!record?.CurrencyRef?.value || record.CurrencyRef.value === 'CAD' || !['Invoice', 'Bill', 'CreditMemo', 'VendorCredit', 'Payment', 'SalesReceipt'].includes(link.TxnType)) continue;
+      const key = link.TxnType + ':' + link.TxnId;
+      if (!sources.has(key)) { const source = await copy.read(scope, link.TxnType, String(link.TxnId)); if (!source) fail('Foreign posting source ' + key + ' is unavailable.'); sources.set(key, source); }
+    }
+    const currencyAccount = (type, currency) => { const matches = accounts.filter(row => row.record?.Active !== false && row.record.AccountType === type && (row.record.CurrencyRef?.value || 'CAD') === currency); if (matches.length !== 1) fail('The ' + currency + ' ' + type + ' account cannot be attributed uniquely.'); return String(matches[0].qboId); };
+    const gains = accounts.filter(row => row.record?.Active !== false && row.record.AccountSubType === 'ExchangeGainOrLoss' && (row.record.CurrencyRef?.value || 'CAD') === 'CAD');
     const features = require('../config').features || {}, inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
     let stock = null;
     if ([...items.values()].some(item => item.Type === 'Inventory')) {
@@ -33,8 +41,8 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
       if (days.length !== 1) fail('Inventory close needs one complete open-day replay.');
       stock = await require('./business-stock-general').readGeneralStockContext({ models: stockModels, scope, active, day: days[0], observations: require('./business-observation-store').createBusinessObservationStore({ ...stockModels, now }) });
     }
-    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash } : {}), mappings, items: [...items], taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
-    return { evidence, inventory, ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : null,
+    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash } : {}), mappings, sources: [...sources], items: [...items], taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
+    return { evidence, inventory, ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), homeCurrency: 'CAD', currencyAccount, exchangeGainLoss: gains.length === 1 ? String(gains[0].qboId) : null, get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : sources.get(entity + ':' + id) || null,
       receivables: mappings.accountsReceivable ? String(mappings.accountsReceivable) : null, payables: mappings.accountsPayable ? String(mappings.accountsPayable) : null, undepositedFunds: mappings.undepositedFunds ? String(mappings.undepositedFunds) : null,
       // Retain real account identities. Multiple agency accounts require an explicit
       // rate-to-account proof; guessing or collapsing them could hide a substitution.

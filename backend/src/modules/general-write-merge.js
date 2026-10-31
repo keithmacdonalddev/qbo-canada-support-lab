@@ -22,6 +22,11 @@ function isComplete(entity, record, requested = null) {
   const fields = [...(COMPLETE[spec.kind] || COMPLETE.list), ...(spec.kind === 'transaction' ? (TRANSACTION_BODY[entity] || TRANSACTION_BODY.default) : spec.kind === 'list' ? (LIST_BODY[entity] || []) : [])];
   if (fields.some(key => record[key] === undefined)) return false;
   if (spec.kind === 'transaction' && ['Invoice', 'Bill', 'SalesReceipt', 'CreditMemo', 'RefundReceipt', 'VendorCredit', 'Purchase', 'Payment', 'BillPayment', 'Deposit', 'Estimate', 'PurchaseOrder', 'JournalEntry'].includes(entity) && !Array.isArray(record.Line)) return false;
+  if (spec.kind === 'transaction' && record.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD') {
+    if (!require('./general-write-currency').validRate(record.ExchangeRate)) return false;
+    if (entity !== 'Transfer' && (typeof record.TotalAmt !== 'number' || !Number.isFinite(record.TotalAmt) || record.TotalAmt < 0 || !Number.isSafeInteger(Math.round(record.TotalAmt * 100)) || Math.abs(record.TotalAmt * 100 - Math.round(record.TotalAmt * 100)) > 0.00001)) return false;
+    if (['Invoice', 'Deposit'].includes(entity) && typeof record.HomeTotalAmt !== 'number') return false;
+  }
   // Every requested top-level field must be present (its value is checked by read-back).
   if (requested && Object.keys(requested).some(key => record[key] === undefined)) return false;
   return true;

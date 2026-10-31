@@ -17,7 +17,7 @@ function cents(value) { const n = Math.round(Number(value) * 100); if (typeof va
 const id = ref => ref?.value == null ? null : String(ref.value);
 // ctx: { get(entity, id) (the local copy), receivables, payables, undepositedFunds: account
 // ids used when QuickBooks omits the control account, taxAccount(rateId, direction) }.
-function postingsOf(entity, record, ctx) {
+function nativePostingsOf(entity, record, ctx) {
   const out = new Map(), add = (account, amount) => { if (!account) fail(entity + ' has a posting without an account.'); if (amount) out.set(account, (out.get(account) || 0) + amount); };
   if (!record || NON_POSTING.has(entity)) return out;
   if (record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) {
@@ -101,6 +101,11 @@ function postingsOf(entity, record, ctx) {
       return out;
     default: return fail(entity + ' has no posting rule.');
   }
+}
+function postingsOf(entity, record, ctx) {
+  const { currencyOf, foreignPostings } = require('./general-write-currency');
+  if (!record || NON_POSTING.has(entity) || currencyOf(record) === 'CAD' || record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) return nativePostingsOf(entity, record, ctx);
+  return foreignPostings(entity, record, ctx, nativePostingsOf, cents);
 }
 // Current postings: a record's GL rows ([{ accountId, cents }]) equal its rule postings.
 function compareLedger(expected, rows) {

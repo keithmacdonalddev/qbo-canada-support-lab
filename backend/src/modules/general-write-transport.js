@@ -52,7 +52,7 @@ function classifyGeneralResponse(scope, batch, response, intuitTid = '') {
   return { ...base, outcome: items.every(item => ['saved', 'rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };
 }
 // models: { GeneralWriteRuns, Agents }. runId / batchIndex name the saved batch.
-function createGeneralGateTransport({ models, scope, runId, batchIndex, admissionGuard, now = () => Date.now() }) {
+function createGeneralGateTransport({ models, scope, runId, batchIndex, admissionGuard, warmCurrency = null, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
   async function saved(session) {
@@ -97,6 +97,7 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
         recovery.evidence = JSON.parse(JSON.stringify(evidence));
         return evidence;
       }
+      if (warmCurrency) await warmCurrency(scope, batch);
       // Linked records shared by several items are read once.
       const memo = new Map(), memoClient = { read: (entity, id) => { const key = entity + ':' + id; if (!memo.has(key)) memo.set(key, client.read(entity, id)); return memo.get(key); }, query: text => { if (!memo.has(text)) memo.set(text, client.query(text)); return memo.get(text); } };
       preflighted = batch;
@@ -198,13 +199,13 @@ async function sendGeneralBatch({ client, gate, scope, runId, batch }) {
 }
 // The live transport for general-write-service: the company's scoped QuickBooks client and a
 // coordinated gate with this batch's runtime. Installed only when dispatch is enabled.
-function createGeneralLiveTransport({ access, models = {}, admissionGuard, now = () => Date.now() }) {
+function createGeneralLiveTransport({ access, models = {}, admissionGuard, warmCurrency = null, now = () => Date.now() }) {
   return {
     historyMarkersAtAdmission: true,
     async sendBatch(scope, { runId, batch }) {
       const client = await access.resolveClient(scope), { QBOClient } = require('./qbo-client');
       if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall) throw denied('General writes require the original scoped QuickBooks transport.');
-      const gate = require('./qbo-write-gate').createCoordinatedGate({ generalTransport: createGeneralGateTransport({ models, scope, runId, batchIndex: batch.index, admissionGuard, now }), now });
+      const gate = require('./qbo-write-gate').createCoordinatedGate({ generalTransport: createGeneralGateTransport({ models, scope, runId, batchIndex: batch.index, admissionGuard, warmCurrency, now }), now });
       return sendGeneralBatch({ client, gate, scope, runId, batch });
     },
   };

@@ -103,12 +103,13 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
     if (item.outcome === 'saved' && !preservesBillableState(before, item.record, item.entity)) fail('General write ' + item.entity + ' ' + id + ' changed native billable expense history; recover its original evidence before close.');
+    if (item.outcome === 'saved' && !require('./general-write-currency').preservesCurrency(before, item.record, request, item.entity)) fail('General foreign write ' + item.entity + ' ' + id + ' lost its currency basis.');
     const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
     const deleted = item.outcome === 'deleted';
     records.push({ entity: item.entity, id, current: current || null, deleted, unavailable: !deleted && !current, before: item.op === 'create' ? null : before,
-      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request } } });
+      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request, postingSources: item.postingSources || {} } } });
   }
   // Ownership is target-specific and must still explain the current settlement,
   // including settlements dated outside this close. Resolve deposits/credit applications
@@ -132,6 +133,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
 // workflows' own period proof and are returned for it, never silently accepted.
 async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
+  if (records.some(row => [row.current, row.before].some(record => record?.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD')) && ledgerReport?.Header?.Currency !== 'CAD') fail('Foreign records require a General Ledger explicitly expressed in CAD.');
   const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, new Set(row.targets)]));
   const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx, fromDate: day, throughDate: through });
   const general = new Set(records.map(row => row.entity + ':' + row.id));

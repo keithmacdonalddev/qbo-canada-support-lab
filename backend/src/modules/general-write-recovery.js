@@ -39,7 +39,7 @@ function matchesRequest(sent, saved) {
 }
 // Sparse readback must preserve native billable history omitted from the payload.
 function matchesSavedRequest(item, record) {
-  return matchesRequest(item.payload || {}, record) && preservesBillableState(item.before, record, item.entity);
+  return matchesRequest(item.payload || {}, record) && preservesBillableState(item.before, record, item.entity) && require('./general-write-currency').preservesCurrency(item.before, record, item.payload, item.entity);
 }
 // Correlation available for an item whose outcome is unknown.
 function correlation(item) {
@@ -120,7 +120,7 @@ function historyMovements(runs, observedAt, ctx, throughDate = null) {
     if (throughDate && ![before?.TxnDate, item.record?.TxnDate].some(date => date && date <= throughDate)) continue;
     if (item.op !== 'create' && !before) historyFail('A saved history change lost its before-image.');
     if (item.outcome === 'saved' && !matchesSavedRequest({ payload: item.request || sent?.payload || op?.payload || {}, before, entity: item.entity }, item.record)) historyFail('A saved history change differs from its original request.');
-    movements.push(...movementsOf(item.entity, item.op === 'create' ? null : before, item.outcome === 'deleted' ? null : item.record, ctx));
+    movements.push(...movementsOf(item.entity, item.op === 'create' ? null : before, item.outcome === 'deleted' ? null : item.record, { ...ctx, postingSources: item.postingSources || sent?.postingSources || {} }));
   }
   return movements;
 }

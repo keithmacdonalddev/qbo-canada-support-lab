@@ -12,6 +12,7 @@
 // ref and say plainly what to change, so the model can correct and re-propose.
 const { ENTITIES, VOID_SUPPORT, REF_TARGETS, ACCOUNT_TYPES, readOnlyFields } = require('./qbo-entity-schema');
 const { billableWriteProblems } = require('./billable-charge-links');
+const { currencyOf, currencyProblems, validRate, homeCents, rateKey, TXNS: CURRENCY_TXNS } = require('./general-write-currency');
 const REF = /^[a-z][a-z0-9-]{0,39}$/, QBO_ID = /^\d{1,30}$/, DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_CAPS = Object.freeze({ record: 5000000, operation: 12000000, journalLine: 1000000, quantity: 1000000, operations: 60, lines: 100, bytes: 65536 });
 const TAXED_LINES = ['SalesItemLineDetail', 'ItemBasedExpenseLineDetail', 'AccountBasedExpenseLineDetail'];
@@ -122,10 +123,13 @@ function checkGeneralWrite({ proposal, local, context }) {
     if (!spec.ops.includes(op.op)) return say(ref, op.entity + ' allows ' + spec.ops.join(', ') + ', not ' + op.op + '.');
     const entry = { ref, op: op.op, entity: op.entity, order, dependsOn: new Set() };
     byRef.set(ref, entry);
-    const payload = op.payload === undefined && ['void', 'delete'].includes(op.op) ? {} : op.payload;
+    let payload = op.payload === undefined && ['void', 'delete'].includes(op.op) ? {} : op.payload;
     if (!plain(payload)) return say(ref, 'Send the record fields as a payload object.');
     if (['void', 'delete'].includes(op.op) && Object.keys(payload).length) say(ref, 'A ' + op.op + ' sends no fields.');
     if (Buffer.byteLength(JSON.stringify(payload)) > caps.bytes) say(ref, 'The payload is larger than ' + caps.bytes + ' bytes.');
+    payload = structuredClone(payload);
+    const code = payload.CurrencyRef?.value, observed = context.currency?.rates?.[rateKey(code, payload.TxnDate)];
+    if (CURRENCY_TXNS.has(op.entity) && op.op === 'create' && code && code !== (context.currency?.homeCurrency || 'CAD') && payload.ExchangeRate === undefined && observed) payload.ExchangeRate = observed.Rate;
     entry.payload = payload;
     // Existing record: create sends no id; every other operation names its target.
     let existing = null;
@@ -154,7 +158,7 @@ function checkGeneralWrite({ proposal, local, context }) {
     const allowed = new Set([...spec.required, ...(spec.optional || []), 'Line', 'TxnDate', 'PrivateNote', 'CurrencyRef', 'Active']);
     for (const key of Object.keys(payload)) if (!allowed.has(key) && !readOnlyFields(op.entity).includes(key)) say(ref, key + ' is not a supported ' + op.entity + ' field (see getQboEntitySchema).');
     if (spec.safe && op.op === 'update') for (const [group, fields] of Object.entries(payload)) for (const field of Object.keys(plain(fields) ? fields : {})) if (!spec.safe.includes(group + '.' + field)) say(ref, 'Preferences ' + group + '.' + field + ' cannot be changed by the accountant.');
-    if (after?.CurrencyRef !== undefined && after.CurrencyRef?.value !== 'CAD') say(ref, 'Only CAD records are supported.');
+    for (const message of currencyProblems(op.entity, op.op, payload, existing, after, local, byRef, context)) say(ref, message);
     if (payload.Line !== undefined && !Array.isArray(payload.Line)) say(ref, 'Line must be a list.');
     if (Array.isArray(payload.Line) && payload.Line.length > caps.lines) say(ref, 'Use at most ' + caps.lines + ' lines.');
     for (const line of Array.isArray(payload.Line) ? payload.Line : []) {
@@ -212,7 +216,8 @@ function checkGeneralWrite({ proposal, local, context }) {
       }
     }
     // 3. Amounts: gross including tax, per record and as absolute plan exposure.
-    const beforeGross = grossCents(op.entity, existing, context, { saved: true }), afterGross = grossCents(op.entity, after, context, { saved: op.op === 'update' && payload.Line === undefined });
+    const inHome = (record, amount) => currencyOf(record, context.currency?.homeCurrency || 'CAD') !== (context.currency?.homeCurrency || 'CAD') && validRate(record?.ExchangeRate) ? homeCents(amount, record.ExchangeRate) : amount;
+    const beforeGross = inHome(existing, grossCents(op.entity, existing, context, { saved: true })), afterGross = inHome(after, grossCents(op.entity, after, context, { saved: op.op === 'update' && payload.Line === undefined }));
     if (Math.max(beforeGross, afterGross) > caps.record) say(ref, 'One record moves at most $' + caps.record / 100 + ' including tax.');
     exposure += op.op === 'create' ? afterGross : op.op === 'update' ? Math.abs(afterGross - beforeGross) : beforeGross;
     if (op.entity === 'JournalEntry' && Array.isArray(after?.Line)) {
@@ -239,7 +244,7 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (!hits.length) { say(ref, path + ' ' + target.value + ' is not a ' + wanted.join(' or ') + ' in the synced company copy.'); continue; }
       const [kind, record] = hits[0];
       if (record.Active === false) say(ref, path + ' ' + target.value + ' is inactive.');
-      if (['Customer', 'Vendor'].includes(kind) && record.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD') say(ref, path + ' ' + target.value + ' is not a CAD party.');
+      if (['Customer', 'Vendor'].includes(kind) && (path.includes('.') || key === 'EntityRef' || !['Invoice', 'Bill', 'Payment', 'BillPayment'].includes(op.entity)) && currencyOf(record) !== currencyOf(after)) say(ref, path + ' currency must match the transaction currency.');
       if (kind === 'Account' && ACCOUNT_TYPES[key] && !ACCOUNT_TYPES[key].includes(record.AccountType)) say(ref, path + ' ' + target.value + ' is a ' + record.AccountType + ' account; ' + key + ' needs ' + ACCOUNT_TYPES[key].join(' or ') + '.');
       if (kind === 'TaxCode' && spec.direction && !(context.taxCodes?.[spec.direction] || []).includes(String(target.value))) say(ref, path + ' tax code ' + target.value + ' is not in the published ' + spec.direction + ' tax policy (' + (context.taxCodes?.[spec.direction] || []).join(', ') + ').');
     }
@@ -263,10 +268,11 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (!record) { say(ref, type + ' ' + target + ' is not in the synced company copy.'); continue; }
       if (party && after[party]?.value != null && record[party]?.value != null && String(record[party].value) !== String(after[party].value)) say(ref, type + ' ' + target + ' belongs to another ' + (party === 'CustomerRef' ? 'customer' : 'supplier') + '.');
       if (control && after[control]?.value != null && record[control]?.value != null && String(record[control].value) !== String(after[control].value)) say(ref, type + ' ' + target + ' posted to another ' + (control === 'ARAccountRef' ? 'receivables' : 'payables') + ' account.');
-      if (record.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD') say(ref, type + ' ' + target + ' is not in CAD.');
+      if (currencyOf(record) !== currencyOf(after)) say(ref, type + ' ' + target + ' currency must match the transaction currency.');
       const amount = level === 'line' ? cents(line.Amount) || 0 : 0, key = type + ':' + target, back = previously.get(key) || 0;
       const openOf = { Invoice: 'Balance', Bill: 'Balance', CreditMemo: 'RemainingCredit', VendorCredit: 'Balance' }[type];
       if (openOf) {
+        if (currencyOf(after) !== 'CAD' && ['Payment', 'BillPayment'].includes(op.entity) && amount !== cents(record.TotalAmt) && typeof record.HomeBalance !== 'number') say(ref, 'A partial foreign settlement needs the source HomeBalance before dispatch.');
         const open = (cents(record[openOf]) || 0) + back; applied.set(key, (applied.get(key) || 0) + amount);
         if (applied.get(key) > open) say(ref, type + ' ' + target + ' has $' + open / 100 + ' open; this plan applies $' + applied.get(key) / 100 + '.');
       } else if (['Payment', 'SalesReceipt'].includes(type)) {
@@ -299,6 +305,6 @@ function checkGeneralWrite({ proposal, local, context }) {
   const entries = [...byRef.values()].sort((x, y) => x.order - y.order);
   if (!problems.length) layers = require('./general-write-scheduler').scheduleBatches(entries.map(entry => ({ ref: entry.ref, op: entry.op, entity: entry.entity, ...(entry.id ? { id: entry.id } : {}), payload: entry.payload, before: entry.before || null, dependsOn: [...entry.dependsOn] })), local).batches;
   const ok = problems.length === 0;
-  return { ok, problems, plan: ok ? { contract: 'general-write-v1', operations: entries.map(({ ref, op, entity, id, payload, order, dependsOn, before, targetVersion, reason }) => ({ ref, op, entity, ...(id ? { id, targetVersion, before } : {}), payload, order, dependsOn: [...dependsOn].sort(), ...(reason ? { reason } : {}) })), layers, reverifyDates: [...reverify].sort(), externalEdits: external, exposureCents: exposure } : null };
+  return { ok, problems, plan: ok ? { contract: 'general-write-v1', ...(context.currency ? { currencyEvidence: context.currency } : {}), operations: entries.map(({ ref, op, entity, id, payload, order, dependsOn, before, targetVersion, reason }) => ({ ref, op, entity, ...(id ? { id, targetVersion, before } : {}), payload, order, dependsOn: [...dependsOn].sort(), ...(reason ? { reason } : {}) })), layers, reverifyDates: [...reverify].sort(), externalEdits: external, exposureCents: exposure } : null };
 }
 module.exports = { checkGeneralWrite, refsIn, effectiveRecord, grossCents, DEFAULT_CAPS };
