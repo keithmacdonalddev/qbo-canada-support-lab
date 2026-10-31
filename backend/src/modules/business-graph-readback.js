@@ -11,7 +11,7 @@ function rootKeys(values) {
   return [...values].sort();
 }
 function normalizeStep(row, scope) {
-  if (!row || !sameScope(row, scope) || row.contractVersion !== 1 || !['saved', 'verified'].includes(row.state) || !Number.isSafeInteger(row.revision) || row.revision < 1 || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || !Array.isArray(row.dependencies) || row.dependencies.length > 20) fail('A related activity is missing or its save is unresolved.');
+  if (!row || !sameScope(row, scope) || row.contractVersion !== 1 || !['saved', 'verified', 'needs-check'].includes(row.state) || !Number.isSafeInteger(row.revision) || row.revision < 1 || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || !Array.isArray(row.dependencies) || row.dependencies.length > 20) fail('A related activity is missing or its save is unresolved.');
   const compiled = row.compilation, request = validateCompilation(compiled), receipt = row.receipt;
   if (!sameScope(request.scope, scope) || compiled.logicalKey !== row.logicalKey || compiled.entity !== row.entity || compiled.intentHash !== row.fingerprint || compiled.compilationHash !== row.dispatch?.compilationHash || compiled.evidenceHash !== row.dispatch?.evidenceHash || request.requestHash !== row.dispatch?.requestHash || !HASH.test(row.dispatch?.key || '') || !receipt || receipt.version !== 1 || receipt.dispatchKey !== row.dispatch.key || receipt.requestHash !== request.requestHash || receipt.qboId !== row.qboId) fail('A related record no longer matches its original dispatch and receipt.');
   const expected = compiled.relationships.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
@@ -90,7 +90,7 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
     require('./business-link-repair-contract').assertReadFence(value);
     return { scope, revision: value.revision, operationId: value.operationId, ...(value.quarantinedRepair ? { unresolved: value.unresolved, quarantinedRepair: value.quarantinedRepair } : {}) };
   }
-  return async ({ scope, roots, signal, mode = 'read', expectedWriterFence = null }) => {
+  return async ({ scope, roots, signal, mode = 'read', expectedWriterFence = null, forceLive = false }) => {
     scope = scoped(scope); roots = rootKeys(roots);
     if (!['prepare', 'read'].includes(mode)) fail('Unsupported graph read mode.');
     const started = now(), controller = new AbortController();
@@ -156,7 +156,7 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
           const directKeys = new Set();
           await scan({ ...query, logicalKey: { $in: batch } }, row => { directKeys.add(row.logicalKey); retain(row); });
           if (batch.some(key => !directKeys.has(key))) fail('A required managed activity is missing from storage.');
-          await scan({ ...query, 'dependencies.logicalKey': { $in: batch }, state: { $in: ['saved', 'verified', 'dispatched', 'unknown'] } }, retain);
+          await scan({ ...query, 'dependencies.logicalKey': { $in: batch }, state: { $in: ['saved', 'verified', 'needs-check', 'dispatched', 'unknown'] } }, retain);
           for (const key of batch) expanded.add(key);
         }
         return [...found.values()].sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
@@ -170,13 +170,13 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
         const manifest = { version: 1, scope, roots, records, writerFence: fence };
         return { ...manifest, kind: 'business-graph-preparation', recordCount: records.length, evidenceHash: hash(manifest), prepared: true };
       }
-      const prepared = prepareRecords ? await read(() => prepareRecords(scope, rows, { signal: controller.signal })) : null; check();
+      const prepared = prepareRecords && !forceLive ? await read(() => prepareRecords(scope, rows, { signal: controller.signal })) : null; check();
       const entries = new Array(rows.length); let next = 0, firstError = null, retainedBytes = 0;
       const worker = async () => {
         while (!firstError && next < rows.length) {
           const index = next++, step = rows[index];
           try {
-            check(); const observed = await read(() => readRecord(scope, step.entity, step.qboId, { signal: controller.signal, ...(prepared ? { observed: prepared.get(step.entity + ':' + step.qboId) } : {}) })); check();
+            check(); const observed = await read(() => readRecord(scope, step.entity, step.qboId, { signal: controller.signal, forceLive, ...(prepared ? { observed: prepared.get(step.entity + ':' + step.qboId) } : {}) })); check();
             const taxPolicy = await read(() => loadTaxPolicy(scope, step.compilation, { signal: controller.signal })); check();
             const entry = { step, observed, taxPolicy };
             retainedBytes += Buffer.byteLength(JSON.stringify(entry));
@@ -189,6 +189,7 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
       check(); const currentActor = await read(() => authorize(scope, 'operations.read', { signal: controller.signal })); check();
       const after = checkedFence(await read(() => readFence(scope, { signal: controller.signal })), scope); check();
       if (currentActor?.actorId !== actor.actorId || canonical(fence) !== canonical(after)) fail('Company activity changed while related records were being read.');
+      if (forceLive) for (const entry of entries) require('./business-step-store').assertLiveBookSafety(entry);
       const result = reconcileBusinessGraph({ scope, roots, entries, now: now() }); check();
       return { ...result, ...(retainSources ? { sourcesJson: JSON.stringify(entries), sourcesHash: hash(JSON.stringify(entries)) } : {}), writerFence: fence, evidenceHash: hash({ graph: result.evidenceHash, writerFence: fence }), durationMs: now() - started };
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }

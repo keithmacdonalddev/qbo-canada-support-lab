@@ -28,7 +28,7 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     const { run } = value; owned(value);
     if (run.leaseToken !== leaseToken || !leaseToken || !Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() <= now()) fail('The operation worker lease changed or expired.');
   }
-  const view = ({ run, calendar, writer }) => ({ operationId: String(run._id), planHash: run.planHash, status: run.status, recordCount: run.recordCount, nextOrdinal: run.nextOrdinal ?? 0, executionRevision: run.executionRevision ?? 0, leaseToken: run.leaseToken || null, leaseExpiresAt: run.leaseExpiresAt || null,
+  const view = ({ run, calendar, writer }) => ({ operationId: String(run._id), planHash: run.planHash, status: run.status, recordCount: run.recordCount, nextOrdinal: run.nextOrdinal ?? 0, completedRecords: (run.nextOrdinal ?? 0) - (run.deferredSteps || []).length, deferredSteps: run.deferredSteps || [], recheckAvailable: Boolean(run.deferredSteps?.length), executionRevision: run.executionRevision ?? 0, leaseToken: run.leaseToken || null, leaseExpiresAt: run.leaseExpiresAt || null,
     ...(run.requiredAssertions.some(row => row.key === 'stock-costs') ? { stockCostRequired: true } : {}),
     ...(run.activityBatch ? { activityBatch: { decisionKey: run.activityBatch.decisionKey, purpose: run.activityBatch.purpose, day: run.activityBatch.day } } : {}),
     fromDate: run.fromDate, throughDate: run.throughDate, stopRequested: calendar?.stopRequested === true, unresolved: writer?.unresolved || null,
@@ -58,28 +58,42 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     if (!['reserved', 'running', 'blocked', 'awaiting-evidence'].includes(run.status)) fail('This operation cannot acquire a worker.');
     if (run.leaseToken && (!Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() > now())) fail('Another worker still holds this operation.');
     const leaseToken = token(); if (typeof leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(leaseToken)) fail('Invalid operation lease token.');
-    return change(value, selected, actorId, session, 'claim', { leaseToken, leaseExpiresAt: new Date(now() + 600000), nextOrdinal: run.nextOrdinal ?? 0, status: (run.nextOrdinal ?? 0) === run.recordCount ? 'awaiting-evidence' : 'running', lastError: null });
+    return change(value, selected, actorId, session, 'claim', { leaseToken, leaseExpiresAt: new Date(now() + 600000), nextOrdinal: run.nextOrdinal ?? 0, status: (run.nextOrdinal ?? 0) === run.recordCount && !(run.deferredSteps || []).some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', lastError: null });
   });
   const renew = (scope, operationId, leaseToken) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
     handle(value, leaseToken); if (!['running', 'awaiting-evidence'].includes(value.run.status)) fail('This worker cannot continue the operation.');
     return change(value, selected, actorId, session, 'renew', { leaseExpiresAt: new Date(now() + 600000) });
   });
-  const advance = (scope, operationId, leaseToken, ordinal, logicalKey) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
+  const advance = (scope, operationId, leaseToken, ordinal, logicalKey, { defer = false } = {}) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
     handle(value, leaseToken); const run = value.run;
-    if (run.status !== 'running' || value.calendar.stopRequested || value.writer.unresolved !== null || ordinal !== (run.nextOrdinal ?? 0) || ordinal >= run.recordCount || !HASH.test(logicalKey || '')) fail('The next operation activity changed or is stopped.');
+    const pending = (run.deferredSteps || []).find(row => row.ordinal === ordinal && row.logicalKey === logicalKey);
+    if (!['running', 'awaiting-evidence'].includes(run.status) || value.calendar.stopRequested || value.writer.unresolved !== null || (ordinal !== (run.nextOrdinal ?? 0) && !pending) || ordinal >= run.recordCount || !HASH.test(logicalKey || '')) fail('The next operation activity changed or is stopped.');
     const plan = await read(Plans, { _id: run.planId, ...selected, operationId: run._id, planHash: run.planHash }, session);
     const expected = plan?.manifest?.records?.[ordinal];
     if (!plan || hash(plan.manifest) !== run.planHash || plan.manifest.recordCount !== run.recordCount || expected?.logicalKey !== logicalKey) fail('The ordered saved plan changed.');
     const row = await read(Steps, { ...selected, logicalKey }, session), stamp = Date.parse(row?.verification?.observedAt);
-    if (!row || row.state !== 'verified' || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || !row.receipt || !row.qboId || !row.lastAuditId || !HASH.test(row.verification?.graphEvidenceHash || '') || !Number.isFinite(stamp) || stamp > now() || now() - stamp > 300000) fail('The activity lacks current saved graph proof.');
+    let deferred = (run.deferredSteps || []).filter(item => item.logicalKey !== logicalKey);
+    if (defer) {
+      for (const key of expected.relationships || []) {
+        if (deferred.some(item => item.logicalKey === key)) continue;
+        const index = plan.manifest.records.findIndex(item => item.logicalKey === key), dependency = plan.manifest.records[index];
+        const parent = await read(Steps, { ...selected, logicalKey: key }, session);
+        if (index < ordinal && parent?.state === 'needs-check' && parent.entity === dependency.entity && parent.fingerprint === dependency.fingerprint && parent.receipt?.qboId === parent.qboId && parent.qboId && parent.lastAuditId) deferred.push({ ordinal: index, logicalKey: key, reason: 'needs-check', dependencies: [] });
+      }
+      const heldBy = (expected.relationships || []).filter(key => deferred.some(item => item.logicalKey === key));
+      const needsCheck = row?.state === 'needs-check' && row.entity === expected.entity && row.fingerprint === expected.fingerprint && row.receipt?.qboId === row.qboId && row.qboId && row.lastAuditId;
+      if (!needsCheck && (!heldBy.length || row?.dispatch || row?.receipt || (row && row.state !== 'claimed'))) fail('Only a known saved check or its unsent dependants may be deferred.');
+      deferred.push({ ordinal, logicalKey, reason: needsCheck ? 'needs-check' : 'dependency', dependencies: heldBy });
+    } else if (!row || row.state !== 'verified' || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || !row.receipt || !row.qboId || !row.lastAuditId || !HASH.test(row.verification?.graphEvidenceHash || '') || !Number.isFinite(stamp) || stamp > now() || now() - stamp > 300000) fail('The activity lacks current saved graph proof.');
     handle(value, leaseToken);
-    return change(value, selected, actorId, session, 'advance', { nextOrdinal: ordinal + 1, status: ordinal + 1 === run.recordCount ? 'awaiting-evidence' : 'running', leaseExpiresAt: new Date(now() + 600000) });
+    const nextOrdinal = Math.max(run.nextOrdinal ?? 0, ordinal + 1);
+    return change(value, selected, actorId, session, defer ? 'defer' : 'advance', { nextOrdinal, deferredSteps: deferred.sort((a, b) => a.ordinal - b.ordinal), status: nextOrdinal === run.recordCount && !deferred.some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', leaseExpiresAt: new Date(now() + 600000) });
   });
   const release = (scope, operationId, leaseToken, reason = 'yield') => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
     handle(value, leaseToken);
     if (!['yield', 'blocked', 'stopped'].includes(reason)) fail('Unsupported worker release reason.');
     if (reason === 'stopped' && (!value.calendar.stopRequested || value.writer.unresolved !== null)) fail('A stopped operation must settle its outstanding request first.');
-    return change(value, selected, actorId, session, 'release-' + reason, { leaseToken: null, leaseExpiresAt: null, status: reason === 'stopped' ? 'stopped' : reason === 'blocked' ? 'blocked' : value.run.status, lastError: reason === 'blocked' ? 'Operation requires recovery or fresh verification.' : null });
+    return change(value, selected, actorId, session, 'release-' + reason, { leaseToken: null, leaseExpiresAt: null, status: reason === 'stopped' ? 'stopped' : reason === 'blocked' ? 'blocked' : (value.run.nextOrdinal ?? 0) === value.run.recordCount ? 'awaiting-evidence' : value.run.status, lastError: reason === 'blocked' ? 'Operation requires recovery or fresh verification.' : null });
   });
   const settleStop = (scope, operationId) => perform(scope, operationId, 'operations.stop', async (value, selected, actorId, session) => {
     if (value.run.status === 'stopped') return view(value);

@@ -49,7 +49,7 @@ function recordText(step, mirror) {
 const STEP_STATES = {
   claimed: ['running', 'Sending to QuickBooks…'], dispatched: ['running', 'Sending to QuickBooks…'],
   unknown: ['attention', 'Checking whether QuickBooks saved it'], saved: ['done', 'Saved'],
-  verified: ['done', 'Saved · verified'], rejected: ['failed', 'QuickBooks rejected it'],
+  'needs-check': ['attention', 'Saved · needs check · automatic re-check available'], verified: ['done', 'Saved · verified'], rejected: ['failed', 'QuickBooks rejected it'],
 };
 function runLabel(run) {
   const types = Array.isArray(run.activityBatch?.activities) ? run.activityBatch.activities.map(row => row?.type) : [];
@@ -58,12 +58,12 @@ function runLabel(run) {
   return { batch: false, text: 'Prepared the business calendar for ' + (span(run.fromDate, run.throughDate) || 'the next period'), records };
 }
 function runStatus(run, label) {
-  const total = Number.isSafeInteger(run.recordCount) ? run.recordCount : null, done = Number.isSafeInteger(run.nextOrdinal) ? run.nextOrdinal : 0;
+  const total = Number.isSafeInteger(run.recordCount) ? run.recordCount : null, done = Math.max(0, (Number.isSafeInteger(run.nextOrdinal) ? run.nextOrdinal : 0) - (run.deferredSteps || []).length);
   const progress = total ? done + ' of ' + total + ' records' : plural(done, 'record');
   switch (run.status) {
     case 'approved': case 'reserved': return ['running', 'Approved · waiting to send to QuickBooks'];
     case 'running': return ['running', 'Sending to QuickBooks · ' + progress];
-    case 'awaiting-evidence': return ['running', 'All records sent · checking the books'];
+    case 'awaiting-evidence': if (run.deferredSteps?.length) return ['attention', 'Saved records need a check · automatic re-check available']; return ['running', 'All records sent · checking the books'];
     case 'committing': return ['running', 'Closing the work · checking the reports'];
     case 'verified': return ['done', label.batch ? 'Finished: ' + (total === null ? 'all records' : plural(total, 'record')) + ' saved and verified' : 'Closed the business calendar through ' + (day(run.throughDate) || 'the period end') + (total === null ? '' : ' · ' + plural(total, 'record'))];
     case 'blocked': return ['attention', 'Stopped part-way after ' + progress + ' · it resumes without sending anything twice'];
@@ -142,7 +142,7 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
   const sendingRun = [...knownRuns.values()].filter(run => SENDING_RUN.has(run.status) || run.executionRequest?.pending === true).sort((a, b) => (time(b.updatedAt) || 0) - (time(a.updatedAt) || 0))[0] || null;
   const queued = [...knownRuns.values()].some(run => ACTIVE_RUN.has(run.status));
   const inFlight = (Array.isArray(steps) ? steps : []).some(step => step && IN_FLIGHT_STEP.has(step.state) && clock - (time(step.updatedAt) || 0) < 10 * 60000);
-  const sending = sendingRun ? { operationId: String(sendingRun._id), done: Number.isSafeInteger(sendingRun.nextOrdinal) ? sendingRun.nextOrdinal : 0, total: Number.isSafeInteger(sendingRun.recordCount) ? sendingRun.recordCount : null, batch: Boolean(sendingRun.activityBatch) } : null;
+  const sending = sendingRun ? { operationId: String(sendingRun._id), done: Math.max(0, (Number.isSafeInteger(sendingRun.nextOrdinal) ? sendingRun.nextOrdinal : 0) - (sendingRun.deferredSteps || []).length), total: Number.isSafeInteger(sendingRun.recordCount) ? sendingRun.recordCount : null, batch: Boolean(sendingRun.activityBatch) } : null;
   const state = !configured ? 'not-configured' : !settings?.monitoring ? 'stopped' : reviewing ? 'reviewing' : sending || inFlight ? 'sending' : 'idle';
   const active = state === 'reviewing' || state === 'sending' || (configured && queued);
   return { state, active, pollMs: active ? FAST_POLL_MS : IDLE_POLL_MS, startedAt: ownPass ? clean(progress.startedAt, 40) || null : reviewing ? activePass?.startedAt || null : null, role: reviewing ? (activePass?.role || 'accountant') : null, reason: ownPass && cadence?.reason ? clean(String(cadence.reason), 120) : '', sending, items: recent, asOf: iso(clock), ...(unavailable ? { unavailable: true } : {}) };
@@ -155,7 +155,7 @@ function createLiveActivityReader({ models, now = () => Date.now() }) {
   return async function liveActivity(scope, { windowMs = WINDOW_MS, maxRuns = 6, maxSteps = 60 } = {}) {
     const since = new Date(now() - windowMs);
     const runs = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, createdAt: { $gte: since } })
-      .select('_id status createdAt updatedAt recordCount nextOrdinal fromDate throughDate activityBatch.day activityBatch.purpose activityBatch.activities.type executionRequest.pending')
+      .select('_id status createdAt updatedAt recordCount nextOrdinal deferredSteps fromDate throughDate activityBatch.day activityBatch.purpose activityBatch.activities.type executionRequest.pending')
       .sort({ createdAt: -1 }).limit(maxRuns).maxTimeMS(2000).lean();
     if (!runs.length) return { runs, steps: [], records: [] };
     const steps = await Steps.find({ environment: scope.environment, realmId: scope.realmId, operationId: { $in: runs.map(run => run._id) } })

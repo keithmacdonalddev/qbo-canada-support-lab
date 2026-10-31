@@ -37,7 +37,66 @@ function validateReceipt(value, row) {
 }
 
 function validateReadback(proof, row, clock) {
-  if (!proof || proof.kind !== 'business-readback' || proof.compilationHash !== row.dispatch?.compilationHash || !validHash(proof.compilationHash) || proof.version !== 1 || !sameScope(proof.scope, row) || proof.logicalKey !== row.logicalKey || proof.entity !== row.entity || proof.qboId !== row.qboId || proof.fingerprint !== row.fingerprint || proof.matchesIntent !== true || !validHash(proof.observedHash) || !validHash(proof.evidenceHash) || typeof proof.syncToken !== 'string' || !VERSION.test(proof.syncToken) || !fresh(proof.observedAt, clock) || !Array.isArray(proof.relationships) || proof.relationships.length !== row.dependencies.length || new Set(proof.relationships.map(link => link.logicalKey)).size !== row.dependencies.length || (proof.listDefinitionHash !== undefined && !validHash(proof.listDefinitionHash))) fail('Read-back does not prove the exact saved intent and relationships');
+  if (!proof || proof.kind !== 'business-readback' || proof.compilationHash !== row.dispatch?.compilationHash || !validHash(proof.compilationHash) || proof.version !== 1 || !sameScope(proof.scope, row) || proof.logicalKey !== row.logicalKey || proof.entity !== row.entity || proof.qboId !== row.qboId || proof.fingerprint !== row.fingerprint || proof.matchesIntent !== true || !validHash(proof.observedHash) || !validHash(proof.evidenceHash) || typeof proof.syncToken !== 'string' || !VERSION.test(proof.syncToken) || !Array.isArray(proof.relationships) || proof.relationships.length !== row.dependencies.length || new Set(proof.relationships.map(link => link.logicalKey)).size !== row.dependencies.length || (proof.listDefinitionHash !== undefined && !validHash(proof.listDefinitionHash))) fail('Read-back does not prove the exact saved intent and relationships');
+  if (!fresh(proof.observedAt, clock)) throw Object.assign(new Error('Read-back evidence expired before it could be retained'), { status: 409, code: 'BUSINESS_READBACK_EXPIRED' });
+}
+// Called only after a full exact live GET on the bounded retry. Missing fields
+// remain unproven; explicit different accounts, tax or amounts are book risk.
+function assertLiveBookSafety({ step, observed, taxPolicy }) {
+  if (!observed || observed.recordHash !== hash(observed.record) || observed.record?.Id !== step.qboId || !sameScope(observed.scope, step)) fail('The exact live record is unavailable');
+  const actual = observed.record, wanted = JSON.parse(step.compilation.request.body);
+  const risky = () => { throw Object.assign(new Error('The saved record proves a different account, tax or amount. Business work is stopped for review.'), { status: 409, code: 'BUSINESS_BOOK_RISK' }); };
+  const numeric = value => typeof value === 'number' && Number.isFinite(value);
+  const money = value => Math.round(value * 100);
+  const compare = (expected, saved) => {
+    if (!expected || !saved || typeof expected !== 'object' || typeof saved !== 'object') return;
+    for (const [key, value] of Object.entries(expected)) {
+      if (key === 'Line') continue;
+      if (/AccountRef$|TaxCodeRef$/.test(key) && value?.value && saved[key]?.value && value.value !== saved[key].value) risky();
+      if (['Amount', 'TotalAmt', 'TotalTax'].includes(key) && numeric(value) && numeric(saved[key]) && money(value) !== money(saved[key])) risky();
+      if (value && typeof value === 'object' && !Array.isArray(value)) compare(value, saved[key]);
+    }
+  };
+  compare(wanted, actual);
+  const expectedLines = wanted.Line?.filter(line => line.DetailType !== 'SubTotalLineDetail'), actualLines = actual.Line?.filter(line => line.DetailType !== 'SubTotalLineDetail');
+  const signatures = (lines, fields) => lines.map(line => Object.fromEntries(fields.map(field => [field, (() => { const value = field.split('.').reduce((entry, key) => entry?.[key], line); return numeric(value) ? /Amount$|TaxInclusiveAmt$/.test(field) ? money(value) : Math.round(value * 1000000) / 1000000 : value; })()]))).map(value => canonical(value)).sort();
+  if (Array.isArray(expectedLines) && Array.isArray(actualLines)) {
+    const explicitAmounts = lines => lines.every(line => numeric(line.Amount));
+    if (explicitAmounts(expectedLines) && explicitAmounts(actualLines)) {
+      const sums = lines => lines.reduce((sum, line) => sum + money(line.Amount), 0);
+      if (sums(expectedLines) !== sums(actualLines)) risky();
+      const fields = new Set(['Amount']);
+      const collect = (value, prefix = '') => { for (const [key, child] of Object.entries(value || {})) {
+        const field = prefix + key;
+        if (/AccountRef$|TaxCodeRef$|ItemRef$/.test(key) && child?.value) fields.add(field + '.value');
+        else if (['Qty', 'UnitPrice', 'TaxInclusiveAmt', 'PostingType'].includes(key)) fields.add(field);
+        else if (child && typeof child === 'object' && !Array.isArray(child)) collect(child, field + '.');
+      } };
+      expectedLines.forEach(line => collect(line));
+      // Compare only explicit fields available on every corresponding detail type.
+      for (const type of new Set([...expectedLines, ...actualLines].map(line => line.DetailType))) {
+        const expected = expectedLines.filter(line => line.DetailType === type), saved = actualLines.filter(line => line.DetailType === type);
+        const available = [...fields].filter(field => expected.every(line => field.split('.').reduce((v,k) => v?.[k], line) !== undefined) && saved.every(line => field.split('.').reduce((v,k) => v?.[k], line) !== undefined));
+        if ((!expected.length || !saved.length) && [...expected, ...saved].some(line => money(line.Amount) !== 0)) risky();
+        const allocationFields = available.filter(field => field !== 'Amount' && !/Qty$|UnitPrice$|TaxInclusiveAmt$/.test(field));
+        if (allocationFields.length && expected.length && saved.length) {
+          const allocation = lines => { const totals = new Map(); for (const line of lines) { const key = signatures([line], allocationFields)[0]; totals.set(key, (totals.get(key) || 0) + money(line.Amount)); } return [...totals].sort((a,b) => a[0].localeCompare(b[0])); };
+          if (canonical(allocation(expected)) !== canonical(allocation(saved))) risky();
+        }
+        if (saved.length && expected.length === saved.length && canonical(signatures(expected, available)) !== canonical(signatures(saved, available))) risky();
+      }
+    }
+  }
+  if (taxPolicy && numeric(actual.TxnTaxDetail?.TotalTax)) {
+    if (money(actual.TxnTaxDetail.TotalTax) !== taxPolicy.totalTaxCents) risky();
+    if (numeric(actual.TotalAmt) && Array.isArray(expectedLines) && expectedLines.every(line => numeric(line.Amount)) && ['Estimate', 'Invoice', 'SalesReceipt', 'PurchaseOrder', 'Bill', 'CreditMemo', 'VendorCredit', 'Purchase', 'RefundReceipt'].includes(step.entity) && money(actual.TotalAmt) !== expectedLines.reduce((sum, line) => sum + money(line.Amount), 0) + taxPolicy.totalTaxCents) risky();
+    const lines = actual.TxnTaxDetail.TaxLine;
+    if (Array.isArray(lines) && lines.every(line => numeric(line.Amount) && line.TaxLineDetail?.TaxRateRef?.value && numeric(line.TaxLineDetail.TaxPercent) && numeric(line.TaxLineDetail.NetAmountTaxable))) {
+      const expected = taxPolicy.lines.map(line => ({ amount: line.amountCents, rate: line.rateId, percent: line.percent, taxable: line.taxableCents })).map(canonical).sort();
+      const saved = lines.map(line => ({ amount: money(line.Amount), rate: line.TaxLineDetail.TaxRateRef.value, percent: line.TaxLineDetail.TaxPercent, taxable: money(line.TaxLineDetail.NetAmountTaxable) })).map(canonical).sort();
+      if (canonical(expected) !== canonical(saved)) risky();
+    }
+  }
 }
 function verificationData(proof) {
   return { version: 1, kind: 'business-readback', compilationHash: proof.compilationHash, observedHash: proof.observedHash, evidenceHash: proof.evidenceHash, syncToken: proof.syncToken, observedAt: proof.observedAt, ...(proof.listDefinitionHash !== undefined ? { listDefinitionHash: proof.listDefinitionHash } : {}), ...(proof.accountRouting ? { accountRouting: structuredClone(proof.accountRouting) } : {}), ...(proof.estimateConversion ? { estimateConversion: structuredClone(proof.estimateConversion) } : {}), ...(proof.estimateLinkDropped ? { estimateLinkDropped: structuredClone(proof.estimateLinkDropped) } : {}), ...(proof.purchaseOrderConsumption ? { purchaseOrderConsumption: structuredClone(proof.purchaseOrderConsumption) } : {}), relationships: proof.relationships.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, qboId: link.qboId, syncToken: link.syncToken })) };
@@ -131,6 +190,15 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       next.lastAuditId = await audit(ctx, next, 'claim', session);
       await Steps.create([next], { session });
       return publicHandle(next);
+    });
+  }
+  async function releaseClaim(scope, operationId, logicalKey, handle, { runLeaseToken } = {}) {
+    const ctx = await context(scope, operationId, logicalKey, 'operations.execute'); ctx.runLeaseToken = runLeaseToken;
+    return transaction(async session => {
+      const row = await read(ctx, session); assertIdentity(row, ctx.intent); assertHandle(row, handle, now());
+      if (row.state !== 'claimed' || row.dispatch || row.receipt) fail('Only the exact unsent claim can be released');
+      await guarded(ctx, 'claim', session);
+      return publicHandle(await replace(ctx, row, { leaseExpiresAt: new Date(0) }, 'dependency-held', session));
     });
   }
   async function beginDispatch(scope, operationId, logicalKey, handle, compilation, { runLeaseToken } = {}) {
@@ -230,7 +298,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       return { ...publicHandle(saved), state: saved.state };
     });
   }
-  async function verifyGraph(scope, operationId, roots, { signal } = {}) {
+  async function verifyGraph(scope, operationId, roots, { signal, forceLive = false, retry = true } = {}) {
     if (typeof loadGraphReadback !== 'function' || typeof graphSnapshot !== 'function') fail('Complete graph verification adapters are not connected');
     scope = scopeOf(scope);
     if (!Array.isArray(roots) || !roots.length || roots.length > 100 || roots.some(key => !validHash(key)) || new Set(roots).size !== roots.length) fail('Choose distinct managed activity roots', 400);
@@ -283,22 +351,50 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       const rows = new Map();
       for (const expected of prepared.records) {
         cancelled(); const ctx = contexts.get(expected.logicalKey), row = await read(ctx, session); assertIdentity(row, ctx.intent, false);
-        if (!['saved', 'verified'].includes(row.state) || !row.receipt || row.revision !== expected.stepRevision || row.qboId !== expected.qboId || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || row.dispatch?.compilationHash !== expected.compilationHash) fail('The prepared graph changed before verification started');
+        if (!['saved', 'verified', 'needs-check'].includes(row.state) || !row.receipt || row.revision !== expected.stepRevision || row.qboId !== expected.qboId || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || row.dispatch?.compilationHash !== expected.compilationHash) fail('The prepared graph changed before verification started');
         await guarded(ctx, 'verification-start', session, row.dispatch, null, row);
         const saved = await replace(ctx, row, { state: 'saved', verification: null }, 'verification-start', session); rows.set(expected.logicalKey, saved);
       }
       cancelled(); const writerFence = await snapshot(null, session); cancelled(); return { rows, writerFence };
     });
     // No QBO or provider reads run inside a retryable database transaction.
-    cancelled(); const graph = envelope(await loadGraphReadback({ scope, roots, signal, mode: 'read', expectedWriterFence: invalidated.writerFence }), false); cancelled();
+    cancelled(); let graph;
+    try { graph = envelope(await loadGraphReadback({ scope, roots, signal, mode: 'read', forceLive, expectedWriterFence: invalidated.writerFence }), false); }
+    catch (error) {
+      if (signal?.aborted || error?.code === 'BUSINESS_BOOK_RISK' || error?.status === 403) throw error;
+      if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
+      return retainNeedsCheck();
+    }
+    async function retainNeedsCheck(afterCommit = null) {
+      await transaction(async session => {
+        cancelled(); await snapshot(afterCommit ? null : invalidated.writerFence, session);
+        // Keep the original receipt/ID. Only requested roots need a check; the
+        // invalidated related graph stays saved and cannot authorize dependencies.
+        for (const key of roots) {
+          const ctx = contexts.get(key), expected = invalidated.rows.get(key), row = await read(ctx, session);
+          assertIdentity(row, ctx.intent, false);
+          const committedRecord = afterCommit?.records.find(record => record.logicalKey === key);
+          assertHandle(row, afterCommit ? { revision: committedRecord?.revision, leaseToken: expected.leaseToken } : publicHandle(expected), now());
+          if ((afterCommit ? row.state !== 'verified' || row.verification?.graphEvidenceHash !== afterCommit.evidenceHash : row.state !== 'saved') || !row.receipt || row.qboId !== expected.qboId || canonical(row.receipt) !== canonical(expected.receipt)) fail('The saved record changed before retaining its check');
+          await guarded(ctx, 'verification-start', session, row.dispatch, null, row);
+          await replace(ctx, row, { state: 'needs-check', verification: { status: 'needs-check', observedAt: new Date(now()).toISOString(), retryable: true, reason: 'The saved record could not be verified after an exact live re-read.' } }, 'needs-check', session);
+        }
+      });
+      return { state: 'needs-check', complete: false, persisted: false, replayAllowed: false, roots, recheckAvailable: true };
+    } cancelled();
     if (canonical(graph.writerFence) !== canonical(invalidated.writerFence) || graph.records.length !== invalidated.rows.size) fail('The observed graph differs from its invalidated snapshot');
     for (const record of graph.records) {
       const row = invalidated.rows.get(record.logicalKey);
       if (!row || row.entity !== record.entity || row.fingerprint !== record.fingerprint || row.qboId !== record.qboId || row.revision !== record.stepRevision || row.dispatch.compilationHash !== record.compilationHash) fail('A graph activity changed while records were read');
     }
-    if (!graph.complete) return { state: 'unverified', complete: false, persisted: false, recordCount: graph.recordCount, failures: graph.failures, evidenceHash: graph.evidenceHash };
-    for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now());
-    const committed = await transaction(async session => {
+    if (!graph.complete) {
+      if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
+      return retainNeedsCheck();
+    }
+    try { for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now()); }
+    catch (error) { if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error; if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false }); return retainNeedsCheck(); }
+    let committed;
+    try { committed = await transaction(async session => {
       cancelled(); await snapshot(graph.writerFence, session); const savedRecords = [];
       for (const record of graph.records) {
         cancelled(); const ctx = contexts.get(record.logicalKey), row = invalidated.rows.get(record.logicalKey), current = await read(ctx, session);
@@ -317,8 +413,18 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now());
       cancelled(); return { state: 'verified', complete: true, persisted: true, recordCount: savedRecords.length, roots, records: savedRecords, evidenceHash: graph.evidenceHash };
     });
+    } catch (error) {
+      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error;
+      if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
+      return retainNeedsCheck();
+    }
     // Commit acknowledgement can arrive after the evidence lifetime, too.
-    for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now());
+    try { for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now()); }
+    catch (error) {
+      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error;
+      if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
+      return retainNeedsCheck(committed);
+    }
     return committed;
   }
   async function evidence(scope, operationId, logicalKey) {
@@ -348,6 +454,6 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       return structuredClone(Object.fromEntries(['version', 'logicalKey', 'entity', 'intentHash', 'request', 'evidenceHash', 'relationships', 'compilationHash'].map(key => [key, artifact[key]])));
     });
   }
-  return { claim, beginDispatch, markUnknown, recordSaved, recover, verifySaved, verifyGraph, evidence, compilation };
+  return { claim, releaseClaim, beginDispatch, markUnknown, recordSaved, recover, verifySaved, verifyGraph, evidence, compilation };
 }
-module.exports = { createBusinessStepStore, validateReadback, proofRequest, MAX_ATTEMPTS };
+module.exports = { createBusinessStepStore, validateReadback, proofRequest, assertLiveBookSafety, MAX_ATTEMPTS };

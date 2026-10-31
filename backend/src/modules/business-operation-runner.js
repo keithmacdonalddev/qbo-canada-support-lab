@@ -8,7 +8,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
   if ([state?.inspect, state?.claim, state?.renew, state?.advance, state?.release, plans?.page, steps?.verifyGraph, dispatch, periods?.reserve, periods?.finish, periods?.repair, prepareEvidence].some(value => typeof value !== 'function')) throw new TypeError('Operation runner requires durable runtime and evidence adapters');
   return async function run(scope, operationId, { signal } = {}) {
     scope = scoped(scope); if (!ID.test(operationId || '')) fail('Choose an exact saved operation.');
-    const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.nextOrdinal, recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash, ...(value.completion.kind === 'additional-activity' ? { kind: value.completion.kind, verifiedThrough: value.completion.verifiedThrough } : {}) } : {}) });
+    const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.completedRecords ?? value.nextOrdinal, ...(value.deferredSteps?.length ? { deferredSteps: value.deferredSteps, recheckAvailable: true } : {}), recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash, ...(value.completion.kind === 'additional-activity' ? { kind: value.completion.kind, verifiedThrough: value.completion.verifiedThrough } : {}) } : {}) });
     let current = await state.inspect(scope, operationId), leaseToken;
     if (current.status === 'verified' && current.completion) return result(current, 'verified');
     if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }
@@ -40,6 +40,8 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
     const release = async reason => { current = await state.release(scope, operationId, leaseToken, reason); leaseToken = null; return current; };
     try {
       let page;
+      // Retry each retained saved check/held step once on a later execution.
+      const rechecks = [...(current.deferredSteps || [])].sort((a, b) => a.ordinal - b.ordinal);
       for (;;) {
         current = await state.renew(scope, operationId, leaseToken);
         if (current.planHash !== planHash) fail('The approved plan changed during execution.');
@@ -49,15 +51,17 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
           await release(stop ? 'stopped' : current.unresolved ? 'blocked' : 'yield');
           return result(current, stop ? 'stopped' : current.unresolved ? 'recovery_required' : 'interrupted');
         }
-        if (current.status === 'awaiting-evidence') break;
-        if (current.status !== 'running' || current.nextOrdinal >= current.recordCount) fail('Operation progress does not match its runnable state.');
-        const ordinal = current.nextOrdinal;
+        if (current.nextOrdinal === current.recordCount && !rechecks.length) break;
+        if (!['running', 'awaiting-evidence'].includes(current.status) || (!rechecks.length && current.nextOrdinal >= current.recordCount)) fail('Operation progress does not match its runnable state.');
+        const ordinal = rechecks.length ? rechecks.shift().ordinal : current.nextOrdinal;
         if (!page || ordinal < page.offset || ordinal >= page.offset + page.entries.length) {
           page = await plans.page(scope, operationId, ordinal, 50);
           if (!page || page.operationId !== operationId || page.planHash !== planHash || page.recordCount !== current.recordCount || page.offset !== ordinal || !Array.isArray(page.entries) || !page.entries.length || page.entries.length > 50 || page.offset + page.entries.length > page.recordCount) fail('The saved plan page changed or is incomplete.');
         }
         const entry = page.entries[ordinal - page.offset], key = entry?.step?.logicalKey;
         if (!HASH.test(key || '') || !['create', 'existing'].includes(entry.kind)) fail('The saved activity disposition is invalid.');
+        const held = (entry.step.dependencies || []).some(link => (current.deferredSteps || []).some(row => row.logicalKey === link.logicalKey));
+        if (held) { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
         let verified;
         if (entry.kind === 'existing') {
           const proof = await steps.verifyGraph(scope, operationId, [key], { signal });
@@ -65,12 +69,18 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
         } else {
           const saved = await dispatch(scope, operationId, key, { signal, leaseToken });
           verified = saved?.complete === true && saved.state === 'verified';
+          if (!verified && ['needs-check', 'dependency-held'].includes(saved?.state) && !signal?.aborted) { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
           if (!verified && !signal?.aborted) { current = await state.inspect(scope, operationId); await release('blocked'); return result(current, saved?.state === 'recovery_required' ? 'recovery_required' : 'unverified'); }
         }
         if (signal?.aborted) continue;
-        if (!verified) { await release('blocked'); return result(current, 'unverified'); }
+        if (!verified) {
+          const saved = await steps.evidence?.(scope, operationId, key);
+          if (saved?.state === 'needs-check') { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
+          await release('blocked'); return result(current, 'unverified');
+        }
         current = await state.advance(scope, operationId, leaseToken, ordinal, key);
       }
+      if (current.deferredSteps?.length) { await release('yield'); return result(current, 'needs-check'); }
       // All individual receipts are insufficient to complete a business period.
       // The collector must freeze fresh whole-record and named report evidence;
       // the period store independently validates it before advancing the date.

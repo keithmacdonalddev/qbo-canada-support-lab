@@ -310,7 +310,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
           if (!keys.includes(row.logicalKey) || found.has(row.logicalKey)) fail('Saved activity ownership is ambiguous');
           found.add(row.logicalKey);
           if (!sameScope(row, scope)) fail('Saved activity belongs to an earlier or different company connection; it requires reviewed recovery');
-          if (row.contractVersion !== 1 || !ID.test(String(row.operationId)) || !validHash(row.planHash) || !validHash(row.fingerprint) || !ENTITIES.has(row.entity) || !['claimed', 'dispatched', 'unknown', 'saved', 'verified', 'rejected'].includes(row.state) || !Number.isSafeInteger(row.revision) || row.revision < 1 || !Array.isArray(row.dependencies)) fail('Saved activity ownership is incomplete');
+          if (row.contractVersion !== 1 || !ID.test(String(row.operationId)) || !validHash(row.planHash) || !validHash(row.fingerprint) || !ENTITIES.has(row.entity) || !['claimed', 'dispatched', 'unknown', 'saved', 'verified', 'needs-check', 'rejected'].includes(row.state) || !Number.isSafeInteger(row.revision) || row.revision < 1 || !Array.isArray(row.dependencies)) fail('Saved activity ownership is incomplete');
           if (row.qboId != null && (typeof row.qboId !== 'string' || !QBO_ID.test(row.qboId))) fail('Saved activity record identity is invalid');
           if (['saved', 'verified'].includes(row.state) && !row.qboId) fail('Saved activity has no exact QuickBooks record identity');
           if (row.qboId) {

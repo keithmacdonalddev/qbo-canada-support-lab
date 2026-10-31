@@ -55,7 +55,7 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
       // recovery obtain the runtime's full completion proof, not an error winner.
       if (error && run.status === 'verified') return;
       const problem = error || observed, controlled = /^BUSINESS_[A-Z_]+$/.test(problem?.code || '') && typeof (error ? problem.message : problem.error) === 'string' ? { error: (error ? problem.message : problem.error).slice(0, 500), code: problem.code } : null;
-      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(controlled || (error ? { error: 'The operation needs attention before it can continue.' } : {})) };
+      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(run.deferredSteps?.length ? { deferredSteps: run.deferredSteps, recheckAvailable: true } : {}), ...(controlled || (error ? { error: 'The operation needs attention before it can continue.' } : {})) };
       await audit(identity, 'settled', result.state, session);
       const saved = await Runs.findOneAndUpdate({ _id: run._id, ...identity.scope, 'executionRequest.id': identity.request.id, 'executionRequest.pending': true, executionRevision: run.executionRevision, status: run.status }, { $set: { executionRequest: { ...run.executionRequest, pending: false, completedAt: new Date(now()).toISOString(), result }, ...(controlled ? { lastError: controlled.error } : {}) } }, { new: true, session }).lean();
       if (!saved) fail('The execution request changed while settling.');
@@ -121,10 +121,10 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
   async function list(user, { after, limit = 50 } = {}) {
     if ((after !== undefined && !ID.test(after)) || !Number.isInteger(limit) || limit < 1 || limit > 100) fail('Use a valid bounded operation page.', 400);
     const selected = await context(user, 'operations.read'); await assertReady();
-    const rows = await Runs.find({ ...selected.scope, ...(after ? { _id: { $lt: after } } : {}) }).select('_id planHash status fromDate throughDate recordCount nextOrdinal executionRequest activityBatch').sort({ _id: -1 }).limit(limit + 1).maxTimeMS(3000).lean();
+    const rows = await Runs.find({ ...selected.scope, ...(after ? { _id: { $lt: after } } : {}) }).select('_id planHash status fromDate throughDate recordCount nextOrdinal deferredSteps executionRequest activityBatch').sort({ _id: -1 }).limit(limit + 1).maxTimeMS(3000).lean();
     const allowed = await permissions(selected);
     await selected.access.authorize(selected.scope, 'operations.read');
-    return { scope: selected.scope, permissions: allowed, operations: rows.slice(0, limit).map(row => ({ operationId: String(row._id), planHash: row.planHash, status: row.status, ...(row.activityBatch ? { activityBatch: { decisionKey: row.activityBatch.decisionKey, purpose: row.activityBatch.purpose, day: row.activityBatch.day } } : {}), fromDate: row.fromDate, throughDate: row.throughDate, recordCount: row.recordCount, completedRecords: row.nextOrdinal || 0, execution: publicRequest(row.executionRequest) })), next: rows.length > limit ? String(rows[limit - 1]._id) : null };
+    return { scope: selected.scope, permissions: allowed, operations: rows.slice(0, limit).map(row => ({ operationId: String(row._id), planHash: row.planHash, status: row.status, ...(row.activityBatch ? { activityBatch: { decisionKey: row.activityBatch.decisionKey, purpose: row.activityBatch.purpose, day: row.activityBatch.day } } : {}), fromDate: row.fromDate, throughDate: row.throughDate, recordCount: row.recordCount, completedRecords: (row.nextOrdinal || 0) - (row.deferredSteps || []).length, deferredSteps: row.deferredSteps || [], recheckAvailable: Boolean(row.deferredSteps?.length), execution: publicRequest(row.executionRequest) })), next: rows.length > limit ? String(rows[limit - 1]._id) : null };
   }
   async function stop(user, operationId) {
     if (!ID.test(operationId || '')) fail('Choose an exact operation.', 400);

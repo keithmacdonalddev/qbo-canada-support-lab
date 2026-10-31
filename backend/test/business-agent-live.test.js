@@ -139,3 +139,12 @@ test('the reader runs three bounded, time-limited queries and skips the rest whe
   assert.deepEqual(await empty(scope), { runs: [], steps: [], records: [] });
   assert.equal(calls.length, 1);
 });
+
+test('saved needs-check records remain visible and deferred records are not counted as completed', () => {
+  const { buildLiveFeed } = require('../src/modules/business-agent-live');
+  const at = '2026-10-31T12:00:00.000Z', id = 'b'.repeat(24);
+  const value = buildLiveFeed({ now: at, runs: [{ _id: id, status: 'awaiting-evidence', recordCount: 3, nextOrdinal: 3, deferredSteps: [{ logicalKey: 'x', reason: 'needs-check' }, { logicalKey: 'y', reason: 'dependency' }], createdAt: at, updatedAt: at }], steps: [{ _id: 'step', operationId: id, entity: 'Invoice', qboId: '100', state: 'needs-check', updatedAt: at }] });
+  assert.ok(value.items.some(row => row.id === 'step:step' && row.status === 'attention' && /automatic re-check/.test(row.outcome)));
+  assert.ok(value.items.some(row => row.id === 'run:' + id + ':status' && /automatic re-check/.test(row.text)));
+  assert.equal(value.items.some(row => /All records sent/.test(row.text)), false);
+});

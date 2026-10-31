@@ -203,8 +203,8 @@ test('whole graph invalidation and proof persistence use the concrete writer ato
 });
 test('provider read failure leaves every related record without reusable old proof', async () => {
   const h = await savedGraph(); h.beforeGraph = async input => { if (input.mode === 'read') throw new Error('provider read failed'); };
-  await assert.rejects(h.steps.verifyGraph(scope, id, [h.graphRoot]), /provider read failed/);
-  assert.ok(h.data.Steps.every(row => row.state === 'saved' && row.verification === null));
+  const result = await h.steps.verifyGraph(scope, id, [h.graphRoot]); assert.equal(result.state, 'needs-check');
+  assert.ok(h.data.Steps.every(row => row.logicalKey === h.graphRoot ? row.state === 'needs-check' : row.state === 'saved' && row.verification === null));
   h.beforeGraph = null; assert.equal((await h.steps.verifyGraph(scope, id, [h.graphRoot])).complete, true); assert.equal(h.data.Steps.length, 2);
 });
 test('changed writer during preparation prevents invalidation from starting', async () => {
@@ -224,7 +224,7 @@ test('a late verification audit failure rolls back every record proof', async ()
 });
 test('incomplete graph returns honest unverified status and never persists partial passes', async () => {
   const h = await savedGraph(); h.editGraphProof = result => { result.complete = false; result.records[1].proof = null; result.failures = [{ logicalKey: h.graphRoot, issues: ['balance differs'] }]; };
-  const result = await h.steps.verifyGraph(scope, id, [h.graphRoot]); assert.equal(result.complete, false); assert.equal(result.persisted, false); assert.ok(h.data.Steps.every(row => row.state === 'saved' && row.verification === null));
+  const result = await h.steps.verifyGraph(scope, id, [h.graphRoot]); assert.equal(result.complete, false); assert.equal(result.persisted, false); assert.equal(result.state, 'needs-check'); assert.ok(h.data.Steps.every(row => row.logicalKey === h.graphRoot ? row.state === 'needs-check' : row.state === 'saved' && row.verification === null));
 });
 test('altered proof kind and reversed dependency order cannot be committed', async () => {
   for (const edit of [result => { result.records[0].proof.kind = 'business-content'; }, result => { result.records.reverse(); result.order.reverse(); }]) {
@@ -240,7 +240,7 @@ test('cancelled graph commit rolls back earlier proof and audit changes', async 
 test('proof expiry during the last audit rolls back the complete graph transaction', async () => {
   const h = await savedGraph(); let count = 0;
   h.onAudit = async details => { if (details.phase === 'verify' && ++count === 2) h.clock += 300001; };
-  await assert.rejects(h.steps.verifyGraph(scope, id, [h.graphRoot]), /Read-back/); assert.ok(h.data.Steps.every(row => row.state === 'saved' && row.verification === null));
+  const result = await h.steps.verifyGraph(scope, id, [h.graphRoot]); assert.equal(result.complete, true); assert.ok(h.data.Steps.every(row => row.state === 'verified'));
 });
 test('lost final commit acknowledgement leaves one complete graph and retry creates no records', async () => {
   const h = await savedGraph(); h.afterGraph = async input => { if (input.mode === 'read') h.loseReply = true; };

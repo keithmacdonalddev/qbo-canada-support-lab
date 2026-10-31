@@ -81,7 +81,10 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       const roots = intent.dependencies.map(value => value.logicalKey);
       if (roots.length) {
         const graph = await call(() => steps.verifyGraph(scope, operationId, roots, { signal: controller.signal })); check();
-        if (graph?.complete !== true || graph.persisted !== true) fail('Originating records are not completely verified.');
+        if (graph?.complete !== true || graph.persisted !== true) {
+          if (graph?.state === 'needs-check') throw Object.assign(new Error('A saved originating record needs a check before this dependent activity can be sent.'), { status: 409, code: 'BUSINESS_DEPENDENCY_NEEDS_CHECK' });
+          fail('Originating records are not completely verified.');
+        }
       }
       if (intent.policy.authorityHash) {
         const taxClient = await call(() => resolveClient(scope, { signal: controller.signal }));

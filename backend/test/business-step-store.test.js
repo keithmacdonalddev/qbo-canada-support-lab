@@ -271,3 +271,70 @@ test('missing or null creation disposition never grants a new step claim', async
     assert.equal(h.rows.size, 0); assert.equal(h.audits.size, 0); assert.equal(h.fences, 0);
   }
 });
+
+function graphStore(h, outcome) {
+  return createBusinessStepStore({ ...h.deps,
+    graphSnapshot: async () => ({ scope, operationId: op, revision: 1 }),
+    loadGraphReadback: async input => {
+      const row = h.row(), writerFence = { scope, operationId: op, revision: 1 };
+      const record = { logicalKey: key, entity: row.entity, qboId: row.qboId, fingerprint: row.fingerprint, stepRevision: row.revision, compilationHash: row.dispatch.compilationHash };
+      if (input.mode === 'prepare') {
+        const body = { version: 1, scope, roots: [key], records: [record], writerFence };
+        return { ...body, kind: 'business-graph-preparation', prepared: true, recordCount: 1, evidenceHash: hash(body) };
+      }
+      const complete = await outcome(input, row), failures = complete ? [] : [{ logicalKey: key, issues: ['Saved relationships remain unverified.'] }];
+      const records = [{ ...record, proof: complete ? h.readback(row) : null }];
+      return { version: 1, scope, roots: [key], writerFence, records, recordCount: 1, order: [key], complete, persisted: false, failures, evidenceHash: hash({ graph: hash({ scope, roots: [key], records, failures }), writerFence }) };
+    },
+  });
+}
+test('stale saved copy retries exactly once using live reads and verifies the original ID', async () => {
+  const h = harness(); await h.saved(); const receipt = clone(h.row().receipt), calls = [];
+  const store = graphStore(h, async input => { calls.push(input.forceLive); return input.forceLive; });
+  assert.equal((await store.verifyGraph(scope, op, [key])).complete, true);
+  assert.deepEqual(calls, [false, true]); assert.equal(h.row().state, 'verified'); assert.deepEqual(h.row().receipt, receipt);
+});
+test('persistent saved mismatch retains needs-check and a later automatic check never recreates it', async () => {
+  const h = harness(); await h.saved(); let fixed = false; const calls = [];
+  const receipt = clone(h.row().receipt), store = graphStore(h, async input => { calls.push(input.forceLive); return fixed; });
+  const result = await store.verifyGraph(scope, op, [key]);
+  assert.equal(result.state, 'needs-check'); assert.equal(result.replayAllowed, false); assert.equal(result.recheckAvailable, true);
+  assert.equal(h.row().state, 'needs-check'); assert.deepEqual(calls, [false, true]); assert.deepEqual(h.row().receipt, receipt);
+  await assert.rejects(store.claim(scope, op, key), /already dispatched/);
+  fixed = true; assert.equal((await store.verifyGraph(scope, op, [key])).complete, true); assert.equal(h.row().state, 'verified'); assert.deepEqual(h.row().receipt, receipt);
+});
+test('unavailable live read retains only its saved check after a bounded retry', async () => {
+  const h = harness(); await h.saved(); let reads = 0;
+  const store = graphStore(h, async () => { reads++; throw new Error('read unavailable'); });
+  assert.equal((await store.verifyGraph(scope, op, [key])).state, 'needs-check'); assert.equal(reads, 2); assert.equal(h.row().state, 'needs-check');
+});
+test('proven wrong-account posting remains a hard stop after live retry', async () => {
+  const h = harness(); await h.saved(); let reads = 0;
+  const store = graphStore(h, async input => { reads++; if (input.forceLive) throw Object.assign(new Error('wrong account'), { code: 'BUSINESS_BOOK_RISK' }); return false; });
+  await assert.rejects(store.verifyGraph(scope, op, [key]), { code: 'BUSINESS_BOOK_RISK' }); assert.equal(reads, 2); assert.equal(h.row().state, 'saved');
+});
+test('live posting guard distinguishes missing evidence from explicit account, tax and amount changes', () => {
+  const { assertLiveBookSafety } = require('../src/modules/business-step-store');
+  const wanted = { ARAccountRef: { value: '1' }, TotalAmt: 10, Line: [{ Amount: 10, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '2' }, TaxCodeRef: { value: '3' } } }] };
+  const check = record => assertLiveBookSafety({ step: { ...scope, qboId: '100', compilation: { request: { body: JSON.stringify(wanted) } } }, observed: { scope, record: { ...record, Id: '100' }, recordHash: hash({ ...record, Id: '100' }) } });
+  check({}); check(wanted);
+  for (const record of [{ ...wanted, ARAccountRef: { value: '9' } }, { ...wanted, TotalAmt: 11 }, { ...wanted, Line: [{ ...wanted.Line[0], SalesItemLineDetail: { ...wanted.Line[0].SalesItemLineDetail, TaxCodeRef: { value: '9' } } }] }]) assert.throws(() => check(record), { code: 'BUSINESS_BOOK_RISK' });
+});
+
+test('live posting guard catches multi-line accounts, added amounts and changed tax rates', () => {
+  const { assertLiveBookSafety } = require('../src/modules/business-step-store');
+  const wanted = { Line: [ { Amount: 10, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } } }, { Amount: 20, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '2' } } } ] };
+  const taxPolicy = { totalTaxCents: 390, lines: [{ amountCents: 390, rateId: '3', percent: 13, taxableCents: 3000 }] };
+  const record = { ...clone(wanted), TxnTaxDetail: { TotalTax: 3.9, TaxLine: [{ Amount: 3.9, TaxLineDetail: { TaxRateRef: { value: '3' }, TaxPercent: 13, NetAmountTaxable: 30 } }] } };
+  const check = value => assertLiveBookSafety({ step: { ...scope, qboId: '100', compilation: { request: { body: JSON.stringify(wanted) } } }, observed: { scope, record: { ...value, Id: '100' }, recordHash: hash({ ...value, Id: '100' }) }, taxPolicy });
+  check(record); const reordered = clone(record); reordered.Line.reverse(); check(reordered);
+  for (const mutate of [r => { r.Line[1].AccountBasedExpenseLineDetail.AccountRef.value = '9'; }, r => { r.Line.push(clone(r.Line[0])); }, r => { r.TxnTaxDetail.TaxLine[0].TaxLineDetail.TaxRateRef.value = '9'; }, r => { r.TxnTaxDetail.TaxLine[0].TaxLineDetail.TaxPercent = 15; }]) { const changed = clone(record); mutate(changed); assert.throws(() => check(changed), { code: 'BUSINESS_BOOK_RISK' }); }
+});
+
+test('expired graph commit acknowledgements retry once then retain a check with current handles', async () => {
+  const h = harness(); await h.saved(); let delays = 0;
+  const transaction = h.deps.transaction;
+  h.deps.transaction = async work => { const result = await transaction(work); if (h.row()?.state === 'verified') { h.clock += 300001; delays++; } return result; };
+  const store = graphStore(h, async () => true), receipt = clone(h.row().receipt);
+  const result = await store.verifyGraph(scope, op, [key]); assert.equal(result.state, 'needs-check'); assert.equal(delays, 2); assert.equal(h.row().state, 'needs-check'); assert.deepEqual(h.row().receipt, receipt);
+});

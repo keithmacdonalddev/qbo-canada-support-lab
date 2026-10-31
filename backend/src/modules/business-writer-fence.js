@@ -60,7 +60,7 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, assertInte
   }
   async function assertSettled(run, scope, session) {
     const state = await snapshot(run, scope, session); owner(state);
-    if (state.run.status !== 'awaiting-evidence' || state.calendar.stopRequested || state.writer.unresolved !== null) fail('An unresolved or stopped company writer cannot complete a period');
+    if (state.run.status !== 'awaiting-evidence' || state.run.deferredSteps?.length || state.calendar.stopRequested || state.writer.unresolved !== null) fail('An unresolved or stopped company writer cannot complete a period');
     return touch(state, scope, session);
   }
   async function release(run, scope, session) {
@@ -96,7 +96,7 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, assertInte
       }
     } else {
       if (state.writer.unresolved !== null) fail('The unresolved company request must be settled first');
-      if (checking && (!['saved', 'verified'].includes(current.state) || !current.receipt)) fail('Read-back requires the original saved receipt');
+      if (checking && (!['saved', 'verified', 'needs-check'].includes(current.state) || !current.receipt)) fail('Read-back requires the original saved receipt');
     }
     // Any step transition invalidates previously frozen period proof in this same transaction.
     const revisions = await touch(state, scope, session, change, true);

@@ -120,8 +120,8 @@ test('concrete compilation and verification runtimes persist dispatch proof and 
   const result = await h.execute();
   assert.equal(result.complete, true); assert.equal(h.row().state, 'verified'); assert.ok(h.row().verification.graphEvidenceHash); assert.equal(posts, 1); assert.equal(gets, 1);
   record.Line[0].Amount = 251; record.TotalAmt = 283.5; record.SyncToken = '1';
-  const changed = await h.execute();
-  assert.equal(changed.complete, false); assert.equal(h.row().state, 'saved'); assert.equal(h.row().verification, null); assert.equal(posts, 1); assert.equal(gets, 2);
+  await assert.rejects(h.execute(), { code: 'BUSINESS_BOOK_RISK' });
+  assert.equal(h.row().state, 'saved'); assert.equal(h.row().verification, null); assert.equal(posts, 1); assert.equal(gets, 3);
 });
 
 test('recovery-only dispatch cannot create or launch graph verification', async () => {
@@ -153,4 +153,11 @@ test('failed never-admitted audit keeps the barrier until the same recovery can 
  const h=harness();h.periodFailure=true;const create=h.models.Audits.create;h.models.Audits.create=async(rows,opts)=>{if(rows.some(row=>row.action==='Business dispatch proved never admitted'))throw Error('Unsent audit unavailable');return create(rows,opts);};
  await assert.rejects(h.execute(),/Unsent audit/);assert.ok(h.writer().unresolved);assert.equal(h.data.Receipts.length,0);assert.equal(h.sent.length,0);
  h.models.Audits.create=create;assert.equal((await h.execute()).state,'not_sent');assert.equal(h.writer().unresolved,null);assert.equal(h.sent.length,0);
+});
+
+test('a dependency hold releases its exact unsent claim for immediate retry', async () => {
+  const h = harness(), compile = h.deps.loadCompilationEvidence;
+  h.deps.loadCompilationEvidence = async () => { throw Object.assign(new Error('saved parent needs check'), { code: 'BUSINESS_DEPENDENCY_NEEDS_CHECK' }); };
+  const held = await h.execute(); assert.equal(held.state, 'dependency-held'); assert.equal(h.row().state, 'claimed'); assert.equal(h.row().dispatch, null); assert.equal(h.row().receipt, null); assert.equal(new Date(h.row().leaseExpiresAt).getTime(), 0); assert.equal(h.sent.length, 0);
+  h.deps.loadCompilationEvidence = compile; const result = await h.execute(); assert.equal(result.complete, true); assert.equal(h.sent.length, 1);
 });

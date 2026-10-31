@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { harness, scope, operationId } = require('./helpers/business-run-fixture');
+const { harness, scope, operationId, hash } = require('./helpers/business-run-fixture');
 test('runs a saved plan in order and advances the real period only after full evidence', async () => {
   const h = harness(), result = await h.execute();
   assert.equal(result.complete, true); assert.equal(result.state, 'verified'); assert.equal(result.completedRecords, 3); assert.equal(h.writes, 3); assert.equal(h.run().leaseToken, null);
@@ -97,4 +97,73 @@ test('cancellation as a successful opening check resolves never claims a worker 
   const run = require('../src/modules/business-operation-runner').createBusinessOperationRunner({state:{...h.state,claim:async(...args)=>{claims++;return h.state.claim(...args);}},plans:h.plans,steps:h.steps,dispatch:h.dispatch,periods:h.periods,prepareEvidence:h.prepareEvidence,validateOpening:async()=>{controller.abort();}});
   const result = await run(scope,operationId,{signal:controller.signal});
   assert.equal(result.state,'interrupted'); assert.equal(claims,0); assert.equal(h.run().leaseToken == null,true,'No worker lease was claimed'); assert.equal(h.run().status,'reserved'); assert.equal(h.writes,0); assert.equal(h.writer().operationId,operationId);
+});
+
+function needsCheckFixture(dependent = false) {
+  const h = harness(), first = h.entries[0].step.logicalKey;
+  if (dependent) {
+    const plan = h.data.Plans[0], child = h.entries[1].step;
+    child.dependencies = [{ logicalKey: first, entity: h.entries[0].step.entity, fingerprint: hash(h.entries[0].step) }];
+    plan.manifest.records[1].relationships = [first]; plan.manifest.records[1].fingerprint = hash(child);
+    h.run().planHash = hash(plan.manifest); plan.planHash = h.run().planHash; h.run().approval.planHash = h.run().planHash;
+    const page = h.plans.page; h.plans.page = async (...args) => ({ ...await page(...args), planHash: h.run().planHash });
+  }
+  h.steps.evidence = async (_scope, _op, key) => h.data.Steps.find(row => row.logicalKey === key) || { state: 'unrecorded' };
+  h.fixed = false;
+  h.onDispatch = async key => {
+    const row = h.saveStep(key);
+    if (key === first && !h.fixed) { row.state = 'needs-check'; row.verification = { status: 'needs-check' }; return { state: 'needs-check', complete: false }; }
+    return { state: 'verified', complete: true };
+  };
+  return h;
+}
+test('persistent saved mismatch retains its check while all independent records finish', async () => {
+  const h = needsCheckFixture(), result = await h.execute();
+  assert.equal(result.state, 'needs-check'); assert.equal(result.complete, false); assert.equal(result.completedRecords, 2);
+  assert.equal(h.writes, 3); assert.equal(h.run().nextOrdinal, 3); assert.equal(h.run().deferredSteps.length, 1); assert.equal(result.recheckAvailable, true);
+  assert.equal(h.calendar().verifiedThrough, '2026-10-05'); assert.equal(h.run().leaseToken, null);
+  h.fixed = true; assert.equal((await h.execute()).complete, true); assert.equal(h.writes, 3); assert.equal(h.dispatchCalls.length, 4); assert.equal(h.run().deferredSteps.length, 0);
+});
+test('only dependants are held and a later automatic check releases them without replaying saved records', async () => {
+  const h = needsCheckFixture(true), result = await h.execute();
+  assert.equal(result.state, 'needs-check'); assert.equal(result.completedRecords, 1); assert.equal(h.writes, 2);
+  assert.deepEqual(h.dispatchCalls.map(row => row.key), [h.entries[0].step.logicalKey, h.entries[2].step.logicalKey]);
+  assert.deepEqual(h.run().deferredSteps.map(row => row.reason), ['needs-check', 'dependency']);
+  assert.equal(h.data.Steps.some(row => row.logicalKey === h.entries[1].step.logicalKey), false);
+  h.fixed = true; h.evidenceReady = false;
+  assert.equal((await h.execute()).state, 'awaiting-evidence'); assert.equal(h.writes, 3); assert.equal(h.run().deferredSteps.length, 0);
+});
+test('day-close refuses retained checks even if a collector claims to have prepared evidence', async () => {
+  const h = needsCheckFixture(); await h.execute(); const claimed = await h.state.claim(scope, operationId);
+  h.entries.forEach(entry => h.saveStep(entry.step.logicalKey));
+  await h.prepareEvidence(); // Even a fabricated all-pass collector cannot waive retained checks.
+  await assert.rejects(h.periods.finish(operationId, scope, { leaseToken: claimed.leaseToken }), /unresolved|proof|evidence|verif/i);
+  assert.equal(h.calendar().verifiedThrough, '2026-10-05');
+});
+test('a proven wrong posting or rejected write stops independent work', async () => {
+  for (const kind of ['wrong-posting', 'rejected']) {
+    const h = harness(); h.onDispatch = async key => {
+      if (kind === 'rejected') return { state: 'rejected', complete: false };
+      h.saveStep(key); throw Object.assign(new Error('Wrong account proven'), { code: 'BUSINESS_BOOK_RISK' });
+    };
+    const result = await h.execute(); assert.equal(result.complete, false); assert.equal(h.run().status, 'blocked'); assert.equal(h.dispatchCalls.length, 1); assert.equal(h.run().nextOrdinal, 0);
+  }
+});
+
+test('failed pre-dispatch parent verification holds only that sibling and resumes through the real writer gate', async () => {
+  const h = needsCheckFixture(true), first = h.entries[0].step.logicalKey, child = h.entries[1].step;
+  h.writerFence = require('../src/modules/business-writer-fence').createBusinessWriterFence({ ...h.models, assertIntegration: async () => {}, now: () => h.clock });
+  let rechecking = false;
+  h.onDispatch = async key => {
+    if (key === child.logicalKey && !rechecking) { const parent = h.data.Steps.find(row => row.logicalKey === first); parent.state = 'needs-check'; parent.verification = { status: 'needs-check' }; return { state: 'dependency-held', complete: false }; }
+    if (key === child.logicalKey) await h.transaction(session => h.writerFence.fenceStep({ scope, intent: { ...scope, operationId, planHash: h.run().planHash, logicalKey: child.logicalKey, fingerprint: hash(child), entity: child.entity, dependencies: child.dependencies }, actorId: 'c'.repeat(24), phase: 'claim', runLeaseToken: h.run().leaseToken, session }));
+    h.saveStep(key); return { state: 'verified', complete: true };
+  };
+  const result = await h.execute(); assert.equal(result.state, 'needs-check'); assert.equal(h.writes, 2); assert.equal(h.run().deferredSteps.length, 2);
+  rechecking = true; h.evidenceReady = false;
+  assert.equal((await h.execute()).state, 'awaiting-evidence'); assert.equal(h.writes, 3); assert.equal(h.run().deferredSteps.length, 0);
+});
+test('persistent checks on a later execution return a check action without blocking the batch', async () => {
+  const h = needsCheckFixture(true); await h.execute(); const result = await h.execute();
+  assert.equal(result.state, 'needs-check'); assert.equal(h.run().deferredSteps.length, 2); assert.equal(h.writes, 2); assert.equal(h.run().status, 'awaiting-evidence');
 });

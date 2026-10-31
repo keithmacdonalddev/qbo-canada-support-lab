@@ -33,20 +33,20 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
           evidence = await steps.evidence(scope, operationId, logicalKey);
         }
         if (evidence.state === 'rejected') return summary('rejected');
-        if (!['saved', 'verified'].includes(evidence.state)) fail('The activity has no settled saved record.');
+        if (!['saved', 'verified', 'needs-check'].includes(evidence.state)) fail('The activity has no settled saved record.');
         // A later child write can change this record while its saved proof is still
         // within the freshness window. Reconcile the current graph on every resume.
         // Cancellation never interrupts recording the outcome of a possibly-sent write.
         if (recoveryOnly || signal?.aborted) return summary('saved', { qboId: evidence.qboId });
         await authority('operations.verify');
         const proof = await steps.verifyGraph(scope, operationId, [logicalKey], { signal });
-        if (proof.complete !== true || proof.persisted !== true) return summary('unverified', { qboId: evidence.qboId });
+        if (proof.complete !== true || proof.persisted !== true) return summary(proof.state === 'needs-check' ? 'needs-check' : 'unverified', { qboId: evidence.qboId });
         const verified = await steps.evidence(scope, operationId, logicalKey);
         if (verified.state !== 'verified' || verified.fresh !== true || verified.qboId !== evidence.qboId) fail('Saved activity verification changed before completion.');
         return summary('verified', { qboId: verified.qboId, complete: true });
       };
       const existing = await steps.evidence(scope, operationId, logicalKey); check();
-      if (['dispatched', 'unknown', 'saved', 'verified', 'rejected'].includes(existing.state)) return reconcile();
+      if (['dispatched', 'unknown', 'saved', 'verified', 'needs-check', 'rejected'].includes(existing.state)) return reconcile();
       if (recoveryOnly) fail('Recovery cannot create a missing activity.');
       if (!['unrecorded', 'claimed'].includes(existing.state)) fail('The activity state is unsupported.');
       await authority('operations.execute'); check();
@@ -62,7 +62,13 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       // Claim precedes observation: claiming changes the writer revision. An expired
       // claim can be replaced by the store; a possibly-sent request cannot.
       const handle = await steps.claim(scope, operationId, logicalKey, 300000, { runLeaseToken: leaseToken }); check();
-      const observations = await loadCompilationEvidence({ scope, operationId, logicalKey, intent: structuredClone(intent), signal }); check();
+      let observations;
+      try { observations = await loadCompilationEvidence({ scope, operationId, logicalKey, intent: structuredClone(intent), signal }); }
+      catch (error) { if (error?.code === 'BUSINESS_DEPENDENCY_NEEDS_CHECK') {
+        await steps.releaseClaim(scope, operationId, logicalKey, handle, { runLeaseToken: leaseToken });
+        return summary('dependency-held');
+      } throw error; }
+      check();
       const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, adopted: observations?.adopted ?? null, purchaseOrder: observations?.purchaseOrder ?? null, observationFence: observations?.observationFence, now: now() });
       if (compiled.dispatchEvidence.operationId !== operationId || compiled.intentHash !== intent.fingerprint) fail('Compiled observations belong to another operation.');
       await authority('operations.execute'); check(); checkClient();

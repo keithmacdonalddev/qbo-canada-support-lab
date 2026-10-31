@@ -27,6 +27,7 @@ const schema = new mongoose.Schema({
   leaseToken: String, leaseExpiresAt: Date,
   executionRevision: { type: Number, default: 0, min: 0 },
   nextOrdinal: { type: Number, default: 0, min: 0, max: 10000 },
+  deferredSteps: { type: [mongoose.Schema.Types.Mixed], default: [], validate: rows => rows.length <= 10000 },
   lastExecutionAuditId: String,
   executionRequest: { type: mongoose.Schema.Types.Mixed, default: null },
   writerRevision: { type: Number, default: 0, min: 0 },
