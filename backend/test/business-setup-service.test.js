@@ -6,7 +6,7 @@ const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
 const matches = (row, filter) => Object.entries(filter).every(([key, value]) => value && typeof value === 'object' ? '$in' in value && value.$in.includes(at(row, key)) : at(row, key) === value);
 function fixture() {
-  const h = { data: { Policies: [], Writers: [], Receipts: [], Audits: [], Users: [{ _id: ownerId, role: 'agent' }], Connections: [{ _id: scope.connectionId, userId: ownerId, realmId: scope.realmId, status: 'active' }], Memberships: [{ userId: ownerId, realmId: scope.realmId, role: 'lab-owner', status: 'active' }] }, active: true, ready: true, storage: [], blockers: [], setups: [], jobs: [] };
+  const h = { data: { Policies: [], Writers: [], Receipts: [], Audits: [], Users: [{ _id: ownerId, role: 'agent' }], Connections: [{ _id: scope.connectionId, userId: ownerId, realmId: scope.realmId, status: 'active' }], Memberships: [{ userId: ownerId, realmId: scope.realmId, role: 'lab-owner', status: 'active' }] }, active: true, ready: true, storage: [], blockers: [], setups: [], storageSetups: [], jobs: [] };
   const models = Object.fromEntries(Object.keys(h.data).map(key => {
     const query = filter => ({ session() { return this; }, maxTimeMS() { return this; }, lean: async () => clone(h.data[key].find(row => matches(row, filter)) || null) });
     return [key, { findOne: query, create: async (rows, options) => { assert.ok(options.session); if (h.failAudit && key === 'Audits') throw new Error('audit failed'); h.data[key].push(...clone(rows)); return rows; }, updateOne: async (filter, update, options) => { assert.ok(options.session); const row = h.data[key].find(value => matches(value, filter)); if (!row) return { matchedCount: 0 }; for (const [k, v] of Object.entries(update.$inc || {})) row[k] = (row[k] || 0) + v; Object.assign(row, clone(update.$set || {})); return { matchedCount: 1 }; }, findOneAndUpdate: (filter, update, options) => ({ lean: async () => { assert.ok(options.session); const row = h.data[key].find(value => matches(value, filter)); if (!row) return null; Object.assign(row, clone(update.$set || {})); for (const [k, v] of Object.entries(update.$inc || {})) row[k] = (row[k] || 0) + v; return clone(row); } }) }];
@@ -15,7 +15,7 @@ function fixture() {
   const transaction = work => { const result = queue.then(async () => { const before = clone(h.data), jobs = clone(h.jobs); try { const result = await work({ inTransaction: () => true }); if (h.loseReply) { h.loseReply = false; return Promise.reject(new Error('commit reply lost')); } return result; } catch (error) { h.data = before; h.jobs = jobs; throw error; } }); queue = result.catch(() => {}); return result; };
   const accessFor = () => ({ authorize: async () => { if (!h.active) throw Object.assign(new Error('Access revoked'), { status: 403, code: 'BUSINESS_ACCESS_DENIED' }); return { actorId: ownerId, ownerId }; } });
   const assertSetup = async (_db, target, profile) => { assert.equal(profile, 'continual-business'); assert.deepEqual(target, { ...scope, ownerId }); if (!h.ready) throw new Error('not prepared'); return { setupVersion: 4, planHash: 'c'.repeat(64) }; };
-  const deps = { models, transaction, connection: { db: {}, getClient: () => ({}) }, accessFor, assertSetup, inspectStorage: async () => h.storage, legacyWork: async () => [...h.blockers], resolveContext: async () => ({ environment: scope.environment, connection: { connected: true, ...scope, companyName: 'Fixture' } }), previewSetup: async (...args) => { h.setups.push(args); return { planHash: 'd'.repeat(64), qboWrites: 0 }; }, applySetup: async (...args) => { h.setups.push(args); return { status: 'complete' }; } };
+  const deps = { previewAdditiveStorage: async (...args) => { h.storageSetups.push(args); return { planHash: "f".repeat(64) }; }, applyAdditiveStorage: async (...args) => { h.storageSetups.push(args); return { status: "complete" }; }, models, transaction, connection: { db: {}, getClient: () => ({}) }, accessFor, assertSetup, inspectStorage: async () => h.storage, legacyWork: async () => [...h.blockers], resolveContext: async () => ({ environment: scope.environment, connection: { connected: true, ...scope, companyName: 'Fixture' } }), previewSetup: async (...args) => { h.setups.push(args); return { planHash: 'd'.repeat(64), qboWrites: 0 }; }, applySetup: async (...args) => { h.setups.push(args); return { status: 'complete' }; } };
   h.service = createBusinessSetupService(deps); h.user = { id: ownerId }; h.models = models; h.transaction = transaction; h.accessFor = accessFor;
   h.prepare = () => h.service.prepareCoordination(h.user);
   h.record = input => h.service.recordPeriodControls(h.user, input || { closedThrough: null, reconciledThrough: null, evidenceNote: 'Owner reviewed the protected accounting dates.' });
@@ -115,4 +115,20 @@ test('occupied, uncertain and changed company writers refuse new jobs before cre
     const h = fixture(), preparation = await h.prepare(); await h.activate(preparation); Object.assign(h.data.Writers[0], fields);
     const before = clone(h.data); await assert.rejects(h.job(), /current company writer/); assert.deepEqual(h.data, before); assert.equal(h.jobs.length, 0);
   }
+});
+
+test('additive storage uses the same owner-only server scope without altering company documents', async () => {
+  const h = fixture(), before = clone(h.data), input = { profile: 'general-writes' };
+  await h.service.previewStorage(h.user, input); await h.service.applyStorage(h.user, { ...input, planHash: 'f'.repeat(64) });
+  assert.deepEqual(h.storageSetups[0], [{}, { ...scope, ownerId }, 'sandbox', 'general-writes']);
+  assert.deepEqual(h.storageSetups[1], [{}, { ...scope, ownerId }, 'sandbox', 'f'.repeat(64), 'general-writes']); assert.deepEqual(h.data, before);
+  await assert.rejects(h.service.previewStorage({ id: ownerId, actorId: 'e'.repeat(24) }, input), /Only/);
+  await assert.rejects(h.service.applyStorage({ id: ownerId, actorId: 'e'.repeat(24) }, { ...input, planHash: 'f'.repeat(64) }), /Only/);
+  h.active = false; await assert.rejects(h.service.previewStorage(h.user, input), /revoked/); assert.equal(h.storageSetups.length, 2);
+});
+test('additive storage rejects scope, arbitrary profiles and malformed approvals before delegation', async () => {
+  const h = fixture();
+  for (const input of [null, {}, { profile: 'continual-business' }, { profile: 'general-writes', realmId: '999' }]) await assert.rejects(h.service.previewStorage(h.user, input), /general-writes/);
+  for (const input of [{ profile: 'general-writes' }, { profile: 'general-writes', planHash: 'bad' }, { profile: 'general-writes', planHash: 'f'.repeat(64), approved: true }]) await assert.rejects(h.service.applyStorage(h.user, input), /general-writes/);
+  assert.equal(h.storageSetups.length, 0);
 });

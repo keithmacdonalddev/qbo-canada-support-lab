@@ -235,4 +235,98 @@ async function assertBaselineSetupCompleted(db, target, session) {
   try { return await assertProfileSetupCompleted(db, target, 'baseline-observations', session); }
   catch { return assertProfileSetupCompleted(db, target, 'continual-business', session); }
 }
-module.exports = { assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };
+// Maintenance is deliberately separate from initial installation: existing records and
+// owner/access fences are never updated. Only missing static DDL and append-only audits.
+function additiveDefinition(profile) {
+  if (profile !== 'general-writes') fail('Additive storage preparation supports only the general-writes profile.');
+  return setupDefinition(profile);
+}
+async function additiveState(db, target, configuredEnvironment, profile) {
+  validateTarget(target, configuredEnvironment);
+  const definition = additiveDefinition(profile), identity = await deployment(db), current = await source(db, target);
+  if (!current.membership) fail('Existing owner membership is required for additive storage preparation.');
+  await assertProfileSetupCompleted(db, target, 'continual-business');
+  return { definition, identity, current, storage: await inspectStorage(db, profile) };
+}
+async function previewAdditiveStorage(db, target, configuredEnvironment, profile) {
+  const { definition, identity, current, storage } = await additiveState(db, target, configuredEnvironment, profile);
+  const changes = storage.filter(step => step.create || step.missingIndexes.length).map(step => ({
+    collection: step.collection, create: step.create,
+    indexes: definition.collections.find(item => item.name === step.collection).indexes.filter(item => step.missingIndexes.includes(item.name)),
+  }));
+  const plan = { operation: 'additive-storage-preparation', version: 1, profile, setupVersion: definition.version, definitionHash: hash(definition),
+    collectionScope: 'database-wide', identity, target, source: current, collections: definition.collections, storage, changes,
+    permissionChange: null, documentWrites: 'append-intent-and-completion-audits-only', activation: 'none', qboWrites: 0, schedulingEnabled: false };
+  return { ...plan, planHash: hash(plan), requiresExplicitApproval: true };
+}
+function preparationIds(planHash) {
+  return Object.fromEntries(['intent', 'complete'].map(event => [event, new ObjectId(hash({ storagePreparation: planHash, event }).slice(0, 24))]));
+}
+async function applyAdditiveStorage(db, target, configuredEnvironment, approvedHash, profile) {
+  validateTarget(target, configuredEnvironment);
+  const definition = additiveDefinition(profile);
+  if (typeof approvedHash !== 'string' || !/^[a-f0-9]{64}$/.test(approvedHash)) fail('Apply requires the hash of the explicitly approved preview.');
+  const keys = preparationIds(approvedHash), audits = db.collection('auditlogs');
+  let intent = await audits.findOne({ _id: keys.intent }, time);
+  let plan;
+  const validateAudit = (row, event) => {
+    if (String(row?._id) !== String(keys[event]) || String(row?.userId) !== target.ownerId || row?.realmId !== target.realmId || row?.actionType !== 'manual' || row?.aiDriven !== false || row?.approvalEvent !== 'explicit-additive-storage-preparation' || row?.action !== (event === 'intent' ? 'Additive business storage preparation requested' : 'Additive business storage preparation completed') || row?.outcome !== (event === 'intent' ? 'partial' : 'success')) fail('The saved storage preparation audit needs review.');
+  };
+  if (intent) { validateAudit(intent, 'intent'); plan = intent.afterState?.reviewedPlan; }
+  else {
+    const preview = await previewAdditiveStorage(db, target, configuredEnvironment, profile);
+    if (preview.planHash !== approvedHash) fail('Storage preparation inputs changed since the reviewed preview. Read the new preview before applying.');
+    const { planHash, requiresExplicitApproval, ...contract } = preview;
+    plan = contract;
+  }
+  if (hash(plan) !== approvedHash || plan?.operation !== 'additive-storage-preparation' || plan.version !== 1 || plan.profile !== profile || plan.setupVersion !== definition.version || plan.definitionHash !== hash(definition) || hash(plan.target) !== hash(target) || hash(plan.collections) !== hash(definition.collections)) fail('The reviewed storage preparation belongs to another target or definition.');
+  const verify = async () => {
+    const current = await additiveState(db, target, configuredEnvironment, profile);
+    if (hash(current.identity) !== hash(plan.identity) || hash(current.current) !== hash(plan.source)) fail('Owner authority, connection or database changed during storage preparation.');
+    for (const step of current.storage) {
+      const approved = plan.storage.find(item => item.collection === step.collection);
+      if (!approved || (step.create && !approved.create) || step.missingIndexes.some(name => !approved.missingIndexes.includes(name))) fail('Storage changed beyond the reviewed missing collections and indexes. Read a new preview.');
+    }
+    return current.storage;
+  };
+  const state = await verify();
+  const afterState = { planHash: approvedHash, target, preparationProfile: profile, definitionHash: hash(definition), deploymentHash: plan.identity.fingerprint, qboWrites: 0 };
+  const completed = await audits.findOne({ _id: keys.complete }, time);
+  if (completed) {
+    validateAudit(completed, 'complete');
+    if (!intent || hash(completed.afterState) !== hash(afterState) || state.some(step => step.create || step.missingIndexes.length)) fail('Previously completed additive storage preparation has changed. Read a new preview.');
+    return { status: 'already-complete', planHash: approvedHash, auditId: String(keys.complete), qboWrites: 0 };
+  }
+  const auditBase = { userId: new ObjectId(target.ownerId), realmId: target.realmId, actionType: 'manual', aiDriven: false, approvalEvent: 'explicit-additive-storage-preparation' };
+  if (!intent) {
+    intent = { _id: keys.intent, ...auditBase, action: 'Additive business storage preparation requested', outcome: 'partial', createdAt: new Date(), afterState: { ...afterState, reviewedPlan: plan } };
+    try { await audits.insertOne(intent, { ...time, writeConcern: { w: 'majority' } }); }
+    catch (error) {
+      if (error.code !== 11000) throw error;
+      const prior = await audits.findOne({ _id: keys.intent }, time); validateAudit(prior, 'intent');
+      if (hash(prior.afterState) !== hash(intent.afterState)) fail('Existing additive storage intent does not match.');
+    }
+  }
+  // Read authority and exact indexes again before every additive action. A partial
+  // retry can only finish the originally reviewed steps, never newly missing work.
+  for (const desired of definition.collections) {
+    let step = (await verify()).find(item => item.collection === desired.name);
+    if (step.create) {
+      try { await db.createCollection(desired.name, { ...time, writeConcern: { w: 'majority' } }); }
+      catch (error) { if (error.code !== 48) throw error; }
+    }
+    for (const wanted of desired.indexes) {
+      step = (await verify()).find(item => item.collection === desired.name);
+      if (step.missingIndexes.includes(wanted.name)) await db.collection(desired.name).createIndex(wanted.key, { name: wanted.name, ...(wanted.unique ? { unique: true } : {}), ...(wanted.partialFilterExpression ? { partialFilterExpression: wanted.partialFilterExpression } : {}), ...time, writeConcern: { w: 'majority' } });
+    }
+  }
+  if ((await verify()).some(step => step.create || step.missingIndexes.length)) fail('Additive storage preparation is incomplete. Retry the reviewed plan.');
+  try { await audits.insertOne({ _id: keys.complete, ...auditBase, action: 'Additive business storage preparation completed', outcome: 'success', createdAt: new Date(), afterState }, { ...time, writeConcern: { w: 'majority' } }); }
+  catch (error) {
+    if (error.code !== 11000) throw error;
+    const prior = await audits.findOne({ _id: keys.complete }, time); validateAudit(prior, 'complete');
+    if (hash(prior.afterState) !== hash(afterState)) fail('Existing additive storage completion does not match.');
+  }
+  return { status: 'complete', planHash: approvedHash, auditId: String(keys.complete), qboWrites: 0 };
+}
+module.exports = { previewAdditiveStorage, applyAdditiveStorage, assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };

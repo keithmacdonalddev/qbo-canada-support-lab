@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ObjectId } = require('mongoose').mongo;
-const { previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, CONTINUAL_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, GENERAL_WRITE_COLLECTIONS, setupDefinition, assertProfileSetupCompleted, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
+const { previewAdditiveStorage, applyAdditiveStorage, previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, CONTINUAL_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, GENERAL_WRITE_COLLECTIONS, setupDefinition, assertProfileSetupCompleted, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
 const { args } = require('../../scripts/rebuild/prepare-business-storage.cjs');
 const target = { environment: 'sandbox', realmId: '123', connectionId: '000000000000000000000001', ownerId: '000000000000000000000002' };
 function clone(value) {
@@ -330,4 +330,107 @@ test('general-write setup requires the existing owner and reviewed base and refu
   const f=fixture(), base=await f.preview('continual-business'); await f.apply(base.planHash,'continual-business');
   f.data().generalwriteruns={docs:[{_id:'existing-general-run'}],indexes:clone(GENERAL_WRITE_COLLECTIONS[0].indexes),options:{}};
   const writes=f.writes; await assert.rejects(f.preview('general-writes'),/empty/); assert.equal(f.writes,writes);
+});
+
+async function populatedGeneralStorage() {
+  const f = fixture(), base = await f.preview('continual-business'); await f.apply(base.planHash, 'continual-business');
+  f.data().operationruns.docs.push({ _id: 'retained-operation' });
+  f.data().businessauthorities.docs.push({ _id: 'retained-authority' });
+  f.data().generalwriteruns = { docs: [{ _id: 'retained-general-run', status: 'complete' }], indexes: [{ name: '_id_', key: { _id: 1 } }, ...clone(GENERAL_WRITE_COLLECTIONS[0].indexes)], options: {} };
+  f.additivePreview = () => previewAdditiveStorage(f.db, target, 'sandbox', 'general-writes');
+  f.additiveApply = hash => applyAdditiveStorage(f.db, target, 'sandbox', hash, 'general-writes');
+  return f;
+}
+const businessDocuments = f => Object.fromEntries(Object.entries(f.data()).filter(([name]) => name !== 'auditlogs').map(([name, value]) => [name, clone(value.docs)]));
+test('additive preview reports exact missing v6 DDL on populated storage without writing', async () => {
+  const f = await populatedGeneralStorage(), writes = f.writes, before = clone(f.data()), plan = await f.additivePreview();
+  assert.equal(f.writes, writes); assert.deepEqual(f.data(), before);
+  assert.equal(plan.setupVersion, 6); assert.equal(plan.collectionScope, 'database-wide'); assert.equal(plan.permissionChange, null); assert.equal(plan.activation, 'none');
+  assert.deepEqual(plan.changes, [{ collection: 'generaldaycloses', create: true, indexes: clone(GENERAL_WRITE_COLLECTIONS[1].indexes) }]);
+  assert.deepEqual(plan.changes[0].indexes[0].key, { environment: 1, realmId: 1, connectionId: 1, fromDate: 1, throughDate: 1, kind: 1, verifiedAt: -1 });
+});
+test('additive apply preserves populated documents and existing indexes, audits and is idempotent', async () => {
+  const f = await populatedGeneralStorage(), before = businessDocuments(f), existing = clone(f.data().generalwriteruns), audits = clone(f.data().auditlogs.docs), plan = await f.additivePreview();
+  const result = await f.additiveApply(plan.planHash); assert.equal(result.status, 'complete');
+  assert.deepEqual(businessDocuments(f), { ...before, generaldaycloses: [] }); assert.deepEqual(f.data().generalwriteruns, existing);
+  assert.deepEqual(f.data().auditlogs.docs.slice(0, audits.length), audits); assert.equal(f.data().auditlogs.docs.length, audits.length + 2);
+  const intent = f.data().auditlogs.docs[audits.length], completed = f.data().auditlogs.docs[audits.length + 1];
+  assert.equal(intent.approvalEvent, 'explicit-additive-storage-preparation'); assert.deepEqual(intent.afterState.reviewedPlan.changes, plan.changes); assert.equal(completed.outcome, 'success');
+  const writes = f.writes; assert.equal((await f.additiveApply(plan.planHash)).status, 'already-complete'); assert.equal(f.writes, writes);
+  await assertProfileSetupCompleted(f.db, target, 'continual-business');
+  const fresh = await f.additivePreview(); assert.deepEqual(fresh.changes, []);
+  await f.additiveApply(fresh.planHash); assert.equal(f.writes, writes + 2); assert.equal((await f.additiveApply(fresh.planHash)).status, 'already-complete');
+});
+test('additive preparation adds missing indexes to populated existing collections only', async () => {
+  const f = await populatedGeneralStorage();
+  f.data().generaldaycloses = { docs: [{ _id: 'retained-close', kind: 'business-day' }], indexes: [{ name: '_id_', key: { _id: 1 } }, { name: 'extra-index', key: { kind: 1 } }], options: {} };
+  f.data().generalwriteruns.indexes.pop(); const before = businessDocuments(f), plan = await f.additivePreview();
+  assert.equal(plan.changes.length, 2); assert.ok(plan.changes.every(step => !step.create && step.indexes.length === 1));
+  const writes = f.writes; await f.additiveApply(plan.planHash); assert.equal(f.writes, writes + 4);
+  assert.deepEqual(businessDocuments(f), before); assert.ok(f.data().generaldaycloses.indexes.some(index => index.name === 'extra-index'));
+});
+test('equivalent index with a different name is already satisfied and never rebuilt', async () => {
+  const f = await populatedGeneralStorage();
+  f.data().generaldaycloses = { docs: [{ _id: 'retained-close' }], indexes: clone(GENERAL_WRITE_COLLECTIONS[1].indexes), options: {} };
+  f.data().generaldaycloses.indexes[0].name = 'existing-equivalent-name';
+  const before = clone(f.data().generaldaycloses), plan = await f.additivePreview(), writes = f.writes;
+  assert.deepEqual(plan.changes, []); await f.additiveApply(plan.planHash); assert.equal(f.writes, writes + 2); assert.deepEqual(f.data().generaldaycloses, before);
+});
+test('partial additive DDL resumes the saved exact plan with populated records still present', async () => {
+  const f = await populatedGeneralStorage(), before = businessDocuments(f), plan = await f.additivePreview(); f.failIndex = true;
+  await assert.rejects(f.additiveApply(plan.planHash), /index unavailable/); assert.ok(f.data().generaldaycloses);
+  assert.notEqual((await f.additivePreview()).planHash, plan.planHash);
+  assert.equal((await f.additiveApply(plan.planHash)).status, 'complete');
+  assert.deepEqual(businessDocuments(f), { ...before, generaldaycloses: [] });
+  const writes = f.writes; await f.additiveApply(plan.planHash); assert.equal(f.writes, writes);
+});
+test('partial retries and stale previews never expand to newly missing or conflicting indexes', async () => {
+  const f = await populatedGeneralStorage(), plan = await f.additivePreview(); f.failIndex = true;
+  await assert.rejects(f.additiveApply(plan.planHash), /index unavailable/);
+  f.data().generalwriteruns.indexes.pop(); const writes = f.writes;
+  await assert.rejects(f.additiveApply(plan.planHash), /beyond the reviewed/); assert.equal(f.writes, writes);
+  const g = await populatedGeneralStorage(), stale = await g.additivePreview(); g.data().generalwriteruns.indexes.pop(); const before = g.writes;
+  await assert.rejects(g.additiveApply(stale.planHash), /changed/); assert.equal(g.writes, before);
+});
+test('audit failure blocks DDL; completion failure retains recoverable DDL without editing documents', async () => {
+  const f = await populatedGeneralStorage(), plan = await f.additivePreview(); f.failIntent = true;
+  await assert.rejects(f.additiveApply(plan.planHash), /audit unavailable/); assert.equal(f.data().generaldaycloses, undefined);
+  f.failIntent = false; f.failComplete = true; const before = businessDocuments(f);
+  await assert.rejects(f.additiveApply(plan.planHash), /audit unavailable/); assert.deepEqual(businessDocuments(f), { ...before, generaldaycloses: [] });
+  f.failComplete = false; assert.equal((await f.additiveApply(plan.planHash)).status, 'complete');
+});
+test('conflicting indexes, duplicate keys, missing prerequisites and collection options stop without writes', async () => {
+  for (const edit of [
+    f => { f.data().generalwriteruns.indexes[1].sparse = true; },
+    f => { f.data().generalwriteruns.indexes[1].key = { wrong: 1 }; },
+    f => { f.data().generalwriteruns.indexes.splice(1, 1); f.duplicates = true; },
+    f => { delete f.data().auditlogs; },
+    f => { delete f.data().companywriters; },
+    f => { f.data().generalwriteruns.options = { validator: {} }; },
+  ]) {
+    const f = await populatedGeneralStorage(); edit(f); const writes = f.writes;
+    await assert.rejects(f.additivePreview()); assert.equal(f.writes, writes);
+  }
+});
+test('only the reviewed profile, target, owner authority and deployment can apply or retry', async () => {
+  const f = await populatedGeneralStorage(), plan = await f.additivePreview(), writes = f.writes;
+  await assert.rejects(previewAdditiveStorage(f.db, target, 'sandbox', 'continual-business'), /only/);
+  await assert.rejects(applyAdditiveStorage(f.db, { ...target, realmId: '456' }, 'sandbox', plan.planHash, 'general-writes'));
+  await assert.rejects(applyAdditiveStorage(f.db, target, 'production', plan.planHash, 'general-writes'), /environment/);
+  await assert.rejects(f.additiveApply('bad-hash'), /hash/); assert.equal(f.writes, writes);
+  await f.additiveApply(plan.planHash); const after = f.writes;
+  f.db.admin = () => ({ command: async () => ({ setName: 'other-deployment', hosts: ['other:27017'] }) });
+  await assert.rejects(f.additiveApply(plan.planHash)); assert.equal(f.writes, after);
+  const g = await populatedGeneralStorage(), gp = await g.additivePreview(); await g.additiveApply(gp.planHash);
+  g.data().users.docs[0].connectionSwitchVersion++; const gw = g.writes;
+  await assert.rejects(g.additiveApply(gp.planHash), /changed/); assert.equal(g.writes, gw);
+});
+test('authority is checked again after partial DDL and completed receipts cannot authorize repairs', async () => {
+  const f = await populatedGeneralStorage(), plan = await f.additivePreview();
+  f.afterIndex = data => { data.connections.docs[0].status = 'revoked'; };
+  await assert.rejects(f.additiveApply(plan.planHash), /ownership/);
+  assert.equal(f.data().auditlogs.docs.filter(row => row.action === 'Additive business storage preparation completed').length, 0);
+  const g = await populatedGeneralStorage(), gp = await g.additivePreview(); await g.additiveApply(gp.planHash);
+  g.data().generaldaycloses.indexes.pop(); const writes = g.writes;
+  await assert.rejects(g.additiveApply(gp.planHash), /completed additive/); assert.equal(g.writes, writes);
 });

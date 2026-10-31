@@ -59,6 +59,19 @@ function createBusinessSetupService(dependencies = {}) {
     const bound = await bind(user, true);
     return (dependencies.applySetup || setup.applySetup)(connection.db, connection.getClient(), bound.target, bound.scope.environment, input.planHash, PROFILE);
   }
+  function storageInput(input, applying = false) {
+    if (!input || Object.keys(input).sort().join(',') !== (applying ? 'planHash,profile' : 'profile') || input.profile !== 'general-writes' || (applying && (typeof input.planHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.planHash)))) fail('Choose the general-writes profile and apply only its exact reviewed storage preview.', 400);
+  }
+  async function previewStorage(user, input) {
+    storageInput(input);
+    const bound = await bind(user, true);
+    return (dependencies.previewAdditiveStorage || setup.previewAdditiveStorage)(connection.db, bound.target, bound.scope.environment, input.profile);
+  }
+  async function applyStorage(user, input) {
+    storageInput(input, true);
+    const bound = await bind(user, true);
+    return (dependencies.applyAdditiveStorage || setup.applyAdditiveStorage)(connection.db, bound.target, bound.scope.environment, input.planHash, input.profile);
+  }
   async function prepareCoordination(user) {
     const bound = await bind(user, true), { scope, ownerId } = bound;
     const completed = await receipt(bound), id = scope.environment + ':' + scope.realmId;
@@ -128,6 +141,6 @@ function createBusinessSetupService(dependencies = {}) {
       return { state: 'active', reused: false };
     });
   }
-  return { status, preview, apply, prepareCoordination, recordPeriodControls, activateCoordination };
+  return { status, preview, apply, previewStorage, applyStorage, prepareCoordination, recordPeriodControls, activateCoordination };
 }
 module.exports = { createBusinessSetupService };
