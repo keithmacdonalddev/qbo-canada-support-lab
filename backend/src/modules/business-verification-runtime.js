@@ -66,11 +66,15 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     checkScope(value); checkSignal(signal);
     if (prepared && (!preparedRecords.has(prepared) || !sameScope(prepared.scope, scope) || prepared.entity !== entity || prepared.record?.Id !== qboId || prepared.recordHash !== hash(prepared.record) || !Number.isFinite(Date.parse(prepared.observedAt)) || Date.parse(prepared.observedAt) > now() || now() - Date.parse(prepared.observedAt) > 300000)) fail('The prepared record differs from its exact current company observation.');
     if (prepared) await authority(scope, 'operations.read', { signal });
-    const observed = prepared || await rawRecord(value, entity, qboId, { signal });
+    let observed = prepared || await rawRecord(value, entity, qboId, { signal });
     if (!['Invoice', 'Payment', 'BillPayment', 'CreditMemo'].includes(entity) || observed.record[entity === 'BillPayment' ? 'APAccountRef' : 'ARAccountRef'] !== undefined) return observed;
     // A zero-funds application posts nothing a ledger could show. Read-back proves it
     // from its exact application pair instead, or refuses it (no evidence is added here).
     if (['Payment', 'BillPayment'].includes(entity) && observed.record.TotalAmt === 0) return observed;
+    // A saved create response predates later steps of the same operation (a payment
+    // applied to this invoice changes its balance and links), so the ledger bracket
+    // must open on a current live observation or it can never match the closing read.
+    if (prepared) { observed = await liveRecord(scope, entity, qboId, { signal }); checkSignal(signal); }
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const compiled = row?.compilation;
