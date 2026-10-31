@@ -1,29 +1,52 @@
 ---
 name: banking-and-deposits
-description: Banking: Undeposited Funds and deposits, transfers, owner and loan money, cash position and buffer, and banking features the API cannot touch (reconciliation, feeds, rules). Use when collecting money, checking cash, moving money, or explaining deposits.
+description: Daily general-tool grouped deposits, Undeposited Funds clearing, separately posted processor fees, bank/card transfers and cash checks; fixed collections deposit automatically. Use when taking payments, grouping remittances, following up undeposited money or preparing close evidence; reconciliation stays owner/manual.
 ---
 
 # Banking and deposits
 
-## Money in
-- A customer Payment or SalesReceipt without a deposit account goes to **Undeposited Funds** (shown as Payments to deposit). A **Deposit** linking those payments moves them to the bank, matching how a real bank deposit groups cheques.
-- The app's sales and collections create Payment then Deposit in the same batch, so Undeposited Funds should return to about zero. A growing Undeposited Funds balance means payments were never deposited: investigate with `queryCompanyData` (Payment with no Deposit link) before anything else.
-- Support teaching point: deposits that group several payments, a deposit that also has another line (for example a bank interest line), and a payment deposited straight to the bank.
+Read qbo-api-records and support-scenarios-for-troubleshooting for exact general payloads. Source-checked 2026-10-31; **no live banking outcome verified**.
 
-## Money between accounts
-- `bank-transfer` moves money between two published bank accounts. It needs two bank roles; `getBusinessActivityChoices` says when only one exists. Paying a credit card from the bank is a transfer to the card account.
-- Owner contributions, owner draws and loan advances use deposits or journal entries to equity or loan accounts; the app's journal-entry activity cannot touch those accounts, so file `requestCapability` if the business needs them.
+## Daily money-in routine
 
-## Cash position
-- Read the operating bank balance: `queryCompanyData` on Account (CurrentBalance) or `runReport` BalanceSheet. Cash flow: CashFlow report.
-- Keep at least about two weeks of operating costs as a buffer before paying non-critical bills or approving discretionary expenses.
-- Advise the owner when cash covers less than a month of costs, when receivables are rising while cash falls, or when a large bill is due within a week.
+1. General Payment/SalesReceipt can name the active Undeposited Funds account as DepositToAccountRef. Fixed sales/collections already create their own Deposit; never deposit those again.
+2. Inspect actual saved receipt totals and existing Deposit links with queryCompanyData mode links (or getTransactionChain). Stale/incomplete copy is not proof a payment is undeposited.
+3. Group genuine undeposited receipts into one Deposit, with one full-amount line per receipt. No partial depositing and no duplicate source links.
+4. Verify the saved Deposit, receipt backlinks, clearing reduction and bank ledger movement. Record any short intentional holding interval and the planned deposit date; investigate unexplained old clearing balances.
+5. Same-day clearing is the default; temporary holding is for a genuine bank batch/teaching lifecycle, not a growing unexplained asset.
 
-## Not available through the API
-- Bank reconciliation, bank feeds, matching and bank rules are QuickBooks UI work. Never say an account is reconciled or a statement is matched.
-- Cleared status is not set by this app.
+Example manageQboRecord input:
+```json
+{
+  "decisionKey":"bank_deposit_20261031_group1",
+  "purpose":"Group today's two customer remittances into the operating bank deposit",
+  "operations":[{
+    "ref":"deposit","op":"create","entity":"Deposit",
+    "payload":{
+      "TxnDate":"<TODAY>","DepositToAccountRef":{"value":"<BANK_ID>"},
+      "DepartmentRef":{"value":"<LOCATION_ID>"},
+      "Line":[
+        {"Amount":100,"LinkedTxn":[{"TxnId":"<PAYMENT_ID>","TxnType":"Payment","TxnLineId":"0"}]},
+        {"Amount":200,"LinkedTxn":[{"TxnId":"<SALES_RECEIPT_ID>","TxnType":"SalesReceipt","TxnLineId":"0"}]}
+      ]
+    }
+  }]
+}
+```
+Replace example amounts with each receipt's actual tax-inclusive TotalAmt. The Deposit's computed total is $300 only for these example amounts; do not send TotalAmt.
 
-## Checklist
-- [ ] Every collection has a deposit in the same batch; Undeposited Funds near zero.
-- [ ] Cash buffer respected before payment runs.
-- [ ] No reconciliation claims; reconciliation is an owner/UI task.
+## Fees, transfers and cash
+
+Negative Deposit fee lines are refused. For a processor settlement use a **gross Deposit plus a separate Purchase** to the fee expense account, same bank and batch reference, published purchase tax code. Exact recipe and net cash proof are in support-scenarios-for-troubleshooting. Two ledger postings do not prove one net deposit matched to a bank feed.
+
+General transfer:
+`manageQboRecord({decisionKey:"transfer_20261031_bank_card",purpose:"Pay down the company credit card from available operating cash",operations:[{ref:"card-payment",op:"create",entity:"Transfer",payload:{TxnDate:"<TODAY>",FromAccountRef:{value:"<BANK_ID>"},ToAccountRef:{value:"<CREDIT_CARD_ACCOUNT_ID>"},Amount:500}}]})`.
+Use permitted active balance-sheet accounts and verify the two movements. Fixed bank-transfer instead takes fromKey/toKey and amountCents between published bank roles.
+
+General non-inventory JournalEntry can use appropriate loan/equity accounts for a documented business need, with balanced lines; fixed journal-entry cannot. Do not create owner contributions, draws or loans merely for volume, or infer an owner funding fact.
+
+Read cash through synced Account balances and dated BalanceSheet/GeneralLedger reports. Check enough cash for scheduled payables and retained operating buffer before non-critical spending. Report a falling buffer and overdue receipts rather than manufacturing cash.
+
+## Owner/manual boundary
+
+Bank/card reconciliation, bank feeds, matching, rules and cleared status remain manual here. Supply dated ledger/deposit exceptions; retain stable owner items under month-end-and-year-end-close. Never say a statement is matched or the bank reconciled from a Deposit or TrialBalance alone.
