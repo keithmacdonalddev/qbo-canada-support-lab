@@ -113,7 +113,7 @@ function createOwnerRecordActions(options = {}) {
       await audit(bound, 'Owner requested QuickBooks record execution', { runId: input.runId, status: 'requested' });
       const result = await require('../modules/actor-context').runAsActor(bound.actorId, () => general(bound).execute(bound, input.runId));
       const saved = await scopedRun(bound, input.runId);
-      return { ...resultView(bound, saved), ...result }; 
+      return { ...resultView(bound, saved), ...result };
     },
   };
 }

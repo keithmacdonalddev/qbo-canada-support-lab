@@ -351,3 +351,26 @@
 .bpl-priority--high { background: color-mix(in srgb, var(--bw-warn) 14%, var(--surface)); color: var(--bw-warn); }
 .bpl-more { margin-top: 6px; }
 @media (max-width: 900px) { .bpl-grid { grid-template-columns: 1fr; } }
+
+/* Guided owner records, within Directions & controls. */
+.bw-record-form { gap: 12px; }
+.bw-record-form input:not([type="checkbox"]) { width: 100%; min-width: 0; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 12px; }
+.bw-record-form textarea { min-height: 76px; }
+.bw-record-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.bw-record-fields > label, .bw-record-choice { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; }
+.bw-record-fields small, .bw-record-choice small { color: var(--ink-3); font-size: 10px; }
+.bw-record-choice-controls { display: grid; gap: 4px; }
+.bw-record-choice select { max-width: 100%; }
+.bw-record-lines { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.bw-record-lines legend { padding: 0 5px; font-size: 12px; font-weight: 600; }
+.bw-record-line { border-bottom: 1px solid var(--line); padding: 0 0 12px; margin-bottom: 12px; }
+.bw-record-line-heading { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.bw-record-review, .bw-record-notice { border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-size: 12px; line-height: 1.6; }
+.bw-record-notice { color: var(--ink); border-color: var(--warning); }
+.bw-record-review h3 { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 0; }
+.bw-record-review svg { width: 16px; height: 16px; }
+.bw-record-form details { font-size: 11px; color: var(--ink-3); }
+.bw-record-form summary { cursor: pointer; }
+.bw-record-form pre { max-height: 300px; overflow: auto; padding: 10px; background: var(--canvas); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bw-record-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; }
+.bw-record-form :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
