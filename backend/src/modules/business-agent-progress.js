@@ -1,10 +1,11 @@
 'use strict';
 // Live progress for one business review: a short plain-English step per governed
 // tool call, so the owner can see what the accountant is doing right now.
-// Only a fixed label, a status and a time are kept. Tool inputs, outputs, record
-// contents, prompts and error text are never stored; labels use allowlisted
-// words chosen from enum-validated input fields or counts, nothing free-form.
-const MAX_STEPS = 20, MAX_LABEL = 100;
+// Only a fixed label, an optional numeric note, a status and a time are kept. Tool
+// inputs, outputs, record contents, prompts and error text are never stored; labels
+// use allowlisted words chosen from enum-validated input fields or counts, and notes
+// are built only from counts and amounts in successful results, nothing free-form.
+const MAX_STEPS = 20, MAX_LABEL = 100, MAX_NOTE = 80;
 const STATUSES = new Set(['running', 'done', 'failed']);
 const ENTITIES = Object.freeze({
   Customer: ['customer', 'customers'], Vendor: ['supplier', 'suppliers'], Employee: ['employee', 'employees'],
@@ -30,6 +31,46 @@ const REPORTS = Object.freeze({
 });
 const has = (map, key) => typeof key === 'string' && Object.hasOwn(map, key);
 const plural = (count, one, many) => count + ' ' + (count === 1 ? one : many);
+// Same-day activity workflows (business-activity-batch POLICY.workflows) in plain words.
+const ACTIVITIES = Object.freeze({
+  'settled-service-sale': ['sale', 'sales'], 'paid-operating-expense': ['supplier bill', 'supplier bills'],
+  'collect-adopted-invoice': ['invoice collection', 'invoice collections'], 'pay-adopted-bill': ['bill payment', 'bill payments'],
+  'paid-cash-expense': ['expense', 'expenses'], 'supplier-credit': ['supplier credit', 'supplier credits'],
+  'customer-credit': ['customer credit', 'customer credits'], 'customer-refund': ['customer refund', 'customer refunds'],
+  'bank-transfer': ['bank transfer', 'bank transfers'], 'journal-entry': ['journal entry', 'journal entries'],
+  'receive-purchase-order': ['purchase order receipt', 'purchase order receipts'], 'add-customer': ['new customer', 'new customers'],
+  'add-supplier': ['new supplier', 'new suppliers'], 'add-item': ['new service', 'new services'], 'correct-own-record': ['correction', 'corrections'],
+});
+// "3 sales and 1 supplier bill" from workflow types; unknown types are counted as "other activities".
+function activitySummary(types) {
+  const counts = new Map();
+  for (const type of Array.isArray(types) ? types.slice(0, 50) : []) {
+    const key = has(ACTIVITIES, type) ? type : 'other';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const parts = [...counts].map(([key, n]) => key === 'other' ? plural(n, 'other activity', 'other activities') : plural(n, ...ACTIVITIES[key]));
+  return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts.at(-1) : parts[0] || '';
+}
+const cad = cents => (cents / 100).toLocaleString('en-CA', { style: 'currency', currency: 'CAD' });
+const whole = value => Number.isSafeInteger(value) && value >= 0 && value <= 100000 ? value : null;
+const size = value => Array.isArray(value) ? value.length : null;
+// A short numeric note from a successful tool result: counts and totals only, never names or text.
+function stepNote(name, input, value) {
+  if (!value || value.success !== true || !value.data || typeof value.data !== 'object') return '';
+  const data = value.data, more = data.mayHaveMore === true ? '+' : '';
+  if (name === 'getObligations' && Array.isArray(data.records)) {
+    const cents = data.records.reduce((total, row) => total + (Number.isSafeInteger(row?.balanceCents) && row.balanceCents > 0 ? row.balanceCents : 0), 0);
+    return data.records.length ? data.records.length + more + ' found · ' + cad(cents) + ' open' : 'none open';
+  }
+  if (name === 'searchEntities') { const n = whole(data.count) ?? size(data.records); return n === null ? '' : n ? n + more + ' found' : 'none found'; }
+  if (name === 'getBusinessActivityChoices') {
+    return [[size(data.customers), 'customer', 'customers'], [size(data.services), 'service', 'services'], [size(data.vendors), 'supplier', 'suppliers']].filter(([n]) => n).map(([n, one, many]) => plural(n, one, many)).join(', ');
+  }
+  if (['prepareBusinessActivity', 'prepareBusinessPeriod'].includes(name)) return data.reused === true ? 'reused the saved plan' : 'plan saved';
+  if (['executeBusinessPeriod', 'resumeBusinessOperation'].includes(name)) return data.state === 'verified' ? 'already finished' : 'queued for sending';
+  return '';
+}
+const safeNote = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, MAX_NOTE) : '';
 const FIXED = Object.freeze({
   lookupCustomer: 'Looking up a customer',
   lookupInvoice: 'Looking up an invoice',
@@ -55,8 +96,10 @@ function stepLabel(name, input) {
   else if (name === 'runReport') label = has(REPORTS, value.report) ? 'Running the ' + REPORTS[value.report] + ' report' : 'Running a report';
   else if (name === 'getObligations') label = value.area === 'payables' ? 'Reading ' + (value.overdueOnly === true ? 'overdue' : 'unpaid') + ' supplier bills' : value.area === 'receivables' ? 'Reading ' + (value.overdueOnly === true ? 'overdue' : 'unpaid') + ' customer invoices' : 'Reading what is owed';
   else if (name === 'prepareBusinessActivity') {
-    const count = Array.isArray(value.activities) && value.activities.length >= 1 && value.activities.length <= 12 ? value.activities.length : 0;
-    label = count ? 'Preparing ' + plural(count, 'piece', 'pieces') + ' of same-day activity' : 'Preparing same-day activity';
+    const pieces = Array.isArray(value.activities) && value.activities.length >= 1 && value.activities.length <= 12 ? value.activities.length : 0;
+    const types = pieces ? value.activities.map(row => row && typeof row === 'object' ? row.type : null) : [];
+    // Only allowlisted workflow types are named; otherwise the count alone is shown.
+    label = pieces && types.every(type => has(ACTIVITIES, type)) ? 'Preparing ' + activitySummary(types) + ' for today' : pieces ? 'Preparing ' + plural(pieces, 'piece', 'pieces') + ' of same-day activity' : 'Preparing same-day activity';
   } else if (name === 'recordBusinessDecision') label = value.requiresOwner === true ? 'Asking you for a decision' : 'Recording a business decision';
   else if (typeof name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,59}$/.test(name)) {
     const words = name.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').toLowerCase();
@@ -66,11 +109,15 @@ function stepLabel(name, input) {
 }
 // Steps are rendered as given; keep only the expected shape and bounds.
 function cleanSteps(steps, max = MAX_STEPS) {
-  return (Array.isArray(steps) ? steps : []).filter(step => step && typeof step.label === 'string').slice(-max).map(step => ({
-    at: Number.isFinite(new Date(step.at).getTime()) ? new Date(step.at).toISOString() : null,
-    label: step.label.slice(0, MAX_LABEL),
-    status: STATUSES.has(step.status) ? step.status : 'done',
-  }));
+  return (Array.isArray(steps) ? steps : []).filter(step => step && typeof step.label === 'string').slice(-max).map(step => {
+    const note = safeNote(step.note);
+    return {
+      at: Number.isFinite(new Date(step.at).getTime()) ? new Date(step.at).toISOString() : null,
+      label: step.label.slice(0, MAX_LABEL),
+      status: STATUSES.has(step.status) ? step.status : 'done',
+      ...(note ? { note } : {}),
+    };
+  });
 }
 // Records steps without delaying tools: writes run in the background, coalesce to the
 // latest list, and failures are only counted. flush() waits a bounded time at pass end.
@@ -91,14 +138,14 @@ function createReviewProgress({ write, now = () => Date.now(), max = MAX_STEPS, 
     const step = { at: new Date(now()).toISOString(), label: stepLabel(name, input), status: 'running' };
     steps = [...steps, step].slice(-max); save(); return step;
   }
-  function finish(step, status) { if (!step) return; step.status = status; save(); }
+  function finish(step, status, note = '') { if (!step) return; step.status = status; if (note) step.note = note; save(); }
   function wrap(execute) {
     return async (name, input) => {
       let step = null;
       try { step = begin(name, input); } catch { step = null; }
       try {
         const value = await execute(name, input);
-        try { finish(step, value && value.success === false ? 'failed' : 'done'); } catch { /* progress is best-effort */ }
+        try { finish(step, value && value.success === false ? 'failed' : 'done', stepNote(name, input, value)); } catch { /* progress is best-effort */ }
         return value;
       } catch (error) {
         try { finish(step, 'failed'); } catch { /* progress is best-effort */ }
@@ -119,4 +166,4 @@ function createReviewProgress({ write, now = () => Date.now(), max = MAX_STEPS, 
   }
   return { wrap, flush, steps: () => cleanSteps(steps, max), failures: () => failures };
 }
-module.exports = { createReviewProgress, stepLabel, cleanSteps, MAX_STEPS };
+module.exports = { createReviewProgress, stepLabel, stepNote, cleanSteps, activitySummary, ACTIVITIES, ENTITIES, MAX_STEPS };

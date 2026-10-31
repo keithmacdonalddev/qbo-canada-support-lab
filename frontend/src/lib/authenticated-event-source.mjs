@@ -1,18 +1,18 @@
 // Fetch supports Authorization headers; tickets and URLs never carry the JWT.
 export class AuthenticatedEventSource {
-  constructor(url, { token = globalThis.localStorage?.getItem('token'), fetcher = globalThis.fetch } = {}) {
+  constructor(url, { token = globalThis.localStorage?.getItem('token'), fetcher = globalThis.fetch, headers = {} } = {}) {
     this.listeners = new Map()
     this.controller = new AbortController()
     this.closed = false
-    this.done = this.read(url, token, fetcher)
+    this.done = this.read(url, token, fetcher, headers)
   }
   addEventListener(name, callback) { if (!this.listeners.has(name)) this.listeners.set(name, new Set()); this.listeners.get(name).add(callback) }
   dispatch(type, data) { if (this.closed) return; for (const callback of this.listeners.get(type) || []) callback({ type, data }) }
   close() { this.closed = true; this.controller.abort() }
-  async read(url, token, fetcher) {
+  async read(url, token, fetcher, headers = {}) {
     let reader
     try {
-      const response = await fetcher(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'text/event-stream' }, signal: this.controller.signal, credentials: 'same-origin' })
+      const response = await fetcher(url, { headers: { ...headers, Authorization: 'Bearer ' + token, Accept: 'text/event-stream' }, signal: this.controller.signal, credentials: 'same-origin' })
       if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) throw Error('Stream unavailable')
       reader = response.body.getReader()
       const decoder = new TextDecoder()

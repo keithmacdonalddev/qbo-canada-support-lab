@@ -10,6 +10,8 @@ import { money, shortDate, dateTime } from '../lib/format'
 import { ageLabel, countValue, recordLink, syncPresentation, textValue, workspaceScope } from '../lib/business-workspace.mjs'
 import BusinessActivityComposer from '../components/BusinessActivityComposer'
 import BusinessWork from '../components/BusinessWork'
+import BusinessLive from '../components/BusinessLive'
+import { useLiveFeed, useTranscript } from '../lib/business-live'
 import BusinessAgentUsage from '../components/BusinessAgentUsage'
 import '../styles/business-workspace.css'
 
@@ -94,7 +96,11 @@ export default function BusinessWorkspace() {
 }
 function BusinessWorkspaceLive({ connection, scope }) {
   const workspace = useWorkspace(client, scope, connection?.ready === true)
-  return <BusinessWorkspaceContent {...workspace} onCommand={workspace.command} companyName={connection?.companyName} environment={connection?.environment} realmId={scope.realmId} connectionState={connection?.state} />
+  // Poll the live feed fast as soon as the status shows a review, even before the feed itself does.
+  const live = useLiveFeed(client, scope, connection?.ready === true && !!workspace.data?.configured, workspace.data?.rightNow?.state === 'reviewing')
+  // The accountant's review session as it streams (reasoning, messages, tool calls and results).
+  const transcript = useTranscript(client, scope, connection?.ready === true && !!workspace.data?.configured)
+  return <BusinessWorkspaceContent {...workspace} live={live} transcript={transcript} onCommand={workspace.command} companyName={connection?.companyName} environment={connection?.environment} realmId={scope.realmId} connectionState={connection?.state} />
 }
 
 function Badge({ tone = 'quiet', children }) { return <span className={'bw-badge bw-badge--' + tone}><span className="bw-status-dot" />{children}</span> }
@@ -122,7 +128,7 @@ function Consent({ mode, companyName, environment, realmId, busy, error, onClose
 }
 
 // Kept context-free so rendered review can exercise real UI states with sanitized fixtures.
-export function BusinessWorkspaceContent({ data, error = '', refreshing = false, busy = '', fresh = true, now, refresh = () => {}, onCommand = async () => false, companyName, environment, realmId, connectionState = 'connected' }) {
+export function BusinessWorkspaceContent({ data, live = null, transcript = null, error = '', refreshing = false, busy = '', fresh = true, now, refresh = () => {}, onCommand = async () => false, companyName, environment, realmId, connectionState = 'connected' }) {
   const [view, setView] = useState('overview'), [consent, setConsent] = useState(null)
   const location = useLocation()
   useEffect(() => { if (location.hash === '#ai-usage') { setView('overview'); requestAnimationFrame(() => document.getElementById('ai-usage')?.scrollIntoView({ block: 'center' })) } }, [location.key, location.hash])
@@ -161,7 +167,8 @@ export function BusinessWorkspaceContent({ data, error = '', refreshing = false,
     {error && <div className="bw-notice bw-notice--attention" role="alert"><AlertCircle /><div><strong>Workspace updates need attention</strong><p>{error} Earlier observations remain visible; controls wait for a confirmed refresh.</p></div><Button size="sm" variant="outline" onClick={refresh} disabled={refreshing}>Retry</Button></div>}
     {agent.lastError && !/AI connection/i.test(agent.lastError) && <div className="bw-notice bw-notice--attention" role="alert"><AlertCircle /><div><strong>The accountant needs attention</strong><p>{agent.lastError}</p><Link to="/settings" className="bw-text-button">Check AI and connection settings<ArrowRight /></Link></div><Button size="sm" variant="outline" disabled={disabled || !active} onClick={() => onCommand('run-now')}>Retry review</Button></div>}
     {!owner && <div className="bw-read-only"><ShieldCheck />You can inspect this workspace. The company owner manages autonomous operation and business directions.</div>}
-    <BusinessWork work={data.work} rightNow={data.rightNow} now={now} disabled={disabled} onAction={kind => kind === 'resume' ? onCommand('resume') : setConsent(kind)} />
+    <BusinessLive feed={live?.feed || null} failed={!!live?.failed} transcript={transcript} rightNow={data.rightNow} now={now} />
+    <BusinessWork work={data.work} disabled={disabled} onAction={kind => kind === 'resume' ? onCommand('resume') : setConsent(kind)} />
     <div className="bw-metrics" aria-label="Company at a glance"><Metric label="Customer balances" value={totals.incompleteCurrency ? 'Unavailable' : money(totals.receivables ?? totals.accountsReceivable, currency)} detail={countValue(counts, 'openInvoices', 'openInvoices') + ' open invoices'} to="/explorer?type=Invoice" icon={FileText} /><Metric label="Supplier balances" value={totals.incompleteCurrency ? 'Unavailable' : money(totals.payables ?? totals.accountsPayable, currency)} detail={countValue(counts, 'openBills', 'openBills') + ' unpaid bills'} to="/explorer?type=Bill" icon={FileText} /><Metric label="Customers & suppliers" value={countValue(counts, 'customers', 'Customer') + ' / ' + countValue(counts, 'vendors', 'Vendor')} detail="Inspect the people behind the business" to="/explorer?type=Customer" icon={Users} /><Metric label="Business records through" value={shortDate(business.recordsThrough || company.latestTransactionDate)} detail={number(business.recordCount ?? counts.records) + ' retained business records'} to="/company/manage" icon={Activity} /></div>
     {totals.incompleteCurrency && <p className="bw-notice bw-notice--attention" role="status">Complete balances are unavailable until the company currency and all foreign-currency amounts are verified. Record counts and individual records remain available.</p>}
     <nav className="bw-view-nav" aria-label="Company workspace views">{[['overview', 'Overview'], ['activity', 'Activity & monitoring'], ['directions', 'Directions & controls']].map(([key, label]) => <button type="button" key={key} aria-pressed={view === key} onClick={() => setView(key)}>{label}{key === 'overview' && decisions.length > 0 && <span>{decisions.length}</span>}</button>)}</nav>

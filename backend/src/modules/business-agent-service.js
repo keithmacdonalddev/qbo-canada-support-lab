@@ -95,6 +95,78 @@ function createBusinessAgentService(options={}) {
       rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today,calendarClose,requests,cadence:row?.cadence||null})};
   }
   async function status(user){const bound=await bind(user);return workspace(bound,await store.get(bound.scope));}
+  // The live activity feed (business-agent-live.js): light enough to poll every few seconds while
+  // work is happening. A failed read returns the last good feed for this agent, marked stale.
+  const lastFeeds=new Map();
+  async function live(user){
+    const bound=await bind(user),row=await store.get(bound.scope),{buildLiveFeed}=require('./business-agent-live');
+    const settings={...DEFAULT_SETTINGS,...(row?.settings||{})},expired=row?.leaseToken&&at(row.leaseExpiresAt)<=now();
+    const base={now:now(),configured:Boolean(row),settings,reviewing:Boolean(row?.leaseToken&&!expired&&row.activePass&&row.status==='reviewing'),progress:row?.reviewProgress||null,activePass:row?.activePass||null,cadence:row?.cadence||null};
+    if(!row)return {scope:bound.scope,revision:0,...buildLiveFeed(base)};
+    const key=String(row._id);let feed;
+    try{
+      const [events,activity]=await Promise.all([store.events(row),typeof store.liveActivity==='function'?store.liveActivity(bound.scope):{runs:[],steps:[],records:[]}]);
+      feed=buildLiveFeed({...base,events,...activity});
+      if(lastFeeds.size>=50)lastFeeds.clear();
+      lastFeeds.set(key,feed);
+    }catch{
+      const prior=lastFeeds.get(key);
+      feed=prior?{...buildLiveFeed(base),items:prior.items,sending:prior.sending,stale:true}:buildLiveFeed({...base,unavailable:true});
+    }
+    await bound.access.authorize(bound.scope,'operations.read');
+    return {scope:bound.scope,revision:row.revision||0,...feed};
+  }
+  // Review session transcripts (business-agent-transcript.js): the recent attempts, one attempt's
+  // entries after a cursor, and a live Server-Sent Events stream with cursor resume.
+  const ATTEMPT=/^[A-Za-z0-9-]{8,64}$/;
+  async function transcriptOwner(user){
+    const bound=await bind(user),row=await store.get(bound.scope);
+    if(!row)fail('Enable company monitoring first.',404);
+    if(!store.transcripts)fail('Review transcripts are unavailable.',404);
+    return {bound,row,agentId:String(row._id)};
+  }
+  async function transcripts(user){
+    const {bound,row,agentId}=await transcriptOwner(user),expired=row.leaseToken&&at(row.leaseExpiresAt)<=now();
+    const attempts=await store.transcripts.attempts(agentId);
+    await bound.access.authorize(bound.scope,'operations.read');
+    return {scope:bound.scope,revision:row.revision||0,reviewing:Boolean(row.leaseToken&&!expired&&row.activePass&&row.status==='reviewing'),attempts};
+  }
+  async function transcript(user,attemptId,after=0){
+    if(!ATTEMPT.test(attemptId||'')||!Number.isSafeInteger(after)||after<0)fail('Choose a saved review transcript.',400);
+    const {bound,row,agentId}=await transcriptOwner(user);
+    const entries=await store.transcripts.entries(agentId,attemptId,after);
+    await bound.access.authorize(bound.scope,'operations.read');
+    return {scope:bound.scope,revision:row.revision||0,attemptId,entries};
+  }
+  const streams=new Map();
+  // res: an Express response. Replays the latest attempt after the cursor, then sends entries as they
+  // are produced. Re-checks access every minute and closes after 15 minutes; the page reconnects.
+  async function transcriptStream(user,{cursor=null}={},req,res,{lifetimeMs=900000,heartbeatMs=20000,recheckMs=60000}={}){
+    const {agentId}=await transcriptOwner(user);
+    if((streams.get(agentId)||0)>=10)fail('Too many live views are open for this company. Close one and try again.',429);
+    streams.set(agentId,(streams.get(agentId)||0)+1);
+    const {subscribe}=require('./business-agent-transcript'),sent=new Map(),buffered=[];
+    let closed=false,replaying=true;
+    const write=text=>{if(!closed&&!res.writableEnded&&!res.write(text)){/* slow reader: the socket buffers; lifetime still bounds it */}};
+    const send=entry=>{if(closed||!entry||!ATTEMPT.test(entry.attemptId||''))return;if(entry.seq<=(sent.get(entry.attemptId)||0))return;sent.set(entry.attemptId,entry.seq);if(sent.size>20)sent.delete(sent.keys().next().value);write('id: '+entry.attemptId+':'+entry.seq+'\nevent: entry\ndata: '+JSON.stringify(entry)+'\n\n');};
+    // Subscribe before replaying so nothing produced during the replay is missed; duplicates are skipped by seq.
+    const off=subscribe(agentId,entry=>replaying?buffered.length<2000&&buffered.push(entry):send(entry));
+    let heartbeat=null,recheck=null,lifetime=null;
+    const close=()=>{if(closed)return;closed=true;off();clearInterval(heartbeat);clearInterval(recheck);clearTimeout(lifetime);const left=(streams.get(agentId)||1)-1;if(left>0)streams.set(agentId,left);else streams.delete(agentId);if(!res.writableEnded)res.end();};
+    req?.on?.('close',close);
+    res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});
+    res.flushHeaders?.();
+    try{
+      const latest=await store.transcripts.latest(agentId);
+      if(latest)for(const entry of await store.transcripts.entries(agentId,latest,cursor&&cursor.attemptId===latest?cursor.seq:0))send(entry);
+    }catch{write('event: notice\ndata: {"replay":"unavailable"}\n\n');}
+    replaying=false;for(const entry of buffered.splice(0))send(entry);
+    write('event: ready\ndata: {}\n\n');
+    heartbeat=setInterval(()=>write(': ping\n\n'),heartbeatMs);heartbeat.unref?.();
+    recheck=setInterval(()=>{bind(user).then(next=>next.access.authorize(next.scope,'operations.read')).then(()=>{},close);},recheckMs);recheck.unref?.();
+    lifetime=setTimeout(close,lifetimeMs);lifetime.unref?.();
+    return close;
+  }
   async function checkGrant(bound,business,session){
     if(options.checkGrant)return options.checkGrant(bound,business,session);
     const current=await store.models.Calendars.findOne(bound.scope).session(session).maxTimeMS(3000).lean();
@@ -127,7 +199,7 @@ function createBusinessAgentService(options={}) {
   async function worker(id,controller){
     const token=randomUUID();let row=await store.claim(id,token,leaseMs);if(!row)return;
     const scope=scopeOf(row),ownerId=String(row.ownerId),access=accessFor({actorId:ownerId,ownerId}),user={id:ownerId,actorId:ownerId,role:'supervisor'};
-    let pulse=null,heartbeatFailure=null,heartbeatPending=Promise.resolve(),syncer=null,pass=null,usageId=null;
+    let pulse=null,heartbeatFailure=null,heartbeatPending=Promise.resolve(),syncer=null,pass=null,usageId=null,transcript=null;
     // Each worker run is one review attempt; its id joins the usage row and the terminal event.
     const attemptId=randomUUID(),refresh={requests:0,ms:0,ticks:0};
     const syncFor=async()=>{
@@ -186,6 +258,7 @@ function createBusinessAgentService(options={}) {
           }
         }
       }
+      try{transcript?.add('outcome',{status:final,text:event?[event.title,event.detail].filter(Boolean).join(' · '):''});}catch{/* transcript is best-effort */}
       if(usageRecord){try{await usage.save(usageRecord,{outcome:final,finishedAt:new Date(now()),resetAt:error?.quota?.resetAt||null});}catch{/* The engine already saved token totals. */}}
       if(apply){try{await apply(final);}catch{/* Owner changes and expired leases win; no second terminal outcome is recorded. */}}
       return final;
@@ -248,12 +321,16 @@ function createBusinessAgentService(options={}) {
         // Each attempt starts a fresh, bounded step list fenced to this pass and lease.
         await update({activePass:pass,status:'reviewing',cadence:started,currentWork:role==='accountant'?'Main accountant is reviewing and managing the business':role+' specialist is reviewing its work',reviewProgress:{passId:pass.id,role,startedAt:new Date(now()).toISOString(),steps:[]}});
         const progressRow=row,progress=createReviewProgress({now,write:steps=>typeof store.progress==='function'?store.progress(progressRow,token,pass.id,steps):undefined});
+        // The live session transcript for this attempt: batched, best-effort and never awaited by the review.
+        const transcripts=store.transcripts||null;
+        transcript=require('./business-agent-transcript').createTranscriptRecorder({agentId:String(row._id),attemptId,passId:pass.id,role,scope,now,write:transcripts?rows=>transcripts.save(rows):null});
+        if(transcripts)transcripts.prune(String(row._id)).catch(()=>{});
         business=await store.business(scope);const decisions=await store.decisions(row),events=await store.events(row);
         const calendarClose=cadence.nextClose(business,cadence.localParts(now()).date);
         const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
         const context={usage:usageState,ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,cadence:row.cadence||null}).items};
-        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
+        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
           // Model calls are not writes: they need authority, not current sources. Write steps refresh sources themselves.
           await guard('authority');
           const state=await usageView(scope,row);
@@ -289,6 +366,7 @@ function createBusinessAgentService(options={}) {
       }
     }finally{
       if(pulse)clearInterval(pulse);await heartbeatPending;
+      if(transcript)await transcript.flush().catch(()=>{});
       const dates=[row.nextSyncAt,...(row.settings.autonomous&&row.status!=='usage-paused'?[row.nextDecisionAt,...row.settings.specialists.map(role=>row.specialists?.[role]?.nextDecisionAt)]:[])].filter(Boolean).map(at);
       const nextWakeAt=new Date(Math.max(now()+1000,dates.length?Math.min(...dates):now()+30000));
       await store.release(row,token,{nextWakeAt}).catch(()=>{});
@@ -302,7 +380,7 @@ function createBusinessAgentService(options={}) {
   function start(){if(closed||interval)return;interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
   function close(){closed=true;if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
   async function drain(){await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
-  return {status,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
+  return {status,live,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
 }
 let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService();}
 module.exports={createBusinessAgentService,getBusinessAgentService,publicSync};

@@ -309,7 +309,7 @@ function errorPreview(stdout, stderr) {
  *   tools and `toolCalls` counts calls that reached it; otherwise toolCalls
  *   counts Codex's MCP tool-call events and toolsListed is false.
  */
-async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs, effort: effortOverride, signal, maxOutputBytes, inferenceOnly = false }) {
+async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.timeoutMs, effort: effortOverride, signal, maxOutputBytes, inferenceOnly = false, onEvent = null }) {
   const deadline = Date.now() + timeoutMs;
   signal?.throwIfAborted();
   if (inferenceOnly && bridge) throw new TypeError('An independent assessment cannot receive a tool bridge.');
@@ -391,6 +391,8 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
     const handleLine = (line) => {
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      // Optional observer (the business review transcript); it can never affect the run.
+      if (typeof onEvent === 'function') { try { onEvent(event); } catch { /* observer failures are ignored */ } }
       const detected = codexSubscriptionQuota([event]);
       if (detected) quota = { ...detected, resetAt: [quota?.resetAt, detected.resetAt].filter(Boolean).sort().at(-1) || null };
       const item = event.item;

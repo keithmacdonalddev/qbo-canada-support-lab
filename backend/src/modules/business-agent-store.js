@@ -9,6 +9,7 @@ function loadModels() { return {
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
   Plans:require('../models/OperationPlan'), Receipts:require('../models/QboWriteReceipt'), Steps:require('../models/OperationStep'),
+  Transcripts:require('../models/BusinessAgentTranscript'),
 }; }
 const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000,TODAY_TTL_MS=10000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});
@@ -16,7 +17,9 @@ const publicEvent=row=>({id:String(row._id),kind:row.kind,role:row.role,title:ro
 function createBusinessAgentStore({models=loadModels(),connection=require('mongoose').connection,transaction=createBusinessTransaction(connection),now=()=>Date.now()}={}) {
   const {Agents,Events}=models;const completedCounts=new Map(),factCache=new Map(),todayCache=new Map();
   const get=(scope,session)=>Agents.findOne(scope).session(session).maxTimeMS(3000).lean();
-  async function setup(){ for(const Model of [Agents,Events,models.Records]){await Model.createCollection();await Model.createIndexes();} }
+  async function setup(){ for(const Model of [Agents,Events,models.Records,...(models.Transcripts?[models.Transcripts]:[])]){await Model.createCollection();await Model.createIndexes();} }
+  // Saved review transcripts (business-agent-transcript.js); absent when the models omit them.
+  const transcripts=models.Transcripts?require('./business-agent-transcript').createTranscriptStore({Transcripts:models.Transcripts}):null;
   async function event(row,kind,title,detail='',data={},session,key=randomUUID(),role='accountant') {
     if(typeof title!=='string'||!title||title.length>160||typeof detail!=='string'||detail.length>6000||Buffer.byteLength(JSON.stringify(data))>16000)fail('Agent activity exceeds its retained evidence size.');
     const id=hash({agentId:String(row._id),kind,key}).slice(0,24),existing=await Events.findOne({_id:id,agentId:String(row._id)}).session(session).maxTimeMS(3000).lean();
@@ -194,8 +197,11 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function release(row,token,changes){return Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token},{$set:{...changes,leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true}).lean();}
   // Best-effort live review steps: fenced to the live lease and its exact pass, never bumps the owner revision.
   async function progress(row,token,passId,steps){return Agents.updateOne({_id:row._id,...scopeOf(row),leaseToken:token,'reviewProgress.passId':passId,leaseExpiresAt:{$gt:new Date(now())}},{$set:{'reviewProgress.steps':require('./business-agent-progress').cleanSteps(steps)}}).maxTimeMS(2000);}
+  // Recent runs, their latest record steps and mirrored names for the live feed (bounded, read-only).
+  let liveReader=null;
+  async function liveActivity(scope,options){liveReader||=require('./business-agent-live').createLiveActivityReader({models,now});return liveReader(scope,options);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.activities.type').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,scopeOf};
+  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};
