@@ -276,8 +276,9 @@ function billedTimeRuntime({ source = 'query', queriedStatus = 'Billable', stand
       assert.match(new URL(options.url).searchParams.get('query'), /FROM TimeActivity WHERE Id IN/);
       return { status: 200, json: { QueryResponse: { TimeActivity: [clone(queried.record)], startPosition: 1, maxResults: 1 } } };
     }
-    assert.ok(options.url.endsWith('/timeactivity/' + time.step.qboId), options.url);
-    return { status: 200, json: { TimeActivity: clone(live.record) } };
+    const found = value.entries.find(e => options.url.endsWith('/' + e.step.entity.toLowerCase() + '/' + e.step.qboId));
+    assert.ok(found, options.url);
+    return { status: 200, json: { [found.step.entity]: clone(found.step.entity === 'TimeActivity' ? live.record : found.observed.record) } };
   } } });
   const runtime = createBusinessVerificationRuntime({ scope, operationId: h.writer.operationId, planHash: hash('operation plan'), Steps: h.models, transaction: h.dependencies.transaction, assertReady: h.dependencies.assertReady, access: { authorize: async () => ({ ownerId, actorId }), resolveClient: async () => client }, writerFence: { graphSnapshot: async () => clone(h.writer) }, plans: { loadIntent: async (_s, _o, key) => clone(value.entries.find(e => e.step.logicalKey === key).intent) }, observations, retainSources: true, now: () => h.clock });
   return { h, calls, time, queried, live, read: () => runtime.loadGraphReadback({ scope, roots: value.roots }) };
@@ -286,7 +287,7 @@ for (const source of ['query', 'mirror', 'saved']) test('same-operation conversi
   const h = billedTimeRuntime({ source }), original = clone(h.queried);
   const result = await h.read(); assert.equal(result.complete, true, JSON.stringify(result.failures));
   assert.equal(h.calls.filter(url => url.includes('/timeactivity/')).length, 1);
-  assert.equal(h.calls.length, source === 'query' ? 2 : 1);
+  assert.equal(h.calls.length, 3); assert.ok(h.calls.every(url => !url.includes('/query?')));
   const retained = JSON.parse(result.sourcesJson).find(e => e.step.entity === 'TimeActivity').observed;
   assert.equal(retained.source.kind, 'qbo-full-entity-get'); assert.deepEqual(retained.record, h.live.record);
   assert.equal(retained.recordHash, hash(h.live.record)); assert.deepEqual(h.queried, original);
@@ -304,9 +305,9 @@ test('refresh cannot hide changed time economics, customer or unrelated invoice 
     const h = billedTimeRuntime({ change }), result = await h.read(); assert.equal(result.complete, false);
   }
 });
-test('already billed or standalone time adds no confirmation GET', async () => {
+test('already billed and standalone time also use exact current GETs', async () => {
   for (const options of [{ queriedStatus: 'HasBeenBilled' }, { standalone: true }]) {
     const h = billedTimeRuntime(options), result = await h.read(); assert.equal(result.complete, true, JSON.stringify(result.failures));
-    assert.equal(h.calls.length, 1); assert.ok(h.calls[0].includes('/query?'));
+    assert.equal(h.calls.length, options.standalone ? 2 : 3); assert.ok(h.calls.every(url => !url.includes('/query?')));
   }
 });

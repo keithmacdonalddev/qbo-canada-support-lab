@@ -49,11 +49,11 @@ async function depositSet(client, paymentId, call, check) {
   }
   fail('Deposit observation exceeds the supported record budget.');
 }
-function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, purchaseOrderSources = null, now = () => Date.now() }) {
+function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, purchaseOrderSources = null, observations, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || [access?.authorize, access?.resolveClient, plans?.loadIntent, steps?.verifyGraph, steps?.evidence, verification?.readRecord, verification?.readFence, assertReady, now].some(value => typeof value !== 'function')) throw new TypeError('Compilation needs an exact operation and concrete observation adapters');
   const { authorize, resolveClient } = access, { loadIntent } = plans;
-  const references = createBusinessReferenceReader({ authorize, resolveClient, now });
+  const references = createBusinessReferenceReader({ authorize, resolveClient, now, observationStore: observations });
   return async function loadCompilationEvidence(input) {
     if (!input || !sameScope(input.scope, scope) || input.operationId !== operationId || !HASH.test(input.logicalKey || '')) fail('Compilation cannot switch the bound operation or company.');
     const supplied = structuredClone(input.intent), logicalKey = input.logicalKey, signal = input.signal;
@@ -94,7 +94,9 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       for (const binding of intent.step.references) unique.set(binding.entity + ':' + binding.id, binding);
       const referenceEvidence = [], parents = [], jobs = [];
       for (const binding of unique.values()) jobs.push(async () => {
-        const observed = await call(() => references(scope, binding.entity, binding.id, { signal: controller.signal })); check();
+        // Item quantity is consumed by stock availability checks, and a prior Bill or
+        // sale in this operation can change it without invalidating a definition copy.
+        const observed = await call(() => references(scope, binding.entity, binding.id, { signal: controller.signal, live: binding.entity === 'Item' })); check();
         referenceEvidence.push({ ...observed, ...tag });
       });
       for (const dependency of intent.dependencies) jobs.push(async () => {

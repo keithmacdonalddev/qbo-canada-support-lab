@@ -42,24 +42,13 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   const checkScope = value => { if (!sameScope(value, scope)) fail('Verification cannot switch its bound company.'); };
   const checkSignal = signal => { if (signal?.aborted) fail('Business verification was cancelled.'); };
   const authority = async (value, action, options = {}) => { checkScope(value); checkSignal(options.signal); const actor = await authorize(scope, action, options); checkSignal(options.signal); return actor; };
-  const rawRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now, observationStore: observations });
+  // Every transaction observation must follow the operation's earlier writes.
   const liveRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now, observationStore: null });
+  const rawRecord = liveRecord;
   const preparedRecords = new WeakSet();
   const readBatch = createBusinessTransactionBatchReader({ access: { authorize: authority, resolveClient }, observations, now });
   const prepareRecords = async (value, steps, options = {}) => {
     const records = await readBatch(value, steps, options);
-    // A linked invoice can change the computed billing state of its time entry
-    // without changing its SyncToken. Confirm an apparently unbilled query/mirror
-    // with one exact GET; the conversion verifier still requires HasBeenBilled.
-    const billedParents = new Set(steps.filter(step => step.entity === 'Invoice').flatMap(step =>
-      step.compilation.relationships.filter(link => link.entity === 'TimeActivity' && link.kind === 'linked')
-        .map(link => link.logicalKey + ':' + link.qboId)));
-    for (const step of steps) {
-      const key = step.entity + ':' + step.qboId, observed = records.get(key);
-      if (step.entity === 'TimeActivity' && billedParents.has(step.logicalKey + ':' + step.qboId) && observed?.record.BillableStatus === 'Billable' && observed.source?.kind !== 'qbo-full-entity-get') {
-        records.set(key, await liveRecord(value, step.entity, step.qboId, options));
-      }
-    }
     for (const record of records.values()) preparedRecords.add(record);
     return records;
   };
@@ -87,13 +76,8 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     // A zero-funds application posts nothing a ledger could show. Read-back proves it
     // from its exact application pair instead, or refuses it (no evidence is added here).
     if (['Payment', 'BillPayment'].includes(entity) && observed.record.TotalAmt === 0) return observed;
-    // A saved create response predates later steps of the same operation (a payment
-    // applied to this invoice changes its balance and links), so the ledger bracket
-    // must open on a current live observation or it can never match the closing read.
-    // Direct compilation reads also need that live time: a create response can
-    // predate the parent's newly persisted routing proof even before payment.
-    // Any copy (saved response or synced mirror) can predate this operation's own later steps; the bracket opens on a live read.
-    observed = await liveRecord(scope, entity, qboId, { signal }); checkSignal(signal);
+    // Prepared records and direct reads are exact GETs taken inside the current
+    // writer fence. Use that observation to open the unchanged-record bracket.
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const compiled = row?.compilation;

@@ -112,9 +112,9 @@ function omittedInvoiceHarness() {
 test('runtime independently reads original AR account, exact ledger and unchanged invoice', async () => {
   const h = omittedInvoiceHarness(), observed = await h.runtime().readRecord(scope, 'Invoice', '2000');
   assert.equal(observed.record.ARAccountRef, undefined); assert.equal(observed.recordHash, hash(h.sample.observed.record));
-  assert.equal(observed.accountRouting.accountId, '601'); assert.equal(h.calls.length, 5);
-  assert.equal(h.calls[3].url, 'https://sandbox-quickbooks.api.intuit.com/v3/company/123/reports/GeneralLedger?start_date=2026-10-06&end_date=2026-10-06&account=601&accounting_method=Accrual');
-  assert.equal(h.calls[3].maxRetries, 1);
+  assert.equal(observed.accountRouting.accountId, '601'); assert.equal(h.calls.length, 4);
+  assert.equal(h.calls[2].url, 'https://sandbox-quickbooks.api.intuit.com/v3/company/123/reports/GeneralLedger?start_date=2026-10-06&end_date=2026-10-06&account=601&accounting_method=Accrual');
+  assert.equal(h.calls[2].maxRetries, 1);
 });
 test('runtime refuses changed invoice, incomplete report, altered original dispatch or writer', async () => {
   for (const change of [h => { h.onCall = options => { if (options.url.includes('/reports/')) h.sample.observed.record.SyncToken = '1'; }; }, h => { h.report.Rows.Row[0].Header.ColData[0].id = '999'; }, h => { h.row.dispatch.requestHash = hash('other'); }, h => { h.deps.writerFence.graphSnapshot = async () => ({ scope, operationId, revision: h.snapshots.length++ }); }]) {
@@ -130,7 +130,22 @@ test('runtime cancellation rejects the awaiting ledger read and drains a late re
 });
 
 test('repeated omitted-account proof reuses its ledger only for unchanged independently observed content',async()=>{
- const h=omittedInvoiceHarness(),runtime=h.runtime();await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,5);
- await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,8);assert.equal(h.calls.filter(call=>call.url.includes('/reports/')).length,1);
+ const h=omittedInvoiceHarness(),runtime=h.runtime();await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,4);
+ await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.length,6);assert.equal(h.calls.filter(call=>call.url.includes('/reports/')).length,1);
  h.sample.observed.record.SyncToken='1';h.sample.refresh();await runtime.readRecord(scope,'Invoice','2000');assert.equal(h.calls.filter(call=>call.url.includes('/reports/')).length,2);
+});
+
+// Even an explicitly injected observation store cannot make transaction versions
+// current: a child save can alter the record without changing its SyncToken.
+test('transaction reader cannot opt back into stale mirror or saved-response reuse', async () => {
+  const { createBusinessTransactionReader } = require('../src/modules/business-reference');
+  for (const entity of ['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'BillPayment']) {
+    const h = harness(entity); let copyReads = 0;
+    const stale = clone(h.sample.observed); stale.record.SyncToken = h.sample.observed.record.SyncToken; stale.record.fixtureStale = true; stale.recordHash = hash(stale.record);
+    const observationStore = { read: async () => { copyReads++; return stale; }, saved: async () => { copyReads++; return stale; } };
+    const read = createBusinessTransactionReader({ authorize: h.authorize, resolveClient: async () => h.client, observationStore, now: () => h.clock });
+    const observed = await read(scope, entity, h.sample.observed.record.Id);
+    assert.equal(copyReads, 0); assert.equal(h.calls.length, 1); assert.equal(observed.source.kind, 'qbo-full-entity-get');
+    assert.equal(observed.record.fixtureStale, undefined); assert.equal(observed.recordHash, hash(h.sample.observed.record));
+  }
 });

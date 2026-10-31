@@ -72,7 +72,9 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
     try {
       check(); const actor = await call(() => authorize(scope, action, { signal: controller.signal })); check();
       if (!actor?.actorId) fail('Company reference read permission is required.');
-      if (observationStore && !live) {
+      // Transaction balances, links and computed states can change after any related
+      // save without a SyncToken change. Copies are only safe for master definitions.
+      if (observationStore && !live && !transactions) {
         let cached;
         try { cached = await call(() => observationStore.read(scope, entity, id, { transactions, signal: controller.signal }));
           if (!cached && transactions) cached = await call(() => observationStore.saved(scope, entity, id, { signal: controller.signal }));

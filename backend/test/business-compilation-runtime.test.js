@@ -95,3 +95,16 @@ test('malformed or unrecognized deposit lines cannot establish absence of paymen
     const h = harness('Deposit'); h.deposits = [{ Id: '9000', SyncToken: '0', Line: [line] }]; await assert.rejects(h.read(), /deposit line|Deposit transaction links/);
   }
 });
+
+test('stock compilation reads Item quantity after a prior receipt instead of its definition mirror', async () => {
+  const h = harness('SalesReceipt'), item = h.f.referenceEvidence.find(x => x.entity === 'Item' && x.record.Type === 'Inventory');
+  const stale = clone(item); stale.record.QtyOnHand = 0; stale.recordHash = hash(stale.record); stale.source.recordHash = stale.recordHash;
+  let itemCopies = 0;
+  h.deps.observations = { read: async (_scope, entity, id) => { if (entity === 'Item' && id === item.record.Id) { itemCopies++; return stale; } return null; } };
+  assert.equal((await h.deps.observations.read(scope, 'Item', item.record.Id)).record.QtyOnHand, 0); itemCopies = 0;
+  const values = await h.read();
+  assert.equal(itemCopies, 0, 'quantity-sensitive compilation must bypass the available old copy');
+  assert.equal(values.referenceEvidence.find(x => x.entity === 'Item' && x.record.Id === item.record.Id).record.QtyOnHand, 12);
+  item.record.QtyOnHand = 0;
+  await assert.rejects(h.read(), /stock availability/);
+});
