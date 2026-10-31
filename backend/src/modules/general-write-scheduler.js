@@ -26,6 +26,10 @@ function resourcesOf(operation, local) {
   const resources = new Set();
   if (operation.id !== undefined) resources.add('record:' + operation.entity + ':' + operation.id);
   for (const key of linkedRecords(operation.payload)) resources.add('record:' + key);
+  // A link to a record created earlier in this write is a shared resource too: two payments
+  // of one new invoice never share a batch.
+  const pending = [...(operation.payload?.LinkedTxn || []), ...(Array.isArray(operation.payload?.Line) ? operation.payload.Line : []).flatMap(line => line?.LinkedTxn || [])];
+  for (const link of pending) { const name = plain(link?.TxnId) ? link.TxnId.$ref : link?.$ref; if (name !== undefined) resources.add('record:$ref:' + name); }
   for (const key of stockItems(operation.entity, operation.payload, local)) resources.add(key);
   // Before and after: a change or removal also claims what the record linked and moved
   // before (a removed link changes that record's balance and backlinks).

@@ -16,6 +16,12 @@ function normalizeWorkflow(value) {
     if (!/^[a-f0-9]{64}$/.test(value.authorityHash || '') || Object.keys(value).some(key => !['version','kind','authorityHash'].includes(key))) throw denied('An exact immutable owned-link repair authority is required.');
     return Object.freeze({ version: 1, kind: 'business-link-repair', authorityHash: value.authorityHash });
   }
+  if (value?.version === 1 && value.kind === 'general-write') {
+    // One saved batch of a general governed write (general-write-v1); sends counts transport
+    // attempts of that same batch (a replay after a lost response keeps its requestid).
+    if (!ID.test(value.runId || '') || !Number.isSafeInteger(value.batchIndex) || value.batchIndex < 0 || value.batchIndex > 999 || !Number.isSafeInteger(value.sends) || value.sends < 1 || value.sends > 10 || Object.keys(value).sort().join(',') !== 'batchIndex,kind,runId,sends,version') throw denied('A general write needs its exact saved run, batch and transport attempt.');
+    return Object.freeze({ version: 1, kind: 'general-write', runId: value.runId, batchIndex: value.batchIndex, sends: value.sends });
+  }
   if (value?.version === 1 && value.kind === 'master-preparation') {
     if (!ID.test(value.runId || '') || !Number.isSafeInteger(value.ordinal) || value.ordinal < 0 || value.ordinal > 99 || !Number.isSafeInteger(value.attempt) || value.attempt < 1 || value.attempt > 10 || typeof value.leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(value.leaseToken)) throw denied('An exact saved master attempt and current worker are required for correlation.');
     return Object.freeze({ version: 1, kind: 'master-preparation', runId: value.runId, ordinal: value.ordinal, attempt: value.attempt, leaseToken: value.leaseToken });

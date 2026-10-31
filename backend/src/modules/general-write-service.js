@@ -30,10 +30,21 @@ function wanted(value, out = []) {
 }
 // A synchronous view of the copy for the pure guards: prefetch every record the proposal
 // names, the records those link to, and the accounts and items their lines use.
-async function loadCopy(copy, scope, operations, owned, extras = []) {
+async function loadCopy(copy, scope, operations, owned, extras = [], stale = new Set()) {
   const map = new Map(), seen = new Set();
-  // Records this write already saved (from their complete responses) count as current.
-  for (const { entity, record } of extras) if (record?.Id) { map.set(entity + ':' + String(record.Id), record); seen.add(entity + ':' + String(record.Id)); }
+  // Records this write already saved (from their complete responses) count as current,
+  // unless a later saved item of this write changed them (a payment changes its invoice's
+  // balance): a saved response is stale once a later step touches the same record. Those
+  // are read fresh, once, from QuickBooks.
+  for (const { entity, record } of extras) { const key = entity + ':' + String(record?.Id); if (record?.Id && !stale.has(key)) { map.set(key, record); seen.add(key); } }
+  for (const key of stale) {
+    if (seen.has(key)) continue;
+    const [entity, id] = key.split(':');
+    if (typeof copy.fetch !== 'function') fail(key.replace(':', ' ') + ' was changed by this write; its current version must be read before the next batch.');
+    const record = await copy.fetch(scope, entity, id);
+    if (!record || String(record.Id) !== id) fail(key.replace(':', ' ') + ' could not be read fresh from QuickBooks; nothing more was sent.');
+    map.set(key, record); seen.add(key);
+  }
   const fetch = async pairs => { for (const [entity, id] of pairs) { const key = entity + ':' + id; if (seen.has(key)) continue; seen.add(key); const record = await copy.read(scope, entity, id); if (record) map.set(key, record); } };
   await fetch(operations.filter(op => op?.id).map(op => [op.entity, String(op.id)]));
   for (let round = 0; round < 3; round++) await fetch([...operations.map(op => op?.payload), ...map.values()].flatMap(value => wanted(value)));
@@ -75,10 +86,10 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     }
     return owned;
   }
-  async function guard(scope, operations, extras = []) {
+  async function guard(scope, operations, extras = [], stale = new Set()) {
     const owned = await ownedSet(scope, operations);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
-    const local = await loadCopy(copy, scope, operations, owned, extras), context = await contextFor(scope, local);
+    const local = await loadCopy(copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local);
     return { result: checkGeneralWrite({ proposal: { operations }, local, context }), local, context };
   }
   // Preparation: validate, guard and save the plan. Nothing is sent.
@@ -89,7 +100,9 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     const existing = await Runs.findOne({ _id, environment: scope.environment, realmId: scope.realmId }).lean();
     if (existing) { if (existing.contentHash !== contentHash) fail('decisionKey ' + input.decisionKey + ' already names different work (' + existing.status + '). Use a new decisionKey for a new decision.'); return { runId: _id, status: existing.status, reused: true, plan: summary(existing.plan) }; }
     const { result, context } = await guard(scope, input.operations);
-    if (!result.ok) return { runId: null, status: 'refused', problems: result.problems };
+    // Void through the batch endpoint is not confirmed against the QuickBooks reference yet.
+    const voids = input.operations.filter(op => op?.op === 'void').map(op => ({ ref: op.ref, message: 'Void is not enabled for general writes yet; delete the record you created, or correct it with a credit or reversing entry.' }));
+    if (!result.ok || voids.length) return { runId: null, status: 'refused', problems: [...(result.problems || []), ...voids] };
     await Runs.create([{ _id, contract: 'general-write-v1', ...scope, ownerId: bound.ownerId, actorId: bound.actorId, agentAuthority: bound.agentAuthority || null, decisionKey: input.decisionKey, contentHash, purpose: input.purpose.trim(), day: context.day, plan: result.plan, status: 'prepared' }]);
     return { runId: _id, status: 'prepared', reused: false, plan: summary(result.plan) };
   }
@@ -119,7 +132,10 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         const operations = remaining.map(op => ({ ref: op.ref, op: op.op, entity: op.entity, ...(op.id ? { id: op.id } : {}), payload: resolve(op.payload, saved), ...(op.reason ? { reason: op.reason } : {}) }));
         // Earlier saved records count for references; their ids are now real ids.
         const extras = Object.values(run.items).filter(item => item.outcome === 'saved' && item.record).map(item => ({ entity: item.entity, record: item.record }));
-        const { result, local, context } = await guard(scope, operations, extras);
+        // Records whose balance or backlinks a saved item changed, and that remaining work uses.
+        const stale = new Set(Object.values(run.items).filter(item => ['saved', 'deleted'].includes(item.outcome)).flatMap(item => item.parents || []));
+        const used = new Set(operations.flatMap(op => [op.id ? op.entity + ':' + op.id : null, ...wanted(op.payload).map(([entity, id]) => entity + ':' + id)]).filter(Boolean));
+        const { result, local, context } = await guard(scope, operations, extras, new Set([...stale].filter(key => used.has(key))));
         if (context.day !== run.day) { run = await save(run, { status: 'needs-correction', lastError: 'The business day changed since this write was prepared (' + run.day + ' → ' + context.day + '). Prepare it again with a new decisionKey.' }); return report(run); }
         if (!result.ok) { run = await save(run, { status: 'needs-correction', lastError: 'The company changed since preparation: ' + result.problems.map(row => (row.ref ? row.ref + ': ' : '') + row.message).join(' ') }); return report(run, result.problems); }
         const first = new Set(result.plan.layers[0]), attempt = run.batches.length + 1;
@@ -134,9 +150,13 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if (markers.length && markDirty) await markDirty(scope, markers);
         run = await save(run, { batches: [...run.batches, batch], dirty: [...run.dirty, ...markers], status: 'sending' });
       }
-      // Send (or replay) exactly the saved identity.
+      // Send (or replay) exactly the saved identity. Each transport attempt is counted first,
+      // so a replay is a new receipt with the same requestid and bIds.
+      run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, sends: (row.sends || 0) + 1 } : row) });
+      batch = run.batches.find(row => row.index === batch.index);
+      if (batch.sends > 10) { run = await save(run, { status: 'unknown', lastError: 'This batch used its transport attempts; its outcome must be attributed before anything else is sent.' }); return report(run); }
       let response;
-      try { response = await transport.sendBatch(scope, { requestId: batch.requestId, items: batch.items.map(item => ({ bId: item.bId, operation: item.operation, entity: item.entity, payload: item.payload })) }); }
+      try { response = await transport.sendBatch(scope, { runId: run._id, batch }); }
       catch (error) {
         if (error?.lost !== true) throw error;
         run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, state: 'lost' } : row), status: 'unknown', lastError: 'The QuickBooks response was lost; the same request will be replayed with its original identity.' });
@@ -194,10 +214,14 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
 }
 // Server composition: the synced copy through the hardened observation store (fresh
 // sources only), the published-business context, and NO transport yet (dispatch held).
-function createDefaultGeneralWrite({ now = () => Date.now() } = {}) {
+function createDefaultGeneralWrite({ now = () => Date.now(), access = null } = {}) {
   const models = { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
   const observations = require('./business-observation-store').createBusinessObservationStore({ now });
-  const copy = { read: async (scope, entity, id) => (await observations.read(scope, entity, id))?.record || null };
-  return createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now }), transport: null, now });
+  // fetch: one targeted fresh read, only for a record this same write just changed.
+  const copy = { read: async (scope, entity, id) => (await observations.read(scope, entity, id))?.record || null, fetch: async (scope, entity, id) => access ? (await (await access.resolveClient(scope)).read(entity.toLowerCase(), id))?.[entity] || null : null };
+  // The live transport exists only when dispatch is enabled on this server.
+  const enabled = require('../config').features?.generalWriteDispatch === true;
+  const transport = enabled && access ? require('./general-write-transport').createGeneralLiveTransport({ access, models: { GeneralWriteRuns: require('../models/GeneralWriteRun'), Agents: require('../models/BusinessAgent') }, now }) : null;
+  return createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now }), transport, retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest };

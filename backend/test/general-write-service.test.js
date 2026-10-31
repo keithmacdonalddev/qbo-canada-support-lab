@@ -43,7 +43,7 @@ function company() {
   };
   // QuickBooks dedupes a batch by requestid: a replay returns the original result.
   const answered = new Map();
-  const transport = { failNext: null, lose: 0, sendBatch: async (s, batch) => {
+  const transport = { failNext: null, lose: 0, sendBatch: async (s, { batch }) => {
     sent.push(structuredClone(batch));
     if (answered.has(batch.requestId)) return structuredClone(answered.get(batch.requestId));
     const response = batch.items.map(item => transport.failNext?.ref === item.bId ? (transport.failNext = null, { bId: item.bId, Fault: { Error: [{ code: '6140', Message: 'Duplicate Document Number Error' }] } }) : { bId: item.bId, ...apply(item) });
@@ -51,7 +51,8 @@ function company() {
     if (transport.lose > 0) { transport.lose--; throw Object.assign(new Error('socket hang up'), { lost: true }); }
     return response;
   } };
-  return { records, sent, transport, copy: { read: async (s, entity, id) => structuredClone(records.get(entity + ':' + id) || null) } };
+  const fetched = [];
+  return { records, sent, transport, fetched, copy: { read: async (s, entity, id) => structuredClone(records.get(entity + ':' + id) || null), fetch: async (s, entity, id) => { fetched.push(entity + ':' + id); return structuredClone(records.get(entity + ':' + id) || null); } } };
 }
 function service(h, { enabled = true, Runs = fakeRuns(), dirty = [] } = {}) {
   const models = { GeneralWriteRuns: Runs, Steps: { findOne: () => ({ select() { return this; }, maxTimeMS() { return this; }, lean: async () => null }) } };
@@ -104,4 +105,22 @@ test('a faulted item stops for correction while saved siblings stay saved; histo
   assert.equal(s.dirty.length, 1); assert.equal(s.dirty[0].date, '2026-11-20');
   assert.equal(h.sent[0].items.find(item => item.payload.Id === '100').payload.SyncToken, '2', 'the update carries the copy’s current SyncToken');
   assert.equal(h.records.get('Invoice:100').DueDate, '2027-01-15');
+});
+
+test('a saved response is stale once a later item changes the same record: the next batch re-reads it, and plan-wide over-application is refused', async () => {
+  const pay = (ref, amount) => ({ ref, op: 'create', entity: 'Payment', payload: { TxnDate: DAY, CustomerRef: { value: '1' }, TotalAmt: amount, Line: [{ Amount: amount, LinkedTxn: [{ TxnId: { $ref: 'inv1' }, TxnType: 'Invoice' }] }] } });
+  // 90 + 150 exceeds the new invoice's $230: refused before either payment is sent.
+  const h = company(), s = service(h);
+  const over = await s.api.prepare(bound, input('stale-parent-check-1', [invoiceOp, pay('pay1', 90), pay('pay2', 150)]));
+  assert.equal(over.plan.batches, 3, 'two payments of one invoice never share a batch');
+  const refused = await s.api.execute(bound, over.runId);
+  assert.equal(refused.status, 'needs-correction'); assert.equal(refused.items.pay1, undefined); assert.match(refused.message, /has \$230 open; this plan applies \$240/);
+  assert.equal(h.sent.length, 1);
+  // 90 + 140 settles it exactly: after the first payment the invoice is read fresh, once.
+  const k = company(), t = service(k);
+  const exact = await t.api.prepare(bound, input('stale-parent-check-2', [invoiceOp, pay('pay1', 90), pay('pay2', 140)]));
+  const done = await t.api.execute(bound, exact.runId);
+  assert.equal(done.status, 'complete', JSON.stringify(done));
+  assert.deepEqual(k.fetched, ['Invoice:' + done.items.inv1.qboId], 'one targeted fresh read of the changed invoice');
+  assert.equal(k.records.get('Invoice:' + done.items.inv1.qboId).Balance, 0);
 });

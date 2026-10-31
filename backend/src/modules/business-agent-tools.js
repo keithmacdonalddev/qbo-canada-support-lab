@@ -148,7 +148,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
       await requireNoUnfinished();
       await access.authorize(scope,'operations.preview',{signal});
-      const general=require('./general-write-service').createDefaultGeneralWrite({now});
+      const general=require('./general-write-service').createDefaultGeneralWrite({now,access});
       const bound={scope,ownerId:String(row.ownerId),actorId:String(user.actorId||user.id),agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)}};
       const prepared=await general.prepare(bound,input);
       if(prepared.status==='refused')result={success:false,refused:true,problems:prepared.problems,error:'Nothing was sent. Correct the listed operations and send again with the same decisionKey.'};
