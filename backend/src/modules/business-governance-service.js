@@ -222,6 +222,11 @@ function createBusinessGovernanceService(dependencies = {}) {
     await readCanadianCompany(client, scope, now);
     const view = { ...scope, draft: active.view, proposal: proposalView() };
     const setup = await (dependencies.readSetup || readDraftSetup)(client, scope, now), masters = await (dependencies.readMasters || readBusinessMasters)(client, scope, now);
+    // General governed writes (general-write-v1) dated in this period, and history edits
+    // inside verified history, must pass their day-close check before the calendar moves.
+    // A composition without general-write storage (an isolated fixture) has no general writes.
+    const generalGate = dependencies.generalCloseGate || (!dependencies.models || models.GeneralWriteRuns ? require('./general-write-close-gate').createGeneralCloseGate({ models: dependencies.models ? { GeneralWriteRuns: models.GeneralWriteRuns, GeneralDayCloses: models.GeneralDayCloses, Records: models.Records } : {}, copy: { read: async (s, entity, id) => (await require('./business-observation-store').createBusinessObservationStore({ now }).read(s, entity, id))?.record || (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] || null }, now }) : null);
+    if (!batchChoices && generalGate) await generalGate.assertPeriodReady(scope, { fromDate, throughDate: request.throughDate, verifiedThrough: active.calendar.verifiedThrough, openingDate: active.value.openingDate, mappings: active.view.mappings || {}, readLedger: (from, through) => client.apiCall('GET', require('./general-write-day-close').ledgerEndpoint(from, through)) });
     let prepared;
     if (batchChoices) {
       const batchTools = require('./business-activity-batch');

@@ -403,3 +403,29 @@ Kept, and counted above:
    assertion.
 6. Prompt and tool descriptions. Then enable on Production after a full simulated run
    and the lead's go-ahead.
+
+## Implementation status (2026-10-31)
+
+Built and tested on the simulated company and in-memory storage. Dispatch stays off
+(`GENERAL_WRITE_DISPATCH_ENABLED`) until the lead's implementation review:
+
+- Tools: `manageQboRecord` (core) and `getQboEntitySchema` (deferred), plans saved as
+  `GeneralWriteRun` (`general-write-service.js`).
+- Live transport: `general-write-transport.js` with a dedicated `generalTransport` in
+  `qbo-write-gate.js` (receipt and writer barrier before sending, per-item period proof,
+  per-item classification and settlement, same-requestid replay as a new attempt).
+  Void through batch is refused until confirmed against the batch reference.
+- Stale saved responses: a record this write created and a later item changed is read
+  fresh (one targeted GET) before the next batch; links to records created earlier in the
+  plan are shared scheduler resources.
+- Day close: `general-write-close-gate.js` gates scheduled-period preparation
+  (`business-governance-service.js`). Every general record dated in the period must pass
+  `closeGeneralDay` (one General Ledger read with explicit debit and credit columns per
+  range; tax rows are compared on the published tax accounts as one tax key), and every
+  history marker inside verified history is re-verified over its range through the
+  cursor. Results are retained as `GeneralDayClose` rows; a failure blocks the calendar
+  with its reasons. Same-day general writes are inside the period's opening trial
+  balance, so the existing movement proof is unchanged; the gate is their proof.
+- Not yet: exact-replay read-back resolution of unresolved items, re-verification of
+  fixed-workflow records inside a dirty range (only general records are re-checked), and
+  a Company-page view of `GeneralDayClose` results.
