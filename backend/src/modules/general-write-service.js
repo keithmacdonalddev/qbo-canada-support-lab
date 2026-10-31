@@ -12,7 +12,7 @@ const { businessErrorDetail, attachBusinessError, failureFields } = require('./b
 // written outside the period proof would fail the next close.
 const { hash, canonical } = require('./business-calendar');
 const { checkGeneralWrite } = require('./general-write-guards');
-const { itemOutcomes, matchesRequest } = require('./general-write-recovery');
+const { itemOutcomes, matchesRequest, matchesSavedRequest } = require('./general-write-recovery');
 const { isComplete, invalidatedParents } = require('./general-write-merge');
 const { REF_TARGETS } = require('./qbo-entity-schema');
 const KEY = /^[a-zA-Z0-9_-]{8,100}$/, QBO_ID = /^\d{1,30}$/, MAX_ATTEMPTS = 3;
@@ -204,7 +204,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if (outcome.outcome === 'saved') {
           const record = outcome.record, complete = isComplete(item.entity, record, item.op === 'create' ? item.payload : null);
           entry.qboId = String(record?.Id ?? ''); entry.version = record?.SyncToken ?? null; entry.record = record || null;
-          if (!QBO_ID.test(entry.qboId) || !matchesRequest(item.payload, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'unresolved', reason: 'QuickBooks saved values that differ from the request.' }; }
+          if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest(item, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'unresolved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
           else {
             entry.complete = complete; entry.parents = invalidatedParents(item.before || null, record);
             if (complete && retain) await retain(scope, item.entity, record, new Date(now()).toISOString());

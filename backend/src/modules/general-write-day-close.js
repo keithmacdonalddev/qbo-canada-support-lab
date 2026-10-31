@@ -7,6 +7,7 @@
 // existing period assertion and the dirty ranges that must be re-verified. No QuickBooks
 // call is made here: the caller supplies the report (one set of reports per day close).
 const { hash } = require('./business-calendar');
+const { preservesBillableState } = require('./billable-charge-links');
 const { evaluateDay, dirtyRange, explainedByOwnSettlements } = require('./general-write-close');
 const SETTLEMENT_ENTITIES = new Set(['Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Deposit']);
 const settlementKey = link => (link.TxnType === 'BillPaymentCheck' ? 'BillPayment' : link.TxnType) + ':' + String(link.TxnId);
@@ -101,6 +102,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
   for (const { item, op, before, id, dates, request } of candidates.values()) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
+    if (item.outcome === 'saved' && !preservesBillableState(before, item.record, item.entity)) fail('General write ' + item.entity + ' ' + id + ' changed native billable expense history; recover its original evidence before close.');
     const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;

@@ -11,6 +11,7 @@
 // checkGeneralWrite returns { ok, problems, plan }; problems name each operation by its
 // ref and say plainly what to change, so the model can correct and re-propose.
 const { ENTITIES, VOID_SUPPORT, REF_TARGETS, ACCOUNT_TYPES, readOnlyFields } = require('./qbo-entity-schema');
+const { billableWriteProblems } = require('./billable-charge-links');
 const REF = /^[a-z][a-z0-9-]{0,39}$/, QBO_ID = /^\d{1,30}$/, DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_CAPS = Object.freeze({ record: 5000000, operation: 12000000, journalLine: 1000000, quantity: 1000000, operations: 60, lines: 100, bytes: 65536 });
 const TAXED_LINES = ['SalesItemLineDetail', 'ItemBasedExpenseLineDetail', 'AccountBasedExpenseLineDetail'];
@@ -146,6 +147,7 @@ function checkGeneralWrite({ proposal, local, context }) {
     if (typeof op.reason === 'string') entry.reason = op.reason.trim();
     const after = effectiveRecord(op.op, existing, payload);
     entry.after = after;
+    for (const message of billableWriteProblems(op.entity, op.op, payload, existing)) say(ref, message);
     // 1. Shape of what is sent.
     for (const key of readOnlyFields(op.entity)) if (payload[key] !== undefined) say(ref, key + ' is set by QuickBooks; leave it out.');
     if (op.op === 'create') for (const key of spec.required) if (payload[key] === undefined) say(ref, op.entity + ' needs ' + key + '.');

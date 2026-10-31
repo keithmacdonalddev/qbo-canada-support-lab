@@ -1,0 +1,556 @@
+{
+  "invoices": [
+    {
+      "AllowIPNPayment": false,
+      "AllowOnlinePayment": false,
+      "AllowOnlineCreditCardPayment": false,
+      "AllowOnlineACHPayment": false,
+      "AllowOnlinePayPalPayment": false,
+      "AllowOnlineAffirmPayment": false,
+      "EInvoiceStatus": "Sent",
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "401",
+      "SyncToken": "19",
+      "TxnDate": "2026-01-30",
+      "CurrencyRef": {
+        "value": "CAD"
+      },
+      "ExchangeRate": 1,
+      "LinkedTxn": [
+        {
+          "TxnId": "400",
+          "TxnType": "ReimburseCharge"
+        },
+        {
+          "TxnId": "399",
+          "TxnType": "ReimburseCharge"
+        }
+      ],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Amount": 733.37,
+          "LinkedTxn": [
+            {
+              "TxnId": "400",
+              "TxnType": "ReimburseCharge",
+              "TxnLineId": "1"
+            }
+          ],
+          "DetailType": "SalesItemLineDetail",
+          "SalesItemLineDetail": {
+            "ServiceDate": "2025-08-09",
+            "TaxInclusiveAmt": 828.71,
+            "MarkupInfo": {
+              "PercentBased": false,
+              "Value": 733.37,
+              "MarkUpIncomeAccountRef": {
+                "value": "51"
+              }
+            },
+            "ItemAccountRef": {
+              "value": "51"
+            },
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        },
+        {
+          "Id": "2",
+          "LineNum": 2,
+          "Amount": 0,
+          "LinkedTxn": [
+            {
+              "TxnId": "399",
+              "TxnType": "ReimburseCharge",
+              "TxnLineId": "1"
+            }
+          ],
+          "DetailType": "SalesItemLineDetail",
+          "SalesItemLineDetail": {
+            "ServiceDate": "2025-01-01",
+            "MarkupInfo": {
+              "PercentBased": false,
+              "Value": 0,
+              "MarkUpIncomeAccountRef": {
+                "value": "51"
+              }
+            },
+            "ItemAccountRef": {
+              "value": "51"
+            },
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        },
+        {
+          "Id": "4",
+          "LineNum": 3,
+          "Amount": 382.5,
+          "DetailType": "GroupLineDetail",
+          "GroupLineDetail": {
+            "GroupItemRef": {
+              "value": "14"
+            },
+            "Quantity": 1,
+            "Line": [
+              {
+                "Id": "10",
+                "LineNum": 4,
+                "Amount": 0,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                  "ItemRef": {
+                    "value": "13"
+                  },
+                  "UnitPrice": 0,
+                  "Qty": 1,
+                  "ItemAccountRef": {
+                    "value": "9"
+                  },
+                  "TaxCodeRef": {
+                    "value": "11"
+                  }
+                },
+                "CustomExtensions": []
+              },
+              {
+                "Id": "11",
+                "LineNum": 5,
+                "Amount": 46.46,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                  "TaxInclusiveAmt": 52.5,
+                  "ItemRef": {
+                    "value": "9"
+                  },
+                  "UnitPrice": 15.4866667,
+                  "Qty": 3,
+                  "ItemAccountRef": {
+                    "value": "80"
+                  },
+                  "TaxCodeRef": {
+                    "value": "11"
+                  }
+                },
+                "CustomExtensions": []
+              },
+              {
+                "Id": "12",
+                "LineNum": 6,
+                "Amount": 26.55,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                  "TaxInclusiveAmt": 30,
+                  "ItemRef": {
+                    "value": "8"
+                  },
+                  "UnitPrice": 26.55,
+                  "Qty": 1,
+                  "ItemAccountRef": {
+                    "value": "55"
+                  },
+                  "TaxCodeRef": {
+                    "value": "11"
+                  }
+                },
+                "CustomExtensions": []
+              },
+              {
+                "Id": "13",
+                "LineNum": 7,
+                "Amount": 265.49,
+                "DetailType": "SalesItemLineDetail",
+                "SalesItemLineDetail": {
+                  "TaxInclusiveAmt": 300,
+                  "ItemRef": {
+                    "value": "11"
+                  },
+                  "UnitPrice": 265.49,
+                  "Qty": 1,
+                  "ItemAccountRef": {
+                    "value": "9"
+                  },
+                  "TaxCodeRef": {
+                    "value": "11"
+                  }
+                },
+                "CustomExtensions": []
+              }
+            ]
+          },
+          "CustomExtensions": []
+        },
+        {
+          "Amount": 1071.87,
+          "DetailType": "SubTotalLineDetail",
+          "SubTotalLineDetail": {}
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 139.34,
+        "TaxLine": [
+          {
+            "Amount": 139.34,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "24"
+              },
+              "PercentBased": true,
+              "TaxPercent": 13,
+              "NetAmountTaxable": 1071.87
+            }
+          }
+        ]
+      },
+      "CustomerRef": {
+        "value": "19"
+      },
+      "FreeFormAddress": false,
+      "SalesTermRef": {
+        "value": "1"
+      },
+      "DueDate": "2026-03-18",
+      "GlobalTaxCalculation": "TaxInclusive",
+      "TotalAmt": 1211.21,
+      "HomeTotalAmt": 1211.21,
+      "Balance": 1211.21,
+      "HomeBalance": 1211.21
+    },
+    {
+      "AllowIPNPayment": false,
+      "AllowOnlinePayment": false,
+      "AllowOnlineCreditCardPayment": false,
+      "AllowOnlineACHPayment": false,
+      "AllowOnlinePayPalPayment": false,
+      "AllowOnlineAffirmPayment": false,
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "405",
+      "SyncToken": "1",
+      "TxnDate": "2026-01-30",
+      "CurrencyRef": {
+        "value": "CAD"
+      },
+      "ExchangeRate": 1,
+      "LinkedTxn": [
+        {
+          "TxnId": "402",
+          "TxnType": "ReimburseCharge"
+        }
+      ],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Amount": 0,
+          "LinkedTxn": [
+            {
+              "TxnId": "402",
+              "TxnType": "ReimburseCharge",
+              "TxnLineId": "1"
+            }
+          ],
+          "DetailType": "SalesItemLineDetail",
+          "SalesItemLineDetail": {
+            "ServiceDate": "2025-12-29",
+            "TaxInclusiveAmt": 0,
+            "MarkupInfo": {
+              "PercentBased": false,
+              "Value": 0,
+              "MarkUpIncomeAccountRef": {
+                "value": "51"
+              }
+            },
+            "ItemAccountRef": {
+              "value": "51"
+            },
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        },
+        {
+          "Amount": 0,
+          "DetailType": "SubTotalLineDetail",
+          "SubTotalLineDetail": {}
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 0,
+        "TaxLine": [
+          {
+            "Amount": 0,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "24"
+              },
+              "PercentBased": true,
+              "TaxPercent": 13,
+              "NetAmountTaxable": 0
+            }
+          }
+        ]
+      },
+      "CustomerRef": {
+        "value": "52"
+      },
+      "FreeFormAddress": true,
+      "SalesTermRef": {
+        "value": "1"
+      },
+      "DueDate": "2026-01-30",
+      "GlobalTaxCalculation": "TaxInclusive",
+      "TotalAmt": 0,
+      "HomeTotalAmt": 0,
+      "Balance": 0,
+      "HomeBalance": 0
+    }
+  ],
+  "sources": [
+    {
+      "DueDate": "2025-06-30",
+      "VendorAddr": {
+        "Id": "126",
+        "Line1": "Maritime Print & Media"
+      },
+      "Balance": 128.38,
+      "HomeBalance": 128.38,
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "350",
+      "SyncToken": "3",
+      "TxnDate": "2025-06-30",
+      "CurrencyRef": {
+        "value": "CAD"
+      },
+      "ExchangeRate": 1,
+      "LinkedTxn": [
+        {
+          "TxnId": "399",
+          "TxnType": "ReimburseCharge"
+        }
+      ],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Amount": 113.61,
+          "LinkedTxn": [
+            {
+              "TxnId": "399",
+              "TxnType": "ReimburseCharge"
+            }
+          ],
+          "DetailType": "AccountBasedExpenseLineDetail",
+          "AccountBasedExpenseLineDetail": {
+            "CustomerRef": {
+              "value": "19"
+            },
+            "AccountRef": {
+              "value": "57"
+            },
+            "BillableStatus": "HasBeenBilled",
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 14.77,
+        "TaxLine": [
+          {
+            "Amount": 14.77,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "23"
+              },
+              "PercentBased": true,
+              "TaxPercent": 13,
+              "NetAmountTaxable": 113.61
+            }
+          }
+        ]
+      },
+      "TxnSource": "Receipt Upload",
+      "VendorRef": {
+        "value": "50"
+      },
+      "APAccountRef": {
+        "value": "59"
+      },
+      "TotalAmt": 128.38,
+      "GlobalTaxCalculation": "TaxInclusive"
+    },
+    {
+      "DueDate": "2025-08-09",
+      "VendorAddr": {
+        "Id": "136",
+        "Line1": "BayView Landscaping Ltd."
+      },
+      "Balance": 0,
+      "HomeBalance": 0,
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "351",
+      "SyncToken": "2",
+      "TxnDate": "2025-08-09",
+      "CurrencyRef": {
+        "value": "CAD"
+      },
+      "ExchangeRate": 1,
+      "LinkedTxn": [
+        {
+          "TxnId": "409",
+          "TxnType": "BillPaymentCheck"
+        },
+        {
+          "TxnId": "400",
+          "TxnType": "ReimburseCharge"
+        }
+      ],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Amount": 828.71,
+          "LinkedTxn": [
+            {
+              "TxnId": "400",
+              "TxnType": "ReimburseCharge"
+            }
+          ],
+          "DetailType": "AccountBasedExpenseLineDetail",
+          "AccountBasedExpenseLineDetail": {
+            "CustomerRef": {
+              "value": "19"
+            },
+            "AccountRef": {
+              "value": "28"
+            },
+            "BillableStatus": "HasBeenBilled",
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 107.73,
+        "TaxLine": [
+          {
+            "Amount": 107.73,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "23"
+              },
+              "PercentBased": true,
+              "TaxPercent": 13,
+              "NetAmountTaxable": 828.71
+            }
+          }
+        ]
+      },
+      "TxnSource": "Receipt Upload",
+      "VendorRef": {
+        "value": "51"
+      },
+      "APAccountRef": {
+        "value": "59"
+      },
+      "TotalAmt": 936.44,
+      "GlobalTaxCalculation": "TaxInclusive"
+    },
+    {
+      "DueDate": "2025-12-29",
+      "VendorAddr": {
+        "Id": "140",
+        "Line1": "Maritime Print & Media"
+      },
+      "Balance": 128.38,
+      "HomeBalance": 128.38,
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "382",
+      "SyncToken": "1",
+      "TxnDate": "2025-12-29",
+      "CurrencyRef": {
+        "value": "CAD"
+      },
+      "ExchangeRate": 1,
+      "LinkedTxn": [
+        {
+          "TxnId": "402",
+          "TxnType": "ReimburseCharge"
+        }
+      ],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Amount": 113.61,
+          "LinkedTxn": [
+            {
+              "TxnId": "402",
+              "TxnType": "ReimburseCharge"
+            }
+          ],
+          "DetailType": "AccountBasedExpenseLineDetail",
+          "AccountBasedExpenseLineDetail": {
+            "CustomerRef": {
+              "value": "52"
+            },
+            "AccountRef": {
+              "value": "57"
+            },
+            "BillableStatus": "HasBeenBilled",
+            "TaxCodeRef": {
+              "value": "11"
+            }
+          },
+          "CustomExtensions": []
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 14.77,
+        "TaxLine": [
+          {
+            "Amount": 14.77,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "23"
+              },
+              "PercentBased": true,
+              "TaxPercent": 13,
+              "NetAmountTaxable": 113.61
+            }
+          }
+        ]
+      },
+      "VendorRef": {
+        "value": "50"
+      },
+      "APAccountRef": {
+        "value": "59"
+      },
+      "TotalAmt": 128.38,
+      "GlobalTaxCalculation": "TaxInclusive"
+    }
+  ],
+  "observedAt": {}
+}

@@ -12,6 +12,7 @@
 //                         under a new identity; without a reliable correlation the item
 //                         stays UNRESOLVED and blocks everything that shares its resources.
 const STALE = '5010';
+const { preservesBillableState } = require('./billable-charge-links');
 // A response must prove the void, not merely echo the target id or a user-entered note.
 function voidedRecord(record) {
   return Boolean(record && (record.status === 'Voided' || /^Voided(?:$|[\s:])/.test(record.PrivateNote || '')) && record.TotalAmt === 0
@@ -35,6 +36,10 @@ function matchesRequest(sent, saved) {
     return Object.entries(sent).every(([key, value]) => ['sparse', 'SyncToken'].includes(key) || matchesRequest(value, key === 'Line' && Array.isArray(saved.Line) ? saved.Line.filter(line => line.DetailType !== 'SubTotalLineDetail') : saved[key]));
   }
   return typeof sent === 'number' ? typeof saved === 'number' && Math.abs(sent - saved) < 1e-8 : sent === saved;
+}
+// Sparse readback must preserve native billable history omitted from the payload.
+function matchesSavedRequest(item, record) {
+  return matchesRequest(item.payload || {}, record) && preservesBillableState(item.before, record, item.entity);
 }
 // Correlation available for an item whose outcome is unknown.
 function correlation(item) {
@@ -78,7 +83,7 @@ function blockedRefs(outcomes, resources, dependsOn) {
   const held = new Set(open.flatMap(ref => resources[ref] || []));
   return Object.keys(resources).filter(ref => !outcomes.some(row => row.ref === ref) && ((resources[ref] || []).some(key => held.has(key)) || (dependsOn[ref] || []).some(name => failed.has(name)))).sort();
 }
-module.exports = { itemOutcomes, blockedRefs, correlation, STALE, matchesRequest, voidedRecord, matchesVoid };
+module.exports = { itemOutcomes, blockedRefs, correlation, STALE, matchesRequest, matchesSavedRequest, voidedRecord, matchesVoid };
 
 // Recovery is read-only at QuickBooks: known saved records are never re-sent.
 const RECHECK_MS = 60000;
@@ -114,7 +119,7 @@ function historyMovements(runs, observedAt, ctx, throughDate = null) {
     const before = item.before || sent?.before || op?.before || null;
     if (throughDate && ![before?.TxnDate, item.record?.TxnDate].some(date => date && date <= throughDate)) continue;
     if (item.op !== 'create' && !before) historyFail('A saved history change lost its before-image.');
-    if (item.outcome === 'saved' && !matchesRequest(item.request || sent?.payload || op?.payload || {}, item.record)) historyFail('A saved history change differs from its original request.');
+    if (item.outcome === 'saved' && !matchesSavedRequest({ payload: item.request || sent?.payload || op?.payload || {}, before, entity: item.entity }, item.record)) historyFail('A saved history change differs from its original request.');
     movements.push(...movementsOf(item.entity, item.op === 'create' ? null : before, item.outcome === 'deleted' ? null : item.record, ctx));
   }
   return movements;
