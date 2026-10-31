@@ -2,3 +2,6 @@
 - [401 passthrough is force-logout footgun](feedback-401-passthrough.md) — frontend force-logs-out on ANY 401; QBO-side 401 must never surface as app-level 401. Use respondQboError.
 - [Live env is REAL production QBO](project-live-production-company.md) — app is connected to a real production QuickBooks company; QBO writes are not hypothetical.
 - [Snapshot totalCount read path](project-snapshot-totalcount.md) — company/snapshot is read-only COUNT(*) via respondQboError; reads QueryResponse.totalCount, silently nulls on mismatch.
+- [Dated tax gates new taxed entities](project-dated-tax-new-entities.md) — Production has NS datedTax; new taxed entities need business-dated-tax CHARGES; consent text is separate.
+- [canonical() rejects lean Mongo rows](project-canonical-hash-lean-docs.md) — hash/canonical throw on Date/ObjectId; plain test fixtures hide it; check post-write verification paths.
+- [Transcript redaction gaps](project-transcript-redaction.md) — live accountant transcripts store/stream context+tool results; JWE QBO tokens and stream recheck scope are known gaps.
