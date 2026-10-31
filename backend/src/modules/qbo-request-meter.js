@@ -6,7 +6,116 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { createHash } = require('node:crypto');
 const CATEGORIES = Object.freeze(['sync', 'report', 'query', 'read', 'write']);
 // Only server-owned labels are retained: never a stack, endpoint, ID or caller text.
-const CALLERS = Object.freeze(['untagged', 'business-reference', 'business-transaction', 'business-receivables', 'business-tax-policy', 'business-period-guard', 'business-stock', 'business-deposit-guard', 'business-report-operation', 'business-report-preparation', 'business-report-baseline', 'business-report-book', 'business-write', 'business-sync']);
+const SOURCE_CALLERS = Object.freeze({
+  "modules/account-automation-review.js": "source-modules-account-automation-review",
+  "modules/account-recovery.js": "source-modules-account-recovery",
+  "modules/ai-orchestrator.js": "source-modules-ai-orchestrator",
+  "modules/ai-provider.js": "source-modules-ai-provider",
+  "modules/ai-session-streams.js": "source-modules-ai-session-streams",
+  "modules/ai-tool-bridge.js": "source-modules-ai-tool-bridge",
+  "modules/ai-tools.js": "source-modules-ai-tools",
+  "modules/blueprint-draft-write.js": "source-modules-blueprint-draft-write",
+  "modules/business-activity-batch.js": "source-modules-business-activity-batch",
+  "modules/business-added-roles.js": "source-modules-business-added-roles",
+  "modules/business-agent-service.js": "source-modules-business-agent-service",
+  "modules/business-agent-store.js": "source-modules-business-agent-store",
+  "modules/business-agent-sync.js": "source-modules-business-agent-sync",
+  "modules/business-agent-tools.js": "source-modules-business-agent-tools",
+  "modules/business-agent-usage.js": "source-modules-business-agent-usage",
+  "modules/business-approval-report-evidence.js": "source-modules-business-approval-report-evidence",
+  "modules/business-baseline.js": "source-modules-business-baseline",
+  "modules/business-calendar.js": "source-modules-business-calendar",
+  "modules/business-company-query.js": "source-modules-business-company-query",
+  "modules/business-compilation-runtime.js": "source-modules-business-compilation-runtime",
+  "modules/business-continuity-service.js": "source-modules-business-continuity-service",
+  "modules/business-country.js": "source-modules-business-country",
+  "modules/business-dated-tax.js": "source-modules-business-dated-tax",
+  "modules/business-dispatch.js": "source-modules-business-dispatch",
+  "modules/business-error-detail.js": "source-modules-business-error-detail",
+  "modules/business-execution-service.js": "source-modules-business-execution-service",
+  "modules/business-governance-service.js": "source-modules-business-governance-service",
+  "modules/business-history-adoption-service.js": "source-modules-business-history-adoption-service",
+  "modules/business-history-adoption.js": "source-modules-business-history-adoption",
+  "modules/business-inventory-review.js": "source-modules-business-inventory-review",
+  "modules/business-link-repair-balances.js": "source-modules-business-link-repair-balances",
+  "modules/business-link-repair.js": "source-modules-business-link-repair",
+  "modules/business-management-review.js": "source-modules-business-management-review",
+  "modules/business-master-apply.js": "source-modules-business-master-apply",
+  "modules/business-master-attribution.js": "source-modules-business-master-attribution",
+  "modules/business-master-preparation-recovery.js": "source-modules-business-master-preparation-recovery",
+  "modules/business-master-preparation-runner.js": "source-modules-business-master-preparation-runner",
+  "modules/business-master-preparation-store.js": "source-modules-business-master-preparation-store",
+  "modules/business-master-runtime.js": "source-modules-business-master-runtime",
+  "modules/business-master-service.js": "source-modules-business-master-service",
+  "modules/business-observation-store.js": "source-modules-business-observation-store",
+  "modules/business-operation-candidate.js": "source-modules-business-operation-candidate",
+  "modules/business-operation-plan-store.js": "source-modules-business-operation-plan-store",
+  "modules/business-operation-recovery.js": "source-modules-business-operation-recovery",
+  "modules/business-operation-retirement.js": "source-modules-business-operation-retirement",
+  "modules/business-period-evidence.js": "source-modules-business-period-evidence",
+  "modules/business-policy-amendment.js": "source-modules-business-policy-amendment",
+  "modules/business-population-plan.js": "source-modules-business-population-plan",
+  "modules/business-population-proof.js": "source-modules-business-population-proof",
+  "modules/business-population-reader.js": "source-modules-business-population-reader",
+  "modules/business-population-runtime.js": "source-modules-business-population-runtime",
+  "modules/business-population-service.js": "source-modules-business-population-service",
+  "modules/business-population-verification.js": "source-modules-business-population-verification",
+  "modules/business-record-inventory.js": "source-modules-business-record-inventory",
+  "modules/business-reference.js": "source-modules-business-reference",
+  "modules/business-report-evidence.js": "source-modules-business-report-evidence",
+  "modules/business-report-source.js": "source-modules-business-report-source",
+  "modules/business-runtime-audit.js": "source-modules-business-runtime-audit",
+  "modules/business-setup-service.js": "source-modules-business-setup-service",
+  "modules/business-step-store.js": "source-modules-business-step-store",
+  "modules/business-stock-general-history.js": "source-modules-business-stock-general-history",
+  "modules/business-stock-general.js": "source-modules-business-stock-general",
+  "modules/business-stock-source.js": "source-modules-business-stock-source",
+  "modules/business-ui-link-correction.js": "source-modules-business-ui-link-correction",
+  "modules/business-unknown-recovery.js": "source-modules-business-unknown-recovery",
+  "modules/business-verification-runtime.js": "source-modules-business-verification-runtime",
+  "modules/business-writer-fence.js": "source-modules-business-writer-fence",
+  "modules/case-changes.js": "source-modules-case-changes",
+  "modules/checkpoint.js": "source-modules-checkpoint",
+  "modules/codex-cli.js": "source-modules-codex-cli",
+  "modules/coverage.js": "source-modules-coverage",
+  "modules/general-write-close-gate.js": "source-modules-general-write-close-gate",
+  "modules/general-write-day-close.js": "source-modules-general-write-day-close",
+  "modules/general-write-recovery.js": "source-modules-general-write-recovery",
+  "modules/general-write-service.js": "source-modules-general-write-service",
+  "modules/general-write-transport.js": "source-modules-general-write-transport",
+  "modules/generation-engine.js": "source-modules-generation-engine",
+  "modules/generation-plan.js": "source-modules-generation-plan",
+  "modules/generation-settlement.js": "source-modules-generation-settlement",
+  "modules/issuepack-engine.js": "source-modules-issuepack-engine",
+  "modules/period-close-reader.js": "source-modules-period-close-reader",
+  "modules/period-close-service.js": "source-modules-period-close-service",
+  "modules/qbo-request-meter.js": "source-modules-qbo-request-meter",
+  "modules/qbo-write-contract.js": "source-modules-qbo-write-contract",
+  "modules/qbo-write-gate.js": "source-modules-qbo-write-gate",
+  "modules/qbo-write-period.js": "source-modules-qbo-write-period",
+  "modules/rebuild-definitions.js": "source-modules-rebuild-definitions",
+  "modules/report-evidence-service.js": "source-modules-report-evidence-service",
+  "modules/report-json.js": "source-modules-report-json",
+  "modules/reproduction-approvals.js": "source-modules-reproduction-approvals",
+  "modules/reproduction-business.js": "source-modules-reproduction-business",
+  "modules/reproduction-engine.js": "source-modules-reproduction-engine",
+  "modules/reproduction-reconcile.js": "source-modules-reproduction-reconcile",
+  "modules/reproduction-runner.js": "source-modules-reproduction-runner",
+  "modules/reproduction-screen.js": "source-modules-reproduction-screen",
+  "modules/storage-target.js": "source-modules-storage-target",
+  "routes/ai-tools-mcp.js": "source-routes-ai-tools-mcp",
+  "routes/ai.js": "source-routes-ai",
+  "routes/auth.js": "source-routes-auth",
+  "routes/business-agent.js": "source-routes-business-agent",
+  "routes/business-plan.js": "source-routes-business-plan",
+  "routes/checkpoint.js": "source-routes-checkpoint",
+  "routes/company.js": "source-routes-company",
+  "routes/explore.js": "source-routes-explore",
+  "routes/issuepacks.js": "source-routes-issuepacks",
+  "routes/qbo.js": "source-routes-qbo",
+  "routes/seed.js": "source-routes-seed"
+});
+const CALLERS = Object.freeze(['qbo-direct', ...Object.values(SOURCE_CALLERS), 'untagged', 'business-reference', 'business-transaction', 'business-receivables', 'business-tax-policy', 'business-period-guard', 'business-stock', 'business-deposit-guard', 'business-report-operation', 'business-report-preparation', 'business-report-baseline', 'business-report-book', 'business-write', 'business-sync']);
 const callerTag = value => CALLERS.includes(value) ? value : 'untagged';
 const context = new AsyncLocalStorage();
 const MAX_PENDING = 500;
@@ -20,6 +129,18 @@ function validScope(scope) {
 function runWithCategory(category, fn) { return context.run({ ...context.getStore(), category }, fn); }
 function runWithCaller(caller, fn) { return context.run({ ...context.getStore(), caller: callerTag(caller) }, fn); }
 function currentCaller() { return callerTag(context.getStore()?.caller || (context.getStore()?.category === 'sync' ? 'business-sync' : 'untagged')); }
+// Capture at apiCall entry, before awaits erase synchronous caller frames. Only
+// checked-in source labels survive; stack text and request contents are discarded.
+function callerForRequest(stack) {
+  const selected = currentCaller();
+  if (selected !== 'untagged') return selected;
+  for (const frame of String(stack || '').split('\n')) {
+    const match = /[\\/](modules|routes)[\\/]([a-z0-9-]+\.js):[0-9]+:[0-9]+/.exec(frame);
+    const label = match && SOURCE_CALLERS[match[1] + '/' + match[2]];
+    if (label) return label;
+  }
+  return 'qbo-direct';
+}
 const mergeCallers = (target, source) => { for (const [tag, counts] of Object.entries(source || {})) { const name = callerTag(tag), row = target[name] ||= { attempts: zero(), succeeded: zero() }; for (const kind of ['attempts', 'succeeded']) for (const category of CATEGORIES) row[kind][category] += Number(counts?.[kind]?.[category]) || 0; } };
 function categorize(method, endpoint) {
   if (String(method).toUpperCase() !== 'GET') return 'write';
@@ -112,4 +233,4 @@ function createQboRequestMeter({ Model = null, now = () => Date.now(), flushMs =
 }
 let singleton;
 function getQboRequestMeter() { return singleton ||= createQboRequestMeter(); }
-module.exports = { createQboRequestMeter, getQboRequestMeter, runWithCategory, runWithCaller, currentCaller, categorize, CATEGORIES, CALLERS };
+module.exports = { createQboRequestMeter, getQboRequestMeter, runWithCategory, runWithCaller, currentCaller, callerForRequest, categorize, CATEGORIES, CALLERS };

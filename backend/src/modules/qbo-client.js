@@ -254,6 +254,7 @@ class QBOClient {
   // It disables accounting retries while allowing token persistence to settle.
   async apiCall(method, endpoint, body, _retryCount = 0, _authRetryCount = 0, readControl) {
     const MAX_RETRIES = 5;
+    const requestCaller = require('./qbo-request-meter').callerForRequest(new Error().stack);
     method = String(method).toUpperCase();
     const control = snapshotReadControl(readControl, method);
     assertReadActive(control);
@@ -316,14 +317,14 @@ class QBOClient {
       response = await require('./business-writer-fence').withCompanyRequestSlot({ environment: this.apiBase.includes('sandbox-') ? 'sandbox' : 'production', realmId: this.realmId }, async () => {
         if (control) { try { assertReadActive(control); } catch (error) { localReadFailure = true; throw error; } }
         reachedApiCall = true;
-        requestCategory = this._meterRequest(method, endpoint, 'attempts');
+        requestCategory = this._meterRequest(method, endpoint, 'attempts', undefined, requestCaller);
         let pending;
         try { pending = this.oauthClient.makeApiCall(opts); }
         finally { if (control?.onSdkAttempt) try { const observed = control.onSdkAttempt(); observed?.catch?.(() => {}); } catch { /* A metrics observer cannot alter transport authority or its result. */ } }
         return await pending;
       });
       // Count the transport response before any caller-side cancellation check can discard it.
-      if (requestCategory && typeof response?.status === 'number' && response.status >= 200 && response.status < 300) this._meterRequest(method, endpoint, 'succeeded', requestCategory);
+      if (requestCategory && typeof response?.status === 'number' && response.status >= 200 && response.status < 300) this._meterRequest(method, endpoint, 'succeeded', requestCategory, requestCaller);
       if (control) {
         if (typeof response?.status === 'number' && response.status >= 400) {
           const fault = this._extractFaultMessage(response), error = new Error('QBO API error (HTTP ' + response.status + ')' + (fault ? ': ' + fault : ''));
@@ -590,11 +591,11 @@ class QBOClient {
   // ---------- Internal helpers ----------
 
   // Daily QuickBooks request measurement (counts only). Never throws or delays the request.
-  _meterRequest(method, endpoint, kind, category) {
+  _meterRequest(method, endpoint, kind, category, caller) {
     try {
       const meter = this.requestMeter || require('./qbo-request-meter').getQboRequestMeter();
       const resolved = category || require('./qbo-request-meter').categorize(method, endpoint);
-      meter.record({ environment: config.qbo.environment, realmId: String(this.realmId || ''), connectionId: String(this.connection?._id || '') }, resolved, kind, require('./qbo-request-meter').currentCaller() === 'untagged' && resolved === 'write' ? 'business-write' : require('./qbo-request-meter').currentCaller());
+      meter.record({ environment: config.qbo.environment, realmId: String(this.realmId || ''), connectionId: String(this.connection?._id || '') }, resolved, kind, caller || require('./qbo-request-meter').callerForRequest(new Error().stack));
       return resolved;
     } catch { return null; }
   }

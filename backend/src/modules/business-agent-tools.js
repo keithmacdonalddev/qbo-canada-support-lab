@@ -183,7 +183,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
           todayLimit(capacity);
           if(capacity.saved+capacity.reserved+creates>capacity.ceiling)fail('Today’s activity ceiling does not have room for these general writes.');
           if(Number.isSafeInteger(capacity.hourCap)&&(Number(capacity.hourUsed)||0)+creates>capacity.hourCap)fail('These general writes would exceed the hourly limit of '+capacity.hourCap+' new records.');
-          await requireRequestBudget();
+          if(require('./business-request-budget').isDiscretionaryGeneralWrite(input.operations))await requireRequestBudget();
         }
       }
       const prepared=await general.prepare(bound,input);
@@ -199,7 +199,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
           if((today.saved||0)+(today.reserved||0)-own+creates>today.ceiling)fail('Today’s activity ceiling does not have room for these general writes.');
           const hourOther=(Number(today.hourUsed)||0)-(Number(today.hourByRun?.[prepared.runId])||0);
           if(Number.isSafeInteger(today.hourCap)&&hourOther+creates>today.hourCap)fail('These general writes would exceed the hourly limit of '+today.hourCap+' new records.');
-          await requireRequestBudget();
+          if(require('./business-request-budget').isDiscretionaryGeneralWrite(input.operations))await requireRequestBudget();
         }
         try{result={success:true,data:{...prepared,execution:await general.execute(bound,prepared.runId)}};}finally{forgetToday();}
       }
