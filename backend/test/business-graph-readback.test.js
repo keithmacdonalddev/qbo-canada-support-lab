@@ -172,3 +172,72 @@ test('single-batch graph scans retain the original 1000-record boundary', async 
   await assert.rejects(createBusinessGraphReader(tooLarge.dependencies)({ scope, roots: tooLarge.value.roots, mode: 'prepare' }), /budget/);
   assert.equal(tooLarge.reads.length, 0); assert.equal(tooLarge.opened, tooLarge.closed);
 });
+
+test('same-operation invoice parent stays current before and after Payment after preceding saved records', async () => {
+  const { createBusinessCompilationRuntime } = require('../src/modules/business-compilation-runtime');
+  const { fixture } = require('./helpers/business-transaction-fixtures');
+  const value = graph(), invoice = value.entries.find(e => e.step.entity === 'Invoice');
+  value.entries = value.entries.slice(0, 3);
+  invoice.observed.record.Balance = invoice.observed.record.TotalAmt;
+  invoice.observed.record.LinkedTxn = invoice.observed.record.LinkedTxn.filter(link => link.TxnType !== 'Payment');
+  delete invoice.observed.record.ARAccountRef;
+  for (const e of value.entries) { e.observed.record.SyncToken = '0'; e.observed.recordHash = hash(e.observed.record); }
+  // Nine independent saves precede this chain in the same operation. Every read
+  // advances the clock; a frozen clock conceals a create-response/proof inversion.
+  for (let i = 0; i < 9; i++) value.entries.push(entry(saved('Estimate', String(7000+i), f => { f.step.logicalKey = hash('preceding '+i); })));
+  value.roots = value.entries.map(e => e.step.logicalKey);
+  const h = harness(value), ownerId = 'c'.repeat(24), actorId = 'd'.repeat(24), calls = [];
+  h.actor = { ownerId, actorId };
+  const f = fixture('Payment'); bindParent(f, 0, { compiled: invoice.step.compilation, observed: invoice.observed }); f.approve();
+  const paymentIntent = { version:1, scope, operationId:invoice.step.operationId, planHash:invoice.step.planHash, logicalKey:f.step.logicalKey, entity:'Payment', kind:'create', fingerprint:hash(f.step), step:f.step, policy:f.policy, dependencies:f.step.dependencies };
+  h.models.findOne = filter => { const q = { select(){return q;},maxTimeMS(){return q;},lean:async()=>clone(value.entries.find(e=>filter.logicalKey?e.step.logicalKey===filter.logicalKey:e.step.entity===filter.entity&&e.step.qboId===filter.qboId)?.step||null) }; return q; };
+  const report = require('./helpers/business-receivables-fixture').routingFixture().input.report;
+  report.Rows.Row[0].Rows.Row[0].ColData[1].id=invoice.step.qboId;
+  const client=Object.create(QBOClient.prototype);
+  Object.defineProperty(client,'apiBase',{value:'https://sandbox-quickbooks.api.intuit.com/v3/company/123'});
+  Object.assign(client,{realmId:scope.realmId,connection:{_id:scope.connectionId,realmId:scope.realmId,userId:ownerId,status:'active'},_requestLog:[],_retryAfterUntil:0,_windowMs:60000,ensureFreshToken:async()=>{},requestMeter:{record(){}},oauthClient:{makeApiCall:async options=>{
+    assert.equal(options.method,'GET'); calls.push(options); h.clock+=200;
+    if(options.url.includes('/reports/'))return {status:200,json:clone(report)};
+    const reference=f.referenceEvidence.find(e=>options.url.endsWith('/'+e.entity.toLowerCase()+'/'+e.record.Id));
+    if(reference)return {status:200,json:{[reference.entity]:clone(reference.record)}};
+    const e=value.entries.find(e=>options.url.endsWith('/'+e.step.entity.toLowerCase()+'/'+e.step.qboId)); assert.ok(e,options.url);
+    return {status:200,json:{[e.step.entity]:clone(e.observed.record)}};
+  }}});
+  const originals=new Map(value.entries.map(e=>[e.step.entity+':'+e.step.qboId,clone(e.observed)]));
+  let applied=false;
+  const observations={read:async()=>null,saved:async(_s,entity,id)=>{
+    if(applied&&entity==='Invoice')return null;
+    const observed=clone(originals.get(entity+':'+id)); if(!observed)return null;
+    return {...observed,source:{kind:'qbo-write-response'}};
+  },retain:async()=>{}};
+  const access={authorize:async()=>clone(h.actor),resolveClient:async()=>client};
+  const plans={loadIntent:async(_s,_o,key)=>clone(key===paymentIntent.logicalKey?paymentIntent:value.entries.find(e=>e.step.logicalKey===key).intent)};
+  const runtime=createBusinessVerificationRuntime({scope,operationId:invoice.step.operationId,planHash:invoice.step.planHash,Steps:h.models,transaction:async work=>work({snapshot:true}),assertReady:async()=>{},access,writerFence:{graphSnapshot:async()=>clone(h.writer)},plans,observations,now:()=>h.clock});
+  const persist=async roots=>{const result=await runtime.loadGraphReadback({scope,roots});assert.equal(result.complete,true,JSON.stringify(result.failures));for(const record of result.records){const e=value.entries.find(e=>e.step.logicalKey===record.logicalKey);e.step.state='verified';e.step.verification=record.proof;}return {...result,persisted:true};};
+  await persist(value.roots); assert.equal(value.entries.length,12); h.clock+=1000;
+  const read=createBusinessCompilationRuntime({scope,operationId:invoice.step.operationId,planHash:invoice.step.planHash,access,plans,verification:runtime,assertReady:async()=>{},steps:{verifyGraph:async(_s,_o,roots)=>persist(roots),evidence:async(_s,_o,key)=>{const row=value.entries.find(e=>e.step.logicalKey===key).step;return {...clone(row),fresh:true};}},now:()=>h.clock});
+  const evidence=await read({scope,operationId:invoice.step.operationId,logicalKey:paymentIntent.logicalKey,intent:paymentIntent});
+  const compiled=require('../src/modules/business-transaction-compiler').compileBusinessTransaction({scope,step:f.step,policy:f.policy,...evidence,now:h.clock});
+  assert.equal(compiled.entity,'Payment');assert.equal(JSON.parse(compiled.request.body).Line[0].LinkedTxn[0].TxnId,invoice.step.qboId);
+  assert.equal(evidence.parents[0].source.kind,'qbo-full-entity-get');
+  // Apply the simulated Payment: old create response remains retained, but its
+  // parent must now be obtained live and graph-verified with the exact new links.
+  const payment=entry(saved('Payment','5004',p=>bindParent(p,0,{compiled:invoice.step.compilation,observed:invoice.observed})));
+  value.entries.push(payment); originals.set('Payment:5004',clone(payment.observed));applied=true;
+  invoice.observed.record.Balance=0;invoice.observed.record.LinkedTxn.push({TxnType:'Payment',TxnId:'5004'});invoice.observed.recordHash=hash(invoice.observed.record);
+  // The batch query is also an independent full record observation.
+  const originalCall=client.oauthClient.makeApiCall;
+  client.oauthClient.makeApiCall=async options=>options.url.includes('/query?')?{status:200,json:{QueryResponse:{Invoice:[clone(invoice.observed.record)],startPosition:1,maxResults:1}}}:originalCall(options);
+  await persist([payment.step.logicalKey]);
+  invoice.observed.record.Balance=1;invoice.observed.recordHash=hash(invoice.observed.record);
+  const changed=await runtime.loadGraphReadback({scope,roots:[payment.step.logicalKey]});assert.equal(changed.complete,false,'incorrect parent balances still fail verification');
+});
+
+test('a pre-dispatch verification refusal retains its claim and an early retry cannot dispatch',async()=>{
+ const h=require('./helpers/business-runtime-fixture').harness();
+ h.onObserve=async()=>{throw Object.assign(new Error('The original and current invoice observation times are stale or out of order.'),{code:'BUSINESS_RECEIVABLES_UNVERIFIED'});};
+ await assert.rejects(h.execute(),error=>error.code==='BUSINESS_RECEIVABLES_UNVERIFIED');
+ assert.equal(h.row().state,'claimed');assert.equal(h.row().dispatch,null);h.clock+=60000;h.onObserve=null;
+ await assert.rejects(h.execute(),error=>error.code===undefined&&error.message==='Activity is busy, already dispatched or requires recovery');
+ assert.equal(h.sent.length,0);assert.equal(h.row().attempts,1);
+});

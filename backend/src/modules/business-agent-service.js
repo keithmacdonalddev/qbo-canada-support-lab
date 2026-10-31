@@ -232,6 +232,9 @@ function createBusinessAgentService(options={}) {
   }
   async function worker(id,controller){
     const token=randomUUID();let row=await store.claim(id,token,leaseMs);if(!row)return;
+    // Older processes saved a baseline without a pending marker. A retained live
+    // review has no recorded completion; recover it without charging a miss.
+    const interruptedLegacyReview=row.status==='reviewing'&&row.activePass?.role==='accountant'&&typeof row.cadence?.reviewSignature==='string'&&row.cadence.reviewPending===undefined;
     const scope=scopeOf(row),ownerId=String(row.ownerId),access=accessFor({actorId:ownerId,ownerId}),user={id:ownerId,actorId:ownerId,role:'supervisor'};
     let pulse=null,heartbeatFailure=null,heartbeatPending=Promise.resolve(),syncer=null,pass=null,usageId=null,transcript=null;
     // Each worker run is one review attempt; its id joins the usage row and the terminal event.
@@ -281,19 +284,22 @@ function createBusinessAgentService(options={}) {
     // If the terminal event cannot be saved, the attempt is failed (never completed); later steps never add a second terminal event.
     let finalized=false,usageRecord=null;
     const finalize=async({outcome,role='accountant',event=null,apply=null,error=null})=>{
-      if(finalized)return;finalized=true;let final=outcome;
+      if(finalized)return;finalized=true;let final=outcome,terminalRecorded=false;
       const evidence=()=>({passId:pass?.id||null,attemptId,usageId,outcome:final,refresh:{...refresh}});
       if(event){
-        try{await store.event(row,event.kind,event.title,event.detail,{...evidence(),...(event.data||{})},null,event.key||hash({attemptId,kind:event.kind}),role);}
+        try{await store.event(row,event.kind,event.title,event.detail,{...evidence(),...(event.data||{})},null,event.key||hash({attemptId,kind:event.kind}),role);terminalRecorded=true;}
         catch{
           if(['completed','incomplete'].includes(final)){
             final='failed';
-            try{await store.event(row,'attention','Business review needs attention','The review finished, but its result could not be recorded. Saved records, decisions and cursors are retained; the next review continues.',{...evidence(),href:'/company/manage'},null,hash({attemptId,kind:'attention'}),role);}catch{/* Storage is unavailable; the usage row still records the failure. */}
+            try{await store.event(row,'attention','Business review needs attention','The review finished, but its result could not be recorded. Saved records, decisions and cursors are retained; the next review continues.',{...evidence(),href:'/company/manage'},null,hash({attemptId,kind:'attention'}),role);terminalRecorded=true;}catch{/* Storage is unavailable; the usage row still records the failure. */}
           }
         }
       }
       try{transcript?.add('outcome',{status:final,text:event?[event.title,event.detail].filter(Boolean).join(' · '):''});}catch{/* transcript is best-effort */}
       if(usageRecord){try{await usage.save(usageRecord,{outcome:final,finishedAt:new Date(now()),resetAt:error?.quota?.resetAt||null});}catch{/* The engine already saved token totals. */}}
+      if(pass?.role==='accountant'&&terminalRecorded){
+        try{row=await store.update(row,token,{cadence:cadence.finishReview(row.cadence)});}catch{/* Lost leases retain the pending baseline; never invent a completed review. */}
+      }
       if(apply){try{await apply(final);}catch{/* Owner changes and expired leases win; no second terminal outcome is recorded. */}}
       return final;
     };
@@ -347,6 +353,8 @@ function createBusinessAgentService(options={}) {
     const failedState=error=>({status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
+      // Persist legacy interruption recovery before sync or any other update reloads row.
+      if(interruptedLegacyReview)await update({cadence:{...row.cadence,reviewPending:true}});
       await runAsActor(ownerId,async()=>{
         if(at(row.nextSyncAt)<=now()){
           await update({status:row.settings.autonomous?'monitoring':'paused',currentWork:'Synchronizing company changes'});

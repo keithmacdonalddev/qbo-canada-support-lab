@@ -286,7 +286,11 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const signature = progressSignature(business, today, owned, obligations);
   // A review is judged against its own starting point; between reviews, any change (for example
   // queued execution finishing) is progress and clears the backoff.
-  if (typeof s.reviewSignature === 'string') { s.misses = s.reviewSignature === signature ? (Number(s.misses) || 0) + 1 : 0; s.reviewSignature = null; }
+  if (typeof s.reviewSignature === 'string') {
+    if (s.reviewSignature !== signature) s.misses = 0;
+    else if (s.reviewPending !== true) s.misses = (Number(s.misses) || 0) + 1;
+    s.reviewSignature = null; s.reviewPending = false;
+  }
   else if (typeof s.lastSignature === 'string' && s.lastSignature !== signature) s.misses = 0;
   s.lastSignature = signature;
   const misses = Number(s.misses) || 0, last = Date.parse(s.lastReviewAt || '') || 0;
@@ -361,10 +365,13 @@ function countReview(state, now) {
 // A main review also fixes the progress baseline that the next decision compares against.
 // A management review plans rather than writes, so it never counts as a review without progress.
 function beginReview(state, { now, signature, kind }) {
-  const next = { ...countReview(state, now), reviewSignature: kind === 'management' ? null : signature, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
+  const next = { ...countReview(state, now), reviewSignature: kind === 'management' ? null : signature, reviewPending: true, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
   if (kind === 'management') { const day = localParts(now).date, prior = next.management?.day === day ? Number(next.management.attempts) || 0 : 0; next.management = { day, attempts: prior + 1 }; }
   return next;
 }
+// Only a recorded terminal outcome makes a review eligible for no-progress backoff.
+// A crash leaves the baseline pending; it still consumes its daily review allowance.
+function finishReview(state) { return { ...(state || {}), reviewPending: false }; }
 const timeFormat = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, hour: 'numeric', minute: '2-digit', hour12: true });
 // "2:15 PM" in Halifax time, for text the accountant and the work list read.
 const localTime = value => { const ms = typeof value === 'number' ? value : Date.parse(value || ''); return Number.isFinite(ms) ? timeFormat.format(new Date(ms)).replace(/\s*a\.m\./i, ' AM').replace(/\s*p\.m\./i, ' PM') : null; };
@@ -378,4 +385,4 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
 }
 
 module.exports = { MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
-  localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };
+  localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

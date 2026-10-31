@@ -74,7 +74,9 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     // A saved create response predates later steps of the same operation (a payment
     // applied to this invoice changes its balance and links), so the ledger bracket
     // must open on a current live observation or it can never match the closing read.
-    if (prepared) { observed = await liveRecord(scope, entity, qboId, { signal }); checkSignal(signal); }
+    // Direct compilation reads also need that live time: a create response can
+    // predate the parent's newly persisted routing proof even before payment.
+    if (prepared || observed.source?.kind === 'qbo-write-response') { observed = await liveRecord(scope, entity, qboId, { signal }); checkSignal(signal); }
     // Restrict compatibility to a retained managed save, never an arbitrary invoice.
     const row = await Steps.findOne({ ...scope, entity, qboId }).select('operationId planHash logicalKey entity fingerprint state compilation dispatch receipt qboId').maxTimeMS(3000).lean(); checkSignal(signal);
     const compiled = row?.compilation;

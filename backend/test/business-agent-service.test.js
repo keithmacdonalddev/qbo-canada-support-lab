@@ -371,3 +371,20 @@ test('a productive review is followed by the next one about a minute later while
  const view=await h.service.status({id:ownerId});assert.match(view.work.items.find(item=>item.key==='todays-activity').next,/^Working continuously/);
  h.service.close();
 });
+
+test('restart without a terminal outcome retries without a no-progress miss (including legacy cadence)',async()=>{
+ const c=require('../src/modules/business-agent-cadence');
+ for(const legacy of [false,true])for(const syncDue of [false,true]){
+  const h=fixture();if(syncDue)h.row.nextSyncAt=new Date(h.clock);h.row.status='reviewing';h.row.leaseToken='dead-process';h.row.leaseExpiresAt=new Date(h.clock-1);h.row.activePass={id:'interrupted-pass',role:'accountant',startedAt:new Date(h.clock-60000).toISOString()};
+  const today=require('../src/modules/business-agent-cadence').summarizeToday({now:h.clock,rhythm:c.dayRhythm('2026-10-23'),runs:[],receipts:[]});
+  h.row.cadence=c.beginReview({misses:0},{now:h.clock-60000,signature:c.progressSignature(h.business,today),kind:'catch-up'});if(legacy)delete h.row.cadence.reviewPending;
+  h.onRun=async()=>{assert.equal(h.row.cadence.misses,0,'interrupted attempt was not a miss');};
+  await h.service._worker(agentId,new AbortController());assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.misses,1,'only the completed replacement is judged');assert.equal(h.row.cadence.reviews,2);h.service.close();
+ }
+});
+test('a recorded failed review still counts toward no-progress backoff',async()=>{
+ const h=fixture();h.onRun=async()=>{throw new Error('fixture review failure');};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.row.cadence.reviewPending,false);h.onRun=null;
+ h.clock+=300001;h.row.nextSyncAt=new Date(h.clock+30000);h.row.syncView.summaryAt=new Date(h.clock).toISOString();h.row.syncView.sources[0].freshUntil=new Date(h.clock+120000).toISOString();
+ await h.service._worker(agentId,new AbortController());assert.equal(h.row.cadence.misses,2,'the failed and completed no-progress attempts each count');h.service.close();
+});

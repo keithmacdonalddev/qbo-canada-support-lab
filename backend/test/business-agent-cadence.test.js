@@ -154,7 +154,7 @@ test('quiet hours never suppress the calendar close after midnight', () => {
 test('catch-up is spaced while it progresses and backs off durably when it does not', () => {
   const day = '2026-10-30', start = at(day, '09:00'), business = current(day, { verifiedThrough: '2026-10-20' });
   const run = (now, state) => c.decide({ now, settings, agent, business, today: todayAt(now), state });
-  let state = c.beginReview({}, { now: start, signature: c.progressSignature(business, todayAt(start)), kind: 'catch-up' });
+  let state = completedReview({}, { now: start, signature: c.progressSignature(business, todayAt(start)), kind: 'catch-up' });
   let next = run(start + MIN, state);
   assert.deepEqual([next.kind, next.callModel, Date.parse(next.nextReviewAt) - start], ['catch-up', false, 5 * MIN], 'no progress: wait 5 minutes');
   assert.match(next.reason, /no progress on the last review, waiting 5 min/);
@@ -162,13 +162,13 @@ test('catch-up is spaced while it progresses and backs off durably when it does 
   for (const wait of waits) {
     const now = Date.parse(next.nextReviewAt);
     assert.equal(run(now, next.state).callModel, true);
-    state = c.beginReview(next.state, { now, signature: c.progressSignature(business, todayAt(now)), kind: 'catch-up' });
+    state = completedReview(next.state, { now, signature: c.progressSignature(business, todayAt(now)), kind: 'catch-up' });
     next = run(now + MIN, state);
     assert.equal(Date.parse(next.nextReviewAt) - now, wait * MIN);
   }
   // Progress (the cursor moved) resets the backoff to the 1-minute catch-up spacing.
   const now = Date.parse(next.nextReviewAt);
-  state = c.beginReview(next.state, { now, signature: c.progressSignature(business, todayAt(now)), kind: 'catch-up' });
+  state = completedReview(next.state, { now, signature: c.progressSignature(business, todayAt(now)), kind: 'catch-up' });
   const moved = run(now + MIN, { ...state, reviewSignature: 'something-else' });
   assert.equal(moved.state.misses, 0);
   const advanced = c.decide({ now: now + MIN, settings, agent, business: current(day, { verifiedThrough: '2026-10-21' }), today: todayAt(now + MIN), state });
@@ -224,7 +224,7 @@ test('approved own work that holds no calendar slot is recovered before any cale
 test('progress made between reviews, such as queued execution finishing, clears the backoff', () => {
   const day = '2026-10-30', start = at(day, '09:00'), owned = [{ operationId: 'a1', status: 'approved', day, agentAuthority: own, executionPending: true }];
   const business = current(day), noon = todayAt(start);
-  let state = c.beginReview({ misses: 3 }, { now: start, signature: c.progressSignature(business, noon, owned), kind: 'recovery' });
+  let state = completedReview({ misses: 3 }, { now: start, signature: c.progressSignature(business, noon, owned), kind: 'recovery' });
   const after = c.decide({ now: start + MIN, settings, agent, business, today: noon, owned, state });
   assert.equal(after.state.misses, 4, 'the review itself queued nothing new');
   // Execution then finishes on its own: the run leaves the unfinished list and today's verified count rises.
@@ -256,13 +256,13 @@ test('due obligations are actionable in business hours, spaced and backed off, a
   const signature = c.progressSignature(business, full, [], obligations);
   const due = c.decide({ now, settings, agent, business, today: full, obligations, state: {} });
   assert.deepEqual([due.kind, due.callModel, due.reason], ['obligations', true, 'settling 3 due invoices and bills'], 'the calendar is current and today is full, yet due obligations still get a review');
-  let clock = now, next = c.decide({ now: now + MIN, settings, agent, business, today: full, obligations, state: c.beginReview(due.state, { now, signature, kind: 'obligations' }) });
+  let clock = now, next = c.decide({ now: now + MIN, settings, agent, business, today: full, obligations, state: completedReview(due.state, { now, signature, kind: 'obligations' }) });
   for (const wait of [5, 15, 30, 30]) {
     assert.deepEqual([next.callModel, Date.parse(next.nextReviewAt) - clock], [false, wait * MIN], 'an obligation that cannot be settled backs off 5, 15, then 30 minutes');
     clock = Date.parse(next.nextReviewAt);
     const ready = c.decide({ now: clock, settings, agent, business, today: full, obligations, state: next.state });
     assert.equal(ready.callModel, true);
-    next = c.decide({ now: clock + MIN, settings, agent, business, today: full, obligations, state: c.beginReview(ready.state, { now: clock, signature, kind: 'obligations' }) });
+    next = c.decide({ now: clock + MIN, settings, agent, business, today: full, obligations, state: completedReview(ready.state, { now: clock, signature, kind: 'obligations' }) });
   }
   const settled = c.decide({ now: Date.parse(next.nextReviewAt), settings, agent, business, today: full, obligations: { count: 2 }, state: next.state });
   assert.equal(settled.state.misses, 0, 'settling one counts as progress');
@@ -305,4 +305,14 @@ test('the daily QuickBooks request budget stops discretionary slices only, with 
   assert.equal(c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-27' }), today: todayAt(now), requests: spent, state: {} }).kind, 'catch-up', 'calendar closes continue');
   assert.equal(c.decide({ now, settings, agent, business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }), today: todayAt(now), requests: spent, state: {} }).kind, 'recovery', 'recovery continues');
   assert.equal(c.decide({ now, settings, agent, business: current(day), today: todayAt(now), obligations: { count: 2 }, requests: spent, state: {} }).kind, 'obligations', 'obligations continue');
+});
+
+function completedReview(state, options) { return c.finishReview(c.beginReview(state, options)); }
+test('an interrupted review does not add a no-progress miss, but completed reviews still do',()=>{
+ const now=Date.parse('2026-10-31T15:00:00Z'), business={openingDate:'2026-10-01',verifiedThrough:'2026-10-29'}, signature=c.progressSignature(business,null);
+ const pending=c.beginReview({misses:1},{now,signature,kind:'catch-up'});
+ const interrupted=c.decide({now:now+60000,business,state:pending});
+ assert.equal(interrupted.state.misses,1);assert.equal(interrupted.state.reviews,1);
+ const terminal=c.decide({now:now+60000,business,state:c.finishReview(pending)});assert.equal(terminal.state.misses,2);
+ const progressed=c.decide({now:now+60000,business:{...business,verifiedThrough:'2026-10-30'},state:pending});assert.equal(progressed.state.misses,0);
 });
