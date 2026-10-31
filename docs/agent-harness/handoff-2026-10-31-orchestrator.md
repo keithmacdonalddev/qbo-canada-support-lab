@@ -59,22 +59,7 @@ Supersedes nothing in `AGENTS.md`, `CLAUDE.md` or `AGENT_WORKFLOW.md`, which sti
 
 ## 2. What the app is for (the owner's intent)
 
-The owner's three jobs for the app:
-1. **Ensure complete data in QuickBooks for every potential situation**, so the owner can reproduce any customer issue that may arise (in QuickBooks, not in this app). This is in addition to job 2, running the business; both are goals (prd.md).
-2. **Manage the QuickBooks company like a real, running business, 24/7, through the API.**
-3. **Make sure every QuickBooks feature gets used**, more than naturally: deliberately cover every feature, setting, edge case and record state, and measure the gaps.
-
-Formal requirements R01–R16 are in `docs/plans/continuous-business-operator-completion-2026-10-24.md` §2 (product contract: `prd.md`). In short:
-- **R01:** a believable test business for Intuit troubleshooting, teaching and learning. Support usefulness beats record count.
-- **R02:** medium-sized and very active, all the time.
-- **R03–R05:** an in-app AI accountant orchestrates everything. It is the head accountant, manager, consultant and decision-maker, with every tool and skill it might ever need, not only what current work needs.
-- **R06:** the owner is also a decision-maker; their instructions persist.
-- **R07:** complete UI so the owner can manage the same things.
-- **R08–R09:** autonomous for days or weeks, with no end date.
-- **R10:** always synced with QBO; real-time monitoring.
-- **R11:** show what happened, what is unfinished, and what's next.
-- **R12:** a UI and experience beyond what the owner would expect.
-- **R13–R14:** optional specialists, only when they're worth it.
+The complete intent is in the **"Owner intent" section of `AGENTS.md`** (single source; loaded by every session). Do not restate it here. Formal requirements: R01–R16 in `docs/plans/continuous-business-operator-completion-2026-10-24.md` §2.
 
 **Owner directions given in this session** (verbatim, and binding):
 - **On activity and scale:**
