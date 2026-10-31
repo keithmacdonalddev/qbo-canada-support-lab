@@ -101,15 +101,15 @@ test('auto mode re-checks a failed Codex sign-in and keeps a recent good one', a
   try {
     config.ai.provider = 'auto';
     providerMemory.codexOkAt = 0;
-    answers = [{ installed: true, loggedIn: false }, { installed: true, loggedIn: true }];
+    answers = [{ installed: true, loggedIn: false, subscriptionReady: false, status: 'check-failed' }, { installed: true, loggedIn: true, method: 'chatgpt', subscriptionReady: true, status: 'ready' }];
     assert.equal(await aiProvider.resolveProvider(), 'codex');
     assert.deepEqual(checks, [false, true]);
 
-    answers = [{ installed: true, loggedIn: false }, { installed: true, loggedIn: false }];
+    answers = [{ installed: true, loggedIn: false, subscriptionReady: false, status: 'check-failed' }, { installed: true, loggedIn: false, subscriptionReady: false, status: 'check-failed' }];
     assert.equal(await aiProvider.resolveProvider(), 'codex', 'a transient failure does not flip providers');
 
     providerMemory.codexOkAt = Date.now() - 11 * 60 * 1000;
-    answers = [{ installed: true, loggedIn: false }, { installed: true, loggedIn: false }];
+    answers = [{ installed: true, loggedIn: false, subscriptionReady: false, status: 'check-failed' }, { installed: true, loggedIn: false, subscriptionReady: false, status: 'check-failed' }];
     assert.equal(await aiProvider.resolveProvider(), 'anthropic');
 
     answers = [{ installed: false, loggedIn: false }];
@@ -130,4 +130,53 @@ test('Claude defaults are current models with room for tool turns', () => {
   if (!process.env.AI_MODEL_FAST) assert.equal(config.ai.modelFast, 'claude-sonnet-5-5');
   if (!process.env.AI_MODEL_DEEP) assert.equal(config.ai.modelDeep, 'claude-opus-5-5');
   if (!process.env.AI_MAX_TOKENS) assert.ok(config.ai.maxTokens >= 16000);
+});
+
+ test('definite sign-out and API-key login cannot reuse a recent subscription success', async t => {
+  const saved = config.ai.provider; config.ai.provider = 'auto';
+  t.after(() => { config.ai.provider = saved; providerMemory.codexOkAt = 0; });
+  for (const status of [
+    { installed: true, loggedIn: false, subscriptionReady: false, status: 'signed-out' },
+    { installed: true, loggedIn: true, method: 'api-key', subscriptionReady: false, status: 'api-key' },
+  ]) {
+    providerMemory.codexOkAt = Date.now();
+    t.mock.method(codexCli, 'getStatus', async () => status);
+    assert.equal(await aiProvider.resolveProvider(), 'anthropic');
+    t.mock.restoreAll();
+  }
+});
+
+test('host status refresh reports subscription, paid fallback and missing key without disclosing a key', async t => {
+  const saved = { ...config.ai }; const checks = []; let status;
+  Object.assign(config.ai, { provider: 'auto', globalKeyEnabled: true, anthropicApiKey: 'synthetic-private-key', userKeysEnabled: false });
+  t.after(() => { Object.assign(config.ai, saved); providerMemory.codexOkAt = 0; });
+  t.mock.method(codexCli, 'getStatus', async options => { checks.push(options); return status; });
+  status = { installed: true, loggedIn: true, method: 'chatgpt', subscriptionReady: true, status: 'ready', checkedAt: '2026-10-31T00:00:00Z' };
+  let health = await aiProvider.getStatus({ refresh: true });
+  assert.equal(health.provider, 'codex'); assert.equal(health.available, true); assert.equal(health.providerStatus.fallback, false);
+  assert.deepEqual(checks, [{ refresh: true }]);
+  status = { installed: false, loggedIn: false, subscriptionReady: false, status: 'not-installed', reason: 'Codex is not installed.' };
+  health = await aiProvider.getStatus({ refresh: true });
+  assert.equal(health.provider, 'anthropic'); assert.equal(health.available, true);
+  assert.equal(health.providerStatus.fallback, true); assert.match(health.providerStatus.detail, /API charges/);
+  assert.ok(!JSON.stringify(health).includes(config.ai.anthropicApiKey));
+  config.ai.globalKeyEnabled = false;
+  health = await aiProvider.getStatus(); assert.equal(health.available, false); assert.match(health.providerStatus.detail, /Add an enabled Anthropic API key/);
+  config.ai.userKeysEnabled = true;
+  health = await aiProvider.getStatus(); assert.equal(health.available, null); assert.equal(health.providerStatus.status, 'unverified');
+  health = await aiProvider.getStatus({ userApiKey: 'synthetic-owner-key' }); assert.equal(health.available, true);
+  config.ai.provider = 'codex';
+  health = await aiProvider.getStatus(); assert.equal(health.provider, 'codex'); assert.equal(health.available, false); assert.equal(health.providerStatus.fallback, false);
+  config.ai.provider = 'anthropic';
+  health = await aiProvider.getStatus({ userApiKey: 'synthetic-owner-key' }); assert.equal(health.provider, 'anthropic'); assert.equal(health.providerStatus.fallback, false);
+});
+
+test('workspace polling reports unknown login without starting a CLI process', async t => {
+  const saved = config.ai.provider; config.ai.provider = 'auto';
+  t.after(() => { config.ai.provider = saved; });
+  t.mock.method(codexCli, 'getStatus', async () => { throw new Error('Polling must not launch status'); });
+  t.mock.method(codexCli, 'getCachedStatus', () => ({ status: 'unchecked', reason: 'Check plan again', checkedAt: null }));
+  const health = await aiProvider.getStatus({ cached: true });
+  assert.equal(health.provider, null); assert.equal(health.available, null);
+  assert.equal(health.providerStatus.status, 'unverified'); assert.equal(health.providerStatus.detail, 'Check plan again');
 });

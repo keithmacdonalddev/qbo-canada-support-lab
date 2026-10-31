@@ -82,3 +82,7 @@ Do not run `npm run dev` merely to verify terminal formatting: backend startup c
 Test Data Lab now uses authenticated MongoDB at `127.0.0.1:27017`, database `qbo-support-lab`, on this PC. The existing `DLsocialMongoDB` Windows service starts automatically and stores database files on D:. Start the app normally with `npm run dev`; an Atlas connection is no longer required for app storage. QuickBooks remains an online production service.
 
 The ignored root `.env` stores the database-specific local login. See [local database operations](ops/local-mongodb.md) for backups, migration evidence, and recovery.
+
+## Deploying the accountant
+
+For a persistent server using the owner’s ChatGPT/Codex subscription, follow [the deployment guide](deployment.md). Install and authenticate Codex under the backend service account, persist its private CODEX_HOME outside the checkout, and use the single-process production command. Settings and the accountant’s Check plan again control report the host login and Anthropic fallback; local sign-in on this PC does not authenticate a different server.

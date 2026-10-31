@@ -22,6 +22,7 @@ const { providerTimeout } = require('./ai-provider-timeout');
 
 const WORK_DIR = path.join(os.tmpdir(), 'test-data-lab-codex');
 const STATUS_CACHE_MS = 60 * 1000;
+const LOGIN_COMMAND = `codex --ignore-user-config -c 'cli_auth_credentials_store="file"' login --device-auth`;
 
 // Codex silently ignores unknown -c keys; re-check these after Codex upgrades.
 const SELF_TEXT_ARGS = Object.freeze([
@@ -62,16 +63,46 @@ let versionCache = null;
 
 // Launch codex.exe directly on Windows: going through cmd.exe mangles quoted
 // -c values.
-function resolveExecutable() {
-  if (config.ai.codex.cliPath && fs.existsSync(config.ai.codex.cliPath)) return config.ai.codex.cliPath;
-  if (process.platform !== 'win32') return 'codex';
+function resolveExecutable({ cliPath = config.ai.codex.cliPath, platform = process.platform, env = process.env, home = os.homedir() } = {}) {
+  const exists = (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  // A configured path is authoritative: a typo must not select another login/binary.
+  if (cliPath) return path.isAbsolute(cliPath) && exists(cliPath) ? cliPath : null;
+  if (platform !== 'win32') {
+    // Return an absolute path so version, catalog and tool checks identify the same binary.
+    for (const directory of String(env.PATH || '').split(path.delimiter).filter(Boolean)) {
+      const file = path.resolve(directory, 'codex');
+      try { fs.accessSync(file, fs.constants.X_OK); if (exists(file)) return file; } catch { /* next PATH entry */ }
+    }
+    return null;
+  }
   const tail = ['npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai',
     'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
   const candidates = [
-    process.env.APPDATA ? path.join(process.env.APPDATA, ...tail) : '',
-    path.join(os.homedir(), 'AppData', 'Roaming', ...tail),
+    ...String(env.Path || env.PATH || '').split(';').filter(Boolean).map(dir => path.join(dir, 'codex.exe')),
+    env.APPDATA ? path.join(env.APPDATA, ...tail) : '',
+    path.join(home, 'AppData', 'Roaming', ...tail),
   ].filter(Boolean);
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return candidates.find(exists) || null;
+}
+
+// A dedicated, writable CODEX_HOME/auth.json is the deployment credential store.
+// Apply this even when inference ignores user config, so status and runs agree.
+const AUTH_ARGS = Object.freeze(['-c', 'cli_auth_credentials_store="file"']);
+const SUBSCRIPTION_ARGS = Object.freeze([...AUTH_ARGS, '-c', 'forced_login_method="chatgpt"']);
+
+function loginHealth({ installed, loggedIn, method, checkFailed = false }) {
+  const subscriptionReady = installed && loggedIn && method === 'chatgpt';
+  const status = !installed ? 'not-installed' : checkFailed ? 'check-failed'
+    : !loggedIn ? 'signed-out' : method === 'api-key' ? 'api-key'
+      : subscriptionReady ? 'ready' : 'unknown-login';
+  const reasons = {
+    'not-installed': 'Codex CLI is unavailable on the backend host. Install it or check CODEX_CLI_PATH.',
+    'check-failed': 'The backend host could not check the Codex login. Check the service account and CODEX_HOME, then check again.',
+    'signed-out': 'Under the backend service account and CODEX_HOME, sign in with ' + LOGIN_COMMAND + ', then check again.',
+    'api-key': 'Codex is using an OpenAI API key, which is billed separately. Sign in with ChatGPT on the backend host to use the subscription.',
+    'unknown-login': 'Codex did not identify a ChatGPT login. Sign in with ChatGPT on the backend host, then check again.',
+  };
+  return { subscriptionReady, status, reason: reasons[status] || null };
 }
 
 function tomlString(value) {
@@ -98,7 +129,7 @@ function getCodexVersion(executable = resolveExecutable()) {
   if (versionCache?.key === key) return Promise.resolve(versionCache.version);
   return new Promise((resolve) => {
     try {
-      execFile(executable, ['--version'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout) => {
+      execFile(executable, ['--version'], { windowsHide: true, timeout: 5000, env: childEnv() }, (err, stdout) => {
         const version = err ? null : (/(\d+\.\d+\.\d+\S*)/.exec(String(stdout || ''))?.[1] || null);
         if (version) versionCache = { key, version };
         resolve(version);
@@ -121,28 +152,40 @@ function getStatus({ refresh = false } = {}) {
     return Promise.resolve({ ...statusCache.value, toolAccess: lastToolAccess() });
   }
   const executable = resolveExecutable();
-  const base = { installed: false, loggedIn: false, method: null, model: config.ai.codex.model, version: null };
+  const base = { installed: false, loggedIn: false, method: null, model: config.ai.codex.model, version: null, authStorage: 'file', checkedAt: new Date().toISOString() };
   if (!executable) {
-    statusCache = { at: Date.now(), value: base };
-    return Promise.resolve({ ...base, toolAccess: null });
+    statusCache = { at: Date.now(), value: { ...base, ...loginHealth(base) } };
+    return Promise.resolve({ ...statusCache.value, toolAccess: null });
   }
   const login = new Promise((resolve) => {
     try {
-      execFile(executable, ['login', 'status'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout, stderr) => {
+      execFile(executable, ['--ignore-user-config', ...AUTH_ARGS, 'login', 'status'], { windowsHide: true, timeout: 5000, env: childEnv() }, (err, stdout, stderr) => {
         const text = `${stdout || ''}\n${stderr || ''}`;
         const loggedIn = !err && /logged in/i.test(text) && !/not logged in/i.test(text);
         const method = /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api-key' : null;
-        resolve({ installed: !(err && err.code === 'ENOENT'), loggedIn, method: loggedIn ? method : null });
+        resolve({ installed: !(err && err.code === 'ENOENT'), loggedIn, method: loggedIn ? method : null,
+          checkFailed: !!err && !/not logged in/i.test(text) });
       });
     } catch {
-      resolve({});
+      resolve({ installed: true, checkFailed: true });
     }
   });
   return Promise.all([login, getCodexVersion(executable)]).then(([signIn, version]) => {
-    const value = { ...base, ...signIn, version };
+    const value = { ...base, ...signIn, ...loginHealth({ ...base, ...signIn }), version };
     statusCache = { at: Date.now(), value };
     return { ...value, toolAccess: lastToolAccess() };
   });
+}
+
+// Workspace polling must not wait for a subprocess. Expired/absent health is explicitly unknown.
+function getCachedStatus() {
+  if (statusCache && Date.now() - statusCache.at < STATUS_CACHE_MS) {
+    return { ...statusCache.value, toolAccess: lastToolAccess() };
+  }
+  return { installed: null, loggedIn: false, method: null, subscriptionReady: false,
+    model: config.ai.codex.model, version: null, authStorage: 'file', status: 'unchecked',
+    checkedAt: statusCache?.value.checkedAt || null, toolAccess: lastToolAccess(),
+    reason: 'Choose Check plan again to check the ChatGPT login on the backend host.' };
 }
 
 // Errors from the model service carry `aiProvider` so routes never mistake
@@ -160,7 +203,7 @@ const ENV_ALLOWLIST = [
   'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'windir', 'ComSpec',
   'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
   'TEMP', 'TMP', 'CODEX_HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'SSL_CERT_FILE',
-  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'LANG',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'LANG', 'CODEX_CA_CERTIFICATE',
 ];
 
 function childEnv() {
@@ -262,7 +305,7 @@ function modelCatalogFile(executable) {
       }
     };
     try {
-      execFile(executable, ['debug', 'models'], { windowsHide: true, timeout: 20000, maxBuffer: 32 * 1024 * 1024, env: childEnv() }, onResult);
+      execFile(executable, ['--ignore-user-config', ...SUBSCRIPTION_ARGS, 'debug', 'models'], { windowsHide: true, timeout: 20000, maxBuffer: 32 * 1024 * 1024, env: childEnv() }, onResult);
     } catch (err) {
       onResult(err);
     }
@@ -315,8 +358,14 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
   if (inferenceOnly && bridge) throw new TypeError('An independent assessment cannot receive a tool bridge.');
   const executable = resolveExecutable();
   if (!executable) {
-    throw providerError('Codex CLI is not installed. Install it with `npm install -g @openai/codex`, then run `codex login`.', 503);
+    throw providerError('Codex CLI is not installed on the backend host. Follow docs/deployment.md to install and sign in under the service account.', 503);
   }
+
+  // Reject an API-key/unknown login before commands that enforce ChatGPT auth:
+  // Codex can log out a credential cache that conflicts with forced_login_method.
+  const health = await require('./codex-inference-output').boundedAwait(getStatus({ refresh: true }), { signal, timeoutMs });
+  signal?.throwIfAborted();
+  if (!health.subscriptionReady) throw Object.assign(providerError(health.reason || 'The host ChatGPT login is unavailable.', 503), { code: 'CODEX_SUBSCRIPTION_UNAVAILABLE' });
 
   // Without the stripped catalog the model may be offered Codex's own coding
   // tools, so refuse rather than run with weaker isolation.
@@ -349,6 +398,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
       '--skip-git-repo-check',
       '--cd', cwd,
       ...ISOLATION_ARGS,
+      ...SUBSCRIPTION_ARGS,
       '-c', `model_reasoning_effort="${effort}"`,
       '-c', `model_instructions_file=${tomlString(instructionsFile)}`,
       '-c', `model_catalog_json=${tomlString(catalogFile)}`,
@@ -445,7 +495,7 @@ async function run({ system, prompt, bridge = null, timeoutMs = config.ai.codex.
         const unknownSetting = /unknown feature flag/i.test(preview);
         if (notSignedIn) statusCache = null;
         let message = `Codex CLI failed (exit ${code})${preview ? `: ${preview}` : ''}`;
-        if (notSignedIn) message = 'Codex CLI is not signed in. Run `codex login` in a terminal, then try again.';
+        if (notSignedIn) message = 'Codex CLI is not signed in. Under the backend service account and CODEX_HOME, run ' + LOGIN_COMMAND + ', then try again.';
         if (unknownSetting) message = `The installed Codex CLI no longer accepts one of this app's isolation settings (${preview}), so the assistant was not started. The app needs an update for this Codex version.`;
         finish(reject, providerError(message, notSignedIn || unknownSetting ? 503 : 502));
         return;
@@ -638,6 +688,6 @@ function lastToolAccess() {
 }
 
 module.exports = {
-  getStatus, getCodexVersion, run, verifyToolAccess, lastToolAccess, createToolAccessCheck,
-  resolveExecutable, childEnv, stripCodingCatalogFields, ISOLATION_ARGS, ALLOWED_ITEM_TYPES,
+  getStatus, getCachedStatus, getCodexVersion, run, verifyToolAccess, lastToolAccess, createToolAccessCheck,
+  resolveExecutable, childEnv, loginHealth, stripCodingCatalogFields, ISOLATION_ARGS, ALLOWED_ITEM_TYPES,
 };

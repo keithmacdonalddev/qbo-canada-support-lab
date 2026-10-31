@@ -224,17 +224,9 @@ router.get('/config', authenticate, async (req, res) => {
     // ?verifyTools=true runs the tool-access check now; otherwise toolAccess is
     // the last check in this process (or null). codex carries version and toolAccess.
     const verified = req.query.verifyTools === 'true' ? await codexCli.verifyToolAccess({ refresh: true }) : null;
-    const codex = await codexCli.getStatus({ refresh: req.query.refresh === 'true' || !!verified });
+    const health = await aiProvider.getStatus({ refresh: req.query.refresh === 'true' || !!verified, userApiKey: user?.anthropicApiKey });
+    const { codex, provider, available, providerStatus } = health;
     if (verified) codex.toolAccess = verified;
-    const provider = await aiProvider.resolveProvider();
-    const anthropicAvailable =
-      (keyConfig.userKeysEnabled && hasUserKey) ||
-      keyConfig.globalKeySet;
-
-    // Can this user actually use AI right now?
-    const available = provider === 'codex'
-      ? codex.installed && codex.loggedIn
-      : anthropicAvailable;
 
     return res.json({
       success: true,
@@ -246,6 +238,7 @@ router.get('/config', authenticate, async (req, res) => {
         available,
         provider,
         providerSetting: config.ai.provider,
+        providerStatus,
         codex,
       },
     });

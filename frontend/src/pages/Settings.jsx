@@ -243,6 +243,8 @@ function AssistantSection() {
       : { tone: 'attention', title: 'Add an Anthropic API key to start', detail: 'The assistant needs a key before it can work on cases.' }
   }
 
+  if (config.providerStatus) headline = { ...headline, title: config.available ? headline.title : 'Assistant needs attention', tone: config.available ? 'ok' : 'attention', detail: config.providerStatus.detail }
+
   return (
     <Panel title="Assistant">
       <Headline tone={headline.tone} title={headline.title} detail={headline.detail}>

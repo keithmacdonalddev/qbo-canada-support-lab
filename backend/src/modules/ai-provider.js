@@ -205,18 +205,44 @@ async function resolveProvider(options = {}) {
   if (options.provider === 'codex' || options.provider === 'anthropic') return options.provider;
   if (config.ai.provider === 'anthropic') return 'anthropic';
   if (config.ai.provider === 'codex') return 'codex';
-  let status = await codexCli.getStatus();
+  let status = options.codexStatus || await codexCli.getStatus({ refresh: options.refresh === true });
   // A sign-in check can fail transiently; check once more before deciding.
-  if (status.installed && !status.loggedIn) status = await codexCli.getStatus({ refresh: true });
-  if (status.installed && status.loggedIn) {
+  if (!options.codexStatus && !options.refresh && status.installed && !status.loggedIn) status = await codexCli.getStatus({ refresh: true });
+  if (status.subscriptionReady === true) {
     providerMemory.codexOkAt = Date.now();
     return 'codex';
   }
-  if (status.installed && Date.now() - providerMemory.codexOkAt < CODEX_LAST_GOOD_MS) {
+  if (status.installed && status.status === 'check-failed' && Date.now() - providerMemory.codexOkAt < CODEX_LAST_GOOD_MS) {
     console.warn('[ai-provider] Codex sign-in check failed; keeping Codex from its last good check');
     return 'codex';
   }
   return 'anthropic';
+}
+
+/** Sanitized host health for Settings and the accountant's Check plan again path.
+ * This checks local credentials only; it neither sends a prompt nor proves remaining plan quota.
+ */
+async function getStatus(options = {}) {
+  const { refresh = false, userApiKey } = options;
+  const codex = options.cached ? codexCli.getCachedStatus() : await codexCli.getStatus({ refresh });
+  const unchecked = codex.status === 'unchecked';
+  const provider = unchecked && config.ai.provider === 'auto' ? null : await resolveProvider({ codexStatus: codex });
+  let anthropicAvailable = false;
+  try { resolveApiKey({ userApiKey }); anthropicAvailable = true; } catch { /* no enabled key */ }
+  const keyKnown = anthropicAvailable || Object.hasOwn(options, 'userApiKey') || !config.ai.userKeysEnabled;
+  const available = provider === null || (provider === 'codex' && unchecked) ? null : provider === 'codex' ? codex.subscriptionReady === true : keyKnown ? anthropicAvailable : null;
+  const fallback = config.ai.provider === 'auto' && provider === 'anthropic';
+  const detail = provider === null ? codex.reason : provider === 'codex'
+    ? available ? 'Using the ChatGPT subscription signed in on the backend host. Remaining plan allowance is reported only when Codex runs.' : codex.reason
+    : !keyKnown ? (fallback ? (codex.reason || 'Codex is unavailable on the backend host.') + ' ' : '') + 'New reviews use the company owner’s enabled Anthropic API key if one is saved. These reviews incur API charges.'
+    : fallback
+      ? (codex.reason || 'Codex is unavailable on the backend host.') + (anthropicAvailable
+        ? ' New reviews use the enabled Anthropic API key and incur API charges.'
+        : ' Add an enabled Anthropic API key for fallback, or restore the ChatGPT login.')
+      : anthropicAvailable ? 'Using the enabled Anthropic API key. Reviews incur API charges.' : 'No enabled Anthropic API key is available.';
+  return { provider, providerSetting: config.ai.provider, available, codex,
+    providerStatus: { status: available === null ? 'unverified' : available ? 'ready' : 'unavailable', fallback, detail,
+      anthropicAvailable: keyKnown ? anthropicAvailable : null, checkedAt: codex.checkedAt } };
 }
 
 /**
@@ -243,7 +269,7 @@ async function complete({ system, prompt, maxTokens, userApiKey, provider, timeo
 }
 
 module.exports = {
-  chat, stream, complete, resolveProvider, MODELS, resolveApiKey, getKeyConfig,
+  chat, stream, complete, resolveProvider, getStatus, MODELS, resolveApiKey, getKeyConfig,
   // Test seams: client cache, retry timing and decision helpers.
   _internal: { clientCache, timing, providerMemory, isRetryable, friendlyError },
 };
