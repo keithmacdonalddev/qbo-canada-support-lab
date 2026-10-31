@@ -29,6 +29,20 @@ The practical mental model is:
 
 `business blueprint -> coverage requirements -> controlled operations -> QBO records -> report and reconciliation evidence`
 
+## Owner intent (read before any work; do not re-derive from summaries)
+
+The owner should never have to re-explain this. Every session, worker and reviewer works toward all of it at once; none of these is a means to another. Formal list: R01–R16 in `docs/plans/continuous-business-operator-completion-2026-10-24.md` §2.
+
+1. **A coherent, believable business in QBO** for Intuit troubleshooting, teaching and learning. The books must hang together like a real company's: collections and late payers, bills paid, stock reordered, month-end, HST, bank reconciliation, reports that agree.
+2. **Medium-sized and very active, 24/7/365, with no end date** (target about 220 records/day spread over 24 hours). Runs for weeks unattended and recovers by itself. A stalled calendar or an idle accountant is a top defect.
+3. **Every situation present in QBO**, in addition to normal operation: every feature, setting, edge case and record state a customer could have (voids, partials, overpayments, unusual tax, corrections, inactive lists, classes, locations, custom fields, and so on), created deliberately where normal business wouldn't produce it. Gaps are measured from live data, never claimed. Customer issues are reproduced by the owner in QBO itself; the app's job is that the data to do so exists.
+4. **The in-app AI accountant is the head accountant, manager, consultant and decision-maker.** It does the bookkeeping itself by writing to QBO through the governed tools; it sets goals, analyses finances, decides, advises, verifies its own work and follows up. It needs every tool it might ever need, not just what today's work uses (general governed QBO reach, not hand-coded transaction shapes). When blocked it diagnoses and files exact build-list items; the orchestrator treats `management.capabilityRequests` and `/api/company/business-agent/blockers` as the work queue.
+5. **The owner is also a decision-maker.** Their instructions persist and shape future work; the UI lets them do everything the accountant can, through working pages.
+6. **Always synced with QBO and visible live**: what happened, what is unfinished, what's next, honestly, with a UI beyond what the owner expects (desktop).
+7. **Within limits**: safe books, ≤3 metered QBO calls per saved record, low AI cost, specialists only when measurably worth it, no unrelated scope.
+
+Judge progress only by the live company (records today vs target, nightly closes, situations covered, blockers), not by tests, reviews or commits. It is a simulated test company (no real money); routine work needs no owner approval. Ask only for owner-only, irreversible choices such as turning on multicurrency.
+
 ## User Communication
 
 - Lead with the practical answer in plain English.
