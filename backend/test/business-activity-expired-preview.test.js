@@ -40,3 +40,26 @@ test('an expired activity preview gives way to today’s preparation and is reti
   const again = await h.service.prepareActivityBatch(h.user, sale('2026-12-01-held-collections-01', 1200));
   assert.equal(again.operationId, today.operationId);
 });
+
+test('a decision carried out under a day-scoped operation is never repeated on a later day', { timeout: 300000 }, async () => {
+  const h = fixture({ activityTemplateVersion: 2, openingDate: '2026-11-01' }); await h.publish(); await calendar(h, '2026-11-30', 'repeat-guard-november');
+  // Day 1: prepared, never approved, then retired unsent on day 2.
+  const first = await h.service.prepareActivityBatch(h.user, sale('repeat-guard-settlement-01'));
+  const idle = await h.service.prepareActivityBatch(h.user, sale('repeat-guard-preview-only-1'));
+  await calendar(h, '2026-12-01', 'repeat-guard-close-first'); h.clock += DAY;
+  const review = await h.service.reviewRetirement(h.user, first.operationId, { planHash: first.planHash });
+  await h.service.retire(h.user, first.operationId, { planHash: first.planHash, reviewHash: review.reviewHash, reason: 'Expired preview from an earlier business day; never approved, nothing sent.' });
+  // Day 2: the same key gets a day-scoped operation, which runs.
+  const second = await h.service.prepareActivityBatch(h.user, sale('repeat-guard-settlement-01', 1300));
+  await h.service.approve(h.user, second.operationId, { planHash: second.planHash }); assert.equal((await h.runtime(second.operationId).execute()).complete, true);
+  const unused = await h.service.prepareActivityBatch(h.user, sale('repeat-guard-preview-only-1', 1400));
+  assert.notEqual(unused.operationId, idle.operationId);
+  await calendar(h, '2026-12-02', 'repeat-guard-close-second'); h.clock += DAY;
+  // Day 3: the original run is inert, but the day-2 operation ran: refused, nothing sent.
+  const posts = h.posts;
+  await assert.rejects(h.service.prepareActivityBatch(h.user, sale('repeat-guard-settlement-01', 1300)), new RegExp('already used by operation ' + second.operationId));
+  // A key whose every earlier operation is an inert preview still gives way.
+  const third = await h.service.prepareActivityBatch(h.user, sale('repeat-guard-preview-only-1', 1500));
+  assert.ok(![idle.operationId, unused.operationId].includes(third.operationId));
+  assert.equal(h.posts, posts);
+});

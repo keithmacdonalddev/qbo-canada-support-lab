@@ -87,8 +87,11 @@ const ACTIVE = new Set(['running', 'committing']);
 const MINUTE = 60000;
 // Batch types that make up a scheduled same-day slice. Duty and list batches
 // (receiving orders, settling adopted obligations, corrections, additions) are
-// naturally single-use per target and keep the accountant's own identity.
-const SLICE_TYPES = new Set(['settled-service-sale', 'paid-operating-expense', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry']);
+// naturally single-use per target and keep the accountant's own identity. Policy v8
+// discretionary work (terms invoices and bills, estimates and their conversion, stock
+// orders) is slice work; collecting or paying its own open records is an obligation
+// duty like settling adopted ones (bounded by each record's open balance).
+const SLICE_TYPES = new Set(['settled-service-sale', 'paid-operating-expense', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'invoice-on-terms', 'bill-on-terms', 'send-estimate', 'convert-own-estimate', 'order-stock']);
 const SLOT_KEY = /^slot-(\d{8})-r(\d+)-s(\d+)(?:-b(\d+))?$/;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

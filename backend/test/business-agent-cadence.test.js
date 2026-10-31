@@ -95,7 +95,11 @@ test('one live batch per slot; a retired slot batch gets the next identity; late
   assert.equal(todayAt(at('2026-10-30', '07:59')).dueSlot, null, 'nothing is due before business hours');
   assert.equal(todayAt(at('2026-10-30', '18:30')).dueSlot, null, 'a shortfall is not replayed after hours');
   assert.equal(todayAt(at('2026-10-25', '12:00')).dueSlot, null, 'a v2 Sunday has no slices');
-  assert.equal(c.isSlice([{ type: 'add-customer' }]), false);assert.equal(c.isSlice([{ type: 'receive-purchase-order' }, { type: 'settled-service-sale' }]), true);
+  assert.equal(c.isSlice([{ type: 'add-customer' }]), false);
+  // Policy v8: discretionary new work is slice work (slot, ceiling and capacity admission); collecting or
+  // paying its own open records is an obligation duty, like settling adopted ones.
+  for (const type of ['invoice-on-terms', 'bill-on-terms', 'send-estimate', 'convert-own-estimate', 'order-stock']) assert.equal(c.isSlice([{ type }]), true, type);
+  for (const type of ['collect-own-invoice', 'pay-own-bill', 'collect-adopted-invoice', 'pay-adopted-bill']) assert.equal(c.isSlice([{ type }]), false, type);assert.equal(c.isSlice([{ type: 'receive-purchase-order' }, { type: 'settled-service-sale' }]), true);
 });
 
 test('the daily ceiling is twice the target, counting saved records and reservations', () => {

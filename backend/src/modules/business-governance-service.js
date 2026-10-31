@@ -432,14 +432,23 @@ function createBusinessGovernanceService(dependencies = {}) {
   // so a past decision is never repeated.
   async function activityRequestKey(bound, decisionKey) {
     const { scope, ownerId, actorId } = bound, day = businessDate(new Date(now()));
-    const legacy = hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey });
-    const run = await read(models.Runs, { _id: hash({ scope, actorId, requestKey: legacy }).slice(0, 24), ...scope });
-    const runDay = run?.activityBatch?.day || run?.throughDate;
-    if (!run || !runDay || runDay >= day) return legacy;
-    const operationId = String(run._id);
-    const effects = await read(models.Receipts, { environment: scope.environment, realmId: scope.realmId, operationId }) || await models.Steps.findOne({ environment: scope.environment, realmId: scope.realmId, operationId }).select('_id').maxTimeMS(3000).lean();
-    if (!['previewed', 'retired'].includes(run.status) || effects) fail('decisionKey ' + decisionKey + ' was already used by operation ' + operationId + ' on ' + runDay + ' (' + run.status + '). Choose a new decisionKey for today’s decision; that earlier work is not repeated.');
-    return hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey, day });
+    const legacy = hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey }), dated = hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey, day });
+    const idOf = requestKey => hash({ scope, actorId, requestKey }).slice(0, 24), legacyId = idOf(legacy), todayId = idOf(dated);
+    const first = await read(models.Runs, { _id: legacyId, ...scope }), firstDay = first?.activityBatch?.day || first?.throughDate;
+    if (!first || !firstDay || firstDay >= day) return legacy;
+    // Every earlier operation of this decision (the original and any day-scoped one) must
+    // be inert, so no decision is ever carried out twice (for example a partial
+    // settlement repeated on a later day).
+    const earlier = await models.Runs.find({ ...scope, 'activityBatch.decisionKey': decisionKey }).select('_id status approval activityBatch.day throughDate').limit(101).maxTimeMS(3000).lean();
+    if (earlier.length > 100) fail('decisionKey ' + decisionKey + ' has too many earlier operations. Choose a new decisionKey for today’s decision.');
+    for (const run of [first, ...earlier.filter(row => String(row._id) !== legacyId)]) {
+      const operationId = String(run._id);
+      if (operationId === todayId) continue;
+      const effects = await read(models.Receipts, { environment: scope.environment, realmId: scope.realmId, operationId }) || await models.Steps.findOne({ environment: scope.environment, realmId: scope.realmId, operationId }).select('_id').maxTimeMS(3000).lean();
+      const inert = (run.status === 'previewed' && !run.approval) || run.status === 'retired';
+      if (!inert || effects) fail('decisionKey ' + decisionKey + ' was already used by operation ' + operationId + ' on ' + (run.activityBatch?.day || run.throughDate) + ' (' + run.status + '). Choose a new decisionKey for today’s decision; that earlier work is not repeated.');
+    }
+    return dated;
   }
   // The agent names a correction's target and reason (or, policy v8, the own record it
   // collects or pays); the server derives the terms. A lost-response retry returns the
