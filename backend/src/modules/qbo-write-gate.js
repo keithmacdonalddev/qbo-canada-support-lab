@@ -12,7 +12,7 @@ const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, caseAdmission, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   if([populationTransport,populationRepairTransport,generalTransport].filter(Boolean).length>1)throw new TypeError('Install one exact batch transport per coordinated client.');
   const resourceClaims = createCompanyResourceClaims({ Writers, transaction, now });
@@ -153,6 +153,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         if (!touchedRun || !touchedCalendar) throw denied('Business ownership changed before sending.');
         unresolved = { ...writer.unresolved, transportConsumed: { receiptId, consumedAt: new Date(now()).toISOString() } };
       } else {
+        if (workflow?.kind === 'reproduction' && caseAdmission) await caseAdmission({ workflow, scope, ownerId, actorId, request, periodProof, session, now: now() });
         if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) throw denied('Another operation or unresolved request owns this company.');
         unresolved = { key: dispatchKey, requestHash: request.requestHash, actorId, entity: request.entity, kind: 'legacy', transportConsumed: { receiptId, consumedAt: new Date(now()).toISOString() } };
       }
@@ -397,7 +398,7 @@ function gateParts() {
     const hello = await mongoose.connection.db.admin().command({ hello: 1 });
     if (!hello.setName && hello.msg !== 'isdbgrid') throw denied('Write coordination requires database transactions.');
   };
-  defaultParts = { ...models, transaction: createBusinessTransaction(mongoose.connection), assertReady };
+  defaultParts = { ...models, transaction: createBusinessTransaction(mongoose.connection), assertReady, caseAdmission: input => require('./reproduction-business').fenceCaseWorkflow(input) };
   return defaultParts;
 }
 module.exports = { createQboWriteGate, getQboWriteGate, createCoordinatedGate };

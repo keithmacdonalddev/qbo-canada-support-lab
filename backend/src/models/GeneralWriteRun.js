@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
   environment: { ...fixed(String), enum: ['sandbox', 'production'] }, realmId: fixed(String), connectionId: fixed(mongoose.Schema.Types.ObjectId),
   ownerId: fixed(mongoose.Schema.Types.ObjectId), actorId: fixed(mongoose.Schema.Types.ObjectId),
   agentAuthority: { type: mongoose.Schema.Types.Mixed, immutable: true, default: null },
+  caseAuthority: { type: mongoose.Schema.Types.Mixed, immutable: true, default: null },
   decisionKey: fixed(String), contentHash: fixed(String), purpose: fixed(String), day: fixed(String),
   // The guard result at preparation: normalized operations, batches, dirty dates.
   plan: fixed(mongoose.Schema.Types.Mixed),
@@ -26,6 +27,9 @@ const schema = new mongoose.Schema({
   dirty: { type: [mongoose.Schema.Types.Mixed], default: [] },
   revision: { type: Number, required: true, default: 0 },
   lastError: { type: String, default: null },
+  errorDetail: { type: mongoose.Schema.Types.Mixed, default: null },
+  errorHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  progressAt: Date,
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, status: 1, updatedAt: -1 });

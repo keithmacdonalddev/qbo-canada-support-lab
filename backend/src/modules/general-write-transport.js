@@ -145,6 +145,7 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
       if (run.agentAuthority) await require('./business-agent-authority').fenceAgentAuthority({ authority: run.agentAuthority, scope, ownerId: String(ownerId), actorId: String(actorId), Agents: models.Agents, session });
       // The company writer: free, or held unresolved by this same batch (a lost response).
       const replay = sameReplay(writer, batch, request);
+      let historyDates = [];
       if (replay) {
         const receipt = await recoveryReceipt(writer, batch, request, session);
         if (!recovery || receipt._id !== recovery.receiptId || hash(receipt.periodProof) !== recovery.proofHash || periodProof?.replay?.receiptId !== recovery.receiptId || periodProof.replay.proofHash !== recovery.proofHash) throw denied('General replay lost its exact admitted receipt proof.');
@@ -155,10 +156,11 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
       if (!replay) {
         if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw denied('The business day changed since this general write was prepared. Nothing was sent.');
         if (typeof admissionGuard !== 'function') throw denied('Full general-write admission guards are required.');
-        try { await admissionGuard({ scope, run, batch, session, periodProof }); }
+        try { historyDates = (await admissionGuard({ scope, run, batch, session, periodProof }))?.reverifyDates || []; }
         catch (error) { if (error?.qboStage === 'write_admission') throw error; throw denied(error?.code === 'GENERAL_WRITE_REFUSED' ? error.message : 'Full general-write guards could not be verified. Nothing was sent.'); }
       }
-      const fenced = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
+      const dirty = [...(run.dirty || []), ...historyDates.filter(date => !(run.dirty || []).some(marker => marker.date === date)).map(date => ({ date, reason: 'General write ' + run.decisionKey, runId: run._id, at: new Date(now()).toISOString() }))];
+      const fenced = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $set: { dirty }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!fenced) throw denied('The general write changed before admission. Nothing was sent.');
       return { version: 1, kind: 'general-write', key: dispatchKey, runId, batchIndex, requestId: batch.requestId, requestHash: request.requestHash, actorId, transportConsumed: { receiptId, consumedAt: new Date(now()).toISOString() } };
     },
@@ -198,6 +200,7 @@ async function sendGeneralBatch({ client, gate, scope, runId, batch }) {
 // coordinated gate with this batch's runtime. Installed only when dispatch is enabled.
 function createGeneralLiveTransport({ access, models = {}, admissionGuard, now = () => Date.now() }) {
   return {
+    historyMarkersAtAdmission: true,
     async sendBatch(scope, { runId, batch }) {
       const client = await access.resolveClient(scope), { QBOClient } = require('./qbo-client');
       if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall) throw denied('General writes require the original scoped QuickBooks transport.');

@@ -46,6 +46,11 @@ async function assertPublishedBusiness(input) {
     if (manifest.stockCostExpectation && (manifest.stockCostExpectation.rootHash !== value.stockRoot?.rootHash || manifest.stockCostExpectation.policyHash !== value.stockRoot?.policyHash)) fail('The operation differs from its published stock-cost root.');
   }
   if (fence) {
+    // Runtime compositions include general storage; isolated non-general stores do not.
+    if (input.GeneralWriteRuns) {
+      const dirty = await input.GeneralWriteRuns.findOne({ ...scope, contract: 'general-write-v1', dirty: { $elemMatch: { date: { $lte: calendar.verifiedThrough } } } }).select('_id').session(session).maxTimeMS(3000).lean();
+      if (dirty) fail('General history is awaiting automatic accounting re-verification.');
+    }
     if (!session?.inTransaction?.()) fail('Active business authority requires a transaction fence.');
     const touched = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, authorityHash: row.contentHash, revision: calendar.revision, writerRevision: calendar.writerRevision, currentOperationId: calendar.currentOperationId, pendingCommit: null }, { $inc: { authorityRevision: 1 } }, { new: true, session }).lean();
     if (!touched) fail('Business publication changed during admission.');

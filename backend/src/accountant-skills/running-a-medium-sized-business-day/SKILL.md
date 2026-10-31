@@ -16,6 +16,8 @@ Read this at each daily planning pass and before sizing a same-day batch. This i
 5. Count records already due from obligations and adjustments before choosing discretionary sales. Don't add transactions simply to fill a count. General writes consume daily/hourly capacity too; a different tool/key is not extra allowance.
 6. If no discretionary slot is due, do permitted standing duties, report checks and internal follow-up; do not pad. If a refusal/held result repeats without progress, retain the dependency and continue independent work.
 
+When an operation is blocked or needs-check, call inspectBlocker({operationId}) and requestCapability with the exact cause: the recorded error/diagnostic, stopped step, differing approved/current fields and record/version mismatch. Load the deferred tools with searchTools({query:"select:inspectBlocker,requestCapability"}) and call them through useTool. Reuse an existing build-request key for the same gap; disclose unavailable historical values, preserve saved receipts, and continue independent permitted work.
+
 ## Size by records, not tool calls
 
 | Activity | New records after successful execution |

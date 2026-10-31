@@ -12,6 +12,22 @@ async function uncertain(entity,terminalKind='sdk-failure'){
  h.plan=plan;h.step=step;h.transport=receipt;h.input={planHash:plan.planHash,logicalKey:step.logicalKey,qboId:h.candidate.id};return h;
 }
 const decision=(h,review)=>({...h.input,reviewHash:review.reviewHash,confirmOwnership:true,reason:'I identified this exact saved transaction from the failed attempt using the original request, creation details and support evidence.'});
+// b37ecdd keeps independent records moving while the exact failed graph remains unverified.
+async function assertHeldAttributionGraph(h,result,posts){
+ const held=new Set([h.step.logicalKey]);let added;
+ do{added=false;for(const intent of h.data.Intents)if(!held.has(intent.logicalKey)&&intent.step.dependencies.some(link=>held.has(link.logicalKey))){held.add(intent.logicalKey);added=true;}}while(added);
+ assert.ok(held.size>1,'the fixture includes downstream records that must be held');
+ assert.equal(result.state,'needs-check');assert.equal(result.complete,false);assert.equal(result.recheckAvailable,true);
+ assert.deepEqual(result.deferredSteps.map(step=>step.logicalKey).sort(),[...held].sort());
+ const root=h.data.Steps.find(step=>step.logicalKey===h.step.logicalKey);assert.equal(root.state,'needs-check');assert.equal(root.qboId,h.input.qboId);
+ assert.equal(h.data.Receipts.filter(receipt=>receipt.logicalKey===h.step.logicalKey).length,1,'the attributed record is never replayed');assert.equal(h.transport.state,'unknown');
+ for(const key of held)if(key!==h.step.logicalKey){assert.equal(h.data.Steps.some(step=>step.logicalKey===key&&step.qboId),false,'no held dependant is saved');assert.equal(h.data.Receipts.some(receipt=>receipt.logicalKey===key),false,'no held dependant is sent');}
+ const independent=h.data.Intents.filter(intent=>!held.has(intent.logicalKey));assert.ok(independent.length>0);
+ for(const intent of independent)assert.equal(h.data.Steps.find(step=>step.logicalKey===intent.logicalKey)?.state,'verified','every independent record completes');
+ assert.equal(result.completedRecords,independent.length);assert.equal(h.posts,posts+independent.length);
+ const before=h.posts,again=await h.runtime(h.plan.operationId).execute();assert.equal(again.complete,false);assert.equal(h.posts,before,'rechecking a held graph never replays saved records');
+ assert.equal(h.data.Calendars[0].verifiedThrough,null);assert.equal(h.data.Evidence.some(row=>row.proof?.complete===true),false,'held records never yield complete book evidence');
+}
 test('terminal unknown attribution retains original transport, requires owner evidence and completes two adjacent periods without replay',async()=>{
  const h=await uncertain(),posts=h.posts,raw=structuredClone(h.transport.observed),terminal=structuredClone(h.transport.terminal);
  const review=await h.service.reviewUnknown(h.user,h.plan.operationId,h.input);assert.equal(review.qboWrites,0);assert.equal(review.provenance,'owner-attributed-readback');assert.ok(review.logicalRecordLookups<=21);assert.match(review.limitation,/do not prove/);assert.ok(review.original.sentAt<=review.original.endedAt);assert.equal(review.original.txnDate,review.record.txnDate);assert.deepEqual(review.original.lines.map(row=>row.amount),review.record.lines.map(row=>row.amount));
@@ -58,18 +74,18 @@ test('concurrent exact confirmations create one decision and cannot overwrite th
  const results=await Promise.all([h.service.attributeUnknown(h.user,h.plan.operationId,input),h.service.attributeUnknown(h.user,h.plan.operationId,input)]);assert.equal(results.filter(row=>row.reused).length,1);assert.equal(h.data.Authorities.filter(row=>row.payload.kind==='owner-attributed-business-creation').length,1);
  const ticket={coordinated:true,scope,receiptId:h.transport._id,dispatchKey:h.transport.dispatchKey,ownerId,actorId:ownerId};await assert.rejects(h.client.writeGate.complete(ticket,h.step.compilation.request,{status:200,json:{[h.step.entity]:{Id:'999999',SyncToken:'0'}}}));assert.deepEqual(h.transport.observed,observed);assert.equal(h.transport.state,'unknown');assert.equal(h.step.qboId,h.input.qboId);
 });
-test('changed claim or revoked owner denies stale confirmation and no graph failure permits a subsequent POST',async()=>{
+test('changed claim or revoked owner denies stale confirmation; graph failure holds its dependants while independent records complete',async()=>{
  for(const mode of ['claim','owner','graph']){const h=await uncertain(),review=await h.service.reviewUnknown(h.user,h.plan.operationId,h.input),posts=h.posts;
  if(mode==='claim'){h.step.revision++;h.step.leaseToken='replacement-claim-123456';await assert.rejects(h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review)));}
  if(mode==='owner'){h.data.Memberships[0].role='reviewer';await assert.rejects(h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review)));}
- if(mode==='graph'){await h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review));const record=h.records.get(h.candidate.entity.toLowerCase()+':'+h.candidate.id).record;record.PrivateNote='External change after owner attribution';assert.equal((await h.runtime(h.plan.operationId).execute()).complete,false);}
- assert.equal(h.posts,posts,mode);assert.equal(h.data.Calendars[0].verifiedThrough,null,mode);}
+ if(mode==='graph'){await h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review));const record=h.records.get(h.candidate.entity.toLowerCase()+':'+h.candidate.id).record;record.PrivateNote='External change after owner attribution';await assertHeldAttributionGraph(h,await h.runtime(h.plan.operationId).execute(),posts);}
+ if(mode!=='graph')assert.equal(h.posts,posts,mode);assert.equal(h.data.Calendars[0].verifiedThrough,null,mode);}
 });
 test('Explorer origin preserves owner attribution and tampered evidence is incomplete rather than a confirmed create response',async()=>{
  const h=await uncertain(),review=await h.service.reviewUnknown(h.user,h.plan.operationId,h.input);h.clock+=60000;await h.service.attributeUnknown(h.user,h.plan.operationId,decision(h,review));
  const {readRecordOrigin}=require('../src/modules/record-origin'),db={collection:name=>({aggregate:()=>({toArray:async()=>name==='operationsteps'?[h.step]:[]})})},args={db,attributionModels:h.models,userId:ownerId,...scope,entity:h.step.entity,id:h.input.qboId};
  const origin=await readRecordOrigin(args);assert.equal(origin.complete,true);assert.equal(origin.sources[0].kind,'business_owner_attribution');assert.equal(origin.sources[0].provenance,'owner-attributed-readback');assert.match(origin.sources[0].limitation,/remains unknown/);assert.notEqual(origin.sources[0].createdAt,origin.sources[0].attributedAt);assert.equal(JSON.stringify(origin).includes('MetaData'),false);
- h.data.Authorities.find(row=>row.payload.kind==='owner-attributed-business-creation').payload.reason+=' changed';const changed=await readRecordOrigin(args);assert.equal(changed.complete,false);assert.equal(changed.sources.length,0);const posts=h.posts;assert.equal((await h.runtime(h.plan.operationId).execute()).complete,false);assert.equal(h.posts,posts);
+ h.data.Authorities.find(row=>row.payload.kind==='owner-attributed-business-creation').payload.reason+=' changed';const changed=await readRecordOrigin(args);assert.equal(changed.complete,false);assert.equal(changed.sources.length,0);const posts=h.posts;await assertHeldAttributionGraph(h,await h.runtime(h.plan.operationId).execute(),posts);
 });
 
 test('an older audited terminal HTTP response can be attributed while SDK failures require their explicit completion fact',async()=>{

@@ -4,7 +4,7 @@ const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { createBusinessReferenceReader, matchesReferenceDefinition } = require('./business-reference');
 const { createBusinessObservationStore } = require('./business-observation-store');
-const { compileBusinessTransaction } = require('./business-transaction-compiler');
+const { compileBusinessTransactionWithDefinitions } = require('./business-transaction-compiler');
 const { taxExpectation } = require('./business-verification-runtime');
 const { verifyBusinessTaxSources } = require('./business-tax-policy');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
@@ -86,7 +86,7 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       if (roots.length) {
         const graph = await call(() => steps.verifyGraph(scope, operationId, roots, { signal: controller.signal })); check();
         if (graph?.complete !== true || graph.persisted !== true) {
-          if (graph?.state === 'needs-check') throw Object.assign(new Error('A saved originating record needs a check before this dependent activity can be sent.'), { status: 409, code: 'BUSINESS_DEPENDENCY_NEEDS_CHECK' });
+          if (graph?.state === 'needs-check') throw Object.assign(new Error('A saved originating record needs a check before this dependent activity can be sent.'), { status: 409, code: 'BUSINESS_DEPENDENCY_NEEDS_CHECK', businessDetail: { parentLogicalKeys: roots, errorDetail: graph.errorDetail || null } });
           fail('Originating records are not completely verified.');
         }
       }
@@ -174,7 +174,7 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       const evidence = { referenceEvidence, parents, adopted, purchaseOrder, observationFence: { scope, ...tag, observedAt: new Date(started).toISOString() } };
       // Preflight all business constraints, including independent tax expectations,
       // before handing any observations to durable dispatch. This creates nothing.
-      const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, ...evidence, now: now() });
+      const compiled = await compileBusinessTransactionWithDefinitions({ scope, step: intent.step, policy: intent.policy, ...evidence, now: now() }, { resolveDefinitionObservation: definitions.definition.bind(definitions), signal: controller.signal, clock: now });
       if (TAXED.has(intent.entity) && !taxExpectation(intent.policy, compiled)) fail('Approved tax expectations are required before creating this transaction.');
       check(); return evidence;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }

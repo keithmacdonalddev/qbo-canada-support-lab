@@ -18,6 +18,9 @@ const schema = new mongoose.Schema({
   verification: { type: mongoose.Schema.Types.Mixed, default: null },
   rejection: { type: mongoose.Schema.Types.Mixed, default: null },
   qboId: String, lastAuditId: String,
+  errorDetail: { type: mongoose.Schema.Types.Mixed, default: null },
+  errorHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  progressAt: Date,
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1, logicalKey: 1 }, { unique: true });
 schema.index({ environment: 1, realmId: 1, entity: 1, qboId: 1 }, { unique: true, partialFilterExpression: { qboId: { $type: 'string' } } });

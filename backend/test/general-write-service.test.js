@@ -236,3 +236,46 @@ test('general context selects historical codes before the transition without per
   const context = await require('../src/modules/general-write-service').createGeneralWriteContext({ models, now: () => Date.parse('2025-03-31T16:00:00Z') })(scope, { get: () => null, map: new Map() });
   assert.deepEqual(context.taxCodes, { sales: ['12'], purchases: ['12'] });
 });
+
+test('failed earlier close permits today general preparation and send, holds backdates and links, then verifies later', async t => {
+  const { harness, scope: closeScope, operationId } = require('./helpers/business-run-fixture');
+  const close = harness(); close.clock = Date.parse('2026-10-07T15:00:00Z'); close.evidenceReady = false;
+  assert.equal((await close.execute()).state, 'awaiting-evidence');
+  assert.equal(close.calendar().verifiedThrough, '2026-10-05'); assert.equal(close.calendar().currentOperationId, operationId); assert.equal(close.writer().operationId, null);
+  const authority = require('../src/modules/business-authority');
+  t.mock.method(authority, 'readPublishedBusiness', async () => ({ view: { mappings: { salesTax: '7', purchaseTax: '7' }, business: { openingDate: '2026-10-01', activityTemplateVersion: 2 } } }));
+  const q = value => ({ session() { return this; }, select() { return this; }, maxTimeMS() { return this; }, lean: async () => value });
+  const h = company(), Runs = fakeRuns(), models = { GeneralWriteRuns: Runs, Steps: { findOne: () => q(null) } };
+  Object.assign(h.records.get('TaxRate:8'), { SyncToken: '0', Active: true, EffectiveTaxRate: [{ EffectiveDate: '2026-01-01', RateValue: 15 }] });
+  h.records.get('TaxCode:7').SalesTaxRateList.TaxRateDetail[0].TaxTypeApplicable = 'TaxOnAmount';
+  h.records.get('TaxCode:7').PurchaseTaxRateList = structuredClone(h.records.get('TaxCode:7').SalesTaxRateList);
+  const contextFor = require('../src/modules/general-write-service').createGeneralWriteContext({ now: () => close.clock, models: { Calendars: close.models.Calendars, Policies: { findOne: () => q({ periodControl: {} }) }, GeneralWriteRuns: { findOne: () => q(null) } } });
+  const api = createGeneralWriteService({ models, copy: h.copy, contextFor, transport: h.transport, dispatchEnabled: () => true, now: () => close.clock });
+  const op = structuredClone(invoiceOp); op.payload.TxnDate = '2026-10-07'; op.payload.DueDate = '2026-11-06';
+  const prepared = await api.prepare(bound, input('today-during-pending-close', [op])); assert.equal(prepared.status, 'prepared');
+  assert.equal((await api.execute(bound, prepared.runId)).status, 'complete'); assert.equal(h.sent.length, 1);
+  assert.equal(close.calendar().verifiedThrough, '2026-10-05'); assert.equal(close.run().status, 'awaiting-evidence');
+  const backdate = structuredClone(op); backdate.payload.TxnDate = '2026-10-06';
+  assert.equal((await api.prepare(bound, input('backdate-open-close-refused', [backdate]))).status, 'refused');
+  h.records.get('Invoice:100').TxnDate = '2026-10-06';
+  const edit = { ref: 'edit', op: 'update', entity: 'Invoice', id: '100', payload: { TxnDate: '2026-10-07' }, reason: 'Move the earlier invoice date into today.' };
+  assert.equal((await api.prepare(bound, input('edit-open-close-refused', [edit]))).status, 'refused');
+  const pay = { ref: 'pay', op: 'create', entity: 'Payment', payload: { TxnDate: '2026-10-07', CustomerRef: { value: '1' }, TotalAmt: 10, Line: [{ Amount: 10, LinkedTxn: [{ TxnId: '100', TxnType: 'Invoice' }] }] } };
+  assert.equal((await api.prepare(bound, input('link-open-close-refused', [pay]))).status, 'refused');
+  const stopped = await api.prepare(bound, input('prepared-before-owner-stop', [op])); close.calendar().stopRequested = true;
+  await assert.rejects(api.guardBatch({ scope, run: Runs.rows.get(stopped.runId), batch: { items: [{ ...op, payload: op.payload }] } }), /stopped/);
+  close.calendar().stopRequested = false; close.evidenceReady = true;
+  assert.equal((await close.execute()).complete, true); assert.equal(close.calendar().verifiedThrough, '2026-10-06'); assert.equal(close.writes, 3);
+});
+test('general admission fences the calendar in its transaction so Stop cannot race an old snapshot', async t => {
+  t.mock.method(require('../src/modules/business-authority'), 'readPublishedBusiness', async () => ({ view: { mappings: { salesTax: '7', purchaseTax: '7' }, business: { openingDate: '2026-10-01', activityTemplateVersion: 2 } } }));
+  const session = { inTransaction: () => true }, calendar = { _id: 'sandbox:123', ...scope, verifiedThrough: '2026-11-30', revision: 2, writerRevision: 4, stopRequested: false, pendingCommit: null };
+  const q = value => ({ session(actual) { assert.equal(actual, session); return this; }, select() { return this; }, maxTimeMS() { return this; }, lean: async () => value });
+  let raced = false, touches = 0;
+  const models = { Calendars: { findOne: () => q(calendar), findOneAndUpdate(filter, change, opts) {
+    touches++; assert.equal(opts.session, session); assert.deepEqual(filter, { _id: calendar._id, ...scope, revision: 2, writerRevision: 4, verifiedThrough: '2026-11-30', stopRequested: false, pendingCommit: null }); assert.deepEqual(change, { $inc: { writerRevision: 1 } }); return q(raced ? null : calendar);
+  } }, Policies: { findOne: () => q({ periodControl: {} }) }, GeneralWriteRuns: { findOne: () => q(null) } };
+  const context = require('../src/modules/general-write-service').createGeneralWriteContext({ models, now: () => Date.parse(DAY + 'T15:00:00Z') });
+  assert.equal((await context(scope, { get: () => null, map: new Map() }, { session })).calendarClosePending, true); assert.equal(touches, 1);
+  raced = true; await assert.rejects(context(scope, { get: () => null, map: new Map() }, { session }), /changed or stopped/);
+});

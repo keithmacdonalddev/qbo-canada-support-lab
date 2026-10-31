@@ -1,4 +1,5 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
 const { randomUUID } = require('node:crypto');
 const { hash, canonical } = require('./business-calendar');
 const { validateCompilation } = require('./business-readback');
@@ -136,6 +137,8 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
   }
   async function read(ctx, session) { return Steps.findOne(filter(ctx)).session(session).lean(); }
   async function replace(ctx, before, change, phase, session) {
+    if (change.state === 'verified') change = { ...change, errorDetail: null, errorHistory: [], progressAt: new Date(now()) };
+    else if (change.qboId && change.qboId !== before.qboId) change = { ...change, progressAt: new Date(now()) };
     const next = { ...before, ...change, revision: before.revision + 1 };
     next.lastAuditId = await audit(ctx, next, phase, session);
     const saved = await Steps.findOneAndUpdate({ ...filter(ctx), operationId: before.operationId, planHash: before.planHash, state: before.state, revision: before.revision, leaseToken: before.leaseToken }, { $set: { ...change, revision: next.revision, lastAuditId: next.lastAuditId } }, { new: true, session }).lean();
@@ -358,14 +361,15 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       cancelled(); const writerFence = await snapshot(null, session); cancelled(); return { rows, writerFence };
     });
     // No QBO or provider reads run inside a retryable database transaction.
-    cancelled(); let graph;
+    cancelled(); let graph, checkFailure = null;
     try { graph = envelope(await loadGraphReadback({ scope, roots, signal, mode: 'read', forceLive, expectedWriterFence: invalidated.writerFence }), false); }
     catch (error) {
       if (signal?.aborted || error?.code === 'BUSINESS_BOOK_RISK' || error?.status === 403) throw error;
       if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
-      return retainNeedsCheck();
+      checkFailure = error; return retainNeedsCheck();
     }
     async function retainNeedsCheck(afterCommit = null) {
+      let retainedError = null;
       await transaction(async session => {
         cancelled(); await snapshot(afterCommit ? null : invalidated.writerFence, session);
         // Keep the original receipt/ID. Only requested roots need a check; the
@@ -377,10 +381,12 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
           assertHandle(row, afterCommit ? { revision: committedRecord?.revision, leaseToken: expected.leaseToken } : publicHandle(expected), now());
           if ((afterCommit ? row.state !== 'verified' || row.verification?.graphEvidenceHash !== afterCommit.evidenceHash : row.state !== 'saved') || !row.receipt || row.qboId !== expected.qboId || canonical(row.receipt) !== canonical(expected.receipt)) fail('The saved record changed before retaining its check');
           await guarded(ctx, 'verification-start', session, row.dispatch, null, row);
-          await replace(ctx, row, { state: 'needs-check', verification: { status: 'needs-check', observedAt: new Date(now()).toISOString(), retryable: true, reason: 'The saved record could not be verified after an exact live re-read.' } }, 'needs-check', session);
+          const errorDetail = businessErrorDetail(checkFailure || { code: 'BUSINESS_GRAPH_UNVERIFIED', message: 'The saved record did not pass graph verification.', businessDetail: { failures: graph?.failures || [], expectedVersion: row.receipt?.syncToken, observedVersion: graph?.records?.find(record => record.logicalKey === key)?.proof?.syncToken || null } }, { operationId, logicalKey: key, entity: row.entity, recordId: row.qboId });
+          retainedError ||= errorDetail;
+          await replace(ctx, row, { ...failureFields(row, errorDetail, {}, now()), state: 'needs-check', verification: { errorDetail, status: 'needs-check', observedAt: new Date(now()).toISOString(), retryable: true, reason: errorDetail.message } }, 'needs-check', session);
         }
       });
-      return { state: 'needs-check', complete: false, persisted: false, replayAllowed: false, roots, recheckAvailable: true };
+      return { state: 'needs-check', complete: false, persisted: false, replayAllowed: false, roots, recheckAvailable: true, errorDetail: retainedError };
     } cancelled();
     if (canonical(graph.writerFence) !== canonical(invalidated.writerFence) || graph.records.length !== invalidated.rows.size) fail('The observed graph differs from its invalidated snapshot');
     for (const record of graph.records) {
@@ -392,7 +398,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       return retainNeedsCheck();
     }
     try { for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now()); }
-    catch (error) { if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error; if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false }); return retainNeedsCheck(); }
+    catch (error) { if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error; checkFailure = error; if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false }); return retainNeedsCheck(); }
     let committed;
     try { committed = await transaction(async session => {
       cancelled(); await snapshot(graph.writerFence, session); const savedRecords = [];
@@ -414,14 +420,14 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       cancelled(); return { state: 'verified', complete: true, persisted: true, recordCount: savedRecords.length, roots, records: savedRecords, evidenceHash: graph.evidenceHash };
     });
     } catch (error) {
-      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error;
+      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error; checkFailure = error;
       if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
       return retainNeedsCheck();
     }
     // Commit acknowledgement can arrive after the evidence lifetime, too.
     try { for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now()); }
     catch (error) {
-      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error;
+      if (error?.code !== 'BUSINESS_READBACK_EXPIRED') throw error; checkFailure = error;
       if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
       return retainNeedsCheck(committed);
     }
@@ -440,7 +446,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
         const verified = await verifiedClosure(ctx, [{ logicalKey, entity: row.entity, fingerprint: row.fingerprint }], session, now());
         row = verified.get(logicalKey); current = true;
       } catch (error) { if (error.code !== 'BUSINESS_EVIDENCE_UNVERIFIED') throw error; }
-      return { originOperationId: String(row.operationId), originPlanHash: row.planHash, state: row.state, qboId: row.qboId || null, fingerprint: row.fingerprint, receipt: row.receipt, rejection: row.rejection || null, verification: row.verification, fresh: current, creationAuthorized: false };
+      return { originOperationId: String(row.operationId), originPlanHash: row.planHash, state: row.state, qboId: row.qboId || null, fingerprint: row.fingerprint, receipt: row.receipt, rejection: row.rejection || null, errorDetail: row.errorDetail || row.verification?.errorDetail || null, verification: row.verification, fresh: current, creationAuthorized: false };
     });
   }
   async function compilation(scope, operationId, logicalKey) {
@@ -454,6 +460,16 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       return structuredClone(Object.fromEntries(['version', 'logicalKey', 'entity', 'intentHash', 'request', 'evidenceHash', 'relationships', 'compilationHash'].map(key => [key, artifact[key]])));
     });
   }
-  return { claim, releaseClaim, beginDispatch, markUnknown, recordSaved, recover, verifySaved, verifyGraph, evidence, compilation };
+  async function recordFailure(scope, operationId, logicalKey, error) {
+    const ctx = await context(scope, operationId, logicalKey, 'operations.read');
+    return transaction(async session => {
+      const row = await read(ctx, session); if (!row) return null;
+      assertIdentity(row, ctx.intent);
+      const fields = failureFields(row, error, { operationId, logicalKey, entity: row.entity, recordId: row.qboId }, now());
+      // Diagnostic metadata cannot change the step, receipt, lease or write authority.
+      return Steps.findOneAndUpdate({ ...filter(ctx), operationId: row.operationId, revision: row.revision }, { $set: fields }, { new: true, session, timestamps: false }).lean();
+    });
+  }
+  return { recordFailure, claim, releaseClaim, beginDispatch, markUnknown, recordSaved, recover, verifySaved, verifyGraph, evidence, compilation };
 }
 module.exports = { createBusinessStepStore, validateReadback, proofRequest, assertLiveBookSafety, MAX_ATTEMPTS };

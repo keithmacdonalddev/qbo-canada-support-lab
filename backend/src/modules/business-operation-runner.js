@@ -1,4 +1,6 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
+const { executionDiagnostic } = require('./business-execution-diagnostic');
 const { scoped } = require('./qbo-write-contract');
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_RUN_UNVERIFIED' }); }
@@ -9,7 +11,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
   return async function run(scope, operationId, { signal } = {}) {
     scope = scoped(scope); if (!ID.test(operationId || '')) fail('Choose an exact saved operation.');
     const result = (value, reason) => ({ operationId, state: reason || value.status, complete: Boolean(value.completion), completedRecords: value.completedRecords ?? value.nextOrdinal, ...(value.deferredSteps?.length ? { deferredSteps: value.deferredSteps, recheckAvailable: true } : {}), recordCount: value.recordCount, ...(value.completion ? { throughDate: value.completion.throughDate, evidenceHash: value.completion.evidenceHash, ...(value.completion.kind === 'additional-activity' ? { kind: value.completion.kind, verifiedThrough: value.completion.verifiedThrough } : {}) } : {}) });
-    let current = await state.inspect(scope, operationId), leaseToken;
+    let current = await state.inspect(scope, operationId), leaseToken, activeKey = null, activeEntity = null, deferredError = null;
     if (current.status === 'verified' && current.completion) return result(current, 'verified');
     if (current.status === 'committing' || current.status === 'verified') { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); return result(current, current.completion ? 'verified' : 'recovery_required'); }
     if (current.status === 'previewed') return result(current, 'approval_required');
@@ -37,7 +39,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
       }
       return state.inspect(scope, operationId);
     };
-    const release = async reason => { current = await state.release(scope, operationId, leaseToken, reason); leaseToken = null; return current; };
+    const release = async (reason, error = null) => { current = await state.release(scope, operationId, leaseToken, reason, error); leaseToken = null; return current; };
     try {
       let page;
       // Retry each retained saved check/held step once on a later execution.
@@ -60,27 +62,28 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
         }
         const entry = page.entries[ordinal - page.offset], key = entry?.step?.logicalKey;
         if (!HASH.test(key || '') || !['create', 'existing'].includes(entry.kind)) fail('The saved activity disposition is invalid.');
+        activeKey = key; activeEntity = entry.step.entity;
         const held = (entry.step.dependencies || []).some(link => (current.deferredSteps || []).some(row => row.logicalKey === link.logicalKey));
         if (held) { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
         let verified;
         if (entry.kind === 'existing') {
-          const proof = await steps.verifyGraph(scope, operationId, [key], { signal });
+          const proof = await steps.verifyGraph(scope, operationId, [key], { signal, forceLive: Boolean(current.deferredSteps?.some(row => row.logicalKey === key)) });
           verified = proof?.complete === true && proof.persisted === true;
         } else {
           const saved = await dispatch(scope, operationId, key, { signal, leaseToken });
           verified = saved?.complete === true && saved.state === 'verified';
-          if (!verified && ['needs-check', 'dependency-held'].includes(saved?.state) && !signal?.aborted) { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
-          if (!verified && !signal?.aborted) { current = await state.inspect(scope, operationId); await release('blocked'); return result(current, saved?.state === 'recovery_required' ? 'recovery_required' : 'unverified'); }
+          if (!verified && ['needs-check', 'dependency-held'].includes(saved?.state) && !signal?.aborted) { deferredError ||= saved.errorDetail; current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
+          if (!verified && !signal?.aborted) { const error = saved?.errorDetail || businessErrorDetail({ code: 'BUSINESS_STEP_UNVERIFIED', message: 'The saved activity did not pass verification.' }, { operationId, logicalKey: key, entity: entry.step.entity, detail: { state: saved?.state } }); current = await state.inspect(scope, operationId); await release('blocked', error); return { ...result(current, saved?.state === 'recovery_required' ? 'recovery_required' : 'unverified'), errorDetail: error }; }
         }
         if (signal?.aborted) continue;
         if (!verified) {
           const saved = await steps.evidence?.(scope, operationId, key);
-          if (saved?.state === 'needs-check') { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
+          if (saved?.state === 'needs-check') { deferredError ||= saved.errorDetail; current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
           await release('blocked'); return result(current, 'unverified');
         }
         current = await state.advance(scope, operationId, leaseToken, ordinal, key);
       }
-      if (current.deferredSteps?.length) { await release('yield'); return result(current, 'needs-check'); }
+      if (current.deferredSteps?.length) { await release('yield', deferredError); return { ...result(current, 'needs-check'), ...(deferredError ? { errorDetail: deferredError } : {}) }; }
       // All individual receipts are insufficient to complete a business period.
       // The collector must freeze fresh whole-record and named report evidence;
       // the period store independently validates it before advancing the date.
@@ -95,6 +98,7 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
       if (!current.completion) fail('The period completion receipt is not verified.');
       leaseToken = null; return result(current, 'verified');
     } catch (error) {
+      attachBusinessError(error, { operationId, logicalKey: activeKey, entity: activeEntity });
       // A failed/ambiguous completion acknowledgement is repaired from the saved
       // calendar receipt, never by creating transactions again.
       try {
@@ -102,8 +106,8 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
         if (['committing', 'verified'].includes(current.status)) { await periods.repair(scope, operationId); current = await state.inspect(scope, operationId); if (current.completion) { leaseToken = null; return result(current, 'verified'); } }
         if (current.leaseToken === leaseToken) {
           current = await reconcileOutstanding();
-          await release(current.stopRequested && !current.unresolved ? 'stopped' : signal?.aborted && !current.unresolved ? 'yield' : 'blocked');
-          return { ...result(current, current.unresolved ? 'recovery_required' : current.status === 'stopped' ? 'stopped' : signal?.aborted ? 'interrupted' : 'blocked'), error: /^BUSINESS_[A-Z_]+$/.test(error?.code || '') && typeof error.message === 'string' ? error.message.slice(0, 500) : 'The operation could not finish. Saved progress is retained.', code: error?.code || 'BUSINESS_RUN_UNVERIFIED' };
+          await release(current.stopRequested && !current.unresolved ? 'stopped' : signal?.aborted && !current.unresolved ? 'yield' : 'blocked', error);
+          return { ...result(current, current.unresolved ? 'recovery_required' : current.status === 'stopped' ? 'stopped' : signal?.aborted ? 'interrupted' : 'blocked'), error: businessErrorDetail(error).message, code: error?.code || 'BUSINESS_RUN_UNVERIFIED', errorDetail: businessErrorDetail(error), diagnostic: executionDiagnostic(error) };
         }
       } catch { /* The durable lease/barrier remains authoritative if storage failed. */ }
       throw error;

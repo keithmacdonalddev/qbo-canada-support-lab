@@ -45,7 +45,7 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   date(copy.fromDate); date(copy.throughDate);
   if (!Number.isFinite(now) || copy.fromDate > copy.throughDate || date(copy.throughDate) - date(copy.fromDate) >= 31 * 86400000 || copy.throughDate > businessDate(new Date(now))) fail('Prepare at most 31 elapsed business days');
   date(copy.openingDate);
-  if (copy.expectedCursor === null ? copy.fromDate !== copy.openingDate : (date(copy.expectedCursor), shift(copy.expectedCursor, 1) !== copy.fromDate || copy.expectedCursor < copy.openingDate)) fail('The operation must immediately follow the verified business calendar');
+  if (copy.expectedCursor === null ? copy.fromDate !== copy.openingDate : (date(copy.expectedCursor), (copy.activityBatch ? copy.expectedCursor >= copy.fromDate : shift(copy.expectedCursor, 1) !== copy.fromDate) || copy.expectedCursor < copy.openingDate)) fail('The operation must immediately follow the verified business calendar');
   if (!Array.isArray(copy.entries) || copy.entries.length > MAX_RECORDS || copy.entries.filter(entry => entry?.kind === 'create').length > MAX_CREATES) fail('The operation exceeds its bounded record capacity');
   const records = copy.entries.map(entry => validateEntry(entry, scope, copy.fromDate, copy.throughDate));
   const byKey = new Map(copy.entries.map(entry => [entry.step.logicalKey, entry]));

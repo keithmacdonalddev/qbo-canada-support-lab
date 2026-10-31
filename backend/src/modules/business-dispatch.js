@@ -1,7 +1,8 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
 const { hash } = require('./business-calendar');
 const { scoped, withBusinessWritePermit } = require('./qbo-write-contract');
-const { compileBusinessTransaction } = require('./business-transaction-compiler');
+const { compileBusinessTransactionWithDefinitions } = require('./business-transaction-compiler');
 const { runAsActor } = require('./actor-context');
 const { AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
 const ADMISSION_REASONS = new Map([[AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE], [CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE], [CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE], [CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE]]);
@@ -10,7 +11,7 @@ const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key
 function fail(message, status = 409) { throw Object.assign(new Error(message), { status, code: 'BUSINESS_DISPATCH_BLOCKED' }); }
 // Internal runner boundary. No startup, approval, storage preparation or retry loop.
 // Every provider write still passes through the existing client's durable gate.
-function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, beforeDispatch = async () => {}, now = () => Date.now() }) {
+function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, beforeDispatch = async () => {}, resolveDefinitionObservation, now = () => Date.now() }) {
   if (['evidence', 'claim', 'beginDispatch', 'recover', 'verifyGraph'].some(key => typeof steps?.[key] !== 'function') || [loadIntent, loadCompilationEvidence, resolveClient, authorize, assertReady, beforeDispatch, now].some(fn => typeof fn !== 'function')) throw new TypeError('Business dispatch requires explicit runtime adapters');
   return async function dispatch(scope, operationId, logicalKey, { signal, leaseToken, recoveryOnly = false } = {}) {
     scope = scoped(scope);
@@ -32,15 +33,15 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
           if (!recovery.recovered) return summary(recovery.notSent ? 'not_sent' : 'recovery_required');
           evidence = await steps.evidence(scope, operationId, logicalKey);
         }
-        if (evidence.state === 'rejected') return summary('rejected');
+        if (evidence.state === 'rejected') return summary('rejected', { errorDetail: evidence.errorDetail || businessErrorDetail({ code: 'BUSINESS_WRITE_REJECTED', message: 'QuickBooks rejected this activity.' }, { operationId, logicalKey, detail: { faultCodes: evidence.rejection?.faultCodes } }) });
         if (!['saved', 'verified', 'needs-check'].includes(evidence.state)) fail('The activity has no settled saved record.');
         // A later child write can change this record while its saved proof is still
         // within the freshness window. Reconcile the current graph on every resume.
         // Cancellation never interrupts recording the outcome of a possibly-sent write.
         if (recoveryOnly || signal?.aborted) return summary('saved', { qboId: evidence.qboId });
         await authority('operations.verify');
-        const proof = await steps.verifyGraph(scope, operationId, [logicalKey], { signal });
-        if (proof.complete !== true || proof.persisted !== true) return summary(proof.state === 'needs-check' ? 'needs-check' : 'unverified', { qboId: evidence.qboId });
+        const proof = await steps.verifyGraph(scope, operationId, [logicalKey], { signal, forceLive: evidence.state === 'needs-check' });
+        if (proof.complete !== true || proof.persisted !== true) return summary(proof.state === 'needs-check' ? 'needs-check' : 'unverified', { qboId: evidence.qboId, errorDetail: proof.errorDetail || evidence.errorDetail || null });
         const verified = await steps.evidence(scope, operationId, logicalKey);
         if (verified.state !== 'verified' || verified.fresh !== true || verified.qboId !== evidence.qboId) fail('Saved activity verification changed before completion.');
         return summary('verified', { qboId: verified.qboId, complete: true });
@@ -66,10 +67,10 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       try { observations = await loadCompilationEvidence({ scope, operationId, logicalKey, intent: structuredClone(intent), signal }); }
       catch (error) { if (error?.code === 'BUSINESS_DEPENDENCY_NEEDS_CHECK') {
         await steps.releaseClaim(scope, operationId, logicalKey, handle, { runLeaseToken: leaseToken });
-        return summary('dependency-held');
+        return summary('dependency-held', { errorDetail: businessErrorDetail(error, { operationId, logicalKey }) });
       } throw error; }
       check();
-      const compiled = compileBusinessTransaction({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, adopted: observations?.adopted ?? null, purchaseOrder: observations?.purchaseOrder ?? null, observationFence: observations?.observationFence, now: now() });
+      const compiled = await compileBusinessTransactionWithDefinitions({ scope, step: intent.step, policy: intent.policy, referenceEvidence: observations?.referenceEvidence, parents: observations?.parents, adopted: observations?.adopted ?? null, purchaseOrder: observations?.purchaseOrder ?? null, observationFence: observations?.observationFence, now: now() }, { resolveDefinitionObservation, signal, clock: now });
       if (compiled.dispatchEvidence.operationId !== operationId || compiled.intentHash !== intent.fingerprint) fail('Compiled observations belong to another operation.');
       await authority('operations.execute'); check(); checkClient();
       await beforeDispatch({ scope, operationId, logicalKey, signal }); check();
@@ -79,18 +80,23 @@ function createBusinessDispatcher({ steps, loadIntent, loadCompilationEvidence, 
       if (marked?.dispatch?.key !== dispatchKey || marked.dispatch.requestHash !== request.requestHash || marked.dispatch.actorId !== actorId) fail('The committed dispatch differs from its compiled request.');
       // Once the marker exists, every failure is reconciled from durable state.
       // Do not race the request against a timer or forward cancellation to a POST.
-      let admissionRefusal = null;
+      let admissionRefusal = null, dispatchError = null;
       try {
         check(); checkClient();
         await withBusinessWritePermit({ scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: marked.revision, stepLeaseToken: marked.leaseToken, ...(leaseToken !== undefined ? { leaseToken } : {}) }, () => client.apiCall(request.method, request.endpoint, JSON.parse(request.body)));
       } catch (error) {
+        dispatchError = attachBusinessError(error, { operationId, logicalKey, entity: intent.entity });
         // Only retain the fixed server-owned reason. A thrown exception cannot
         // establish whether a write was sent; the exact receipt recovery below does.
         if (error?.qboStage === 'write_admission' && error.outcomeUnknown === false && ADMISSION_REASONS.has(error.code)) admissionRefusal = { code: error.code, message: ADMISSION_REASONS.get(error.code) };
       }
       const recovered = await reconcile();
       if (admissionRefusal && recovered.state === 'not_sent') throw Object.assign(Error(admissionRefusal.message), { status: 409, code: admissionRefusal.code });
-      return recovered;
+      return dispatchError && !recovered.complete ? { ...recovered, errorDetail: businessErrorDetail(dispatchError) } : recovered;
+    }).catch(async error => {
+      attachBusinessError(error, { operationId, logicalKey });
+      try { await steps.recordFailure?.(scope, operationId, logicalKey, error); } catch { /* Keep the original failure; run settlement also records it. */ }
+      throw error;
     });
   };
 }

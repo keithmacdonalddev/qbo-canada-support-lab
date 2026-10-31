@@ -27,7 +27,7 @@ function companyCopy(extra = []) {
   const map = new Map(rows.map(([entity, record]) => [entity + ':' + record.Id, record]));
   return { get: (entity, id) => map.get(entity + ':' + id) || null, owned: (entity, id) => !(entity === 'Invoice' && id === '101') };
 }
-const context = { day: DAY, verifiedThrough: '2026-12-01', protectedThrough: '2026-10-31', taxCodes: { sales: ['7'], purchases: ['8'] } };
+const context = { day: DAY, verifiedThrough: '2026-12-01', protectedThrough: '2026-10-31', taxCodes: { sales: ['7'], purchases: ['8'] }, historyReverification: { available: true, origins: new Set(['Invoice:100']), fromDate: '2026-11-01' } };
 const check = (operations, local = companyCopy()) => checkGeneralWrite({ proposal: { decisionKey: 'k', purpose: 'p', operations }, local, context });
 const sale = (extra = {}) => ({ ref: 'inv1', op: 'create', entity: 'Invoice', payload: { TxnDate: DAY, DueDate: '2027-01-01', CustomerRef: { value: '1' }, GlobalTaxCalculation: 'TaxExcluded', Line: [{ Amount: 250, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '40' }, Qty: 2, UnitPrice: 125, TaxCodeRef: { value: '7' } } }], ...extra } });
 const messages = result => result.problems.map(row => row.message).join(' | ');
@@ -72,7 +72,7 @@ test('every generic guard refuses with a plain, per-operation reason', () => {
   refuse([{ ref: 'prefs', op: 'update', entity: 'Preferences', id: '1', payload: { CurrencyPrefs: { MultiCurrencyEnabled: true } } }], /not a supported Preferences field|cannot be changed|not in the synced/);
 });
 
-test('placeholders build dependency layers while history edits are held for full reproof', () => {
+test('placeholders build dependency layers and history edits carry durable reproof dates', () => {
   const result = check([
     sale(),
     { ref: 'pay1', op: 'create', entity: 'Payment', payload: { TxnDate: DAY, CustomerRef: { value: '1' }, TotalAmt: 100, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: { $ref: 'inv1' }, TxnType: 'Invoice' }] }] } },
@@ -81,7 +81,7 @@ test('placeholders build dependency layers while history edits are held for full
   assert.deepEqual(result.plan.layers, [['inv1'], ['pay1']]);
   assert.deepEqual(result.plan.reverifyDates, []);
   const held = check([{ ref: 'up1', op: 'update', entity: 'Invoice', id: '100', payload: { DueDate: '2026-12-20' } }]);
-  assert.equal(held.ok, false); assert.match(messages(held), /changes verified history/);
+  assert.equal(held.ok, true, messages(held)); assert.deepEqual(held.plan.reverifyDates, ['2026-11-20']);
   assert.deepEqual(result.plan.externalEdits, []);
 });
 

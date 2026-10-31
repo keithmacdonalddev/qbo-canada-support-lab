@@ -10,7 +10,7 @@ function taxDefinition(entity, id, record) {
   return hash({ version: 2, entity, fields: definitionFields(entity, record) });
 }
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
-function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED' }); }
+function fail(message, detail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_TAX_UNVERIFIED', businessDetail: detail }); }
 function rateDate(value) {
   if (typeof value !== 'string') fail('A dated tax definition is required.');
   // The SDK permits dateTime. Keep its explicit local business date rather than
@@ -23,16 +23,16 @@ function applicableRate(record, txnDate) {
   date(txnDate);
   if (!record || typeof record.Id !== 'string' || typeof record.SyncToken !== 'string' || record.Active !== true) fail('The selected tax rate is not an active complete record.');
   const values = record.EffectiveTaxRate;
-  if (!Array.isArray(values) || !values.length || values.length > 100) fail('Dated tax-rate history is required for this business period.');
+  if (!Array.isArray(values) || !values.length || values.length > 100) fail('Dated tax-rate history is required for this business period.', { rateId: record.Id, txnDate, effectiveRates: values });
   const ordered = values.map(rate => ({ rate, start: rateDate(rate.EffectiveDate), end: rate.EndDate == null ? null : rateDate(rate.EndDate) })).sort((a, b) => a.start.localeCompare(b.start));
   for (let i = 0; i < ordered.length; i++) {
     const item = ordered[i], next = ordered[i + 1];
-    if ((item.end && item.end < item.start) || (next && (next.start === item.start || (item.end && item.end > next.start)))) fail('The tax-rate history has overlapping or ambiguous boundaries.');
+    if ((item.end && item.end < item.start) || (next && (next.start === item.start || (item.end && item.end > next.start)))) fail('The tax-rate history has overlapping or ambiguous boundaries.', { rateId: record.Id, txnDate, start: item.start, end: item.end, nextStart: next?.start });
   }
   // A later effective start replaces the earlier value for the SAME TaxRate ID.
   // Retain the original date/time definitions in policy evidence for review.
   const selected = ordered.filter(item => item.start <= txnDate).at(-1);
-  if (!selected || (selected.end && txnDate >= selected.end) || typeof selected.rate.RateValue !== 'number' || !Number.isFinite(selected.rate.RateValue) || selected.rate.RateValue < 0 || selected.rate.RateValue > 100 || !/^\d+(?:\.\d{1,6})?$/.test(String(selected.rate.RateValue))) fail('Exactly one supported effective tax rate is required.');
+  if (!selected || (selected.end && txnDate >= selected.end) || typeof selected.rate.RateValue !== 'number' || !Number.isFinite(selected.rate.RateValue) || selected.rate.RateValue < 0 || selected.rate.RateValue > 100 || !/^\d+(?:\.\d{1,6})?$/.test(String(selected.rate.RateValue))) fail('Exactly one supported effective tax rate is required.', { rateId: record.Id, txnDate, selected: selected || null });
   return selected.rate.RateValue;
 }
 // Integer half-up rounding, using six decimal places of a percentage. Expected
@@ -100,7 +100,7 @@ async function verifyBusinessTaxSources(policy, client) {
     if (!['TaxCode', 'TaxRate'].includes(source.entity) || hash(source.record) !== source.recordHash) fail('Retained tax policy evidence changed.');
     const response = await readBusinessTaxRecord(client, source.entity, source.id);
     const approved = taxDefinition(source.entity, source.id, source.record), current = response?.[source.entity];
-    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || taxDefinition(source.entity, source.id, current) !== approved) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.');
+    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || taxDefinition(source.entity, source.id, current) !== approved) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.', { entity: source.entity, recordId: source.id, expectedVersion: source.record.SyncToken, observedVersion: current?.SyncToken, differences: require('./business-error-detail').definitionDifferences(definitionFields(source.entity, source.record), current ? definitionFields(source.entity, current) : {}) });
   }
 }
 module.exports = { applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };

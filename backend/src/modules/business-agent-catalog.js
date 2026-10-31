@@ -20,6 +20,7 @@ const TOOLS = Object.freeze({
   getBusinessWork: { group: 'business-read', summary: 'Reads the work list: its own jobs, what is blocked and why, and what needs the owner.' },
   getObligations: { group: 'business-read', summary: 'Lists unpaid customer invoices or supplier bills.' },
   queryCompanyData: { group: 'business-read', summary: 'Searches and analyses the app’s synced copy of every record (sales by customer or month, aging, items sold, who pays late, linked records) without using any QuickBooks requests.' },
+  inspectBlocker: { group: 'business-read', summary: 'Explains blocked work from saved errors and steps, showing changed reference or tax fields and record versions without making QuickBooks requests.' },
   inspectBusinessOperation: { group: 'business-read', summary: 'Reads a saved accounting plan and how far it got.' },
   getBusinessActivityChoices: { group: 'business-read', summary: 'Lists the customers, services and suppliers it may use for extra activity (including ones it added earlier), the open imported invoices and bills it may settle, its own open invoices and bills on terms (with balances and due dates) and open estimates, wholly unreceived purchase orders it may receive, and which of its own earlier records it may correct.' },
   getBusinessDecision: { group: 'business-read', summary: 'Reads one earlier decision and the owner’s answer.' },

@@ -79,6 +79,7 @@ const FIXED = Object.freeze({
   getBusinessState: 'Checking the business state',
   getBusinessWork: 'Reading its work list',
   queryCompanyData: 'Searching the synced company records',
+  inspectBlocker: 'Inspecting why accounting work is blocked',
   inspectBusinessOperation: 'Checking a saved accounting plan',
   getBusinessActivityChoices: 'Reviewing customers, suppliers and open items it can use',
   prepareBusinessPeriod: 'Preparing the dated business calendar',

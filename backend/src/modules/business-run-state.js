@@ -1,4 +1,5 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
 const { randomUUID } = require('node:crypto');
 const { hash } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
@@ -31,7 +32,7 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
   const view = ({ run, calendar, writer }) => ({ operationId: String(run._id), planHash: run.planHash, status: run.status, recordCount: run.recordCount, nextOrdinal: run.nextOrdinal ?? 0, completedRecords: (run.nextOrdinal ?? 0) - (run.deferredSteps || []).length, deferredSteps: run.deferredSteps || [], recheckAvailable: Boolean(run.deferredSteps?.length), executionRevision: run.executionRevision ?? 0, leaseToken: run.leaseToken || null, leaseExpiresAt: run.leaseExpiresAt || null,
     ...(run.requiredAssertions.some(row => row.key === 'stock-costs') ? { stockCostRequired: true } : {}),
     ...(run.activityBatch ? { activityBatch: { decisionKey: run.activityBatch.decisionKey, purpose: run.activityBatch.purpose, day: run.activityBatch.day } } : {}),
-    fromDate: run.fromDate, throughDate: run.throughDate, stopRequested: calendar?.stopRequested === true, unresolved: writer?.unresolved || null,
+    errorDetail: run.errorDetail || null, progressAt: run.progressAt || null, fromDate: run.fromDate, throughDate: run.throughDate, stopRequested: calendar?.stopRequested === true, unresolved: writer?.unresolved || null,
     completion: run.status === 'verified' && HASH.test(run.verification?.evidenceHash || '') && HASH.test(run.verification?.recordSetHash || '') && run.verification?.planHash === run.planHash && run.verification?.blueprintHash === run.blueprintHash && same(run.verification?.operationId, run._id) && run.verification?.completionAuditId && calendar?.businessKey === run.businessKey && calendar?.verifiedThrough >= (run.activityBatch ? run.expectedCursor : run.throughDate) && calendar?.revision >= run.expectedRevision + 1 && !same(calendar?.pendingCommit?.operationId, run._id) && !same(calendar?.currentOperationId, run._id) && !same(writer?.operationId, run._id) ? { evidenceHash: run.verification.evidenceHash, throughDate: run.throughDate, ...(run.activityBatch ? { kind: 'additional-activity', verifiedThrough: run.expectedCursor } : {}) } : null });
   async function perform(scope, operationId, action, work) {
     scope = scoped(scope); if (!ID.test(operationId || '')) fail('An exact operation ID is required.');
@@ -44,6 +45,7 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     });
   }
   async function change(value, scope, actorId, session, phase, fields) {
+    if (fields.nextOrdinal !== undefined && fields.nextOrdinal !== value.run.nextOrdinal) fields = { ...fields, progressAt: new Date(now()), errorDetail: null, errorHistory: [] };
     const run = value.run, next = (run.executionRevision ?? 0) + 1;
     const eventKey = 'business-run:' + run._id + ':' + next;
     const receipt = await writeAudit(eventKey, { ...scope, actorId, operationId: String(run._id), planHash: run.planHash, phase, nextOrdinal: fields.nextOrdinal ?? run.nextOrdinal ?? 0 }, session);
@@ -53,12 +55,27 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     return view({ ...value, run: saved });
   }
   const inspect = (scope, operationId) => perform(scope, operationId, 'operations.read', async value => view(value));
+  // Only a completed elapsed close may lend its writer to independent current-day
+  // work. The calendar slot, cursor and immutable plan remain owned by the close.
+  const closeReady = run => !run.activityBatch && run.throughDate < require('./business-activity-preview').businessDate(new Date(now())) && run.nextOrdinal === run.recordCount && !run.deferredSteps?.length;
+  const idle = writer => writer?.operationId === null && writer.planHash === null && writer.unresolved === null && !(writer.resourceClaims || []).some(row => row.state !== 'reserved' || row.expiresAt > now()) && !(writer.resourceQueue || []).some(row => row.expiresAt > now());
+  function yielded(value) {
+    if (!closeReady(value.run) || !idle(value.writer)) fail('The pending close needs an idle company writer before fresh verification.');
+    owned({ ...value, writer: { ...value.writer, operationId: value.run._id, planHash: value.run.planHash } });
+  }
   const claim = (scope, operationId) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
-    owned(value); const run = value.run;
+    const run = value.run;
     if (!['reserved', 'running', 'blocked', 'awaiting-evidence'].includes(run.status)) fail('This operation cannot acquire a worker.');
     if (run.leaseToken && (!Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() > now())) fail('Another worker still holds this operation.');
+    if (value.writer?.operationId === null && value.writer.planHash === null) {
+      yielded(value);
+      const writer = value.writer;
+      value.writer = await Writers.findOneAndUpdate({ _id: writer._id, ...selected, revision: writer.revision, operationId: null, planHash: null, unresolved: null }, { $set: { operationId: run._id, planHash: run.planHash }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!value.writer) fail('The company writer changed before close verification.');
+    }
+    owned(value);
     const leaseToken = token(); if (typeof leaseToken !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(leaseToken)) fail('Invalid operation lease token.');
-    return change(value, selected, actorId, session, 'claim', { leaseToken, leaseExpiresAt: new Date(now() + 600000), nextOrdinal: run.nextOrdinal ?? 0, status: (run.nextOrdinal ?? 0) === run.recordCount && !(run.deferredSteps || []).some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', lastError: null });
+    return change(value, selected, actorId, session, 'claim', { leaseToken, leaseExpiresAt: new Date(now() + 600000), nextOrdinal: run.nextOrdinal ?? 0, status: (run.nextOrdinal ?? 0) === run.recordCount && !(run.deferredSteps || []).some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', ...(run.verificationCandidateHash ? { verificationCandidateHash: null } : {}), lastError: null });
   });
   const renew = (scope, operationId, leaseToken) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
     handle(value, leaseToken); if (!['running', 'awaiting-evidence'].includes(value.run.status)) fail('This worker cannot continue the operation.');
@@ -89,14 +106,25 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     const nextOrdinal = Math.max(run.nextOrdinal ?? 0, ordinal + 1);
     return change(value, selected, actorId, session, defer ? 'defer' : 'advance', { nextOrdinal, deferredSteps: deferred.sort((a, b) => a.ordinal - b.ordinal), status: nextOrdinal === run.recordCount && !deferred.some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', leaseExpiresAt: new Date(now() + 600000) });
   });
-  const release = (scope, operationId, leaseToken, reason = 'yield') => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
+  const release = (scope, operationId, leaseToken, reason = 'yield', error = null) => perform(scope, operationId, 'operations.execute', async (value, selected, actorId, session) => {
     handle(value, leaseToken);
     if (!['yield', 'blocked', 'stopped'].includes(reason)) fail('Unsupported worker release reason.');
     if (reason === 'stopped' && (!value.calendar.stopRequested || value.writer.unresolved !== null)) fail('A stopped operation must settle its outstanding request first.');
-    return change(value, selected, actorId, session, 'release-' + reason, { leaseToken: null, leaseExpiresAt: null, status: reason === 'stopped' ? 'stopped' : reason === 'blocked' ? 'blocked' : (value.run.nextOrdinal ?? 0) === value.run.recordCount ? 'awaiting-evidence' : value.run.status, lastError: reason === 'blocked' ? 'Operation requires recovery or fresh verification.' : null });
+    if (reason !== 'stopped' && !value.calendar.stopRequested && closeReady(value.run) && value.writer.unresolved === null) {
+      const writer = value.writer;
+      value.writer = await Writers.findOneAndUpdate({ _id: writer._id, ...selected, revision: writer.revision, operationId: value.run._id, planHash: value.run.planHash, unresolved: null }, { $set: { operationId: null, planHash: null }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!value.writer) fail('The close writer changed before yielding.');
+    }
+    return change(value, selected, actorId, session, 'release-' + reason, { leaseToken: null, leaseExpiresAt: null, ...(value.run.verificationCandidateHash ? { verificationCandidateHash: null } : {}), status: reason === 'stopped' ? 'stopped' : reason === 'blocked' ? 'blocked' : (value.run.nextOrdinal ?? 0) === value.run.recordCount ? 'awaiting-evidence' : value.run.status, ...(error ? failureFields(value.run, error, { operationId }, now()) : {}), lastError: error ? businessErrorDetail(error).message : reason === 'blocked' ? 'Operation requires recovery or fresh verification.' : null });
   });
   const settleStop = (scope, operationId) => perform(scope, operationId, 'operations.stop', async (value, selected, actorId, session) => {
     if (value.run.status === 'stopped') return view(value);
+    if (value.writer?.operationId === null) {
+      yielded(value);
+      const writer = value.writer;
+      value.writer = await Writers.findOneAndUpdate({ _id: writer._id, ...selected, revision: writer.revision, operationId: null, planHash: null, unresolved: null }, { $set: { operationId: value.run._id, planHash: value.run.planHash }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!value.writer) fail('The close writer changed before settling Stop.');
+    }
     owned(value);
     const expiry = new Date(value.run.leaseExpiresAt).getTime();
     if (!value.calendar.stopRequested || value.writer.unresolved !== null || (value.run.leaseToken && (!Number.isFinite(expiry) || expiry > now()))) fail('Stop remains requested while an active worker or uncertain request needs to settle.');

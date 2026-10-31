@@ -1,4 +1,5 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
 const { randomUUID } = require('node:crypto');
 const { hash } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
@@ -12,6 +13,7 @@ const { createBusinessAgentUsage, reviewPause, reviewOutcome } = require('./busi
 const { DEFAULT_SETTINGS, validateControl, reduceControl, fail, ID } = require('./business-agent-policy');
 const { runAsActor } = require('./actor-context');
 const cadence = require('./business-agent-cadence');
+const { businessBlockersFor, blockerBuild, escalateBusinessBlockers } = require('./business-error-detail');
 const management = require('./business-management-review');
 const iso=value=>value?new Date(value).toISOString():null;
 const at=value=>value?new Date(value).getTime():0;
@@ -65,7 +67,8 @@ function createBusinessAgentService(options={}) {
   const todayContext=today=>{const {slots,reservedByRun,...rest}=today||{};return {...rest,...(rest.nextSlotAt?{nextSlotTime:cadence.localTime(rest.nextSlotAt)}:{})};};
   // The daily management review (business-management-review.js): the latest saved plan; null turns the review off.
   async function managementFor(row){if(!row||typeof store.latestDailyPlan!=='function')return null;try{const plan=await store.latestDailyPlan(row);return {lastPlanDay:plan?.day||null,plan};}catch{return null;}}
-  async function capabilityRequestsFor(row){if(!row||typeof store.capabilityRequests!=='function')return [];try{return await store.capabilityRequests(row);}catch{return [];}}
+  async function blockerView(scope){try{return await businessBlockersFor({models:store.models,scope,now:now()});}catch{return {blockers:[],unavailable:true,error:'Saved blocker diagnostics could not be read; no blocked work was cleared.'};}}
+  async function capabilityRequestsFor(row){if(!row)return [];try{const view=await blockerView(scopeOf(row)),saved=typeof store.capabilityRequests==='function'?await store.capabilityRequests(row):[];return [...view.blockers.filter(b=>b.overdue).map(blockerBuild),...saved.filter(b=>!String(b.key||'').startsWith('business-blocker-'))];}catch{return [];}}
   const decideCadence=(row,business,today,ownerRequested,owned=[],obligations=null,requests=null,daily=null)=>cadence.decide({now:now(),settings:row.settings,business,agent:{id:String(row._id),grant:row.grant||null},today,owned,obligations,requests,state:row.cadence||{},ownerRequested,management:daily});
   // Today's enforced QuickBooks request budget from the Phase 0 meter (unreadable counts as reached).
   const requestsFor=async scope=>cadence.requestBudget(await requestMeter.summary(scope).catch(()=>null));
@@ -75,8 +78,9 @@ function createBusinessAgentService(options={}) {
   // The management review's measures, from the local company copy (no QuickBooks calls); a failure is stated, never fatal.
   async function managementContextFor(scope,row,today,events,decisions){
     const requestsList=await capabilityRequestsFor(row);
-    try{const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now()});return management.managementContext({snapshot,today,events,decisions,requests:requestsList,nowMs:now()});}
-    catch{return management.managementContext({snapshot:null,today,events,decisions,requests:requestsList,nowMs:now(),error:'The local company measures could not be read this time; use the read tools.'});}
+    const supportScenarios=await require('./reproduction-business').recentCaseTypes({...scope,ownerId:String(row.ownerId)},{now:now()}).catch(()=>({unavailable:true}));
+    try{const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now()});return {...management.managementContext({snapshot,today,events,decisions,requests:requestsList,nowMs:now()}),supportScenarios};}
+    catch{return {...management.managementContext({snapshot:null,today,events,decisions,requests:requestsList,nowMs:now(),error:'The local company measures could not be read this time; use the read tools.'}),supportScenarios};}
   }
   const leaseMs=240000,scanMs=5000;
   async function bind(user,action='operations.read') {
@@ -89,6 +93,8 @@ function createBusinessAgentService(options={}) {
   }
   async function workspace(bound,row) {
     let business;try{business=await store.business(bound.scope);}catch{business={scope:bound.scope,published:null,unavailable:true,verifiedThrough:null,recordsThrough:null,recordCount:null,currentOperation:null,blockers:[{code:'business-state-unavailable',title:'Business state needs another read',detail:'Saved business evidence could not be read. Current controls and monitoring state remain available.',href:'/company/manage'}]};}
+    const diagnosticView = await blockerView(bound.scope);
+    business = { ...business, errorBlockers: diagnosticView.blockers, diagnosticsUnavailable: diagnosticView.unavailable === true };
     const settings={...DEFAULT_SETTINGS,...(row?.settings||{}),specialists:[...(row?.settings?.specialists||[])]};
     const sync=publicSync(row,now()),usageState=await usageView(bound.scope,row);
     let qboRequests;try{qboRequests=await requestMeter.summary(bound.scope);}catch{qboRequests={unavailable:true};}
@@ -117,6 +123,7 @@ function createBusinessAgentService(options={}) {
       progress:today&&!today.unavailable?{target:today.target,saved:today.saved,verified:today.verified,reserved:today.reserved,slotCount:today.slotCount,currentSlot:today.currentSlot}:null,
       capabilityRequests:buildList.slice(0,40)};
   }
+  async function blockers(user){const bound=await bind(user);const view=await blockerView(bound.scope);await bound.access.authorize(bound.scope,'operations.read');return {scope:bound.scope,...view};}
   async function status(user){const bound=await bind(user);return workspace(bound,await store.get(bound.scope));}
   // The live activity feed (business-agent-live.js): light enough to poll every few seconds while
   // work is happening. A failed read returns the last good feed for this agent, marked stale.
@@ -300,7 +307,7 @@ function createBusinessAgentService(options={}) {
     let finalized=false,usageRecord=null;
     const finalize=async({outcome,role='accountant',event=null,apply=null,error=null})=>{
       if(finalized)return;finalized=true;let final=outcome,terminalRecorded=false;
-      const evidence=()=>({passId:pass?.id||null,attemptId,usageId,outcome:final,refresh:{...refresh}});
+      const evidence=()=>({...(error?{errorDetail:businessErrorDetail(error)}:{}),passId:pass?.id||null,attemptId,usageId,outcome:final,refresh:{...refresh}});
       if(event){
         try{await store.event(row,event.kind,event.title,event.detail,{...evidence(),...(event.data||{})},null,event.key||hash({attemptId,kind:event.kind}),role);terminalRecorded=true;}
         catch{
@@ -310,7 +317,7 @@ function createBusinessAgentService(options={}) {
           }
         }
       }
-      try{transcript?.add('outcome',{status:final,text:event?[event.title,event.detail].filter(Boolean).join(' · '):''});}catch{/* transcript is best-effort */}
+      try{transcript?.add('outcome',{status:final,...(error?{data:{errorDetail:businessErrorDetail(error)}}:{}),text:event?[event.title,event.detail].filter(Boolean).join(' · '):''});}catch{/* transcript is best-effort */}
       if(usageRecord){try{await usage.save(usageRecord,{outcome:final,finishedAt:new Date(now()),resetAt:error?.quota?.resetAt||null});}catch{/* The engine already saved token totals. */}}
       if(pass?.role==='accountant'&&terminalRecorded){
         try{row=await store.update(row,token,{cadence:cadence.finishReview(row.cadence,{failureKind:final==='failed'?(error?.code||'failed'):'no-progress'})});}catch{/* Lost leases retain the pending baseline; never invent a completed review. */}
@@ -352,7 +359,7 @@ function createBusinessAgentService(options={}) {
     };
     // After an automatic recovery the operation continues at once under the standing grant (the same
     // execution request resumeBusinessOperation queues), without waiting for a model review.
-    const continueRecovered=async run=>{
+    const continueRecovered=async(run,recoveryDue=false)=>{
       // General plans keep their exact saved payload and decision identity; no model reconstruction.
       if(run.contract==='general-write-v1'){
         if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.authorityHash!==row.grant.authorityHash||run.agentAuthority?.ownerId!==ownerId||!['prepared','held','sending'].includes(run.status)||run.status==='sending'&&run.admitted)return false;
@@ -374,21 +381,30 @@ function createBusinessAgentService(options={}) {
           return result?.status==='complete';
         }catch(error){if(error?.businessAgentFatal)throw error;return false;}
       }
-      if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.ownerId!==ownerId||!run.planHash||run.executionPending)return false;
+      if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.ownerId!==ownerId||run.agentAuthority?.authorityHash!==row.grant.authorityHash||!run.planHash||run.executionPending)return false;
       await guard('authority');
       const governor=governanceFor(run.agentAuthority,{token,now});
-      if(typeof governor.automaticRecoveryPending!=='function')return false;
-      let check;try{check=await governor.automaticRecoveryPending(user,run.operationId,{planHash:run.planHash});}catch(error){if(error?.businessAgentFatal)throw error;return false;}
+      // Retry an elapsed close on the existing recovery cadence, under its exact
+      // standing grant. No model reconstructs it and no cursor is advanced here.
+      const current=await store.business(scope),close=current.currentOperation;
+      const pendingClose=recoveryDue&&(current.blockers||[]).every(item=>item.code==='current-operation')&&close?.operationId===run.operationId&&!close.activityBatch&&['blocked','awaiting-evidence'].includes(close.status)&&close.throughDate<cadence.localParts(now()).date&&close.completedRecords===close.recordCount&&!close.recheckAvailable;
+      let check;
+      if(pendingClose)check={pending:true,at:Math.floor(now()/60000)};
+      else {
+        if(typeof governor.automaticRecoveryPending!=='function')return false;
+        try{check=await governor.automaticRecoveryPending(user,run.operationId,{planHash:run.planHash});}catch(error){if(error?.businessAgentFatal)throw error;return false;}
+      }
       if(!check.pending)return false;
       await guard('authority');
       try{await execution.request(user,run.operationId,{planHash:run.planHash,requestKey:hash({operationId:run.operationId,phase:'auto-recovery-continue',at:check.at})});}
       catch(error){if(error?.businessAgentFatal)throw error;try{await store.event(row,'attention','Recovered work could not be continued',safeError(error),{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-recovery-continue-failed',at:check.at}),'accountant');}catch{/* Visible on the next pass. */}return false;}
-      try{await store.event(row,'plan-decision','Main accountant continued its recovered work',`The uncertain QuickBooks request was resolved automatically; the operation's remaining records are being sent.`,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({operationId:run.operationId,phase:'auto-recovery-continued',at:check.at}),'accountant');}catch{/* The execution audit is the durable record. */}
+      try{await store.event(row,'plan-decision',pendingClose?'Main accountant retried an open calendar close':'Main accountant continued its recovered work',pendingClose?'The earlier day remains open and unverified while its original report close retries. Independent current-day activity can continue.':`The uncertain QuickBooks request was resolved automatically; the operation's remaining records are being sent.`,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({operationId:run.operationId,phase:'auto-recovery-continued',at:check.at}),'accountant');}catch{/* The execution audit is the durable record. */}
       return true;
     };
-    const failedState=error=>({status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
+    const failedState=error=>({errorDetail:businessErrorDetail(error),status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
+      try { await escalateBusinessBlockers({store,row,scope,now:now()}); } catch { lastScanError='Blocker attention could not be refreshed. Saved business work is retained.'; }
       // Persist legacy interruption recovery before sync or any other update reloads row.
       if(interruptedLegacyReview)await update({cadence:{...row.cadence,reviewPending:true}});
       await runAsActor(ownerId,async()=>{
@@ -406,9 +422,15 @@ function createBusinessAgentService(options={}) {
         if(recoveryDue)await update({cadence:{...(row.cadence||{}),recoveryCheckedAt:new Date(now()).toISOString()}});
         recoveryTask=(async()=>{
           let changed=false;
+          if(recoveryDue){
+            const recovery=require('./general-write-recovery');
+            const ownedChecks=owned.filter(run=>run.agentAuthority?.agentId===String(row._id)&&run.agentAuthority?.grantId===row.grant?.id&&run.agentAuthority?.authorityHash===row.grant?.authorityHash&&run.agentAuthority?.ownerId===ownerId);
+            changed=Boolean(await recovery.recheckSavedOperations({runs:ownedChecks,now:now(),guard:()=>guard('authority'),request:(run,key)=>execution.request(user,run.operationId,{planHash:run.planHash,requestKey:hash({operationId:run.operationId,phase:key})})}))||changed;
+            try{const checked=await (options.recheckGeneral||recovery.recheckGeneralHistory)({scope,access,models:store.models,now,guard:()=>guard('authority'),signal:controller.signal});changed=checked?.history?.ok||checked?.results?.some(result=>result.ok)||changed;}catch(error){if(error?.businessAgentFatal)throw error;}
+          }
           for(const run of owned.filter(run=>run.disposition==='unsent').slice(0,3))changed=(await retireUnsent(run))||changed;
           if(recoveryDue&&business.blockers?.some(item=>item.code==='uncertain-write'))for(const run of owned.filter(run=>run.holdsSlot).slice(0,3))changed=(await resolveUncertain(run))||changed;
-          for(const run of (changed?await ownedFor(scope,row):owned).filter(run=>run.status==='blocked'||run.contract==='general-write-v1'&&run.disposition==='prepared').slice(0,3))changed=(await continueRecovered(run))||changed;
+          for(const run of (changed?await ownedFor(scope,row):owned).filter(run=>run.status==='blocked'||recoveryDue&&run.status==='awaiting-evidence'||run.contract==='general-write-v1'&&run.disposition==='prepared').slice(0,3))changed=(await continueRecovered(run,recoveryDue))||changed;
           return changed;
         })();
         // Handle rejection immediately: a failed recovery must not cancel independent activity.
@@ -467,7 +489,9 @@ function createBusinessAgentService(options={}) {
           try { return await tools.execute(name,input); } finally { requiredEntities = null; }
         };
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
-        const context={usage:usageState,ownerInstructions:row.settings.instructions,memory:reconcileRetained(role==='accountant'?row.memory:row.specialists?.[role]?.memory,business),currentStateUpdates:currentStateUpdates(business),company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,owned,requests,cadence:row.cadence||null}).items};
+        const reviewBlockers=(await blockerView(scope)).blockers;
+        business={...business,errorBlockers:reviewBlockers};
+        const context={blockers:reviewBlockers,usage:usageState,ownerInstructions:row.settings.instructions,memory:reconcileRetained(role==='accountant'?row.memory:row.specialists?.[role]?.memory,business),currentStateUpdates:currentStateUpdates(business),company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,owned,requests,cadence:row.cadence||null}).items};
         let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(executeScoped),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:REVIEW_LIMITS.ms,maxRounds:REVIEW_LIMITS.rounds,maxCalls:REVIEW_LIMITS.calls,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
           // Model calls are not writes: they need authority, not current sources. Write steps refresh sources themselves.
           await guard('authority');
@@ -523,7 +547,7 @@ function createBusinessAgentService(options={}) {
   function start(){if(closed||interval)return;interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
   function close(){closed=true;if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
   async function drain(){await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
-  return {status,live,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
+  return {status,blockers,live,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
 }
 let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService();}
 module.exports={createBusinessAgentService,getBusinessAgentService,publicSync};

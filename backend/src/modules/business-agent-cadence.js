@@ -312,8 +312,8 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // A writer or uncertain request belongs to its exact operation. Stops, publication, imports,
   // calendar completion and coordination still hold the whole company. The tools prove resource independence.
   const operationHold = (!op || ownRetained(op, agent)) && blockers.every(item => item.code === 'current-operation' || item.code === 'uncertain-write') && (op || (owned || []).some(run => ownRetained(run, agent)));
-  const newActivity = (!op || ownRetained(op, agent)) && capacity && today && !today.unavailable && today.dueSlot && !requests?.reached && !nextClose(business, day) && (!blockers.length || operationHold);
-  const independentDuties = (!op || ownRetained(op, agent)) && capacity && !nextClose(business, day) && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
+  const newActivity = (!op || ownRetained(op, agent)) && capacity && today && !today.unavailable && today.dueSlot && !requests?.reached && (!blockers.length || operationHold);
+  const independentDuties = (!op || ownRetained(op, agent)) && capacity && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
   const independentKind = newActivity ? 'slice' : independentDuties ? 'obligations' : null;
   const independentReason = () => newActivity ? sliceReason() : 'settling currently eligible invoices and bills while other operations continue or recover';
   const sliceReason = () => 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule' + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
@@ -352,7 +352,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   if (!kind && !budgetSpent && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
   // Alternate recovery reviews with new activity; a failed/held recovery cannot consume the
   // next slice's delay. Automatic recovery also runs between model reviews in the worker.
-  if (independentKind && (!kind && held || kind === 'recovery' && (s.lastKind === 'recovery' || misses > 0))) { kind = independentKind; reason = independentReason(); held = null; }
+  if (independentKind && (!kind && held || ['recovery', 'catch-up'].includes(kind) && (['recovery', 'catch-up'].includes(s.lastKind) || misses > 0))) { kind = independentKind; reason = independentReason(); held = null; }
   if (!kind && held) return held;
   if (!kind && newActivity) { kind = 'slice'; reason = sliceReason(); }
   const open = rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close;

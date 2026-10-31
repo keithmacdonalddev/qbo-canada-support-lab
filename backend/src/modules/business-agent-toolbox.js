@@ -33,6 +33,7 @@ const INFO = Object.freeze({
   getBusinessWork: { category: 'business-read', keywords: ['work', 'jobs', 'todo', 'blocked', 'features', 'owner'] },
   queryCompanyData: { category: 'business-read', keywords: ['query', 'search', 'local', 'mirror', 'aggregate', 'sum', 'count', 'group', 'analysis', 'trend', 'aging', 'margin'] },
   getObligations: { category: 'business-read', keywords: ['unpaid', 'open', 'invoices', 'bills', 'receivables', 'payables', 'overdue', 'due', 'collections'] },
+  inspectBlocker: { category: 'business-read', keywords: ['blocker', 'blocked', 'needs-check', 'refusal', 'diagnostic', 'error', 'reference', 'definition', 'tax', 'mismatch', 'version'] },
   inspectBusinessOperation: { category: 'business-read', keywords: ['operation', 'plan', 'saved', 'inspect', 'verification', 'recovery', 'progress'] },
   getBusinessActivityChoices: { category: 'business-read', keywords: ['choices', 'roles', 'customers', 'suppliers', 'items', 'purchase orders', 'adopted', 'correctable', 'options'] },
   getBusinessDecision: { category: 'business-read', keywords: ['decision', 'owner', 'answer', 'evidence', 'response'] },

@@ -22,7 +22,7 @@ const setPath = (target, path, value) => {
 };
 
 // In-memory stand-ins for the models and QuickBooks, enough for reconcile().
-function fixture({ steps, records = {}, queryRows = [], running = false, active = false, auditOk = true, outcomeUnknown = true } = {}) {
+function fixture({ steps, records = {}, queryRows = [], running = false, active = false, auditOk = true, outcomeUnknown = true, dependencies = {} } = {}) {
   const plan = { _id: PLAN, sessionId: SESSION, userId: OWNER, steps };
   const session = { _id: SESSION, userId: OWNER, realmId: 'r1', plans: [PLAN],
     reproduction: { status: running ? 'running' : 'stopped', environment: 'production', connectionId: CONNECTION,
@@ -76,6 +76,7 @@ function fixture({ steps, records = {}, queryRows = [], running = false, active 
     createAuditEntry: async (...args) => { audits.push(args); return auditOk ? { _id: 'audit' } : null; },
     isActive: () => active,
     now: () => clock,
+    ...dependencies,
   };
   return { plan, session, writes, queries, audits, advance: ms => { clock += ms; }, reconciler: createReconciler(deps) };
 }
@@ -271,4 +272,36 @@ for (const mode of ['expired', 'replaced']) test('recovery cannot settle with a 
   if (mode === 'expired') await assert.rejects(pending, /expired/);
   else { const result = await pending; assert.equal(result.outcomeUnknown, true); }
   assert.equal(f.plan.steps[1].status, 'executing'); assert.equal(f.audits.length, 0);
+});
+
+
+test('governed lost-write reconciliation settles the general receipt inside the existing transaction and retains identity', async () => {
+  const transaction = { marker: 'recovery-transaction' }, generalId = '9'.repeat(24), observed = savedInvoice('501');
+  let called = 0, inside = false;
+  const f = fixture({ steps: [customerStep, invoiceStep({ result: { outcomeUnknown: true, generalWriteRunId: generalId } })], queryRows: [observed], dependencies: {
+    settleWrite: async (_input, save) => { inside = true; try { return await save(transaction); } finally { inside = false; } },
+    settleGeneralResult: async value => { called++; assert.equal(inside, true); assert.equal(value.session, transaction); assert.equal(value.decision.receiptSettled, true); assert.deepEqual(value.decision.generalRecord, observed); assert.equal(value.step.result.generalWriteRunId, generalId); },
+  } });
+  const result = await call(f);
+  assert.equal(called, 1); assert.equal(result.outcomeUnknown, false); assert.equal(f.plan.steps[1].result.generalWriteRunId, generalId); assert.deepEqual(f.writes, []);
+});
+test('failure to settle a governed receipt leaves the case unresolved and preserves its original identity', async () => {
+  const generalId = '9'.repeat(24);
+  const f = fixture({ steps: [customerStep, invoiceStep({ result: { outcomeUnknown: true, generalWriteRunId: generalId } })], queryRows: [savedInvoice('501')], dependencies: { settleGeneralResult: async () => { throw new Error('Receipt changed'); } } });
+  const result = await call(f);
+  assert.equal(result.outcomeUnknown, true); assert.equal(f.plan.steps[1].status, 'executing'); assert.equal(f.plan.steps[1].result.generalWriteRunId, generalId); assert.deepEqual(f.writes, []);
+});
+test('lost governed update followed by an unrelated edit stays uncertain with its pre-write token', async () => {
+  const step = { _id: STEP_ID, stepNumber: 1, toolName: 'updateRecord', status: 'failed', toolInput: { entityType: 'Invoice', id: '501', changes: { PrivateNote: 'case experiment' } }, result: { outcomeUnknown: true, beforeSyncToken: '3', generalWriteRunId: '9'.repeat(24) } };
+  const f = fixture({ steps: [step], records: { 'invoice:501': { __type: 'Invoice', Id: '501', SyncToken: '5', PrivateNote: 'Later manual change', TotalAmt: 100 } } });
+  const result = await call(f);
+  assert.equal(result.outcomeUnknown, true); assert.match(result.unresolved[0].reason, /record changed/); assert.equal(step.result.outcomeUnknown, true); assert.deepEqual(f.writes, []);
+});
+
+
+test('lost governed void followed by a newer nonvoid record stays unresolved', async () => {
+  const step = { _id: STEP_ID, stepNumber: 1, toolName: 'voidTransaction', status: 'failed', toolInput: { entityType: 'Invoice', id: '501' }, result: { outcomeUnknown: true, beforeSyncToken: '3', generalWriteRunId: '9'.repeat(24) } };
+  const f = fixture({ steps: [step], records: { 'invoice:501': { __type: 'Invoice', Id: '501', SyncToken: '5', TotalAmt: 100 } } });
+  const result = await call(f);
+  assert.equal(result.outcomeUnknown, true); assert.match(result.unresolved[0].reason, /uncertain void/); assert.equal(step.result.outcomeUnknown, true); assert.deepEqual(f.writes, []);
 });

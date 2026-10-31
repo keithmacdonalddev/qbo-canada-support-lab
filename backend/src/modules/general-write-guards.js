@@ -103,8 +103,11 @@ function checkGeneralWrite({ proposal, local, context }) {
     if (!DAY.test(date || '')) return;
     if (context.protectedThrough && date <= context.protectedThrough) say(ref, what + ' dated ' + date + ' is inside the closed or reconciled period through ' + context.protectedThrough + '; it cannot be changed.');
     else if (dirty && context.verifiedThrough && date <= context.verifiedThrough) {
+      if (context.historyReverification?.available !== true) say(ref, 'Historical edits need retained managed accounting reports through the current cursor.');
+      else if (date < context.historyReverification.fromDate) say(ref, 'This date needs adopted-history or earlier fiscal-year accounting evidence before editing.');
+      if (date < context.historyReverification?.openingDate && context.historyReverification?.baseline !== true) say(ref, 'A pre-opening edit requires the retained opening baseline reports.');
       reverify.add(date);
-      say(ref, what + ' changes verified history. General history edits are held until downstream periods and the opening baseline can be re-proved.');
+      // The durable pre-send marker holds subsequent work until full history re-verification.
     }
   };
   ops.forEach((op, order) => {
@@ -190,14 +193,20 @@ function checkGeneralWrite({ proposal, local, context }) {
     if (spec.kind === 'transaction') {
       if (op.op === 'create' && payload.TxnDate !== context.day) say(ref, 'Date new records ' + context.day + ', the open business day.');
       if (op.op === 'update' && payload.TxnDate !== undefined && (!DAY.test(payload.TxnDate) || payload.TxnDate > context.day)) say(ref, 'Records cannot be dated after ' + context.day + '.');
-      if (existing) protectDate(ref, existing.TxnDate, op.entity + ' ' + op.id);
+      if (existing) {
+        protectDate(ref, existing.TxnDate, op.entity + ' ' + op.id);
+        if (context.verifiedThrough && [existing.TxnDate, payload.TxnDate].some(date => date && date <= context.verifiedThrough) && !context.historyReverification?.origins?.has(op.entity + ':' + op.id)) say(ref, 'Historical fixed-workflow records retain their original creation contract; edit a general-created record.');
+      }
       if (op.op === 'update' && payload.TxnDate !== undefined) protectDate(ref, payload.TxnDate, 'The new date');
       // Affected sources of a change or removal: records linked before or after it. (A new
       // settlement may link historical sources; they stay read-only prerequisites.)
       if (op.op !== 'create') for (const { link } of [...linksIn(existing), ...linksIn(after)]) {
         if (isRefObject(link?.TxnId) || link?.$ref !== undefined || !QBO_ID.test(String(link?.TxnId ?? ''))) continue;
         const source = local.get(linkType(link.TxnType), String(link.TxnId));
-        if (source?.TxnDate) protectDate(ref, source.TxnDate, 'Linked ' + linkType(link.TxnType) + ' ' + link.TxnId, false);
+        if (source?.TxnDate) {
+          protectDate(ref, source.TxnDate, 'Linked ' + linkType(link.TxnType) + ' ' + link.TxnId, false);
+          if (context.verifiedThrough && [existing?.TxnDate, payload.TxnDate].some(date => date && date <= context.verifiedThrough) && !context.historyReverification?.origins?.has(linkType(link.TxnType) + ':' + link.TxnId)) say(ref, 'Historical settlement edits need a general-created linked source; the fixed-workflow graph cannot be amended by this edit.');
+        }
       }
     }
     // 3. Amounts: gross including tax, per record and as absolute plan exposure.

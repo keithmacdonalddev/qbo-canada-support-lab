@@ -174,3 +174,12 @@ test('period evidence checks actual BSON overhead before storage and on historic
     }
   }
 });
+
+test('failed elapsed report close yields writer, stays unverified and later closes on fresh strict evidence', async () => {
+  const h = harness(); h.clock += 86400000;
+  h.onReport = () => { const source = h.reportSources(); source.reports.TrialBalance.Rows.Row.at(-1).Summary.ColData[2].value = '99.00'; const { sourceHash, ...raw } = source; return { ...raw, sourceHash: hash(raw) }; };
+  assert.equal((await h.execute()).state, 'awaiting-evidence'); assert.equal(h.writer().operationId, null); assert.equal(h.calendar().currentOperationId, operationId); assert.equal(h.calendar().verifiedThrough, '2026-10-05');
+  const saved = h.writes, revision = h.calendar().revision;
+  assert.equal((await h.execute()).complete, false); assert.equal(h.writes, saved); assert.equal(h.calendar().revision, revision);
+  h.onReport = null; assert.equal((await h.execute()).complete, true); assert.equal(h.writes, saved); assert.equal(h.calendar().verifiedThrough, '2026-10-06');
+});

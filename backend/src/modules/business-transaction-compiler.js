@@ -79,7 +79,7 @@ function assertCorrectionSource({ lifecycle, payload, source, receivables, relat
 }
 // Pure compiler only. All inputs must come from server-owned approved intent and
 // fresh verified company evidence. A compiled request grants no write authority.
-function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], adopted = null, purchaseOrder = null, observationFence, now = Date.now() }) {
+function compileBusinessTransaction({ scope, step, policy, referenceEvidence, parents = [], adopted = null, purchaseOrder = null, observationFence, now = Date.now(), resolveDefinitionObservation }) {
   scope = scoped(scope);
   if (!observationFence || !sameScope(observationFence.scope, scope) || !/^[a-f0-9]{24}$/.test(observationFence.operationId || '') || !Number.isSafeInteger(observationFence.writerRevision) || observationFence.writerRevision < 0 || observationFence.writerRevision >= Number.MAX_SAFE_INTEGER || !fresh(observationFence.observedAt, now)) fail('A current operation writer observation is required.');
   const currentObservation = value => value?.operationId === observationFence.operationId && value?.writerRevision === observationFence.writerRevision;
@@ -108,7 +108,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       if (choices.length !== 1 || !HASH.test(choices[0].definition?.hash || '') || ![1, 2].includes(choices[0].definition.version)) fail('The owner-reviewed tax-code definition is unavailable.');
       approvedBinding = { ...binding, definition: choices[0].definition };
     }
-    const record = verifyBusinessReference({ scope, binding: approvedBinding, observed: observed[0], now }); id(record.Id);
+    const record = verifyBusinessReference({ scope, binding: approvedBinding, observed: observed[0], now, resolveDefinitionObservation }); id(record.Id);
     if (['Customer', 'Vendor'].includes(binding.entity) && record.CurrencyRef?.value !== 'CAD') fail('The transaction party must use CAD.');
     if (binding.entity === 'Customer' && record.IsProject === true) fail('A customer identity cannot silently become a project.');
     refs.set(key, record); physical.add(binding.entity + ':' + record.Id);
@@ -398,4 +398,46 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
   const compilationHash = hash(artifact);
   return { ...artifact, compilationHash, dispatchEvidence: { artifact, compilationHash, scope, operationId: observationFence.operationId, logicalKey: step.logicalKey, intentHash: hash(step), requestHash: request.requestHash, evidenceHash, writerRevision: observationFence.writerRevision, observedAt }, authorized: false };
 }
-module.exports = { compileBusinessTransaction, originalTaxMatches, SUPPORTED, LISTS, canonicalTxnType };
+// Runtime entry: resolve historical approval evidence before the pure compiler.
+// The resolver is private and per compilation; no witness changes stored inputs or hashes.
+async function compileBusinessTransactionWithDefinitions(input, { resolveDefinitionObservation, signal, clock = () => input.now ?? Date.now() } = {}) {
+  const controller = new AbortController(), abort = () => controller.abort();
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 10000); timer.unref?.();
+  const check = () => { if (controller.signal.aborted) throw Object.assign(new Error('Approved reference evidence was cancelled or exceeded its ten-second budget.'), { status: 409, code: 'BUSINESS_REFERENCE_UNVERIFIED' }); };
+  const resolve = resolveDefinitionObservation || require('./business-observation-store').createBusinessObservationStore({ now: clock }).definition;
+  const retained = new Map(), key = (scope, entity, id, definition) => canonical({ scope, entity, id, definition });
+  try {
+    check();
+    for (const binding of input.step?.references || []) {
+      let definition = binding.definition;
+      if (binding.entity === 'TaxCode' && input.policy?.taxReferenceDefinitions) {
+        const choices = input.policy.taxReferenceDefinitions.filter(choice => choice.key === binding.key && choice.id === binding.id && choice.originalDefinitionHash === definition?.hash);
+        if (choices.length === 1) definition = choices[0].definition;
+      }
+      if (definition?.version !== 1 || !['Item', 'TaxCode'].includes(binding.entity)) continue;
+      const observed = input.referenceEvidence?.find(value => value.entity === binding.entity && value.record?.Id === binding.id);
+      if (!observed) continue;
+      // Exact v1 shapes need no compatibility evidence. All other shapes require
+      // the retained record's original v1 hash and matching canonical v2 fields.
+      let exact = false;
+      try { exact = require('./business-reference').matchesReferenceDefinition(input.scope, binding.entity, observed.record, definition, observed.definitionObservation, clock()); } catch { /* The pure verifier records the precise refusal below. */ }
+      const identity = key(input.scope, binding.entity, binding.id, definition);
+      if (exact || retained.has(identity)) continue;
+      let witness;
+      try { witness = await new Promise((done, reject) => {
+        const cancel = () => { try { check(); } catch (error) { reject(error); } };
+        controller.signal.addEventListener('abort', cancel, { once: true });
+        Promise.resolve().then(() => { check(); return resolve(input.scope, binding.entity, binding.id, { definition, signal: controller.signal }); }).then(done, reject).finally(() => controller.signal.removeEventListener('abort', cancel));
+      });
+      check(); } catch (error) {
+        error.referenceDiagnostic = { observationSource: ({ 'qbo-full-entity-get': 'live', 'qbo-current-mirror': 'mirror', 'qbo-write-response': 'saved' })[observed.source?.kind] || 'unknown', definitionVersion: definition.version, definitionObservationPresent: Boolean(observed.definitionObservation), retainedDefinitionResolved: false };
+        throw error;
+      }
+      retained.set(identity, witness || null);
+    }
+    check();
+    return compileBusinessTransaction({ ...input, now: clock(), resolveDefinitionObservation: (scope, entity, id, definition) => retained.get(key(scope, entity, id, definition)) });
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
+}
+module.exports = { compileBusinessTransaction, compileBusinessTransactionWithDefinitions, originalTaxMatches, SUPPORTED, LISTS, canonicalTxnType };

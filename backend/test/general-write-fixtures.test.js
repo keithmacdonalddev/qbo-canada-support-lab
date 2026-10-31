@@ -80,7 +80,7 @@ test('history edits dirty every close from the earliest affected date through th
   const local = { get: (entity, id) => copy.get(entity + ':' + id) || null, owned: () => true };
   const result = checkGeneralWrite({ proposal: { operations: [{ ref: 'undo', op: 'delete', entity: 'Payment', id: '300' }] }, local, context: { day: '2026-12-02', verifiedThrough: '2026-12-01', protectedThrough: '2026-10-31', taxCodes: { sales: ['7'], purchases: ['8'] } } });
   assert.equal(result.ok, false);
-  assert.match(result.problems.map(row => row.message).join(' '), /changes verified history/);
+  assert.match(result.problems.map(row => row.message).join(' '), /Historical edits need retained managed accounting reports/);
   assert.equal(result.plan, null, 'history cannot dispatch before cascade reproof exists');
 });
 

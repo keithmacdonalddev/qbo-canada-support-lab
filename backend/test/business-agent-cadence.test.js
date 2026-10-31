@@ -153,7 +153,7 @@ test('quiet hours never suppress the calendar close after midnight', () => {
 
 test('catch-up is spaced while it progresses and backs off durably when it does not', () => {
   const day = '2026-10-30', start = at(day, '09:00'), business = current(day, { verifiedThrough: '2026-10-20' });
-  const run = (now, state) => c.decide({ now, settings, agent, business, today: todayAt(now), state });
+  const run = (now, state) => c.decide({ now, settings, agent, business, today: { ...todayAt(now), dueSlot: null }, state });
   let state = completedReview({}, { now: start, signature: c.progressSignature(business, todayAt(start)), kind: 'catch-up' });
   let next = run(start + MIN, state);
   assert.deepEqual([next.kind, next.callModel, Date.parse(next.nextReviewAt) - start], ['catch-up', false, 5 * MIN], 'no progress: wait 5 minutes');
@@ -359,4 +359,12 @@ test('eligible collections receive an independent obligations review even when n
  const today={...todayAt(now),dueSlot:null,remaining:0};
  const next=c.decide({now,settings,agent,business,today,state:{day,lastKind:'recovery',misses:9,lastReviewAt:new Date(now-MIN).toISOString()}});
  assert.deepEqual([next.kind,next.callModel],['obligations',true]);assert.match(next.reason,/currently eligible/);
+});
+
+test('a failed earlier close alternates with today activity while the cursor remains unverified', () => {
+  const day = '2026-11-02', now = at(day, '12:00');
+  const business = current(day, { verifiedThrough: '2026-10-31', blockers: [{ code: 'current-operation' }], currentOperation: { operationId: 'close-day-n', status: 'awaiting-evidence', agentAuthority: own } });
+  const today = todayAt(now), state = completedReview({}, { now: now - 10 * MIN, signature: c.progressSignature(business, today), kind: 'recovery' });
+  const next = c.decide({ now, settings, agent, business, today, state });
+  assert.equal(next.kind, 'slice'); assert.equal(next.callModel, true); assert.ok(c.nextClose(business, day)); assert.equal(business.verifiedThrough, '2026-10-31');
 });

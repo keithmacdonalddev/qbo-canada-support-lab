@@ -191,7 +191,8 @@ async function executeCase(sessionId, runId) {
         if (!account) throw new Error('The initiating account is unavailable.');
         return aiProvider.complete({ ...options, userApiKey: account.anthropicApiKey, provider });
       } });
-    await runEngine({ state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen, ensureContract: assessor.ensureContract, reviewFinish: assessor.reviewFinish,
+    const caseBusiness = (dependencies.createCaseBusiness || require('./reproduction-business').createCaseBusiness)({ session, state, plan, qbo, assertActive, persist });
+    await runEngine({ caseBusiness, state, plan, qbo, persist, assertActive, audit, messages, confirmContinuation, inspectScreen, ensureContract: assessor.ensureContract, reviewFinish: assessor.reviewFinish,
       runModel: async (transcript, execute, tools, budget) => { await assertActive(); const currentUser = await User.findById(state.actorId).select('+anthropicApiKey'); if (!currentUser) throw new Error('The initiating account is unavailable.'); return runProvider(transcript, system, execute, tools, currentUser.anthropicApiKey, { ...budget, provider }); } });
     session.messages.push({ role: 'assistant', content: state.summary, timestamp: new Date() });
     if (state.title) session.title = state.title;

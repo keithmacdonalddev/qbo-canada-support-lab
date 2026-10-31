@@ -45,3 +45,30 @@ test('stop-only settlement cannot steal a live lease or clear an unresolved writ
  h.writer().unresolved={key:hash('uncertain')};await assert.rejects(h.state.settleStop(scope,operationId),/uncertain request/);h.writer().unresolved=null;
  const saved=await h.state.settleStop(scope,operationId);assert.equal(saved.status,'stopped');assert.equal(saved.leaseToken,null);assert.equal(h.calendar().stopRequested,true);assert.equal(h.writer().operationId,operationId);
 });
+
+test('elapsed close lends only its settled writer and reclaims it before fresh proof; Stop stays resumable', async () => {
+  const h = harness(); h.clock += 86400000; h.evidenceReady = false;
+  assert.equal((await h.execute()).state, 'awaiting-evidence');
+  assert.equal(h.calendar().currentOperationId, operationId); assert.equal(h.calendar().verifiedThrough, '2026-10-05'); assert.equal(h.writer().operationId, null);
+  for (const field of ['resourceClaims', 'resourceQueue', 'unresolved']) {
+    const old = clone(h.writer());
+    h.writer()[field] = field === 'unresolved' ? { key: hash('uncertain') } : [{ state: 'admitted', expiresAt: h.clock + 60000 }];
+    await assert.rejects(h.state.claim(scope, operationId), /idle company writer/);
+    Object.assign(h.writer(), old); h.writer()[field] = old[field];
+  }
+  h.writer().revision++; const claim = await h.state.claim(scope, operationId);
+  assert.equal(h.writer().operationId, operationId); assert.equal(claim.status, 'awaiting-evidence');
+  await h.state.release(scope, operationId, claim.leaseToken); assert.equal(h.writer().operationId, null);
+  h.calendar().stopRequested = true; await h.state.settleStop(scope, operationId);
+  assert.equal(h.run().status, 'stopped'); assert.equal(h.writer().operationId, operationId);
+});
+test('incomplete records and deferred checks never lend their writer', async () => {
+  for (const deferred of [false, true]) {
+    const h = await claimed(); h.clock += 86400000;
+    if (deferred) { h.run().nextOrdinal = h.run().recordCount; h.run().deferredSteps = [{ ordinal: 0, logicalKey: h.entries[0].step.logicalKey, reason: 'needs-check' }]; }
+    // Renew after changing the fixture clock before releasing this worker.
+    h.run().leaseExpiresAt = new Date(h.clock + 60000);
+    await h.state.release(scope, operationId, h.lease.leaseToken);
+    assert.equal(h.writer().operationId, operationId);
+  }
+});

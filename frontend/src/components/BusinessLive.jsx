@@ -39,6 +39,8 @@ function nowLine(feed, rightNow, clock) {
     const sending = feed.sending
     return { tone: 'working', Icon: LoaderCircle, spin: true, title: 'Sending records to QuickBooks', detail: sending && sending.total ? sending.done + ' of ' + sending.total + ' records done' : 'checking each record as it is saved' }
   }
+  if (feed?.state === 'blocked') return { tone: 'held', Icon: AlertTriangle, title: 'Blocked: ' + (feed.blocked?.reason || 'The operation needs attention before it can continue.'), detail: stamp(feed.blocked?.at) === null ? '' : 'blocked ' + minutes(clock - stamp(feed.blocked.at)) + ' ago' }
+  if (feed?.state === 'waiting') return { tone: 'idle', Icon: Clock3, title: feed.waitReason || 'Waiting for the operation worker', detail: '' }
   switch (rightNow?.state) {
     case 'paused': return { tone: 'held', Icon: OctagonPause, title: 'Paused', detail: 'nothing new happens until you resume the accountant' }
     case 'stopped': return { tone: 'held', Icon: OctagonPause, title: 'Stopped', detail: 'company monitoring is off' }
@@ -82,14 +84,18 @@ function timeline(feed, transcript) {
 
 const ITEM_ICONS = { running: LoaderCircle, done: Check, failed: X, attention: AlertTriangle, info: Circle }
 function FeedRow({ item, clock, onOpen }) {
-  const Icon = ITEM_ICONS[item.status] || Check
-  return <li className={'bwl-item bwl-item--' + item.status + ' bwl-item--' + item.kind}>
+  const blockedAt = stamp(item.blockedAt), blocked = item.operationStatus === 'blocked' || blockedAt !== null
+  const status = blocked ? 'attention' : item.waitReason ? 'info' : item.status
+  const Icon = ITEM_ICONS[status] || Check
+  const outcome = blocked && !item.outcome?.startsWith('Blocked:') ? 'Blocked: the operation needs attention before it can continue.' : item.waitReason || item.outcome
+  return <li className={'bwl-item bwl-item--' + status + ' bwl-item--' + item.kind}>
     <time dateTime={item.at}>{clockTime(item.at, clock)}</time>
-    <Icon aria-hidden="true" className={item.status === 'running' ? 'animate-spin' : ''} />
+    <Icon aria-hidden="true" className={status === 'running' ? 'animate-spin' : ''} />
     <div>
       <span className="bwl-text">{item.record ? <Link to={recordLink(item.record)}>{item.text}</Link> : item.text}{item.by === 'owner' && <em> · you</em>}</span>
-      {item.outcome && <span className="bwl-outcome"> — {item.outcome}</span>}
-      {item.status === 'running' && <span className="bw-sr-only"> (in progress)</span>}
+      {outcome && <span className="bwl-outcome"> — {outcome}</span>}
+      {blockedAt !== null && <span className="bwl-outcome"> · blocked {minutes(clock - blockedAt)} ago</span>}
+      {status === 'running' && <span className="bw-sr-only"> (in progress)</span>}
       {item.detail && <p>{item.detail}</p>}
       {item.kind === 'operation' && item.id.endsWith(':planned') && <Link className="bwl-inspect" to="/company/manage">Inspect<ArrowRight aria-hidden="true" /></Link>}
       <ActivityMetadata metadata={item.metadata} recordedAt={item.at} clock={clock} onOpen={onOpen} />

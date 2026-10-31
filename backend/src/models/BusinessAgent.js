@@ -38,6 +38,7 @@ const schema = new mongoose.Schema({
   reviewRequestedAt: { type: Date, default: null },
   codexQuotaClearedAt: { type: Date, default: null },
   codexQuota: { type: mongoose.Schema.Types.Mixed, default: null },
+  errorDetail: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1 }, { unique: true });
 schema.index({ 'settings.monitoring': 1, nextWakeAt: 1, _id: 1 });

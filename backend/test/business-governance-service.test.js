@@ -33,7 +33,7 @@ test('actual preparation, approval, transport, readback, independent ledger repo
 
 test('unsent retirement releases only proved never-sent claims and permits a fresh reviewed operation',async()=>{
  const h=fixture();await h.publish();const request={requestKey:'retirement-tax-drift-0001',throughDate:'2026-10-06'},prepared=await h.service.prepare(h.user,request);await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});
- h.records.get('taxrate:950').record.SyncToken='1';const blocked=await h.runtime(prepared.operationId).execute();assert.equal(blocked.complete,false);assert.equal(h.posts,0);assert.equal(h.data.Steps.length,1);
+ const changedRate=h.records.get('taxrate:950').record;changedRate.SyncToken='1';changedRate.RateValue=15;changedRate.EffectiveTaxRate[0].RateValue=15;const blocked=await h.runtime(prepared.operationId).execute();assert.equal(blocked.complete,false);assert.equal(h.posts,0);assert.equal(h.data.Steps.length,1);
  const input={planHash:prepared.planHash},review=await h.service.reviewRetirement(h.user,prepared.operationId,input);assert.equal(review.claimCount,1);assert.equal(review.qboWrites,0);
  const choice={...input,reviewHash:review.reviewHash,reason:'Tax definitions changed before any request was sent.'};h.loseReply=true;await assert.rejects(h.service.retire(h.user,prepared.operationId,choice),/acknowledgement/);
  assert.equal((await h.service.retire(h.user,prepared.operationId,choice)).reused,true);assert.equal(h.data.Steps.length,0);assert.equal(h.data.Writers[0].operationId,null);assert.equal(h.data.Calendars[0].verifiedThrough,null);assert.equal(h.data.Plans.length,1);assert.ok(h.data.Audits.some(row=>row.action==='Unsent business operation retired'&&row.beforeState.claims.length===1));

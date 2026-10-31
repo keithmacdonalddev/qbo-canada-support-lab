@@ -24,7 +24,7 @@ function assertRun(run, scope) {
   }
   if (run.expectedCursor !== null) {
     requireDate(run.expectedCursor);
-    if (shift(run.expectedCursor, 1) !== run.fromDate) throw problem('Business period must immediately follow the verified cursor');
+    if (run.activityBatch ? run.expectedCursor >= run.fromDate : shift(run.expectedCursor, 1) !== run.fromDate) throw problem('Business period must immediately follow the verified cursor');
   }
 }
 function assertRunApproval(run) {

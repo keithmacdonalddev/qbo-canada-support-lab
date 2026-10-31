@@ -270,8 +270,9 @@ function createReconciler(dependencies = {}) {
     if (step.toolName === 'voidTransaction') {
       const zero = near(0, current.TotalAmt);
       if (zero && /void/i.test(String(current.PrivateNote || ''))) {
-        return { status: 'completed', result: { success: true, data: recordSummary(entityType, current), reconciled: 'applied' } };
+        return { status: 'completed', generalRecord: current, result: { success: true, data: recordSummary(entityType, current), reconciled: 'applied' } };
       }
+      if (!zero && before !== undefined && before !== null) return { reason: 'The record changed after the uncertain void but does not establish its result; keep the original receipt unresolved.' };
       if (!zero) return { status: 'failed', error: 'Reconciled: the transaction still has its amount, so it was not voided.', result: { success: false, reconciled: 'not_applied' } };
       return { reason: 'The transaction has a zero total but no void note, so whether it was voided cannot be told.' };
     }
@@ -280,7 +281,7 @@ function createReconciler(dependencies = {}) {
       const fields = Object.entries(changes).filter(([key]) => !['Id', 'SyncToken', 'sparse', 'MetaData'].includes(key));
       if (!fields.length) return { reason: 'The update named no fields to compare.' };
       if (fields.every(([key, value]) => holds(value, current[key], key))) {
-        return { status: 'completed', result: { success: true, data: recordSummary(entityType, current), reconciled: 'applied' } };
+        return { status: 'completed', generalRecord: current, result: { success: true, data: recordSummary(entityType, current), reconciled: 'applied' } };
       }
       // A newer version that does not hold the change was edited by someone else.
       if (before !== undefined && before !== null) return { reason: 'The record changed in QuickBooks but does not hold the requested values; check it in QuickBooks.' };
@@ -311,7 +312,7 @@ function createReconciler(dependencies = {}) {
       } catch (err) {
         return { reason: 'Record ' + record.Id + ' cannot belong to this case: ' + err.message, candidates: candidates.map(candidateSummary) };
       }
-      return { status: 'completed', result: { success: true, data: recordSummary(entityType, record), reconciled: how } };
+      return { status: 'completed', generalRecord: record, result: { success: true, data: recordSummary(entityType, record), reconciled: how } };
     };
     const none = (how) => ({ status: 'failed', error: 'Reconciled: QuickBooks has no record from this change, so it was not created.', result: { success: false, reconciled: how } });
     const noIdentity = 'The attempted create had no identifying field (name, number, memo or party), so no record can be confirmed as its result. Check QuickBooks; only "none" (nothing was created) can be chosen here.';
@@ -365,12 +366,13 @@ function createReconciler(dependencies = {}) {
 
   async function save({ session, userId, plan, step, decision, selection, lock }) {
     const reconciledAt = new Date(now());
-    const result = { ...decision.result, reconciledAt, reconciledBy: String(userId) };
+    const result = { ...decision.result, ...(step.result?.generalWriteRunId ? { generalWriteRunId: step.result.generalWriteRunId } : {}), reconciledAt, reconciledBy: String(userId) };
     const fields = { status: decision.status, result };
     if (decision.status === 'completed') fields.executedAt = reconciledAt;
     if (decision.error) fields.error = decision.error;
     if (step.approval) fields['approval.state'] = decision.status === 'completed' ? 'approved' : 'failed';
     return settleWrite({ scope: { realmId: String(session.realmId), environment: session.reproduction.environment, connectionId: String(session.reproduction.connectionId) }, ownerId: String(userId), actorId: String(userId), workflow: { version: 1, kind: 'reproduction', sessionId: String(session._id), planId: String(plan._id), stepNumber: step.stepNumber }, dispatch: step.writeDispatch, decision }, async transactionSession => {
+    if (step.result?.generalWriteRunId) await (dependencies.settleGeneralResult || require('./reproduction-business').settleCaseGeneralResult)({ step, decision: { ...decision, receiptSettled: true }, scope: { realmId: String(session.realmId), environment: session.reproduction.environment, connectionId: String(session.reproduction.connectionId) }, caseId: String(session._id), planId: String(plan._id), session: transactionSession });
     if (now() >= lock.getTime()) fail(409, 'Recovery decision expired. Reconcile again; no saved change will be resent.');
     const locked = await AISession.updateOne({ _id: session._id, userId, 'reproduction.decisionLockUntil': lock }, { $inc: { 'reproduction.decisionRevision': 1 }, ...(session.reproduction.caseContractVersion === 2 ? { $set: { 'reproduction.assessment': null, 'reproduction.assessmentResult': null, 'reproduction.outcome': 'unverified', 'reproduction.summary': 'Recovery changed the case evidence. Continue the saved request to check its result.' } } : {}) }, { session: transactionSession });
     if (locked?.matchedCount !== 1) fail(409, 'Recovery decision ownership changed. Nothing was settled.');

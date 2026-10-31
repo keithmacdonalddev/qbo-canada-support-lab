@@ -69,12 +69,19 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
   const runs = await readGeneralRuns(Runs, scope), candidates = new Map(), dirty = [];
   const inside = date => typeof date === 'string' && date >= day && date <= through;
   for (const run of runs) {
-    dirty.push(...(run.dirty || []).map(row => ({ earliestDate: row.date, reason: row.reason, runId: run._id })));
+    dirty.push(...(run.dirty || []).map(row => ({ earliestDate: row.date, reason: row.reason || null, runId: String(run._id) })));
     for (const batch of run.batches || []) if (batch.state !== 'answered' && batch.items.some(item => inside(item.payload?.TxnDate || run.day) || inside(item.before?.TxnDate))) fail('General write ' + run._id + ' has an unsettled batch; recover its original response before close.');
     for (const [ref, item] of Object.entries(run.items || {})) {
       const op = run.plan.operations.find(row => row.ref === ref), id = item.qboId || op?.id;
       const dispatched = [...(run.batches || [])].reverse().find(batch => (!item.attempt || batch.attempt === item.attempt) && batch.items.some(row => row.ref === ref))?.items.find(row => row.ref === ref);
       const before = item.before || dispatched?.before || op?.before || null;
+      if (item.outcome === 'fault') {
+        const batch = (run.batches || []).find(row => row.attempt === item.attempt && row.state === 'answered' && row.items.some(sent => sent.ref === ref));
+        const sent = batch?.items.find(row => row.ref === ref), gated = batch?.transport?.items?.find(row => row.ref === ref && row.bId === sent?.bId);
+        // Only the exact durable gate refusal proves no mutation. Unknown outcomes
+        // and admission contention keep their original recovery barrier.
+        if (gated?.outcome === 'rejected' && batch.transport.receiptId && item.fault?.length && gated.faultCodes?.length) continue;
+      }
       if (!['saved', 'deleted'].includes(item.outcome)) {
         if (inside(item.record?.TxnDate || run.day) || inside(before?.TxnDate)) fail('General write ' + run._id + ' has an unresolved item; close is incomplete.');
         continue;
@@ -124,7 +131,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
 async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
   const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, new Set(row.targets)]));
-  const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx });
+  const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx, fromDate: day, throughDate: through });
   const general = new Set(records.map(row => row.entity + ':' + row.id));
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();
   if (ledger.unknown.length) evaluation.failures.push({ key: null, reason: ledger.unknown.length + ' General Ledger rows name a transaction type the close cannot attribute.', rows: ledger.unknown });

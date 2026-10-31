@@ -1,4 +1,6 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
+const { executionDiagnostic } = require('./business-execution-diagnostic');
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { assertRun, assertRunApproval } = require('./business-period-store');
@@ -54,10 +56,10 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
       // Another worker may have completed while this worker lost its lease. Let
       // recovery obtain the runtime's full completion proof, not an error winner.
       if (error && run.status === 'verified') return;
-      const problem = error || observed, controlled = /^BUSINESS_[A-Z_]+$/.test(problem?.code || '') && typeof (error ? problem.message : problem.error) === 'string' ? { error: (error ? problem.message : problem.error).slice(0, 500), code: problem.code } : null;
-      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(run.deferredSteps?.length ? { deferredSteps: run.deferredSteps, recheckAvailable: true } : {}), ...(controlled || (error ? { error: 'The operation needs attention before it can continue.' } : {})) };
+      const problem = error || observed, errorDetail = problem && (error || problem.error || problem.errorDetail) ? businessErrorDetail(problem, { operationId: identity.operationId }) : null, controlled = /^BUSINESS_[A-Z_]+$/.test(problem?.code || '') && typeof (error ? problem.message : problem.error) === 'string' ? { error: errorDetail.message, code: problem.code } : null;
+      const result = { state: observed?.state || (run.status === 'verified' ? 'verification-required' : run.status), complete: observed?.complete === true && run.status === 'verified', ...(run.deferredSteps?.length ? { deferredSteps: run.deferredSteps, recheckAvailable: true } : {}), ...(errorDetail ? { errorDetail } : {}), ...(controlled || (error ? { error: 'The operation needs attention before it can continue.' } : {})), ...(executionDiagnostic(problem) ? { diagnostic: executionDiagnostic(problem) } : {}) };
       await audit(identity, 'settled', result.state, session);
-      const saved = await Runs.findOneAndUpdate({ _id: run._id, ...identity.scope, 'executionRequest.id': identity.request.id, 'executionRequest.pending': true, executionRevision: run.executionRevision, status: run.status }, { $set: { executionRequest: { ...run.executionRequest, pending: false, completedAt: new Date(now()).toISOString(), result }, ...(controlled ? { lastError: controlled.error } : {}) } }, { new: true, session }).lean();
+      const saved = await Runs.findOneAndUpdate({ _id: run._id, ...identity.scope, 'executionRequest.id': identity.request.id, 'executionRequest.pending': true, executionRevision: run.executionRevision, status: run.status }, { $set: { executionRequest: { ...run.executionRequest, pending: false, completedAt: new Date(now()).toISOString(), result }, ...(errorDetail ? { ...failureFields(run, errorDetail, {}, now()), lastError: errorDetail.message } : {}) } }, { new: true, session }).lean();
       if (!saved) fail('The execution request changed while settling.');
     });
   }

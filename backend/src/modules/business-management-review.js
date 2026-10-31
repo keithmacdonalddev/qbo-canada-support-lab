@@ -86,7 +86,7 @@ function openRequests(events = []) {
   for (const row of events) {
     if (row?.kind !== 'capability-request' || !row.key || seen.has(row.key)) continue;
     seen.add(row.key);
-    if (row.status === 'open' || !row.status) out.push({ id: row.id, key: row.key, title: row.title, requirement: row.requirement, priority: row.priority, missing: row.missing, feature: row.feature, why: row.why, at: row.at });
+    if (row.status === 'open' || !row.status) out.push({ id: row.id, key: row.key, title: row.title, requirement: row.requirement, priority: row.priority, missing: row.missing, feature: row.feature, why: row.why, at: row.at, ...(row.errorDetail ? { errorDetail: row.errorDetail, count: row.count, firstAt: row.firstAt, lastAt: row.lastAt } : {}) });
   }
   return out.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || String(b.at).localeCompare(String(a.at)));
 }
@@ -217,7 +217,7 @@ function managementContext({ snapshot = null, today = null, events = [], decisio
     problems: problemsOf(events, nowMs),
     ownerAnswers: ownerAnswersOf(decisions),
     responsibilities: RESPONSIBILITIES,
-    capabilityRequests: openRequests(requests).slice(0, 20).map(({ key, priority, missing, requirement }) => ({ key, priority, requirement, missing })),
+    capabilityRequests: openRequests(requests).slice(0, 20).map(({ key, priority, missing, requirement, errorDetail, count, firstAt, lastAt }) => ({ key, priority, requirement, missing, ...(errorDetail ? { errorDetail, count, firstAt, lastAt } : {}) })),
   };
 }
 

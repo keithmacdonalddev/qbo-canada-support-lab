@@ -24,3 +24,12 @@ test('retained history, current operation and non-owner do not permit a suppleme
  const runtime=h.runtime(first.operationId);h.afterPost=async()=>{h.afterPost=null;await runtime.stop();};const result=await runtime.execute();assert.equal(result.state,'stopped');assert.equal(h.data.Calendars[0].verifiedThrough,'2026-11-30');const posts=h.posts;
  await assert.rejects(h.service.prepareActivityBatch(h.user,choice(2)));assert.equal(h.posts,posts);
 });
+
+test('today supplemental activity runs with an earlier unverified day when the calendar writer is idle', { timeout: 120000 }, async () => {
+  const h = fixture({ activityTemplateVersion: 2, openingDate: '2026-12-01' }); h.clock = Date.parse('2026-12-04T15:00:00Z'); await h.publish(); await calendar(h, '2026-12-02', 'verified-opening-before-pending-day');
+  const cursor = h.data.Calendars[0].verifiedThrough, prepared = await h.service.prepareActivityBatch(h.user, choice(1));
+  const run = h.data.Runs.find(row => row._id === prepared.operationId); assert.equal(run.fromDate, '2026-12-04'); assert.equal(run.expectedCursor, cursor);
+  await h.service.approve(h.user, prepared.operationId, { planHash: prepared.planHash });
+  const result = await h.runtime(prepared.operationId).execute(); assert.equal(result.complete, true, JSON.stringify(result));
+  assert.equal(h.data.Calendars[0].verifiedThrough, cursor); assert.equal(h.data.Calendars[0].lastActivityOperationId, prepared.operationId);
+});

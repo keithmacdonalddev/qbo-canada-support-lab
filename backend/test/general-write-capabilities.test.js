@@ -150,7 +150,7 @@ test('service prepares and executes an owned void through the saved batch contra
   let owned=true;
   const api = require('../src/modules/general-write-service').createGeneralWriteService({ models:{ GeneralWriteRuns:Runs,Steps:{findOne:()=>query(owned?{_id:'proof'}:null)} },copy:{read:async(s,e,id)=>e==='Invoice' && id==='700'?saved:local.get(e,id)},contextFor:async()=>context,dispatchEnabled:()=>true,transport:{sendBatch:async(s,{batch})=>{ sent.push(batch); const r={...voidRecord(),Id:'700'}; return [{bId:'1',Invoice:r}]; }} });
   const op={ref:'void',op:'void',entity:'Invoice',id:'700'};
-  const prepared=await api.prepare(bound,input('owned-void-0001',[op]));assert.equal(prepared.status,'prepared');
+  const prepared=await api.prepare(bound,input('owned-void-0001',[op]));assert.equal(prepared.status,'prepared',JSON.stringify(prepared));
   const done=await api.execute(bound,prepared.runId);assert.equal(done.status,'complete',JSON.stringify(done));
   assert.equal(sent[0].items[0].operation,'void');assert.equal(sent[0].items[0].payload.sparse,true);
   owned=false;

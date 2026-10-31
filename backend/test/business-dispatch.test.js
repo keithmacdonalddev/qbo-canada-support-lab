@@ -161,3 +161,12 @@ test('a dependency hold releases its exact unsent claim for immediate retry', as
   const held = await h.execute(); assert.equal(held.state, 'dependency-held'); assert.equal(h.row().state, 'claimed'); assert.equal(h.row().dispatch, null); assert.equal(h.row().receipt, null); assert.equal(new Date(h.row().leaseExpiresAt).getTime(), 0); assert.equal(h.sent.length, 0);
   h.deps.loadCompilationEvidence = compile; const result = await h.execute(); assert.equal(result.complete, true); assert.equal(h.sent.length, 1);
 });
+
+test('dispatch recompile resolves a missing legacy Item witness instead of refusing the live-shaped record', async () => {
+  const h = harness(), observed = h.fixture.referenceEvidence.find(value => value.entity === 'Item'), binding = h.intent.step.references.find(value => value.entity === 'Item' && value.id === observed.record.Id);
+  observed.record.IncomeAccountRef.name = 'Approved display'; const retained = clone(observed); retained.recordHash = hash(retained.record); retained.source.recordHash = retained.recordHash;
+  binding.definition = require('../src/modules/business-reference').referenceDefinition(scope, 'Item', retained.record, 1);
+  delete observed.record.IncomeAccountRef.name; h.fixture.refresh(); h.fixture.approve(); h.intent.fingerprint = hash(h.intent.step);
+  let resolved = 0; h.deps.resolveDefinitionObservation = async () => { resolved++; return retained; };
+  const result = await h.execute(); assert.equal(result.state, 'verified'); assert.equal(resolved, 1); assert.equal(h.sent.length, 1);
+});

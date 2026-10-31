@@ -1,7 +1,8 @@
 'use strict';
 // General closes bind every run, current record and posting reference version. Historical
-// edits remain unavailable until downstream periods and opening evidence can be re-proved.
+// edits are held by durable markers until downstream periods and opening evidence re-prove.
 const { hash } = require('./business-calendar');
+const persistedHash = value => hash(JSON.parse(JSON.stringify(value)));
 const { closeGeneralDay, ledgerEndpoint, generalRecordsFor, settlementLinks, SETTLEMENT_ENTITIES } = require('./general-write-day-close');
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED' }); }
 const TAX_SUBTYPES = ['GlobalTaxPayable', 'GlobalTaxSuspense', 'SalesTaxPayable', 'OtherCurrentLiabilities'];
@@ -65,12 +66,12 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     }
     return evidence.sort((a, b) => a.key.localeCompare(b.key));
   }
-  async function verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered }) {
+  async function verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered, force = false }) {
     const preview = gathered || await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy }), ctx = await contextFor(scope, mappings, preview.records);
     const settlements = await fixedSettlementsFor(scope, preview);
     const snapshotHash = hash({ fromDate, throughDate, ...preview, settlements, context: ctx.evidence });
     const prior = await Closes.findOne({ ...company(scope), fromDate, throughDate, kind: 'period', ok: true, snapshotHash }).sort({ verifiedAt: -1 }).maxTimeMS(3000).lean();
-    if (prior?.snapshotHash === snapshotHash) return prior;
+    if (!force && prior?.snapshotHash === snapshotHash) return prior;
     const report = await readLedger(fromDate, throughDate);
     const after = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy });
     const afterContext = await contextFor(scope, mappings, after.records), afterSettlements = await fixedSettlementsFor(scope, after);
@@ -88,6 +89,71 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     if (failed.length) fail('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + failed.flatMap(row => row.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason)).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.');
     return { required: results.length > 0, results: results.map(row => ({ fromDate: row.fromDate, throughDate: row.throughDate, kind: row.kind, ok: row.ok, recordCount: row.recordCount })) };
   }
-  return { pending, assertPeriodReady, ledgerEndpoint };
+
+  async function reverifyDirty(scope, { verifiedThrough, openingDate, mappings, readLedger, readReports, references, verifyFixedDay, guard, transaction }) {
+    const { reverifyHistory } = require('./general-write-recovery'), { dirtyRange } = require('./general-write-close');
+    const { readGeneralRuns } = require('./general-write-day-close');
+    const runs = await readGeneralRuns(Runs, scope), markers = runs.flatMap(run => (run.dirty || []).map(marker => ({ ...marker, earliestDate: marker.date, runId: String(run._id) })));
+    const range = dirtyRange({ markers, verifiedThrough, openingDate });
+    if (!range) return { ok: true, required: false };
+    if (typeof transaction !== 'function' || typeof guard !== 'function') fail('History re-verification needs transactional company fences.');
+    const original = persistedHash(runs), snapshots = [];
+    const check = async session => {
+      await guard(session);
+      if (persistedHash(await readGeneralRuns(Runs, scope)) !== original) fail('General history changed during re-verification; dirty markers remain.');
+    };
+    await check();
+    const earliest = markers.map(row => row.earliestDate).sort()[0];
+    const changed = await generalRecordsFor({ Runs, scope, day: earliest, through: verifiedThrough, copy });
+    const ctx = await contextFor(scope, mappings, changed.records);
+    const result = await reverifyHistory({ scope: company(scope), range, runs, references, readReports, context: ctx, now, guard: check,
+      verifyDay: async day => {
+        const from = range.baseline && day < openingDate ? earliest : day;
+        const preview = await generalRecordsFor({ Runs, scope, day: from, through: day, copy }), dayCtx = await contextFor(scope, mappings, preview.records);
+        const ledgerReport = await readLedger(from, day);
+        const after = await generalRecordsFor({ Runs, scope, day: from, through: day, copy });
+        if (hash(preview) !== hash(after) || hash(dayCtx.evidence) !== hash((await contextFor(scope, mappings, after.records)).evidence)) fail('History records changed during ledger verification.');
+        const settlements = await fixedSettlementsFor(scope, preview);
+        if (typeof verifyFixedDay !== 'function') fail('Historical fixed-record re-verification is unavailable.');
+        const fixed = await verifyFixedDay(from, day, preview.records);
+        const closed = await closeGeneralDay({ Runs, scope, day: from, through: day, copy, ledgerReport, ctx: dayCtx, gathered: preview, ownSettlements: settlements });
+        if (closed.fixedWorkflowKeys.some(key => !fixed.some(row => row.key === key))) fail('A historical ledger record has no re-verified original ownership proof.');
+        return { ...closed, fixedRecords: fixed, ledgerReport };
+      },
+      save: async proof => {
+        // One bounded document per day; an interruption keeps the original dirty
+        // markers, and no partially collected history can authorize new work.
+        const id = hash({ scope: company(scope), original, proof }).slice(0, 24);
+        if (!await Closes.findOne({ _id: id }).maxTimeMS(3000).lean()) await Closes.create([{ _id: id, contract: 'general-write-v1', ...company(scope), fromDate: proof.day, throughDate: proof.day, kind: 'reverify', ok: true, snapshotHash: original, ledgerHash: proof.ledgerHash, recordCount: proof.records.length, failures: [], records: proof.records, markers: [], history: proof, verifiedAt: new Date(now()) }]);
+        snapshots.push({ id, day: proof.day, sourceHash: proof.sourceHash, ledgerHash: proof.ledgerHash, recordCount: proof.records.length });
+      },
+    });
+    // Persist proof and clear only the exact markers whose original settled runs were
+    // observed. Transaction failure leaves all dirty markers in force for the next pass.
+    await transaction(async session => {
+      await check(session);
+      const id = hash({ scope: company(scope), original, result }).slice(0, 24);
+      await Closes.create([{ _id: id, contract: 'general-write-v1', ...company(scope), fromDate: range.from, throughDate: range.through, kind: 'reverify', ok: true, snapshotHash: original, ledgerHash: hash(snapshots.map(row => row.ledgerHash)), recordCount: snapshots.reduce((n, row) => n + row.recordCount, 0), failures: [], records: [], markers: markers.filter(row => row.date <= range.through).map(row => row.runId + ':' + row.date), history: { baseline: range.baseline, days: snapshots }, verifiedAt: new Date(now()) }], { session });
+      for (const run of runs.filter(run => run.dirty?.length)) {
+        const saved = await Runs.findOneAndUpdate({ _id: run._id, ...company(scope), revision: run.revision, dirty: run.dirty }, { $set: { dirty: run.dirty.filter(marker => marker.date > range.through) }, $inc: { revision: 1 } }, { new: true, session }).lean();
+        if (!saved) fail('A history marker changed before its proof committed.');
+      }
+    });
+    return { ...result, required: true };
+  }
+  async function retryFailed(scope, options) {
+    const rows = await Closes.find({ ...company(scope), kind: 'period' }).sort({ verifiedAt: -1 }).limit(20).maxTimeMS(3000).lean(), seen = new Set(), results = [];
+    for (const row of rows) {
+      const key = row.fromDate + ':' + row.throughDate;
+      if (seen.has(key)) continue; seen.add(key);
+      if (row.ok) continue;
+      try { results.push(await verifyRange(scope, { ...options, fromDate: row.fromDate, throughDate: row.throughDate, force: true })); }
+      catch (error) { results.push({ ok: false, reason: error.message }); }
+      if (results.length === 3) break;
+    }
+    return results;
+  }
+  return { pending, assertPeriodReady, reverifyDirty, retryFailed, ledgerEndpoint };
+
 }
 module.exports = { createGeneralCloseGate };

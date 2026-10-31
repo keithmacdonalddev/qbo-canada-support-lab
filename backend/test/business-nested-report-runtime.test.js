@@ -26,7 +26,7 @@ test('nested original-SDK reports survive capture, publication, new expectations
   assert.equal(inspected.financialMovements.status, 'passed'); assert.equal(h.reads, beforeReads); assert.equal(h.posts, beforePosts); assert.equal(h.data.Baselines[0].evidenceHash, originalBaselineHash);
   const evidence = h.data.Evidence.find(row => row.operationId === prepared.operationId && row.proof.complete === true); assert.ok(evidence); assert.equal(evidence.sources.version, 3);
   const pointer = structuredClone(run.approval.reportEvidence); run.approval.reportEvidence.sourceVersion = 2;
-  await assert.rejects(readApprovalReports({ models: h.models, run, ownerId }), /retained seven-report/); run.approval.reportEvidence = pointer;
+  await assert.rejects(readApprovalReports({ models: h.models, run, ownerId }), error => error.code === 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' && error.status === 409); run.approval.reportEvidence = pointer;
   assert.equal((await readApprovalReports({ models: h.models, run, ownerId })).sourceVersion, 3);
 });
 test('immutable v1 income and financial expectations compare with a fresh nested v3 observation', async () => {

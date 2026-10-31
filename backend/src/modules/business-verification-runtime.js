@@ -12,7 +12,7 @@ const { accountPostingEvidence, endpointFor } = require('./business-receivables-
 const ID = /^[a-f0-9]{24}$/, HASH = /^[a-f0-9]{64}$/, QBO_ID = /^\d{1,30}$/;
 const TAXED = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
 const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
-function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }); }
+function fail(message, detail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE', businessDetail: detail }); }
 const cents = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000000000;
 // The expectation must have been retained inside the approved immutable policy.
 // Never learn expected tax from the actual QBO response being checked.
@@ -29,7 +29,7 @@ function taxExpectation(policy, compiled) {
   if (sum !== expected.totalTaxCents) fail('Approved tax lines do not match their expected total.');
   const payload = JSON.parse(compiled.request.body), sales = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(compiled.entity);
   const code = policy.tax?.[sales ? 'salesTax' : 'purchaseTax'];
-  if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || typeof code !== 'string' || !QBO_ID.test(code) || !Array.isArray(payload.Line) || !payload.Line.length || payload.Line.some(line => line[line.DetailType]?.TaxCodeRef?.value !== code)) fail('The compiled transaction differs from its approved tax code policy.');
+  if (payload.GlobalTaxCalculation !== 'TaxExcluded' || policy.tax?.calculation !== 'TaxExcluded' || typeof code !== 'string' || !QBO_ID.test(code) || !Array.isArray(payload.Line) || !payload.Line.length || payload.Line.some(line => line[line.DetailType]?.TaxCodeRef?.value !== code)) fail('The compiled transaction differs from its approved tax code policy.', { entity: compiled.entity, logicalKey: compiled.logicalKey, expectedCode: code, observedCodes: payload.Line?.map(line => line[line.DetailType]?.TaxCodeRef?.value), txnDate: payload.TxnDate });
   return { version: 1, totalTaxCents: expected.totalTaxCents, lines: expected.lines.map(line => ({ rateId: line.rateId, percent: line.percent, taxableCents: line.taxableCents, amountCents: line.amountCents })) };
 }
 // Internal composition only: no routes, startup, storage preparation or activation.

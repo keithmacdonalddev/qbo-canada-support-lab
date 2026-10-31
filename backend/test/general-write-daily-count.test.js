@@ -20,32 +20,42 @@ test('general writes count saved records and unresolved reservations once toward
   assert.equal(done.saved,3);assert.equal(done.reserved,0);
 });
 
-test('unsent held general plans expire and definite refused items do not reserve the whole day',async()=>{
+test('unsent saved general plans retain their reservation; definite refused items release theirs',async()=>{
   const h=fixture([{_id:'held',status:'held',createdAt:new Date(clock-86400000),plan,items:{},batches:[]},{_id:'faulted',status:'needs-correction',createdAt:new Date(clock),plan,items:{inv:{outcome:'saved',entity:'Invoice'},pay:{outcome:'fault',entity:'Payment'}},batches:[{state:'answered',items:[]}]}]);
   const today=cadence.summarizeToday({rhythm:cadence.dayRhythm(day),...await h.store.todayActivity(scope,agentId,day,{fresh:true}),now:clock});
-  assert.equal(today.saved,1);assert.equal(today.reserved,0);
+  assert.equal(today.saved,1);assert.equal(today.reserved,3);assert.deepEqual(today.reservedByRun,{held:3});assert.equal(today.inFlight,1);
 });
 
-test('same-key unsent general retries cannot bypass the request budget or execute permission',async()=>{
+test('new general plans and saved same-key retries cannot bypass the request budget or execute permission',async()=>{
   const generalModule=require('../src/modules/general-write-service'),original=generalModule.createDefaultGeneralWrite;
-  let prepared=0,sends=0,authorized=0;
+  let prepared=0,sends=0,authorized=0,read=10000,allowExecute=true;const open=[];
   generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>({runId:'r',status:'prepared',reused:prepared++>0,admitted:false,plan:{operations:1}}),dispatchEnabled:()=>true,execute:async()=>{sends++;return{};}});
   try{
-    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async(scope,permission)=>{if(permission==='operations.execute')authorized++;}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>({target:100,ceiling:200,saved:0,reserved:1,reservedByRun:{r:1}}),requestsFor:async()=>({today:{attempts:{read:10000,query:0,report:0,sync:0,write:0}},month:{attempts:{read:10000,query:0,report:0,sync:0,write:0}}})});
+    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async(scope,permission)=>{if(permission==='operations.execute'){authorized++;if(!allowExecute)throw new Error('execute permission revoked');}}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>({target:100,ceiling:200,saved:0,reserved:1,reservedByRun:{r:1},open}),requestsFor:async()=>({today:{attempts:{read,query:0,report:0,sync:0,write:0}},month:{attempts:{read,query:0,report:0,sync:0,write:0}}})});
     const input={decisionKey:'quota-retry',purpose:'Record a genuine customer addition.',operations:[{ref:'cust',op:'create',entity:'Customer',payload:{DisplayName:'Clinic'}}]};
     await assert.rejects(tools.execute('manageQboRecord',input),/request budget/);
+    assert.deepEqual([prepared,authorized,sends],[0,0,0],'a new plan is refused before preparation at the budget');
+    open.push({operationId:'r',decisionKey:input.decisionKey,status:'prepared'});
     await assert.rejects(tools.execute('manageQboRecord',input),/request budget/);
-    assert.equal(sends,0);assert.equal(authorized,2);
+    await assert.rejects(tools.execute('manageQboRecord',input),/request budget/);
+    assert.deepEqual([prepared,authorized,sends],[2,2,0],'saved retries retain the budget and execute checks');
+    read=0;allowExecute=false;
+    await assert.rejects(tools.execute('manageQboRecord',input),/execute permission revoked/);
+    assert.deepEqual([prepared,authorized,sends],[3,3,0],'a saved retry cannot bypass revoked execute permission');
   }finally{generalModule.createDefaultGeneralWrite=original;}
 });
 
 test('general tool checks the full proposed record count against remaining daily capacity',async()=>{
-  const generalModule=require('../src/modules/general-write-service'),original=generalModule.createDefaultGeneralWrite;let sends=0;
-  generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>({runId:'r',status:'prepared',admitted:false}),dispatchEnabled:()=>true,execute:async()=>{sends++;}});
+  const generalModule=require('../src/modules/general-write-service'),original=generalModule.createDefaultGeneralWrite;let sends=0,prepared=0;const open=[];let today={target:2,ceiling:4,saved:2,reserved:1,reservedByRun:{other:1},open};
+  generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return {runId:'r',status:'prepared',admitted:false};},dispatchEnabled:()=>true,execute:async()=>{sends++;}});
   try{
-    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>({target:2,ceiling:4,saved:3,reserved:2,reservedByRun:{r:2},ceilingReached:true})});
+    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
     await assert.rejects(tools.execute('manageQboRecord',{decisionKey:'quota-room',purpose:'Record two new customer additions.',operations:[{ref:'cust1',op:'create',entity:'Customer',payload:{DisplayName:'One'}},{ref:'cust2',op:'create',entity:'Customer',payload:{DisplayName:'Two'}}]}),/ceiling does not have room/);
-    assert.equal(sends,0);
+    assert.deepEqual([prepared,sends],[0,0],'the full new batch is checked before preparation');
+    open.push({operationId:'r',decisionKey:'quota-room',status:'prepared'});
+    today={target:2,ceiling:4,saved:3,reserved:2,reservedByRun:{r:2},ceilingReached:true,open};
+    await assert.rejects(tools.execute('manageQboRecord',{decisionKey:'quota-room',purpose:'Record two new customer additions.',operations:[{ref:'cust1',op:'create',entity:'Customer',payload:{DisplayName:'One'}},{ref:'cust2',op:'create',entity:'Customer',payload:{DisplayName:'Two'}}]}),/ceiling does not have room/);
+    assert.deepEqual([prepared,sends],[1,0],'a saved plan excludes its own reservation but still checks every proposed create');
   }finally{generalModule.createDefaultGeneralWrite=original;}
 });
 

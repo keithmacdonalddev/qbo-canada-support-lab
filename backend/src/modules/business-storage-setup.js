@@ -33,10 +33,15 @@ const LEGACY_PREREQUISITES = Object.freeze([
   { name: 'auditlogs', indexes: [index({ userId: 1, realmId: 1, createdAt: -1 })] },
 ]);
 const MASTER_COLLECTIONS = Object.freeze([{ name: 'masterpreparationruns', indexes: [index({ environment: 1, realmId: 1, claim: 1 }, { unique: true, partialFilterExpression: { claim: 'open' } }), index({ environment: 1, realmId: 1, createdAt: -1 }), index({ environment: 1, realmId: 1, 'records.entity': 1, 'records.qboId': 1 })] }]);
+const GENERAL_WRITE_COLLECTIONS = Object.freeze([
+  { name: 'generalwriteruns', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true }), index({ environment: 1, realmId: 1, connectionId: 1, status: 1, updatedAt: -1 }), index({ environment: 1, realmId: 1, 'owned.key': 1 })] },
+  { name: 'generaldaycloses', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, fromDate: 1, throughDate: 1, kind: 1, verifiedAt: -1 })] },
+]);
 function freeze(value) { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
-freeze(MASTER_COLLECTIONS); freeze(CONTINUAL_COLLECTIONS); freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
+freeze(GENERAL_WRITE_COLLECTIONS); freeze(MASTER_COLLECTIONS); freeze(CONTINUAL_COLLECTIONS); freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
 function setupDefinition(profile = 'blueprint') {
   // Independent additive contract. The existing populated v4 profile is never reinstalled.
+  if (profile === 'general-writes') return { version: 6, profile, collections: GENERAL_WRITE_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'general-write-collections-empty-database-wide-existing-business-storage-retained' };
   if (profile === 'master-preparation') return { version: 5, profile, collections: MASTER_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'master-preparation-runs-empty-database-wide-existing-business-storage-retained' };
   if (profile === 'continual-business') return { version: 4, profile, collections: CONTINUAL_COLLECTIONS, prerequisites: LEGACY_PREREQUISITES, initialState: 'operation-and-authority-collections-empty-database-wide-existing-drafts-cases-observations-retained' };
   if (!['blueprint', 'business-operations', 'baseline-observations'].includes(profile)) fail('Choose the blueprint, business-operations or baseline-observations setup profile.');
@@ -113,7 +118,7 @@ async function inspectStorage(db, profile = 'blueprint') {
 // Do not run concurrently with privileged initialization or deployment changes.
 async function assertInitialState(db, definition, session) {
   if (definition.version === 1) return;
-  for (const collection of (definition.version === 5 ? definition.collections : definition.collections.slice(COLLECTIONS.length)).filter(item => definition.version !== 4 || !['businessbaselines', 'aisessions'].includes(item.name))) {
+  for (const collection of ([5, 6].includes(definition.version) ? definition.collections : definition.collections.slice(COLLECTIONS.length)).filter(item => definition.version !== 4 || !['businessbaselines', 'aisessions'].includes(item.name))) {
     const existing = await db.collection(collection.name).findOne({}, { projection: { _id: 1 }, session, ...time });
     if (existing !== null) fail((definition.version === 3 ? 'Baseline observation' : 'Business operation') + ' storage must be empty across this database for initial setup. Populated storage requires a separately reviewed maintenance process.');
   }
@@ -127,15 +132,15 @@ async function previewSetup(db, target, configuredEnvironment, profile = 'bluepr
   validateTarget(target, configuredEnvironment);
   const identity = await deployment(db);
   const current = await source(db, target);
-  if (profile === 'master-preparation') {
-    if (!current.membership) fail('Existing owner membership and continual-business setup are required before adding master preparation.');
+  if (profile === 'master-preparation' || profile === 'general-writes') {
+    if (!current.membership) fail('Existing owner membership and continual-business setup are required before adding ' + profile + '.');
     await assertProfileSetupCompleted(db, target, 'continual-business');
   }
   const storage = await inspectStorage(db, profile);
   await assertInitialState(db, definition);
   const contract = { version: definition.version, ...(definition.version > 1 ? { profile, prerequisites: definition.prerequisites, collectionScope: 'database-wide', initialState: definition.initialState, activation: 'none' } : {}), identity, target, source: current, collections: definition.collections,
     permissionChange: current.membership ? null : { from: 'legacy-read-only', to: 'lab-owner', permissions: [...ROLE_PERMISSIONS['lab-owner']] },
-    writes: [definition.version === 5 ? 'Add master-preparation storage and exact indexes only; retain all existing business collections and records' : definition.version === 1 ? 'Add missing blueprint collections and exact indexes' : definition.version === 2 ? 'Add missing business operation and blueprint collections and exact indexes across this database' : definition.version === 4 ? 'Add missing continual-business collections and exact indexes, retaining existing drafts and observations' : 'Add missing baseline observation and blueprint collections and exact indexes across this database', 'Insert owner membership if absent', 'Increment owner, connection and existing membership scope fences', 'Append setup intent and completion audit'],
+    writes: [definition.version === 6 ? 'Add general-write storage and exact indexes only; retain all existing business collections and records' : definition.version === 5 ? 'Add master-preparation storage and exact indexes only; retain all existing business collections and records' : definition.version === 1 ? 'Add missing blueprint collections and exact indexes' : definition.version === 2 ? 'Add missing business operation and blueprint collections and exact indexes across this database' : definition.version === 4 ? 'Add missing continual-business collections and exact indexes, retaining existing drafts and observations' : 'Add missing baseline observation and blueprint collections and exact indexes across this database', 'Insert owner membership if absent', 'Increment owner, connection and existing membership scope fences', 'Append setup intent and completion audit'],
   };
   return { ...contract, planHash: hash(contract), storage, requiresExplicitApproval: true, qboWrites: 0, schedulingEnabled: false };
 }
@@ -195,7 +200,7 @@ async function applySetup(db, client, target, configuredEnvironment, approvedHas
       await assertInitialState(db, definition, session);
       if ((await deployment(db)).fingerprint !== plan.identity.fingerprint) fail('Database deployment changed during setup.');
       const current = await source(db, target, session);
-      if (profile === 'master-preparation') await assertProfileSetupCompleted(db, target, 'continual-business', session);
+      if (profile === 'master-preparation' || profile === 'general-writes') await assertProfileSetupCompleted(db, target, 'continual-business', session);
       if (hash(current) !== hash(plan.source)) fail('Owner authority or connection changed during setup.');
       // Uses the same write fence as QBO connect/disconnect; a concurrent switch retries then fails source comparison.
       const fence = await db.collection('users').updateOne({ _id: new ObjectId(target.ownerId), role: current.legacyRole, ...(current.switchVersion === 0 ? { $or: [{ connectionSwitchVersion: 0 }, { connectionSwitchVersion: { $exists: false } }] } : { connectionSwitchVersion: current.switchVersion }) }, { $inc: { connectionSwitchVersion: 1 } }, { session, ...time });
@@ -230,4 +235,4 @@ async function assertBaselineSetupCompleted(db, target, session) {
   try { return await assertProfileSetupCompleted(db, target, 'baseline-observations', session); }
   catch { return assertProfileSetupCompleted(db, target, 'continual-business', session); }
 }
-module.exports = { assertProfileSetupCompleted, assertBaselineSetupCompleted, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };
+module.exports = { assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };

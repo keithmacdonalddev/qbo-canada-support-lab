@@ -80,6 +80,7 @@ function reconcileRetained(text,business){
 function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null,facts=null,today=null,calendarClose=null,cadence=null,owned=[],requests=null}={}){
   settings=settings||{};agent=agent||{};business=business||{};sync=sync||{};
   const items=[],blockers=Array.isArray(business.blockers)?business.blockers:[],codes=new Set(blockers.map(item=>item.code));
+  for(const blocker of business.errorBlockers||[])items.push(require('./business-error-detail').blockerWork(blocker));
   const add=item=>items.push({detail:'',next:'',...item});
   const operation=business.currentOperation,grant=agent.grant,published=!codes.has('not-published');
   // Only a changed published business needs the owner again; new accountant
@@ -144,7 +145,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
     const due=today.dueSlot,line=todayLine(today);
     const detail=today.unavailable?'Today’s count could not be read; same-day activity waits for the next review.'
       :!today.target?'No same-day activity is planned for this day. Obligations and corrections continue.'
-      :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
+      :calendarClose?'Today’s independent activity continues while earlier open days retry their close. Changes affecting those days wait.'
       :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
       :requests?.reached&&today.remaining>0?(reason=>reason.charAt(0).toUpperCase()+reason.slice(1)+'.')(require('./business-agent-cadence').requestBudgetReason(requests))
       :today.inFlight>=3?'Three operations are prepared, queued or executing. New activity resumes when one finishes; recovery continues.':due?'Working continuously: today is '+plural(Number.isSafeInteger(today.behind)?today.behind:due.records,'record')+' behind schedule; the next batch of about '+plural(due.records,'record')+' of genuine business work is prepared now. Independent batches continue while other operations run or recover.'

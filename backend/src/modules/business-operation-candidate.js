@@ -33,8 +33,10 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
   const base = { version: 1, scope, ...(payload.continuity ? { authorityHash: context.authorityHash } : {}), businessKey: context.businessKey, blueprintId: context.blueprintId, blueprintHash: context.blueprintHash, baselineHash: context.baselineHash,
     openingDate: context.openingDate, fromDate: payload.fromDate, throughDate: payload.throughDate,
     expectedCursor: context.expectedCursor, expectedRevision: context.expectedRevision, requiredAssertions: context.requiredAssertions };
-  // Validate dates, scope, calendar continuity and required checks without inventing policies.
-  validateOperationCandidate({ ...base, entries: [] }, scope, now);
+  // Period continuity can be checked before policies. Additional activity needs
+  // its complete self-contained record set; bindApprovedOperationPolicies below
+  // validates that full candidate (including its exact day/cursor) before storage.
+  if (!payload.activityBatch) validateOperationCandidate({ ...base, entries: [] }, scope, now);
   if (!history || typeof history !== 'object') fail('Read original saved activity history before assembly.');
   const { sourceHash, ...source } = history;
   if (source.version !== 1 || !sameScope(source.scope, scope) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || source.requiresCurrentReadback !== true || !Array.isArray(source.entries) || source.entries.length > MAX_ENTRIES || !Array.isArray(source.missing) || source.missing.length > MAX_ENTRIES || canonical(source.roots) !== canonical(operationHistoryRoots(prepared))) fail('Original history does not match this prepared operation.');

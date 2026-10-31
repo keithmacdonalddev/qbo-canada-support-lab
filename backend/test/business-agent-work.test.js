@@ -249,7 +249,7 @@ test('a calendar behind yesterday shows what is closed, what is closing and when
   assert.equal(item.state, 'on-duty');
   assert.match(item.detail, /^Calendar closed through Oct 27 · closing Oct 28–Oct 29 \(2 days behind\)\./);
   assert.equal(item.next, 'Closing Oct 28–Oct 29 · next try 2:17 PM.');
-  assert.match(byKey(work, 'todays-activity').detail, /starts once the calendar is closed through yesterday/);
+  assert.match(byKey(work, 'todays-activity').detail, /independent activity continues while earlier open days retry their close/);
   const held = businessWork({ ...running, business: { ...running.business, verifiedThrough: '2026-10-27' }, calendarClose, cadence: { kind: 'held', reason: 'held: a QuickBooks request needs recovery' } });
   assert.equal(byKey(held, 'close-calendar').state, 'blocked');
 });

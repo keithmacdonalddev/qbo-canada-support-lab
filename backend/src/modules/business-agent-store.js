@@ -9,7 +9,7 @@ function loadModels() { return {
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
   Plans:require('../models/OperationPlan'), Receipts:require('../models/QboWriteReceipt'), Steps:require('../models/OperationStep'), Intents:require('../models/OperationIntent'),
-  Transcripts:require('../models/BusinessAgentTranscript'), GeneralWriteRuns:require('../models/GeneralWriteRun'),
+  Versions:require('../models/BlueprintVersion'), Evidence:require('../models/OperationEvidence'), Transcripts:require('../models/BusinessAgentTranscript'), GeneralWriteRuns:require('../models/GeneralWriteRun'),
 }; }
 const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000,TODAY_TTL_MS=10000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});
@@ -164,7 +164,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     // Current-day prepared plans are returned too: they occupy one of the three operation slots.
     const today=require('./business-activity-preview').businessDate(new Date(now()));
     const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,$or:[{status:{$in:UNFINISHED}},{status:'previewed','activityBatch.day':{$lte:today}}],...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
-    const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending nextOrdinal deferredSteps').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
+    const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending executionRequest.requestedAt nextOrdinal deferredSteps').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
 
     const calendar=models.Calendars?await models.Calendars.findOne(scope).select('currentOperationId').maxTimeMS(3000).lean():null;
     const writer=models.Writers?await models.Writers.findOne({environment:scope.environment,realmId:scope.realmId}).select('operationId').maxTimeMS(3000).lean():null;
@@ -179,7 +179,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         const effect=receipt||!models.Steps?true:await models.Steps.exists({environment:scope.environment,realmId:scope.realmId,operationId:row._id,$or:[{state:{$ne:'claimed'}},{dispatch:{$ne:null}},{receipt:{$ne:null}},{qboId:{$ne:null}}]}).maxTimeMS(3000);
         disposition=effect?'stranded':'unsent';
       }
-      out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,agentAuthority:row.agentAuthority||null,executionPending:pending,completedRecords:Math.max(0,(row.nextOrdinal||0)-(row.deferredSteps||[]).length),holdsSlot:holds,disposition});
+      out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,agentAuthority:row.agentAuthority||null,executionPending:pending,...((row.deferredSteps?.length||row.status==='awaiting-evidence')?{recheckAvailable:true,executionRequestedAt:row.executionRequest?.requestedAt||null}:{}),completedRecords:Math.max(0,(row.nextOrdinal||0)-(row.deferredSteps||[]).length),holdsSlot:holds,disposition});
     }
     if(models.GeneralWriteRuns){
       const general=await models.GeneralWriteRuns.find({...scope,contract:'general-write-v1','agentAuthority.agentId':agentId,...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{}),status:{$in:['prepared','sending','held','unknown']}}).select('_id status day decisionKey agentAuthority items plan.operations.op plan.operations.ref batches.state batches.transport.receiptId').sort({_id:1}).limit(100).maxTimeMS(3000).lean();

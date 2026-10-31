@@ -6,13 +6,14 @@ const {respondQboError}=require('../modules/qbo-error');
 function createBusinessAgentRouter({records={},service=()=>require('../modules/business-agent-service').getBusinessAgentService(),provider=()=>require('../modules/ai-provider')}={}){
   const router=express.Router();router.use(authenticate,rejectContextOverrides,(_req,res,next)=>{res.set('Cache-Control','no-store');next();});
   router.use((req,res,next)=>Object.keys(req.query).length?res.status(400).json({error:'Business-agent controls do not accept query overrides.'}):next());
-  const action=work=>async(req,res)=>{try{res.json({data:await work(req)});}catch(error){if(error.qboStage==='api'&&respondQboError(res,error))return;const known=/^(BUSINESS_|GENERAL_WRITE_)/.test(error.code||''),status=known&&[400,403,404,409].includes(error.status)?error.status:500;res.status(status).json({error:status===500?'Business monitoring could not be read. Saved controls and activity are retained.':error.message,code:known?error.code:'BUSINESS_AGENT_UNAVAILABLE'});}};
+  const action=work=>async(req,res)=>{try{res.json({data:await work(req)});}catch(error){if(error.qboStage==='api'&&respondQboError(res,error))return;const known=/^(BUSINESS_|GENERAL_WRITE_)/.test(error.code||''),status=known&&[400,403,404,409].includes(error.status)?error.status:500;res.status(status).json({error:status===500?'Business monitoring could not be read. Saved controls and activity are retained.':error.message,code:known?error.code:'BUSINESS_AGENT_UNAVAILABLE',errorDetail:require('../modules/business-error-detail').businessErrorDetail(error)});}};
   const withProvider = async (state, refresh = false) => {
     // Host login health is distinct from plan quota and never dispatches a model/tool call.
     const health = await provider().getStatus({ refresh, cached: !refresh });
     return { ...state, usage: { ...state.usage, providerStatus: health.providerStatus, codex: health.codex } };
   };
   router.get('/',action(async req=>withProvider(await service().status(req.user))));
+  router.get('/blockers',action(req=>service().blockers(req.user)));
   router.get('/live',action(req=>service().live(req.user)));
   // Review session transcripts. The cursor travels in the path (polling) or Last-Event-ID (stream), never a query.
   router.get('/transcripts',action(req=>service().transcripts(req.user)));

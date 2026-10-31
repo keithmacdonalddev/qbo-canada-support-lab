@@ -1,4 +1,5 @@
 'use strict';
+const { businessErrorDetail, attachBusinessError, failureFields } = require('./business-error-detail');
 // The general governed QuickBooks write (manageQboRecord), contract general-write-v1
 // (docs/plans/general-governed-write-tool-2026-10-31.md, rev 3). It composes the pure
 // parts: guards over the synced copy, the resource-aware scheduler, the exact transport
@@ -63,7 +64,7 @@ function resolve(value, saved) {
   return out;
 }
 const unresolved = value => JSON.stringify(value).includes('"$ref"');
-function createGeneralWriteService({ models, copy, contextFor, transport = null, retain = null, markDirty = null, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
+function createGeneralWriteService({ models, copy, contextFor, transport = null, retain = null, markDirty = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   async function ownedSet(scope, operations, session) {
     const inSession = query => session ? query.session(session) : query;
@@ -75,37 +76,58 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     }
     return owned;
   }
-  async function guard(scope, operations, extras = [], stale = new Set(), session) {
+  async function guard(scope, operations, extras = [], stale = new Set(), session, runId) {
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
-    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, salesTaxCodes: [...new Set(operations.filter(op => ['Invoice', 'SalesReceipt'].includes(op?.entity)).flatMap(op => (Array.isArray(op.payload?.Line) ? op.payload.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value)).filter(id => typeof id === 'string'))] });
-    return { result: checkGeneralWrite({ proposal: { operations }, local, context }), local, context };
+    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, salesTaxCodes: [...new Set(operations.filter(op => ['Invoice', 'SalesReceipt'].includes(op?.entity)).flatMap(op => (Array.isArray(op.payload?.Line) ? op.payload.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value)).filter(id => typeof id === 'string'))] });
+    const result = checkGeneralWrite({ proposal: { operations }, local, context });
+    // A later posting day is independent; changing an earlier pending day's records,
+    // names or links would change the close's exact readback evidence and must wait.
+    if (context.calendarClosePending) {
+      const pendingDate = date => date > context.verifiedThrough && date < context.day;
+      for (const op of operations) {
+        const before = op.id ? local.get(op.entity, String(op.id)) : null;
+        const linked = wanted([op.payload, before]).some(([entity, id]) => pendingDate(local.get(entity, id)?.TxnDate));
+        if (pendingDate(op.payload?.TxnDate) || before && (before.TxnDate < context.day || !before.TxnDate) || linked) {
+          result.problems.push({ ref: op.ref, message: 'An earlier business day is still open and unverified. Changes to its records or links and history edits wait for its close; independent records dated today can continue.' });
+          result.ok = false;
+        }
+      }
+    }
+    return { result, local, context };
   }
   // Preparation: validate, guard and save the plan. Nothing is sent.
   async function prepare(bound, input) {
     const scope = scopeOf(bound.scope);
+    if (bound.caseAuthority && (bound.agentAuthority || !Array.isArray(input?.operations) || input.operations.length !== 1 || !['create', 'update', 'void', 'delete'].includes(input.operations[0].op))) fail('Case general writes accept exactly one case-authorized operation.');
     if (!plain(input) || Object.keys(input).some(key => !['decisionKey', 'purpose', 'operations'].includes(key)) || !KEY.test(input.decisionKey || '') || typeof input.purpose !== 'string' || input.purpose.trim().length < 10 || input.purpose.length > 2000 || !Array.isArray(input.operations)) fail('Send { decisionKey (8-100 letters, digits, - or _), purpose (10-2,000 characters), operations: [...] }.', 400);
     const contentHash = hash({ purpose: input.purpose.trim(), operations: input.operations }), _id = hash({ scope, ownerId: String(bound.ownerId), kind: 'general-write', decisionKey: input.decisionKey }).slice(0, 24);
     const existing = await Runs.findOne({ _id, environment: scope.environment, realmId: scope.realmId }).lean();
     if (existing) {
+      if (canonical(existing.caseAuthority || null) !== canonical(bound.caseAuthority || null)) fail('This write belongs to a different case authority.');
       if (existing.contentHash !== contentHash) fail('decisionKey ' + input.decisionKey + ' already names different work (' + existing.status + '). Use a new decisionKey for a new decision.');
       const admitted = existing.batches?.some(batch => batch.transport?.receiptId) || Boolean(models.Receipts && existing.batches?.length && await models.Receipts.findOne({ ...scope, kind: 'general-write', 'general.runId': String(existing._id), 'general.requestId': { $in: existing.batches.map(batch => batch.requestId) } }).select('_id').maxTimeMS(3000).lean());
       return { runId: _id, status: existing.status, reused: true, admitted, plan: summary(existing.plan) };
     }
     const { result, context } = await guard(scope, input.operations);
-    if (!result.ok) return { runId: null, status: 'refused', problems: result.problems };
-    await Runs.create([{ _id, contract: 'general-write-v1', ...scope, ownerId: bound.ownerId, actorId: bound.actorId, agentAuthority: bound.agentAuthority || null, decisionKey: input.decisionKey, contentHash, purpose: input.purpose.trim(), day: context.day, plan: result.plan, status: 'prepared' }]);
+    if (!result.ok) return { runId: null, status: 'refused', problems: result.problems, errorDetail: businessErrorDetail({ code: 'GENERAL_WRITE_REFUSED', message: 'The proposed records did not pass business checks.', businessDetail: { problems: result.problems } }, { check: { module: 'general-write-service', function: 'prepare', file: 'backend/src/modules/general-write-service.js' } }) };
+    await Runs.create([{ _id, contract: 'general-write-v1', ...scope, ownerId: bound.ownerId, actorId: bound.actorId, agentAuthority: bound.agentAuthority || null, caseAuthority: bound.caseAuthority || null, decisionKey: input.decisionKey, contentHash, purpose: input.purpose.trim(), day: context.day, plan: result.plan, status: 'prepared' }]);
     return { runId: _id, status: 'prepared', reused: false, plan: summary(result.plan) };
   }
   function summary(plan) { return { operations: plan.operations.length, batches: plan.layers.length, reverifyDates: plan.reverifyDates, externalEdits: plan.externalEdits, exposureCents: plan.exposureCents }; }
   async function save(run, changes) {
+    if (changes.lastError) changes = { ...changes, ...failureFields(run, { code: 'GENERAL_WRITE_REFUSED', message: changes.lastError, businessDetail: { status: changes.status, problems: changes.problems || [], items: Object.entries(changes.items || {}).filter(([,item]) => !['saved','deleted'].includes(item.outcome)).map(([ref,item]) => ({ ref, entity: item.entity, outcome: item.outcome, fault: item.fault, next: item.next })) } }, { operationId: String(run._id) }, now()) };
+    if (changes.status === 'complete' || changes.items && canonical(changes.items) !== canonical(run.items)) changes = { ...changes, progressAt: new Date(now()), ...(changes.status === 'complete' ? { errorDetail: null, errorHistory: [] } : {}) };
     const saved = await Runs.findOneAndUpdate({ _id: run._id, revision: run.revision }, { $set: changes, $inc: { revision: 1 } }, { new: true }).lean();
     if (!saved) fail('This write changed concurrently; read it again.');
     return saved;
   }
   async function refreshSettlement(run, batch) {
     const fresh = await Runs.findOne({ _id: run._id, ...scopeOf(run) }).lean();
-    const withoutTransport = row => ({ ...row, revision: 0, updatedAt: null, batches: row.batches.map(({ transport, ...rest }) => rest) });
+    const previousDirty = run.dirty || [], currentDirty = fresh?.dirty || [];
+    const additions = currentDirty.filter(marker => !previousDirty.some(old => canonical(old) === canonical(marker)));
+    if (previousDirty.some(marker => !currentDirty.some(current => canonical(current) === canonical(marker))) || additions.some(marker => !(batch.dirtyDates || []).includes(marker.date) || String(marker.runId) !== String(run._id) || marker.reason !== 'General write ' + run.decisionKey)) fail('History markers changed outside this batch admission.');
+    const withoutTransport = row => ({ ...row, dirty: previousDirty, revision: 0, updatedAt: null, batches: row.batches.map(({ transport, ...rest }) => rest) });
     if (!fresh || canonical(JSON.parse(JSON.stringify(withoutTransport(fresh)))) !== canonical(JSON.parse(JSON.stringify(withoutTransport(run)))) || fresh.batches.find(row => row.index === batch.index)?.requestId !== batch.requestId) fail('This write changed concurrently; read it again.');
     return fresh;
   }
@@ -115,6 +137,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     const scope = scopeOf(bound.scope);
     let run = await Runs.findOne({ _id: runId, environment: scope.environment, realmId: scope.realmId }).lean();
     if (!run || String(run.connectionId) !== scope.connectionId) fail('This general write is unavailable.', 404);
+    if (canonical(run.caseAuthority || null) !== canonical(bound.caseAuthority || null) || run.caseAuthority && !caseWrites) fail('This write belongs to a different case authority.');
     if (run.status === 'complete') return report(run);
     if (!dispatchEnabled() || !transport) { if (run.status !== 'held') run = await save(run, { status: 'held', lastError: 'Dispatch of general writes is not enabled on this server yet; the plan is saved and nothing was sent.' }); return report(run); }
     if (run.status === 'needs-correction' || Object.values(run.items).some(item => ['mismatch', 'unknown'].includes(item.outcome))) return report(run);
@@ -132,7 +155,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         // Records whose balance or backlinks a saved item changed, and that remaining work uses.
         const stale = new Set(Object.values(run.items).filter(item => ['saved', 'deleted'].includes(item.outcome)).flatMap(item => item.parents || []));
         const used = new Set(operations.flatMap(op => [op.id ? op.entity + ':' + op.id : null, ...wanted(op.payload).map(([entity, id]) => entity + ':' + id)]).filter(Boolean));
-        const { result, local, context } = await guard(scope, operations, extras, new Set([...stale].filter(key => used.has(key))));
+        const { result, local, context } = await guard(scope, operations, extras, new Set([...stale].filter(key => used.has(key))), undefined, String(run._id));
         if (context.day !== run.day) { run = await save(run, { status: 'needs-correction', lastError: 'The business day changed since this write was prepared (' + run.day + ' → ' + context.day + '). Prepare it again with a new decisionKey.' }); return report(run); }
         if (!result.ok) { run = await save(run, { status: 'needs-correction', lastError: 'The company changed since preparation: ' + result.problems.map(row => (row.ref ? row.ref + ': ' : '') + row.message).join(' ') }); return report(run, result.problems); }
         const first = new Set(result.plan.layers[0]), attempt = run.batches.length + 1;
@@ -142,10 +165,12 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
           return { bId: String(n + 1), ref: op.ref, op: op.op, entity: op.entity, ...(op.id ? { id: op.id, before: current } : {}), operation: op.op, payload: body };
         });
         batch = { index: run.batches.length, attempt, requestId: hash({ runId: run._id, attempt, refs: items.map(item => item.ref) }).slice(0, 32), items, state: 'sending', savedAt: new Date(now()).toISOString() };
-        // Durable dirty-period markers come before any history-changing send.
-        const markers = result.plan.reverifyDates.filter(date => !run.dirty.some(row => row.date === date)).map(date => ({ date, reason: 'General write ' + run.decisionKey, runId: run._id, at: new Date(now()).toISOString() }));
-        if (markers.length && markDirty) await markDirty(scope, markers);
-        run = await save(run, { batches: [...run.batches, batch], dirty: [...run.dirty, ...markers], status: 'sending' });
+        // Save the affected dates with the exact batch identity. The coordinated
+        // admission transaction installs their durable markers only after it owns
+        // the writer, before any QBO send. A busy writer cannot invalidate its owner.
+        batch.dirtyDates = result.plan.reverifyDates;
+        if (batch.dirtyDates.length && transport.historyMarkersAtAdmission !== true) fail('Historical writes require transactional dirty-marker admission.');
+        run = await save(run, { batches: [...run.batches, batch], status: 'sending' });
       }
       // Send (or replay) exactly the saved identity. Each transport attempt is counted first,
       // so a replay is a new receipt with the same requestid and bIds.
@@ -163,7 +188,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
           run=await refreshSettlement(run,batch);
           if(!run.batches.find(row=>row.index===batch.index)?.transport?.receiptId)run=await save(run,{status:'prepared',batches:run.batches.map(row=>row.index===batch.index?{...row,sends:Math.max(0,(row.sends||0)-1)}:row)});
         }
-        if (error?.lost !== true) throw error;
+        if (error?.lost !== true) { attachBusinessError(error, { operationId: String(run._id), detail: { batch: batch.index } }); run = await save(run, failureFields(run, error, {}, now())); throw error; }
         run = await refreshSettlement(run, batch);
         run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, state: 'lost' } : row), status: 'unknown', lastError: 'The QuickBooks response was lost; the same request will be replayed with its original identity.' });
         return report(run);
@@ -187,6 +212,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
           }
         }
         if (outcome.outcome === 'deleted') owned.push({ key: item.entity + ':' + item.id, ref: item.ref, op: 'delete' });
+        if (!['saved','deleted'].includes(entry.outcome)) entry.errorDetail = businessErrorDetail({ code: 'GENERAL_WRITE_ITEM_UNVERIFIED', message: entry.next?.reason || 'The QuickBooks item did not complete.', businessDetail: { fault: entry.fault || [], outcome: entry.outcome, differences: outcome.record ? require('./business-error-detail').definitionDifferences(item.payload, outcome.record) : [] } }, { operationId: String(run._id), logicalKey: item.ref, entity: item.entity, recordId: entry.qboId || item.id });
         items[item.ref] = entry;
       }
       const open = Object.values(items).filter(item => !['saved', 'deleted'].includes(item.outcome));
@@ -198,18 +224,18 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     return report(run);
   }
   function report(run, problems = null) {
-    return { runId: run._id, status: run.status, items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}) }])), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
+    return { runId: run._id, status: run.status, items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
   }
   // Called again INSIDE gate admission for every unsent/resumed saved batch.
   async function guardBatch({ scope, run, batch, session, periodProof }) {
     const operations = batch.items.map(item => { const { Id, SyncToken, sparse, ...payload } = item.payload; return { ref: item.ref, op: item.op, entity: item.entity, ...(item.id ? { id: item.id } : {}), payload, ...(run.plan.operations.find(op => op.ref === item.ref)?.reason ? { reason: run.plan.operations.find(op => op.ref === item.ref).reason } : {}) }; });
-    const { result, local, context } = await guard(scope, operations, [], new Set(), session);
+    const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id));
     for (const proof of periodProof?.proofs || []) for (const record of proof.evidence.records) {
       const current = local.get(record.entity, record.id);
       if (!current || hash(current) !== record.recordHash) fail('The general batch copy differs from its fresh linked-record evidence.');
     }
     if (context.day !== run.day) fail('The business day changed since this general write was prepared.');
-    if (!result.ok) fail('General batch admission refused: ' + result.problems.map(row => row.message).join(' '));
+    if (!result.ok) (function () { throw Object.assign(new Error('General batch admission refused: ' + result.problems.map(row => row.message).join(' ')), { status: 409, code: 'GENERAL_WRITE_REFUSED', businessDetail: { problems: result.problems } }); })();
     for (const item of batch.items) if (item.id && String(local.get(item.entity, item.id)?.SyncToken) !== String(item.payload.SyncToken)) fail('The target version changed before general batch admission.');
     if (run.agentAuthority) {
       const agent = await models.Agents.findOne({ _id: run.agentAuthority.agentId, ...scope }).session(session).lean();
@@ -226,16 +252,17 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
 // The published business context the guards need: open day, protected and verified dates,
 // published tax codes and their total percentages (from the copy's TaxCode/TaxRate).
 function createGeneralWriteContext({ models, now = () => Date.now() }) {
-  return async (scope, local, { session, salesTaxCodes = [] } = {}) => {
+  return async (scope, local, { session, runId, salesTaxCodes = [] } = {}) => {
     const { businessDate } = require('./business-activity-preview'), { shift } = require('./business-calendar');
     const calendar = await models.Calendars.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId }).session(session).lean();
     const control = (await models.Policies.findOne({ environment: scope.environment, realmId: scope.realmId }).select('periodControl').session(session).lean())?.periodControl;
     const day = businessDate(new Date(now()));
-    if (!calendar?.verifiedThrough || shift(calendar.verifiedThrough, 1) !== day) fail('General writes need verified history through yesterday; today (' + day + ') is the open business day.');
+    if (!calendar?.verifiedThrough || calendar.verifiedThrough >= day) fail('General writes need an established history cursor before today (' + day + '), the open business day.');
+    if (calendar.stopRequested || calendar.pendingCommit) fail('The business calendar is stopped or completing a close. Resume or settle it before general writes.');
     // Old historical outcomes cannot support another general admission while their
     // downstream accounting or opening baseline remains unproved.
     const GeneralRuns = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
-    const dirty = await GeneralRuns.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', dirty: { $elemMatch: { date: { $lte: calendar.verifiedThrough } } } }).select('_id').session(session).maxTimeMS(3000).lean();
+    const dirty = await GeneralRuns.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(runId ? { _id: { $ne: runId } } : {}), dirty: { $elemMatch: { date: { $lte: calendar.verifiedThrough } } } }).select('_id').session(session).maxTimeMS(3000).lean();
     if (dirty) fail('General history invalidation is unresolved; downstream periods and the opening baseline must be re-proved before new general writes.');
     // The published business decides the tax codes (the same authority the fixed
     // workflows use); without it nothing can be guarded.
@@ -270,19 +297,42 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
       if (dated && (direction !== 'sales' || id === primarySales) && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', day).percent) fail('The published dated tax rate differs from its approved policy.');
       taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
     }
+    // Fence Stop and a concurrent close in the same admission transaction. A
+    // snapshot read alone would allow Stop to commit without conflicting.
+    if (session?.inTransaction?.()) {
+      const touched = await models.Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, revision: calendar.revision, writerRevision: calendar.writerRevision, verifiedThrough: calendar.verifiedThrough, stopRequested: false, pendingCommit: null }, { $inc: { writerRevision: 1 } }, { new: true, session }).lean();
+      if (!touched) fail('The business calendar changed or stopped before general write admission.');
+    }
+    // Historical edits need retained managed closing evidence and a general-create
+    // origin. Fixed workflow creation contracts remain immutable dependencies.
+    const historyOrigins = new Set();
+    for (const key of local.map?.keys() || []) {
+      const [entity, id] = key.split(':');
+      if (!local.get(entity, id)?.TxnDate) continue;
+      const origin = await GeneralRuns.findOne({ ...scope, contract: 'general-write-v1', owned: { $elemMatch: { key, op: 'create' } } }).select('_id').session(session).maxTimeMS(3000).lean();
+      if (origin) historyOrigins.add(key);
+    }
+    const ending = models.Evidence ? await models.Evidence.findOne({ ...scope, 'proof.complete': true, 'proof.throughDate': calendar.verifiedThrough }).select('operationId evidenceHash').sort({ 'proof.observedAt': -1 }).session(session).maxTimeMS(3000).lean() : null;
+    const endingRun = ending ? await models.Runs.findOne({ _id: ending.operationId, ...scope, status: 'verified', 'completion.evidenceHash': ending.evidenceHash }).select('_id').session(session).maxTimeMS(3000).lean() : null;
+    const openingDate = published.value?.openingDate || calendar.openingDate;
+    const opening = models.Baselines ? await models.Baselines.findOne({ ...scope, evidenceHash: calendar.baseline.evidenceHash }).select('sources.period').session(session).maxTimeMS(3000).lean() : null;
+    const fiscalMonth = published.view.business.fiscalYearStartMonth || 1;
+    const fiscalYear = Number(calendar.verifiedThrough.slice(0, 4)) - (Number(calendar.verifiedThrough.slice(5, 7)) < fiscalMonth ? 1 : 0);
+    const fiscalFrom = fiscalYear + '-' + String(fiscalMonth).padStart(2, '0') + '-01';
+    const historyReverification = { available: Boolean(endingRun), openingDate, baseline: Boolean(openingDate && opening?.sources?.period?.throughDate === shift(openingDate, -1)), origins: historyOrigins, fromDate: [calendar.adoption?.through ? shift(calendar.adoption.through, 1) : fiscalFrom, fiscalFrom].sort().at(-1), fiscalMonth };
     const features = require('../config').features || {};
-    const inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
+    const inventory = { enabled: features.generalWriteInventory === true && calendar.verifiedThrough === shift(day, -1), entities: features.generalWriteInventoryEntities || {} };
     let stock = null;
     if (inventory.enabled && [...(local.map?.values() || [])].some(record => record.Type === 'Inventory')) {
       stock = await require('./business-stock-general').readGeneralStockContext({ models, scope, active: published, day, session, purchaseOrderIds: [...local.map.keys()].filter(key => key.startsWith('PurchaseOrder:')).map(key => key.split(':')[1]),
         observations: require('./business-observation-store').createBusinessObservationStore({ Records: models.Records, Agents: models.Agents, Receipts: models.Receipts, Writers: models.Writers, Audits: models.Audits, session, now }) });
     }
-    return { inventory, stock, day, verifiedThrough: calendar.verifiedThrough, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
+    return { inventory, stock, historyReverification, day, calendarClosePending: calendar.verifiedThrough < shift(day, -1), verifiedThrough: calendar.verifiedThrough, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
   };
 }
 // Server composition: the synced copy through the hardened observation store (fresh
 // sources only), the published-business context, and NO transport yet (dispatch held).
-function createDefaultGeneralWrite({ now = () => Date.now(), access = null } = {}) {
+function createDefaultGeneralWrite({ now = () => Date.now(), access = null, caseTransport = null } = {}) {
   const models = { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
   const observations = require('./business-observation-store').createBusinessObservationStore({ now });
   // fetch: one targeted fresh read, only for a record this same write just changed.
@@ -295,8 +345,8 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null } = {
   // The same hardened observation checks run on the admission transaction's snapshot.
   copy.forSession = session => ({ read: async (scope, entity, id) => (await require('./business-observation-store').createBusinessObservationStore({ Records: models.Records, Agents: models.Agents, Receipts: models.Receipts, Writers: models.Writers, Audits: models.Audits, session, now }).read(scope, entity, id, { transactions: true }))?.record || null });
   let api;
-  const transport = enabled && access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), now }) : null;
-  api = createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now }), transport, retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
+  const transport = enabled ? (caseTransport || (access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), now }) : null)) : null;
+  api = createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest };

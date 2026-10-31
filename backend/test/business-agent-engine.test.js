@@ -117,7 +117,11 @@ test('progressive disclosure: core schemas only, skills index in the instruction
  assert.ok(!sent[0].includes('runReport'),'deferred tools are not sent first');assert.ok(sent[0].includes('searchTools')&&sent[0].includes('getBusinessState'));
  assert.ok(sent[1].includes('runReport'),'a searched tool is offered natively from the next round');
  assert.match(system,/receivables-and-collections: /);assert.match(system,/Deferred tools: quickbooks-read: runReport/);
- assert.equal(results[0].data.tools[0].name,'runReport');assert.match(results[1].data.instructions,/Dunning/);
+ assert.equal(results[0].data.tools[0].name,'runReport');
+ const skillSource=require('node:fs').readFileSync(require('node:path').join(__dirname,'../src/accountant-skills/receivables-and-collections/SKILL.md'),'utf8').replace(/\r\n/g,'\n');
+ const expectedInstructions=skillSource.replace(/^---\n[\s\S]*?\n---\n/,'').trim();
+ assert.equal(results[1].success,true);assert.equal(results[1].data.name,'receivables-and-collections');
+ assert.equal(results[1].data.instructions,expectedInstructions,'the complete requested skill body is returned');
  assert.equal(results[3].success,false,'useTool rejects input outside the schema');
  assert.deepEqual(calls,[{name:'runReport',input:{reportName:'AgedReceivables'}},{name:'runReport',input:{reportName:'ProfitAndLoss'}}],'discovery calls do not use the three-call allowance');
 });

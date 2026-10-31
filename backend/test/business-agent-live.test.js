@@ -68,8 +68,8 @@ test('the feed never carries prompts, tool inputs, raw errors or record payloads
   const feed = buildLiveFeed({ now: NOW, settings, reviewing: true, activePass: pass, progress, cadence: { reason: 'business hours' }, events, runs: [{ ...batchRun, status: 'blocked' }], steps, records });
   const json = JSON.stringify(feed);
   for (const leak of ['tool input', 'raw upstream fault text', 'payload', 'raw fault', '"line"', 'planHash', 'grant', 'requestHash', 'toolCalls', '\\n']) assert.ok(!json.includes(leak), leak + ' must not reach the feed');
-  for (const item of feed.items) for (const key of Object.keys(item)) assert.ok(['id', 'at', 'kind', 'status', 'text', 'detail', 'outcome', 'record', 'operationId', 'by', 'metadata'].includes(key), key);
-  assert.match(feed.items.find(item => item.id === 'run:' + runId + ':status').text, /^Stopped part-way after 7 of 15 records/);
+  for (const item of feed.items) for (const key of Object.keys(item)) assert.ok(['id', 'at', 'kind', 'status', 'text', 'detail', 'outcome', 'record', 'operationId', 'by', 'metadata', 'blockedAt', 'operationStatus', 'waitReason'].includes(key), key);
+  assert.match(feed.items.find(item => item.id === 'run:' + runId + ':status').text, /^Blocked: The operation needs attention/);
 });
 
 test('idle: no spinner, slow polling, and the last few things done stay visible even when old', () => {
@@ -103,7 +103,7 @@ test('bounded to the newest items and to the window; stopped and unconfigured st
   assert.equal(closed.items[0].text, 'Closed the business calendar through Oct 29 · 120 records');
   assert.equal(closed.items[1].text, 'Prepared the business calendar for Oct 1–Oct 29 · 120 records');
   const sendingOnly = buildLiveFeed({ now: NOW, settings, runs: [{ ...period, status: 'awaiting-evidence' }] });
-  assert.equal(sendingOnly.state, 'sending');
+  assert.equal(sendingOnly.state, 'waiting');
   assert.equal(sendingOnly.pollMs, FAST_POLL_MS);
 });
 
@@ -147,4 +147,19 @@ test('saved needs-check records remain visible and deferred records are not coun
   assert.ok(value.items.some(row => row.id === 'step:step' && row.status === 'attention' && /automatic re-check/.test(row.outcome)));
   assert.ok(value.items.some(row => row.id === 'run:' + id + ':status' && /automatic re-check/.test(row.text)));
   assert.equal(value.items.some(row => /All records sent/.test(row.text)), false);
+});
+
+test('a claimed step in a blocked operation has a reason, block time and no sending state', () => {
+  const blockedAt = at(-180), reason = 'The selected Item differs from its approved definition or version.';
+  const feed = buildLiveFeed({ now: NOW, settings, runs: [{ ...batchRun, status: 'blocked', updatedAt: at(-60), executionRequest: { pending: true, completedAt: blockedAt, result: { code: 'BUSINESS_REFERENCE_UNVERIFIED', error: reason, diagnostic: { stack: 'SECRET' } } } }], steps: [{ _id: 'held', operationId: runId, state: 'claimed', entity: 'Invoice', updatedAt: at(-4000) }] });
+  const item = feed.items.find(item => item.id === 'step:held');
+  assert.equal(item.status, 'attention'); assert.equal(item.outcome, 'Blocked: ' + reason); assert.equal(item.blockedAt, blockedAt); assert.equal(item.at, blockedAt);
+  assert.equal(feed.state, 'blocked'); assert.equal(feed.sending, null); assert.equal(feed.active, false); assert.equal(item.metadata.timing.durationMs, 180000); assert.equal(JSON.stringify(feed).includes('SECRET'), false);
+});
+test('a waiting claimed step names its prerequisite and a stopped dispatched step is not sending', () => {
+  for (const [status, state, expected] of [['running', 'claimed', /reference and safety checks/], ['approved', 'claimed', /reference and safety checks/], ['stopped', 'dispatched', /continued/]]) {
+    const feed = buildLiveFeed({ now: NOW, settings, runs: [{ ...batchRun, status }], steps: [{ _id: 'wait', operationId: runId, entity: 'Invoice', state, updatedAt: at(-10) }] });
+    const item = feed.items.find(item => item.id === 'step:wait'); assert.equal(item.status, 'info'); assert.match(item.outcome, expected); assert.match(item.waitReason, /Waiting for/);
+    if (status !== 'running') assert.notEqual(feed.state, 'sending');
+  }
 });

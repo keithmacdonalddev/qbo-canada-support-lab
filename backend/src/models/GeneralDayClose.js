@@ -16,6 +16,8 @@ const schema = new mongoose.Schema({
   records: { type: [mongoose.Schema.Types.Mixed], immutable: true, default: [] },
   // Dirty markers ('runId:date') this verification covered.
   markers: { type: [String], immutable: true, default: [] },
+  // Fresh daily sources and accounting proof that supersede invalidated history.
+  history: fixed(mongoose.Schema.Types.Mixed, false),
   verifiedAt: fixed(Date),
 }, { timestamps: true, autoCreate: false, autoIndex: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, fromDate: 1, throughDate: 1, kind: 1, verifiedAt: -1 });

@@ -59,7 +59,7 @@ function earliestAffected(before, after) { return [before?.TxnDate, after?.TxnDa
 // ownSettlements: the accountant's own verified settlements. Returns the classification,
 // the current-posting comparison of each accountant record (after-state, R2-1), the
 // date-allocated movements to add to the period assertion, and every failure.
-function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx }) {
+function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDate = null, throughDate = fromDate }) {
   const { postingsOf, compareLedger, movementsOf } = require('./general-write-postings');
   const results = [], movements = [], failures = [];
   for (const row of records) {
@@ -75,7 +75,8 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx }) {
           && headerLinks(row.current).some(key => key.startsWith('Deposit:') && ownSettlements.has(key));
         const requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
         if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, requestedView)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
-        const comparison = compareLedger(postingsOf(row.entity, row.deleted ? null : row.current, ctx), ledger[key] || []);
+        const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
+        const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, ctx), ledger[key] || []);
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });
         if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, ctx));

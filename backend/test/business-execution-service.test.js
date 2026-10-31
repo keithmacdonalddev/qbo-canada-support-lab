@@ -164,3 +164,16 @@ test('a historical completed stop returns its own proof without repairing a late
  const later='f'.repeat(24);h.data.Calendars[0].currentOperationId=later;h.data.Calendars[0].pendingCommit={operationId:later,evidenceHash:hash('later-proof')};h.writer().operationId=later;h.writer().planHash=hash('later-plan');
  const before=structuredClone(h.data);const result=await h.runtime.settleStop();assert.equal(result.complete,true);assert.equal(result.operationId,operationId);assert.deepEqual(h.data,before);assert.equal(h.data.Runs[0].verification.evidenceHash,oldRun.verification.evidenceHash);
 });
+
+test('both thrown and returned worker failures retain only safe execution diagnostics', async () => {
+  for (const returned of [false, true]) {
+    const h = setup();
+    const error = Object.assign(new Error('The selected Item differs from its approved definition or version.'), { code: 'BUSINESS_REFERENCE_UNVERIFIED', referenceDiagnostic: { observationSource: 'live', definitionVersion: 1, definitionObservationPresent: false, retainedDefinitionResolved: false } });
+    error.stack = 'Error: SECRET record\n    at fail (C:/Projects/qbo/backend/src/modules/business-reference.js:14:44)';
+    h.options.runtimeFor = () => ({ execute: async () => { h.data.Runs[0].status = 'blocked'; if (!returned) throw error; return { state: 'blocked', complete: false, code: error.code, error: error.message, diagnostic: require('../src/modules/business-execution-diagnostic').executionDiagnostic(error) }; } });
+    h.service = createBusinessExecutionService(h.options); await h.service.request(user, operationId, h.body); await h.flush();
+    const result = h.data.Runs[0].executionRequest.result;
+    assert.equal(result.diagnostic.reference.observationSource, 'live'); assert.equal(result.diagnostic.reference.definitionVersion, 1); assert.equal(result.diagnostic.reference.definitionObservationPresent, false);
+    assert.match(result.diagnostic.stack, /business-reference.js:14:44/); assert.equal(JSON.stringify(result).includes('SECRET'), false); assert.equal(h.posts, 0); h.service.close();
+  }
+});

@@ -485,3 +485,23 @@ test('a recovery source-refresh yield does not cancel an independent review',asy
  const controller=new AbortController();h.onRun=async input=>{await input.execute('rememberBusinessContext',{memory:'Keep independent activity moving.'});};
  await h.service._worker(agentId,controller);assert.equal(h.engineCalls,1);assert.equal(controller.signal.aborted,false);assert.equal(h.row.lastError,null);assert.ok(h.events.some(event=>event.kind==='review-completed'));h.service.close();
 });
+
+test('an owned elapsed close awaiting reports automatically retries without blocking today review', async () => {
+  const h = fixture();
+  const origin = { version: 1, agentId, grantId: h.row.grant.id, authorityHash, ownerId };
+  const run = { operationId: 'f'.repeat(24), status: 'awaiting-evidence', fromDate: '2026-10-22', throughDate: '2026-10-22', planHash: '1'.repeat(64), completedRecords: 3, recordCount: 3, holdsSlot: true, disposition: 'continue', agentAuthority: origin, executionPending: false };
+  h.business.currentOperation = run; h.business.verifiedThrough = '2026-10-21'; h.business.blockers = [{ code: 'current-operation' }]; h.owned = [run];
+  h.row.cadence = { lastKind: 'recovery', lastReviewAt: new Date(h.clock - 600000).toISOString() };
+  await h.service._worker(agentId, new AbortController());
+  assert.equal(h.requested, 1); assert.equal(h.engineCalls, 1); assert.equal(h.business.verifiedThrough, '2026-10-21');
+  assert.ok(h.events.some(event => /retried an open calendar close/.test(event.title)));
+  h.service.close();
+});
+
+test('saved needs-check work is automatically queued between model reviews once per minute',async()=>{
+ const h=fixture();h.row.nextDecisionAt=new Date(h.clock+3600000);h.owned=[{...heldRun(h),status:'awaiting-evidence',recheckAvailable:true,executionRequestedAt:new Date(h.clock-60000).toISOString()}];
+ h.business.currentOperation={...h.owned[0]};h.governance={automaticRecoveryPending:async()=>({pending:false})};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.requested,1);
+ h.owned[0].executionRequestedAt=new Date(h.clock).toISOString();
+ await h.service._worker(agentId,new AbortController());assert.equal(h.requested,1,'another wake in the same minute cannot queue a duplicate check');h.service.close();
+});

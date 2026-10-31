@@ -359,3 +359,16 @@ test('disjoint service invoices sharing one Item dispatch together with fresh pr
     }
   }
 });
+
+
+test('queued historical admission cannot invalidate an active specialized operation',async()=>{
+ const h=harness();h.run().batches[0].dirtyDates=['2026-11-20'];h.writer().operationId='9'.repeat(24);h.writer().planHash='8'.repeat(64);
+ await assert.rejects(h.begin(h.gateFor()),/owns this company|writer|operation/i);
+ assert.deepEqual(h.run().dirty,[]);assert.equal(h.writer().operationId,'9'.repeat(24));assert.equal(h.data.Receipts.length,0);
+});
+test('historical dirty markers commit with admission before a provider send can begin',async()=>{
+ const h=harness(),batch=h.run().batches[0];batch.dirtyDates=['2026-11-20'];
+ const transport=createGeneralGateTransport({models:h.models,scope,runId,batchIndex:0,now:()=>h.clock,admissionGuard:async()=>({reverifyDates:batch.dirtyDates})});
+ const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
+ const ticket=await h.begin(gate);assert.ok(ticket.receiptId);assert.equal(h.writer().unresolved.kind,'general-write');assert.deepEqual(h.run().dirty.map(row=>row.date),['2026-11-20']);assert.equal(h.run().dirty[0].runId,runId);
+});

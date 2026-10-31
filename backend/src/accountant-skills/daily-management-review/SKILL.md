@@ -24,6 +24,8 @@ Copy and tick:
 Outside the management review, `getBusinessState` carries `management` (today's plan and the open build-request keys), and the deferred `getManagementReview` returns the full measures, gaps, tool map and build list. Read it before any `requestCapability` so a known gap reuses its key. When an earlier preview expired unsent (an earlier day, no saved records), prepare today’s work under a new `decisionKey`: that is correct, not a bypass.
 
 1. **Unfinished work first.** If `context.unfinishedOperations` is not empty, resume it before planning anything new; note `context.calendarClose`.
+When an operation is blocked or needs-check, call inspectBlocker({operationId}) and requestCapability with the exact cause: the recorded error/diagnostic, stopped step, differing approved/current fields and record/version mismatch. Load the deferred tools with searchTools({query:"select:inspectBlocker,requestCapability"}) and call them through useTool. Reuse an existing build-request key for the same gap; disclose unavailable historical values, preserve saved receipts, and continue independent permitted work.
+
 2. **Measures.** `context.management` holds measures from the local company copy: activity versus target, coverage gaps, problems, owner answers, the responsibility-to-tool map and open build requests. Confirm anything surprising with one `queryCompanyData` aggregate (see business-analysis-and-advice).
 3. **Findings** (status `on-track`, `attention` or `gap`), one per requirement:
    - **R01** support usefulness and feature coverage: which scenarios and features exist, which are missing.

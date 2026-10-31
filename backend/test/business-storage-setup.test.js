@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ObjectId } = require('mongoose').mongo;
-const { previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, CONTINUAL_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
+const { previewSetup, applySetup, exactIndex, COLLECTIONS, OPERATIONS_COLLECTIONS, CONTINUAL_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, GENERAL_WRITE_COLLECTIONS, setupDefinition, assertProfileSetupCompleted, assertBaselineSetupCompleted } = require('../src/modules/business-storage-setup');
 const { args } = require('../../scripts/rebuild/prepare-business-storage.cjs');
 const target = { environment: 'sandbox', realmId: '123', connectionId: '000000000000000000000001', ownerId: '000000000000000000000002' };
 function clone(value) {
@@ -193,9 +193,9 @@ test('reviewed storage definitions cover actual runtime schemas and satisfy read
   // Models are registered only in this disconnected test process, never by setup preview.
   for (const name of ['User', 'Connection', 'CompanyMembership', 'AuditLog']) require('../src/models/' + name);
   const { loadModels } = require('../src/modules/business-runtime');
-  const models = loadModels();
+  const models = { ...loadModels(), GeneralDayCloses: require('../src/models/GeneralDayClose') };
   for (const model of Object.values(models)) {
-    const definition = [...CONTINUAL_COLLECTIONS, ...LEGACY_PREREQUISITES].find(row => row.name === model.collection.name);
+    const definition = [...CONTINUAL_COLLECTIONS, ...LEGACY_PREREQUISITES, ...GENERAL_WRITE_COLLECTIONS].find(row => row.name === model.collection.name);
     assert.ok(definition, model.modelName + ' collection is explicitly defined');
     assert.equal(definition.indexes.length, model.schema.indexes().length, model.modelName);
     for (const [key, options] of model.schema.indexes()) assert.ok(definition.indexes.some(value => exactIndex(value, { key, ...options })), model.modelName + ' exact index');
@@ -206,6 +206,7 @@ test('reviewed storage definitions cover actual runtime schemas and satisfy read
     for (const [key, options] of model.schema.indexes()) assert.ok(definition.indexes.some(value => exactIndex(value, { key, ...options })));
   }
   const f = fixture(), plan = await f.preview('continual-business'); await f.apply(plan.planHash, 'continual-business');
+  const general = await f.preview('general-writes'); await f.apply(general.planHash, 'general-writes');
   const mapped = Object.fromEntries(Object.entries(models).map(([key, model]) => [key, { schema: model.schema, collection: { name: model.collection.name, indexes: () => f.db.collection(model.collection.name).indexes() } }]));
   const { createBusinessStorageReadiness } = require('../src/modules/business-runtime-storage');
   await createBusinessStorageReadiness({ connection: { readyState: 1, db: f.db }, models: mapped })();
@@ -310,4 +311,23 @@ test('master installation requires a completed v4 receipt and refuses pre-existi
   const continual = await f.preview('continual-business'); await f.apply(continual.planHash, 'continual-business');
   f.data().masterpreparationruns = { docs: [{ _id: 'unexpected-master' }], indexes: [{ name: '_id_', key: { _id: 1 } }], options: {} };
   const writes = f.writes; await assert.rejects(f.preview('master-preparation'), /empty/); assert.equal(f.writes, writes);
+});
+
+test('general-write storage adds exact definitions without changing populated continual-business receipts', async () => {
+  const f=fixture(), base=await f.preview('continual-business'); await f.apply(base.planHash,'continual-business');
+  f.data().operationruns.docs.push({_id:'retained-operation',realmId:'123'});
+  const before=clone(f.data().auditlogs.docs.find(row=>row.outcome==='success')),writes=f.writes;
+  const plan=await f.preview('general-writes'); assert.equal(f.writes,writes); assert.equal(plan.version,6); assert.equal(plan.activation,'none'); assert.equal(plan.qboWrites,0);
+  assert.equal(args(['--profile','general-writes']).profile,'general-writes');
+  assert.deepEqual(plan.collections.map(row=>row.name),['generalwriteruns','generaldaycloses']); assert.equal(plan.permissionChange,null);
+  await f.apply(plan.planHash,'general-writes'); await assertProfileSetupCompleted(f.db,target,'continual-business');
+  assert.deepEqual(f.data().auditlogs.docs.find(row=>String(row._id)===String(before._id)),before);
+  assert.deepEqual(f.data().operationruns.docs,[{_id:'retained-operation',realmId:'123'}]);
+  assert.equal((await f.apply(base.planHash,'continual-business')).status,'already-complete'); assert.equal(setupDefinition('continual-business').version,4);
+});
+test('general-write setup requires the existing owner and reviewed base and refuses populated new storage before writes', async () => {
+  const empty=fixture(); await assert.rejects(empty.preview('general-writes'),/Existing owner membership/); assert.equal(empty.writes,0);
+  const f=fixture(), base=await f.preview('continual-business'); await f.apply(base.planHash,'continual-business');
+  f.data().generalwriteruns={docs:[{_id:'existing-general-run'}],indexes:clone(GENERAL_WRITE_COLLECTIONS[0].indexes),options:{}};
+  const writes=f.writes; await assert.rejects(f.preview('general-writes'),/empty/); assert.equal(f.writes,writes);
 });

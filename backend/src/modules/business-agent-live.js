@@ -9,11 +9,12 @@
 // lastError text, record payloads or event data beyond an operation link.
 const { cleanSteps, activitySummary, ENTITIES } = require('./business-agent-progress');
 const { oneLine } = require('./business-agent-work');
+const { businessErrorDetail } = require('./business-error-detail');
+const { redactLogSecrets } = require('./log-diagnostic');
 
 const WINDOW_MS = 12 * 3600000, MIN_ITEMS = 6, MAX_ITEMS = 50, MAX_TEXT = 160, MAX_DETAIL = 200;
 const FAST_POLL_MS = 2500, IDLE_POLL_MS = 10000;
 const ACTIVE_RUN = new Set(['approved', 'reserved', 'running', 'awaiting-evidence', 'committing']);
-const SENDING_RUN = new Set(['running', 'awaiting-evidence', 'committing']);
 const IN_FLIGHT_STEP = new Set(['claimed', 'dispatched', 'unknown']);
 const ROLE_NAMES = { receivables: 'Receivables specialist', payables: 'Payables specialist', inventory: 'Inventory specialist' };
 const PARTY_REFS = ['CustomerRef', 'VendorRef', 'EntityRef'];
@@ -51,6 +52,19 @@ const STEP_STATES = {
   unknown: ['attention', 'Checking whether QuickBooks saved it'], saved: ['done', 'Saved'],
   'needs-check': ['attention', 'Saved · needs check · automatic re-check available'], verified: ['done', 'Saved · verified'], rejected: ['failed', 'QuickBooks rejected it'],
 };
+function blockedReason(run) {
+  const result = run?.executionRequest?.result;
+  return /^BUSINESS_[A-Z_]+$/.test(result?.code || '') && typeof result.error === 'string' ? clean(redactLogSecrets(result.error), MAX_DETAIL) : 'The operation needs attention before it can continue.';
+}
+function stepDisplay(step, run) {
+  if (!IN_FLIGHT_STEP.has(step.state)) return {};
+  if (run?.status === 'blocked') return { blockedAt: run.executionRequest?.completedAt || run.updatedAt || step.updatedAt || step.createdAt, reason: blockedReason(run) };
+  if (run?.status === 'stopped' || run?.status === 'retired') return { waitReason: 'Waiting for this saved operation to be continued' };
+  if (step.state === 'unknown') return { waitReason: 'Waiting for confirmation of whether QuickBooks saved this record' };
+  if (step.state === 'claimed') return { waitReason: 'Waiting for reference and safety checks before sending' };
+  if (run && ['approved', 'reserved'].includes(run.status)) return { waitReason: 'Waiting for the operation worker to send this record' };
+  return {};
+}
 function runLabel(run) {
   const types = Array.isArray(run.activityBatch?.activities) ? run.activityBatch.activities.map(row => row?.type) : [];
   const records = Number.isSafeInteger(run.recordCount) ? plural(run.recordCount, 'record') : '';
@@ -61,12 +75,12 @@ function runStatus(run, label) {
   const total = Number.isSafeInteger(run.recordCount) ? run.recordCount : null, done = Math.max(0, (Number.isSafeInteger(run.nextOrdinal) ? run.nextOrdinal : 0) - (run.deferredSteps || []).length);
   const progress = total ? done + ' of ' + total + ' records' : plural(done, 'record');
   switch (run.status) {
-    case 'approved': case 'reserved': return ['running', 'Approved · waiting to send to QuickBooks'];
+    case 'approved': case 'reserved': return ['info', 'Waiting for the operation worker to send approved records'];
     case 'running': return ['running', 'Sending to QuickBooks · ' + progress];
     case 'awaiting-evidence': if (run.deferredSteps?.length) return ['attention', 'Saved records need a check · automatic re-check available']; return ['running', 'All records sent · checking the books'];
     case 'committing': return ['running', 'Closing the work · checking the reports'];
     case 'verified': return ['done', label.batch ? 'Finished: ' + (total === null ? 'all records' : plural(total, 'record')) + ' saved and verified' : 'Closed the business calendar through ' + (day(run.throughDate) || 'the period end') + (total === null ? '' : ' · ' + plural(total, 'record'))];
-    case 'blocked': return ['attention', 'Stopped part-way after ' + progress + ' · it resumes without sending anything twice'];
+    case 'blocked': return ['attention', 'Blocked: ' + blockedReason(run)];
     case 'stopped': return ['attention', 'Stopped after ' + progress + ' · nothing is sent twice'];
     case 'retired': return ['done', 'Retired without sending anything'];
     default: return null;
@@ -131,13 +145,18 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
     const purpose = run.activityBatch ? oneLine(run.activityBatch.purpose, MAX_DETAIL) : '';
     push('run:' + id + ':planned', run.createdAt, 'operation', 'done', label.text + (label.records ? ' · ' + label.records : ''), { ...detail(purpose), operationId: id, metadata: { timing: activityTiming(null, null, false, 'Preparation time', clock), attribution: 'none' } });
     const status = run.status === 'previewed' ? null : runStatus(run, label);
-    if (status) push('run:' + id + ':status', run.updatedAt, 'operation', status[0], status[1], { operationId: id, metadata: { timing: activityTiming(run.createdAt, run.updatedAt, false, 'Since prepared (to last update)', clock), attribution: 'none' } });
+    if (run.errorDetail && status) { status[0] = 'attention'; status[1] = businessErrorDetail(run.errorDetail).message; }
+    if (status) push('run:' + id + ':status', run.updatedAt, 'operation', status[0], status[1], { operationId: id, ...(run.errorDetail ? { errorDetail: businessErrorDetail(run.errorDetail) } : {}), metadata: { timing: activityTiming(run.createdAt, run.updatedAt, false, 'Since prepared (to last update)', clock), attribution: 'none' } });
   }
   for (const step of Array.isArray(steps) ? steps : []) {
     if (!step || !step._id || !has(STEP_STATES, step.state)) continue;
-    const [status, outcome] = STEP_STATES[step.state], qboId = recordId(step.qboId);
+    const display = stepDisplay(step, knownRuns.get(String(step.operationId)));
+    const [originalStatus, originalOutcome] = STEP_STATES[step.state], qboId = recordId(step.qboId);
+    const errorDetail = step.errorDetail ? businessErrorDetail(step.errorDetail) : null;
+    const status = errorDetail ? 'attention' : display.blockedAt ? 'attention' : display.waitReason ? 'info' : originalStatus;
+    const outcome = errorDetail ? errorDetail.message : display.blockedAt ? 'Blocked: ' + display.reason : display.waitReason || originalOutcome;
     const mirror = qboId ? mirrors.get(step.entity + ':' + qboId) : null;
-    push('step:' + String(step._id), step.updatedAt || step.createdAt, 'record', status, recordText({ entity: step.entity, qboId }, mirror), { outcome, ...(qboId && has(ENTITIES, step.entity) ? { record: { entity: step.entity, qboId } } : {}), ...(step.operationId ? { operationId: String(step.operationId) } : {}), metadata: { timing: activityTiming(step.createdAt, step.updatedAt, false, 'Record processing (to last update)', clock), attribution: 'none' } });
+    push('step:' + String(step._id), display.blockedAt || step.updatedAt || step.createdAt, 'record', status, recordText({ entity: step.entity, qboId }, mirror), { outcome, ...(errorDetail ? { errorDetail } : {}), ...(display.blockedAt ? { blockedAt: iso(time(display.blockedAt)), operationStatus: 'blocked' } : {}), ...(display.waitReason ? { waitReason: display.waitReason } : {}), ...(qboId && has(ENTITIES, step.entity) ? { record: { entity: step.entity, qboId } } : {}), ...(step.operationId ? { operationId: String(step.operationId) } : {}), metadata: { timing: display.blockedAt ? activityTiming(display.blockedAt, iso(clock), false, 'Time blocked', clock) : activityTiming(step.createdAt, step.updatedAt, false, 'Record processing (to last update)', clock), attribution: 'none' } });
   }
 
   // (c) Key events.
@@ -145,20 +164,24 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
     if (!event || !has(EVENTS, event.kind)) continue;
     const [status, text, more] = EVENTS[event.kind](event);
     const operationId = typeof event.operationId === 'string' && /^[a-f0-9]{24}$/.test(event.operationId) ? event.operationId : null;
-    push('event:' + clean(String(event.id || ''), 80), event.at, 'event', status, text, { ...detail(more), ...(event.role === 'owner' ? { by: 'owner' } : {}), ...(operationId ? { operationId } : {}), metadata: metadata(null, event, ['review-completed', 'review-yielded', 'review-cancelled', 'review-paused'].includes(event.kind) || (event.kind === 'specialist-report' && Boolean(event.outcome))) });
+    push('event:' + clean(String(event.id || ''), 80), event.at, 'event', status, text, { ...detail(more), ...(event.errorDetail ? { errorDetail: businessErrorDetail(event.errorDetail), count: event.count, firstAt: event.firstAt, lastAt: event.lastAt } : {}), ...(event.role === 'owner' ? { by: 'owner' } : {}), ...(operationId ? { operationId } : {}), metadata: metadata(null, event, ['review-completed', 'review-yielded', 'review-cancelled', 'review-paused'].includes(event.kind) || (event.kind === 'specialist-report' && Boolean(event.outcome))) });
   }
 
   // Newest first; keep the recent window, but never fewer than the last few things done.
   const seen = new Set(), ordered = items.filter(item => !seen.has(item.id) && seen.add(item.id)).sort((a, b) => b.at.localeCompare(a.at) || a.id.localeCompare(b.id));
   const recent = ordered.filter((item, index) => index < MIN_ITEMS || clock - Date.parse(item.at) <= WINDOW_MS).slice(0, MAX_ITEMS);
 
-  const sendingRun = [...knownRuns.values()].filter(run => SENDING_RUN.has(run.status) || run.executionRequest?.pending === true).sort((a, b) => (time(b.updatedAt) || 0) - (time(a.updatedAt) || 0))[0] || null;
+  const sendingRun = [...knownRuns.values()].filter(run => !run.errorDetail && run.status === 'running' && (Array.isArray(steps) ? steps : []).some(step => String(step.operationId) === String(run._id) && step.state === 'dispatched')).sort((a, b) => (time(b.updatedAt) || 0) - (time(a.updatedAt) || 0))[0] || null;
   const queued = [...knownRuns.values()].some(run => ACTIVE_RUN.has(run.status));
-  const inFlight = (Array.isArray(steps) ? steps : []).some(step => step && IN_FLIGHT_STEP.has(step.state) && clock - (time(step.updatedAt) || 0) < 10 * 60000);
+  const inFlight = (Array.isArray(steps) ? steps : []).some(step => step && !step.errorDetail && step.state === 'dispatched' && !['blocked', 'stopped', 'retired'].includes(knownRuns.get(String(step.operationId))?.status) && clock - (time(step.updatedAt) || 0) < 10 * 60000);
   const sending = sendingRun ? { operationId: String(sendingRun._id), done: Math.max(0, (Number.isSafeInteger(sendingRun.nextOrdinal) ? sendingRun.nextOrdinal : 0) - (sendingRun.deferredSteps || []).length), total: Number.isSafeInteger(sendingRun.recordCount) ? sendingRun.recordCount : null, batch: Boolean(sendingRun.activityBatch) } : null;
-  const state = !configured ? 'not-configured' : !settings?.monitoring ? 'stopped' : reviewing ? 'reviewing' : sending || inFlight ? 'sending' : 'idle';
+  const blockedRun = [...knownRuns.values()].filter(run => run.status === 'blocked').sort((a, b) => (time(b.executionRequest?.completedAt || b.updatedAt) || 0) - (time(a.executionRequest?.completedAt || a.updatedAt) || 0))[0];
+  const waitingRun = [...knownRuns.values()].find(run => ACTIVE_RUN.has(run.status));
+  const waitReason = waitingRun ? waitingRun.status === 'awaiting-evidence' || waitingRun.status === 'committing' ? 'Waiting for saved records and report checks to be verified' : waitingRun.status === 'running' ? 'Waiting for reference and safety checks before sending' : 'Waiting for the operation worker to send approved records' : null;
+  const blocked = blockedRun ? { reason: blockedReason(blockedRun), at: blockedRun.executionRequest?.completedAt || blockedRun.updatedAt } : null;
+  const state = !configured ? 'not-configured' : !settings?.monitoring ? 'stopped' : reviewing ? 'reviewing' : sending || inFlight ? 'sending' : blocked ? 'blocked' : waitingRun ? 'waiting' : 'idle';
   const active = state === 'reviewing' || state === 'sending' || (configured && queued);
-  return { state, active, pollMs: active ? FAST_POLL_MS : IDLE_POLL_MS, startedAt: ownPass ? clean(progress.startedAt, 40) || null : reviewing ? activePass?.startedAt || null : null, role: reviewing ? (activePass?.role || 'accountant') : null, reason: ownPass && cadence?.reason ? clean(String(cadence.reason), 120) : '', sending, items: recent, asOf: iso(clock), ...(unavailable ? { unavailable: true } : {}) };
+  return { state, active, pollMs: active ? FAST_POLL_MS : IDLE_POLL_MS, startedAt: ownPass ? clean(progress.startedAt, 40) || null : reviewing ? activePass?.startedAt || null : null, role: reviewing ? (activePass?.role || 'accountant') : null, blocked, waitReason, reason: ownPass && cadence?.reason ? clean(String(cadence.reason), 120) : '', sending, items: recent, asOf: iso(clock), ...(unavailable ? { unavailable: true } : {}) };
 }
 
 // Bounded, indexed reads for the feed: recent runs of this company, their latest record steps,
@@ -168,11 +191,11 @@ function createLiveActivityReader({ models, now = () => Date.now() }) {
   return async function liveActivity(scope, { windowMs = WINDOW_MS, maxRuns = 6, maxSteps = 60 } = {}) {
     const since = new Date(now() - windowMs);
     const runs = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, createdAt: { $gte: since } })
-      .select('_id status createdAt updatedAt recordCount nextOrdinal deferredSteps fromDate throughDate activityBatch.day activityBatch.purpose activityBatch.activities.type executionRequest.pending')
+      .select('_id status createdAt updatedAt recordCount nextOrdinal deferredSteps fromDate throughDate activityBatch.day activityBatch.purpose activityBatch.activities.type executionRequest.pending executionRequest.completedAt executionRequest.result.code executionRequest.result.error errorDetail')
       .sort({ createdAt: -1 }).limit(maxRuns).maxTimeMS(2000).lean();
     if (!runs.length) return { runs, steps: [], records: [] };
     const steps = await Steps.find({ environment: scope.environment, realmId: scope.realmId, operationId: { $in: runs.map(run => run._id) } })
-      .select('_id operationId entity state qboId createdAt updatedAt').sort({ updatedAt: -1 }).limit(maxSteps).maxTimeMS(2000).lean();
+      .select('_id operationId entity state qboId createdAt updatedAt errorDetail').sort({ updatedAt: -1 }).limit(maxSteps).maxTimeMS(2000).lean();
     const keys = steps.filter(step => recordId(step.qboId) && typeof step.entity === 'string').map(step => ({ entity: step.entity, qboId: step.qboId }));
     const records = keys.length && Records ? await Records.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, $or: keys })
       .select('entity qboId summary.name summary.docNumber summary.amountCents summary.currency ' + PARTY_REFS.map(ref => 'record.' + ref + '.name').join(' '))

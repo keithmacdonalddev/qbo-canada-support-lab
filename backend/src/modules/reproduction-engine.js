@@ -22,6 +22,10 @@ const IMMEDIATE = {
   voidTransaction: 'Runs immediately on a transaction created by this case. For a transaction that existed before the case, the request waits for the company owner to approve it on the case page.',
 };
 const reproductionTools = [
+  { ...require('./business-agent-tools').EXTRA_TOOLS.find(t => t.name === 'queryCompanyData'), description: 'FIRST search the existing business for this case. ' + require('./business-agent-tools').EXTRA_TOOLS.find(t => t.name === 'queryCompanyData').description },
+  extraTool('offerExistingRecords', 'Offer existing QuickBooks records returned by queryCompanyData that may already demonstrate this situation. The server confirms them live and saves read-only evidence identities. Check the exact conditions and name the documents in your reply. No write or linking authority is granted.', {
+    records: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', properties: { entityType: { type: 'string', enum: VALID_ENTITY_TYPES }, id: text }, required: ['entityType', 'id'] } }, reason: text,
+  }, ['records', 'reason']),
   ...toolDefinitions.filter((t) => READ_NAMES.has(t.name) || Object.hasOwn(IMMEDIATE, t.name))
     .map((t) => ({ ...t, description: t.description.replace(/\s*Queued for user approval\.?/g, '') + (IMMEDIATE[t.name] ? ' ' + IMMEDIATE[t.name] : '') })),
   extraTool('defineCase', 'Record what the operator asked for and the observable conditions that must be true when you finish: the requested records and values for a setup request, plus the symptom measurement when the operator reports one the tools can measure. Call it before any change. Until the first change it can be rewritten; after a change in this run, conditions can only be added. When the operator adds or changes detail in a later message, rewrite it before changing anything else.', {
@@ -30,7 +34,7 @@ const reproductionTools = [
   extraTool('deleteRecord', 'Delete a transaction CREATED BY THIS CASE, only when deletion is part of the request; returns a deletion receipt, so inspect affected related records afterwards. A record that existed before the case is never deleted by you: the request is queued for the company owner to approve on the case page.', {
     entityType: { type: 'string', enum: DELETE_TYPES }, id: text, summary: text,
   }, ['entityType', 'id', 'summary']),
-  extraTool('checkCase', 'Check one defined condition against freshly read fields of records created by this case. Give record field paths such as TotalAmt, TxnDate, Line.0.Amount or Line.*.Amount. Sum adds numeric values across sources. Missing fields are unavailable, never zero. Path exists reads true or false, including for a record the case deleted.', {
+  extraTool('checkCase', 'Check one defined condition against freshly read fields of case-created records or existing records confirmed with offerExistingRecords. Give record field paths such as TotalAmt, TxnDate, Line.0.Amount or Line.*.Amount. Sum adds numeric values across sources. Missing fields are unavailable, never zero. Path exists reads true or false, including for a record the case deleted.', {
     ...CONDITION,
     sources: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', properties: {
       entityType: { type: 'string', enum: VALID_ENTITY_TYPES }, id: text, path: text,
@@ -75,6 +79,7 @@ function systemPrompt(scope) {
     'The operator connected this company and submitted this case. That authorizes the work the case needs; do not ask for permission to proceed.',
     '',
     'Tools:',
+    '- FIRST call queryCompanyData to search the existing business for the requested situation. Its synced-copy results state freshness; use offerExistingRecords to confirm promising records live, then checkCase/checkReport for the exact symptom. Offer matching documents by number/name and explain where to look in QuickBooks. Reuse read-only evidence rather than creating duplicates. Search results alone do not prove the symptom. If new records are needed, explain the missing situation: createRecord uses the same governed manageQboRecord service as ordinary activity, including date, tax, stock and protected-period guards.',
     '- searchEntities, getEntityDetail and runReport read company data. createRecord, updateRecord, voidTransaction and deleteRecord change QuickBooks immediately and return the saved record.',
     '- defineCase records the request and the observable conditions that must be true when you finish. checkCase reads case records fresh and compares one field with an expected value. checkReport runs a report fresh and compares one row value, which suits report requests. Mark a check historical when it records an intermediate state that later steps change (for example a balance before a credit is applied); it keeps counting after those changes.',
     '- checkScreen reads only the Billed or Received quantity column of a case-created purchase order. There is no other screen, browser, internet or audit-log access.',
@@ -112,7 +117,7 @@ const RECENT_OPERATIONS = 60;
 function caseStateSnapshot(state, plan) {
   const steps = plan.steps || [];
   return {
-    scenario: state.scenario, conditions: state.conditions, ...(state.caseContractVersion === 2 ? { sourceRequirements: state.requestContract?.payload?.requirements || [], sourceHash: state.requestSources?.contentHash } : {}), ownedRecords: state.ownedRecords || [],
+    scenario: state.scenario, conditions: state.conditions, ...(state.caseContractVersion === 2 ? { sourceRequirements: state.requestContract?.payload?.requirements || [], sourceHash: state.requestSources?.contentHash } : {}), ownedRecords: state.ownedRecords || [], existingRecords: state.existingRecords || [],
     checks: (state.checks || []).map((c) => ({ label: c.label, operator: c.operator, expected: clip(c.expected, 300), actual: clip(c.actual, 300),
       available: c.available, passed: c.passed, revision: c.revision, ...(c.reason ? { reason: String(c.reason).slice(0, 300) } : {}),
       sources: (c.sources || []).map(({ entityType, id, path }) => ({ entityType, id, path })) })),
@@ -154,7 +159,7 @@ async function checkInventoryReferences(value, owned, qbo, seen = new Set()) {
 // complete loop can be tested without providers, a database, or a live company.
 async function runEngine({ state, plan, qbo, persist, assertActive, audit, runModel, messages,
   handlers = toolHandlers, maxCalls = 160, maxWrites = 60, deadline = Date.now() + 12 * 60 * 1000,
-  confirmContinuation, inspectScreen, ensureContract, reviewFinish, maxPasses = 6, verificationReserveMs = 90000, assessmentReserveMs = 60000 }) {
+  confirmContinuation, inspectScreen, ensureContract, reviewFinish, caseBusiness, maxPasses = 6, verificationReserveMs = 90000, assessmentReserveMs = 60000 }) {
   const reviewed = state.caseContractVersion === 2;
   const executionDeadline = reviewed ? deadline - assessmentReserveMs : deadline;
   let fatal = null;
@@ -169,6 +174,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
   let passCalls = 0;
   let lastReplyText = '';
   let finishRejections = 0;
+  let searchedBusiness = false;
   const owned = state.ownedRecords || (state.ownedRecords = []);
   state.checks ||= [];
   state.revision ||= 0;
@@ -310,6 +316,22 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       state.conditions = conditions;
       await persistRequired();
       return { success: true, conditions: state.conditions };
+    }
+    if (name === 'queryCompanyData' || name === 'offerExistingRecords') {
+      if (!caseBusiness) return { success: false, error: 'The company search service is unavailable.' };
+      try {
+        const result = await caseBusiness[name](input);
+        await requireAudit('Case business search: ' + name, { actionType: 'ai_read', tool: name, inputParams: input, outcome: result.success ? 'success' : 'failure' });
+        if (result.success && name === 'queryCompanyData' && ['find', 'links'].includes(input.mode)) searchedBusiness = true;
+        if (result.success && name === 'offerExistingRecords') {
+          const byKey = new Map((state.existingRecords || []).map(row => [row.entityType + ':' + row.id, row]));
+          for (const row of result.records) byKey.set(row.entityType + ':' + row.id, row);
+          state.existingRecords = [...byKey.values()].slice(-60);
+          state.progress = { currentStep: 'Existing QuickBooks records: ' + result.records.map(row => row.entityType + ' ' + (row.docNumber || row.id)).join(', '), remainingSteps: ['Check these records against the requested conditions before creating anything.'], updatedAt: new Date() };
+          await persistRequired();
+        }
+        return result;
+      } catch (err) { return { success: false, error: err.message }; }
     }
     if (name === 'askOperator') {
       const options = input.options ?? [];
@@ -471,7 +493,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
     }
     if (name === 'checkCase') {
       if (!Array.isArray(input.sources) || !input.sources.length || input.sources.length > 20) {
-        return { success: false, error: 'Give 1–20 sources, each { entityType, id, path } for a record created by this case.' };
+        return { success: false, error: 'Give 1–20 sources, each { entityType, id, path } for a case-created or confirmed existing record.' };
       }
       if (!['single', 'sum'].includes(input.aggregate) || !['equal', 'not_equal'].includes(input.operator)
           || !(input.expected === null || ['string', 'number', 'boolean'].includes(typeof input.expected))) {
@@ -480,8 +502,8 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       const sources = [];
       try {
         for (const source of input.sources) {
-          const record = owned.find((r) => r.entityType === source?.entityType && String(r.id) === String(source?.id));
-          if (!record) throw new Error('Evidence must refer to records created by this case.');
+          const record = [...owned, ...(state.existingRecords || [])].find((r) => r.entityType === source?.entityType && String(r.id) === String(source?.id));
+          if (!record) throw new Error('Evidence must refer to case-created or confirmed existing records.');
           if (source.path === 'exists') {
             // Absence is evidence too: a deleted case record reads as false.
             sources.push({ ...source, record: { exists: !record.deleted && await recordExists(source) } });
@@ -520,6 +542,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       } catch (err) { return { success: false, error: err.message }; }
     }
     if (!WRITES.has(name)) return { success: false, error: 'Tool unavailable for this case.' };
+    if (caseBusiness && !searchedBusiness) return { success: false, error: 'First search for this situation with queryCompanyData (find or links); offer existing examples before creating new records.' };
     if (!state.conditions?.length) return { success: false, error: 'Define the scenario and success conditions before writing.' };
     verificationOnly ||= Date.now() >= executionDeadline - verificationReserveMs || calls >= maxCalls - 20;
     if (verificationOnly) return { success: false, verificationOnly: true, error: 'The remaining budget is reserved for verification. Read saved records, run checkCase and finishCase; list unfinished experiments.' };
@@ -567,7 +590,9 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       sent = true;
       const mutate = async () => {
       let result;
-      if (name === 'deleteRecord') {
+      if (caseBusiness) {
+        result = await caseBusiness.writeRecord(name, input, savedStep, before);
+      } else if (name === 'deleteRecord') {
         const response = await qbo.apiCall('POST', input.entityType.toLowerCase() + '?operation=delete',
           { Id: before.Id, SyncToken: before.SyncToken });
         if (String(response[input.entityType]?.Id) !== String(input.id) || response[input.entityType]?.status !== 'Deleted') {
@@ -613,7 +638,7 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
         collectLinks(before); collectLinks(input.record || input.changes);
       }
       savedStep.status = 'completed';
-      savedStep.result = result;
+      savedStep.result = { ...result, ...(savedStep.result?.generalWriteRunId ? { generalWriteRunId: savedStep.result.generalWriteRunId } : {}) };
       savedStep.executedAt = new Date();
       await persistRequired();
       await requireAudit('Case change saved: ' + name, { actionType: 'ai_executed', tool: name,
@@ -630,10 +655,14 @@ async function runEngine({ state, plan, qbo, persist, assertActive, audit, runMo
       if (savedStep.status === 'completed') {
         fatal ||= 'The change was saved but its evidence could not be fully recorded. Further changes stopped.';
       } else {
-        const definite = writeFailureIsDefinite(err, sent);
+        let definite = writeFailureIsDefinite(err, sent);
+        if (definite && savedStep.result?.generalWriteRunId && caseBusiness) {
+          try { await caseBusiness.retireWrite(savedStep, { status: 'failed', result: { success: false, reconciled: 'definite_no_effect' } }); }
+          catch { definite = false; fatal = 'The unsent case write receipt could not be retired. Reconcile it before continuing.'; state.outcomeUnknown = true; }
+        }
         savedStep.status = 'failed';
         savedStep.error = err.message;
-        savedStep.result = { success: false, outcomeUnknown: !definite };
+        savedStep.result = { ...(savedStep.result?.generalWriteRunId ? { generalWriteRunId: savedStep.result.generalWriteRunId, ...(savedStep.result.beforeSyncToken != null ? { beforeSyncToken: savedStep.result.beforeSyncToken } : {}) } : {}), success: false, outcomeUnknown: !definite };
         if (!definite) { state.outcomeUnknown = true; fatal = 'A QuickBooks write has an unknown outcome. It will not be retried automatically.'; }
       }
       await persistRequired();
