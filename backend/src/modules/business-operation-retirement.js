@@ -9,16 +9,20 @@ function createBusinessOperationRetirement({ models, transaction, now, bind, fen
     if(!ID.test(operationId||'')||!HASH.test(planHash||''))fail('Choose the exact saved operation and plan.');
     const {scope}=bound,run=await read(models.Runs,{_id:operationId,...scope,planHash},session);
     const calendar=await read(models.Calendars,{...scope},session),writer=await read(models.Writers,{environment:scope.environment,realmId:scope.realmId},session);
-    if(!run||!calendar||!writer||String(writer.connectionId)!==scope.connectionId||run.status==='retired'||['verified','committing'].includes(run.status)||calendar.pendingCommit||calendar.verifiedThrough!==run.expectedCursor||calendar.revision!==run.expectedRevision||(calendar.currentOperationId!==null&&String(calendar.currentOperationId)!==operationId)||(writer.operationId!==null&&String(writer.operationId)!==operationId)||writer.unresolved!==null)fail('Only the exact unsettled operation with no uncertain request can be retired.');
+    // An expired preview (never approved, holds neither the calendar nor the writer)
+    // is inert: approval fences the calendar revision it was prepared against. It can be
+    // retired after the calendar moved on, and retirement leaves the slot untouched.
+    const inert=run?.status==='previewed'&&!run.approval&&calendar&&writer&&String(calendar.currentOperationId)!==operationId&&String(writer.operationId)!==operationId&&(calendar.verifiedThrough!==run.expectedCursor||calendar.revision!==run.expectedRevision);
+    if(!run||!calendar||!writer||String(writer.connectionId)!==scope.connectionId||run.status==='retired'||['verified','committing'].includes(run.status)||(!inert&&(calendar.pendingCommit||calendar.verifiedThrough!==run.expectedCursor||calendar.revision!==run.expectedRevision||(calendar.currentOperationId!==null&&String(calendar.currentOperationId)!==operationId)||(writer.operationId!==null&&String(writer.operationId)!==operationId)||writer.unresolved!==null)))fail('Only the exact unsettled operation with no uncertain request can be retired.');
     const plan=run&&await read(models.Plans,{_id:run.planId,...scope,operationId,planHash},session);
-    if(!plan||hash(plan.manifest)!==planHash||(writer.operationId===null?writer.planHash!==null:writer.planHash!==planHash))fail('The retained plan or writer ownership changed.');
+    if(!plan||hash(plan.manifest)!==planHash||(!inert&&(writer.operationId===null?writer.planHash!==null:writer.planHash!==planHash)))fail('The retained plan or writer ownership changed.');
     if(run.leaseToken&&(!Number.isFinite(new Date(run.leaseExpiresAt).getTime())||new Date(run.leaseExpiresAt).getTime()>now()))fail('An active worker must finish or stop before retirement can be reviewed.');
     if(await read(models.Receipts,{environment:scope.environment,realmId:scope.realmId,operationId},session))fail('A transport receipt exists. Retain and reconcile those effects; this operation cannot be retired as unsent.');
     const rows=await models.Steps.find({environment:scope.environment,realmId:scope.realmId,operationId}).limit(1001).session(session).maxTimeMS(3000).lean();
     if(rows.length>1000||rows.some(row=>String(row.connectionId)!==scope.connectionId||row.state!=='claimed'||row.dispatch||row.receipt||row.qboId))fail('Saved or possibly sent activity cannot be retired as unsent.');
     const claims=rows.map(row=>({id:String(row._id),logicalKey:row.logicalKey,fingerprint:row.fingerprint,planHash:row.planHash,revision:row.revision,attempts:row.attempts,leaseHash:hash(row.leaseToken||null)})).sort((a,b)=>a.logicalKey.localeCompare(b.logicalKey));
-    const review={version:1,scope,operationId,planHash,runRevision:run.executionRevision,writerRevision:writer.revision,calendarWriterRevision:calendar.writerRevision,authorityHash:calendar.authorityHash,claims,noTransportReceipts:true,noAccountingRecords:true};
-    return{run,calendar,writer,rows,review,reviewHash:hash(review)};
+    const review={version:1,scope,operationId,planHash,runRevision:run.executionRevision,writerRevision:writer.revision,calendarWriterRevision:calendar.writerRevision,authorityHash:calendar.authorityHash,claims,noTransportReceipts:true,noAccountingRecords:true,...(inert?{expiredPreview:true}:{})};
+    return{run,calendar,writer,rows,review,reviewHash:hash(review),inert};
   }
   async function review(user,operationId,input) {
     if(!exact(input)||Object.keys(input).join(',')!=='planHash')fail('Choose the exact saved plan for review.');
@@ -41,8 +45,9 @@ function createBusinessOperationRetirement({ models, transaction, now, bind, fen
       // a newly reviewed operation. Immutable plans/intents remain untouched.
       for(const row of rows){const removed=await models.Steps.deleteOne({_id:row._id,...scope,operationId,state:'claimed',revision:row.revision,leaseToken:row.leaseToken,dispatch:null,receipt:null},{session});if(removed.deletedCount!==1)fail('An unsent claim changed during retirement.');}
       const saved=await models.Runs.findOneAndUpdate({_id:operationId,...scope,planHash:input.planHash,status:run.status,executionRevision:run.executionRevision,writerRevision:run.writerRevision},{ $set:{status:'retired',retirement,leaseToken:null,leaseExpiresAt:null,executionRequest:run.executionRequest?{...run.executionRequest,pending:false,result:{complete:false,state:'retired'}}:null,lastError:'Retired with no QuickBooks effects; prepare a fresh reviewed operation.'},$inc:{executionRevision:1,writerRevision:1,evidenceRevision:1}},{new:true,session}).lean();
-      const released=await models.Writers.findOneAndUpdate({_id:writer._id,...scope,revision:writer.revision,operationId:writer.operationId,unresolved:null},{ $set:{operationId:null,planHash:null},$inc:{revision:1}},{new:true,session}).lean();
-      const cleared=await models.Calendars.findOneAndUpdate({_id:calendar._id,...scope,currentOperationId:calendar.currentOperationId,revision:calendar.revision,writerRevision:calendar.writerRevision,pendingCommit:null},{ $set:{currentOperationId:null,stopRequested:false},$inc:{writerRevision:1}},{new:true,session}).lean();
+      // An expired preview never held the slot: another operation may hold it now.
+      const released=current.inert?writer:await models.Writers.findOneAndUpdate({_id:writer._id,...scope,revision:writer.revision,operationId:writer.operationId,unresolved:null},{ $set:{operationId:null,planHash:null},$inc:{revision:1}},{new:true,session}).lean();
+      const cleared=current.inert?calendar:await models.Calendars.findOneAndUpdate({_id:calendar._id,...scope,currentOperationId:calendar.currentOperationId,revision:calendar.revision,writerRevision:calendar.writerRevision,pendingCommit:null},{ $set:{currentOperationId:null,stopRequested:false},$inc:{writerRevision:1}},{new:true,session}).lean();
       if(!saved||!released||!cleared)fail('Operation ownership changed before retirement.');
       await models.Audits.create([{_id:auditId,userId:ownerId,actorUserId:actorId!==ownerId?actorId:undefined,realmId:scope.realmId,action:'Unsent business operation retired',actionType:'manual',outcome:'success',beforeState:review,afterState:{...scope,operationId,planHash:input.planHash,retirement,qboWrites:0,verifiedThrough:calendar.verifiedThrough}}],{session});
       return{retired:true,reused:false,operationId};

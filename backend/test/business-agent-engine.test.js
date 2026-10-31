@@ -10,8 +10,8 @@ test('a truncated tool response cannot dispatch partial model arguments',async()
   let writes=0;const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({stop_reason:'max_tokens',content:[{type:'tool_use',id:'cut',name:'executeBusinessPeriod',input:{}}]})};
   const result=await createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>writes++});assert.equal(writes,0);assert.equal(result.complete,false);
 });
-test('Codex bridge closes on provider failure and has no additional tool surface',async()=>{
-  let closed=0;const tools=[{name:'getBusinessState'}];const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},createBridge:options=>{assert.equal(options.tools,tools);return {bridge:{token:'fixture-private'},close:async()=>closed++};},codex:{run:async()=>{throw new Error('fixture failure');}}});
+test('Codex bridge closes on provider failure and receives only core and discovery tools',async()=>{
+  let closed=0;const tools=[{name:'getBusinessState'},{name:'runReport'}];const engine=createBusinessAgentEngine({provider:{resolveProvider:async()=> 'codex'},createBridge:options=>{assert.deepEqual(options.tools.map(tool=>tool.name),['searchTools','useTool','listSkills','loadSkill','readSkillReference','getBusinessState']);return {bridge:{token:'fixture-private'},close:async()=>closed++};},codex:{run:async()=>{throw new Error('fixture failure');}}});
   await assert.rejects(engine.run({context:{},tools,execute:async()=>({})}),/fixture failure/);assert.equal(closed,1);
 });
 test('cancelled passes do not call a model and specialist operating briefs preserve main accountability',async()=>{
@@ -100,4 +100,24 @@ test('deferOutcome leaves the terminal outcome to the caller’s attempt finaliz
  const saves=[];const provider={resolveProvider:async()=> 'anthropic',chat:async()=>({model:'claude-sonnet-5-5',usage:{input_tokens:1,output_tokens:1},stop_reason:'end_turn',content:[{type:'text',text:'done'}]})};
  const result=await createBusinessAgentEngine({provider}).run({context:{},tools:[],execute:async()=>({}),deferOutcome:true,usage:{begin:async()=>({_id:'fixture'}),save:async(row,value)=>saves.push(value)}});
  assert.equal(result.outcome,'completed');assert.equal(Object.hasOwn(saves.at(-1),'outcome'),false);assert.ok(saves.at(-1).finishedAt);
+});
+test('progressive disclosure: core schemas only, skills index in the instructions, search loads a deferred tool natively and useTool dispatches',async()=>{
+ const schema={type:'object',properties:{reportName:{type:'string'}},required:['reportName'],additionalProperties:false};
+ const tools=[{name:'getBusinessState',description:'state',input_schema:{type:'object',properties:{},required:[],additionalProperties:false}},{name:'runReport',description:'Runs a QuickBooks report such as aged receivables.',input_schema:schema}];
+ const sent=[],calls=[];let system='';
+ const replies=[
+  {stop_reason:'tool_use',content:[{type:'tool_use',id:'a',name:'searchTools',input:{query:'aged receivables report'}},{type:'tool_use',id:'b',name:'loadSkill',input:{name:'receivables-and-collections'}}]},
+  {stop_reason:'tool_use',content:[{type:'tool_use',id:'c',name:'useTool',input:{name:'runReport',input:{reportName:'AgedReceivables'}}},{type:'tool_use',id:'d',name:'useTool',input:{name:'runReport',input:{wrong:true}}}]},
+  {stop_reason:'tool_use',content:[{type:'tool_use',id:'e',name:'runReport',input:{reportName:'ProfitAndLoss'}}]},
+  {stop_reason:'end_turn',content:[{type:'text',text:'done'}]}];
+ const results=[];
+ const provider={resolveProvider:async()=> 'anthropic',chat:async(messages,list,options)=>{sent.push(list.map(tool=>tool.name));system=options.system;const last=messages.at(-1);if(Array.isArray(last.content))results.push(...last.content.map(item=>JSON.parse(item.content)));return replies[sent.length-1];}};
+ const result=await createBusinessAgentEngine({provider}).run({context:{},tools,maxCalls:3,execute:async(name,input)=>{calls.push({name,input});return {success:true};}});
+ assert.equal(result.complete,true);
+ assert.ok(!sent[0].includes('runReport'),'deferred tools are not sent first');assert.ok(sent[0].includes('searchTools')&&sent[0].includes('getBusinessState'));
+ assert.ok(sent[1].includes('runReport'),'a searched tool is offered natively from the next round');
+ assert.match(system,/receivables-and-collections: /);assert.match(system,/Deferred tools: quickbooks-read: runReport/);
+ assert.equal(results[0].data.tools[0].name,'runReport');assert.match(results[1].data.instructions,/Dunning/);
+ assert.equal(results[3].success,false,'useTool rejects input outside the schema');
+ assert.deepEqual(calls,[{name:'runReport',input:{reportName:'AgedReceivables'}},{name:'runReport',input:{reportName:'ProfitAndLoss'}}],'discovery calls do not use the three-call allowance');
 });

@@ -196,9 +196,9 @@ const moveTo=(h,iso)=>{h.clock=Date.parse(iso);const now=new Date(h.clock).toISO
 test('overnight with nothing actionable makes no model call and saves the next time and its reason',async()=>{
  const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');// 11:00 PM Friday in Halifax; the calendar is closed through yesterday
  await h.service._worker(agentId,new AbortController());
- assert.equal(h.engineCalls,0);assert.equal(h.row.cadence.kind,'quiet');assert.equal(h.row.cadence.reason,'after business hours');
+ assert.equal(h.engineCalls,0);assert.equal(h.row.cadence.kind,'quiet');assert.equal(h.row.cadence.reason,'outside that day’s activity hours');
  assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+3600000,'the owner interval is the overnight re-check, with no model');
- const view=await h.service.status({id:ownerId});assert.equal(view.rightNow.cadence.reason,'after business hours');
+ const view=await h.service.status({id:ownerId});assert.equal(view.rightNow.cadence.reason,'outside that day’s activity hours');
  h.service.close();
 });
 test('an owner request outranks the cadence once and counts toward the daily ceiling',async()=>{
@@ -210,7 +210,7 @@ test('an owner request outranks the cadence once and counts toward the daily cei
  h.service.close();
 });
 test('at the daily review ceiling reviews pause until Halifax midnight',async()=>{
- const h=fixture();h.row.cadence={day:'2026-10-23',reviews:80};
+ const h=fixture();h.row.cadence={day:'2026-10-23',reviews:160};
  await h.service._worker(agentId,new AbortController());
  assert.equal(h.engineCalls,0);assert.equal(h.row.cadence.kind,'ceiling');assert.equal(new Date(h.row.nextDecisionAt).toISOString(),'2026-10-24T03:00:00.000Z');
  h.service.close();
@@ -242,9 +242,9 @@ test('settings changes are not review requests, and an owner request at the ceil
  const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');
  await h.service.control({id:ownerId},{command:'configure',settings:{syncIntervalSeconds:30,decisionIntervalMinutes:60},expectedRevision:1,requestKey:'fixture_configure_0001'});await h.service.drain();
  assert.equal(h.engineCalls,0);assert.equal(h.row.reviewRequestedAt,undefined);
- const capped=fixture();capped.row.cadence={day:'2026-10-23',reviews:80};
+ const capped=fixture();capped.row.cadence={day:'2026-10-23',reviews:160};
  await capped.service.control({id:ownerId},{command:'run-now',expectedRevision:1,requestKey:'fixture_run_now_0001'});await capped.service.drain();
- assert.equal(capped.engineCalls,0,'review 81 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 80 reviews is reached/);
+ assert.equal(capped.engineCalls,0,'review 161 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 160 reviews is reached/);
  assert.equal(new Date(capped.row.nextDecisionAt).toISOString(),'2026-10-24T03:00:00.000Z','the request runs after Halifax midnight');
  [h,capped].forEach(value=>value.service.close());
 });
@@ -296,5 +296,40 @@ test('at the daily request budget a due slot makes no model call and the reason 
  assert.equal(h.engineCalls,0);assert.match(h.row.cadence.reason,/request budget of 10,000 is used/);
  const view=await h.service.status({id:ownerId});
  assert.equal(view.rightNow.requests.reached,true);assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\)/);
+ h.service.close();
+});
+
+// Daily management review (business-management-review.js).
+const recordsFixture=rows=>({find:()=>({select(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>rows})});
+test('the first management review runs at once with measures from the local copy, and today’s plan reaches the slices',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T04:40:00Z');// 01:40 Saturday in Halifax, calendar closed through yesterday
+ h.business.verifiedThrough='2026-10-23';
+ let plan=null;h.store.latestDailyPlan=async()=>plan;h.store.capabilityRequests=async()=>[{kind:'capability-request',id:'1',key:'partial-customer-payments',priority:'high',status:'open',missing:'Partial customer payments',requirement:'R01',at:new Date(h.clock).toISOString()}];
+ h.store.models.Records=recordsFixture([{entity:'Customer',record:{Id:'1',DisplayName:'A',Active:true}},{entity:'Invoice',record:{Id:'2',TxnDate:'2026-10-20',DueDate:'2026-10-21',TotalAmt:100,Balance:100},summary:{txnDate:'2026-10-20',dueDate:'2026-10-21',amountCents:10000,balanceCents:10000}}]);
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'management');assert.equal(h.passContext.cadence.reason,'the first management review');
+ assert.equal(h.passContext.management.measures.parties.customers,1);assert.equal(h.passContext.management.measures.receivables.overdue,1);
+ assert.equal(h.passContext.management.coverage.source,'local-mirror');assert.equal(h.passContext.management.capabilityRequests[0].key,'partial-customer-payments');
+ assert.equal(h.passContext.todaysPlan,null);assert.deepEqual(h.row.cadence.management,{day:'2026-10-24',attempts:1});
+ // The plan saved by that review is carried into the day's slices; the review does not repeat.
+ plan={id:'p',day:'2026-10-24',at:new Date(h.clock).toISOString(),title:'Today’s plan · Sat Oct 24',detail:'Grow customers today.',findings:[{requirement:'R02',status:'gap',finding:'Volume is low.'}],changes:[{area:'customers',change:'Add three customers.',count:3}]};
+ moveTo(h,'2026-10-24T13:31:00Z');h.store.todayActivity=async()=>({runs:[],receipts:[]});// 10:31 Saturday: the first slice is due
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,2);assert.equal(h.passContext.cadence.kind,'slice');assert.equal(h.passContext.management,undefined);
+ assert.deepEqual(h.passContext.todaysPlan.changes,[{area:'customers',change:'Add three customers.',count:3}]);assert.deepEqual(h.passContext.todaysPlan.focus,['R02: Volume is low.']);
+ const view=await h.service.status({id:ownerId});
+ assert.equal(view.management.plan.note,'Grow customers today.');assert.equal(view.management.capabilityRequests[0].priority,'high');assert.equal(view.management.progress.target,30);
+ h.service.close();
+});
+test('a store without the management review keeps the earlier cadence and payload',async()=>{
+ const h=fixture();const view=await h.service.status({id:ownerId});assert.equal(view.management.available,false);assert.equal(view.management.plan,null);assert.deepEqual(view.management.capabilityRequests,[]);h.service.close();
+});
+test('a slice can re-read the management review through its tools',async()=>{
+ const h=fixture();h.store.latestDailyPlan=async()=>({id:'p',day:'2026-10-23',at:new Date(h.clock).toISOString(),changes:[{area:'items',change:'Add two service items.'}],findings:[]});h.store.capabilityRequests=async()=>[];
+ h.store.models.Records=recordsFixture([{entity:'Vendor',record:{Id:'9',DisplayName:'V',Active:true}}]);h.store.todayActivity=async()=>({runs:[],receipts:[]});
+ let review=null;h.onRun=async input=>{review=await input.execute('getManagementReview',{});};
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.passContext.cadence.kind,'slice');assert.equal(review.success,true);
+ assert.deepEqual(review.data.todaysPlan.changes,[{area:'items',change:'Add two service items.'}]);assert.equal(review.data.measures.parties.suppliers,1);
  h.service.close();
 });

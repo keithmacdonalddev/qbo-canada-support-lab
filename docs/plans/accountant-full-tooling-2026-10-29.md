@@ -183,6 +183,47 @@ and the app shows the owner exactly which tools exist and what they reach.
   QuickBooks' Canadian acceptance of zero-funds bill payments applying a supplier
   credit, and of zero-amount payments without an omitted receivables field, is
   unverified on Production.
+- Business lifecycles over time (code, not yet live; 2026-10-31): same-day activity
+  policy v8 (`business-activity-v8`; v7 frozen in `SAVED_POLICIES`, hash unchanged)
+  adds seven workflows so the accountant's own work creates open receivables and
+  payables, aging, partial payments, quotes and orders instead of only same-day
+  settled sales:
+  `invoice-on-terms` (a published service invoice left open, due 7/15/30/45/60 days
+  later; a field-service hour also records its estimate and time, as a settled sale
+  does), `bill-on-terms` (one nonbillable operating-expense bill left open until due),
+  `collect-own-invoice` (Payment to undeposited funds, then Deposit, for any amount up
+  to the open balance), `pay-own-bill` (BillPayment from the operating bank, up to the
+  open balance), `send-estimate` (a field-service Estimate left open) with
+  `convert-own-estimate` (today's TimeActivity and an Invoice on terms linked to the
+  earlier estimate, at its quoted hours and price), and `order-stock` (a PurchaseOrder
+  for one to five workshop stock items, 500 units per line, received later by the
+  existing `receive-purchase-order`). Payment terms are a lifecycle contract
+  (`paymentTerms.days`, due date = transaction date + days); every other v1–v7 invoice
+  or bill still needs immediate terms.
+  The agent sends only the record, its party and the amount or terms;
+  `business-own-settlement.js` derives the original from its immutable creation intent
+  (plan-store history) and saves it with its dependency closure as the batch's
+  existing prerequisites. Eligible only: a verified record created by an activity batch
+  on terms (or a sent estimate), for this company, with the full ownership chain used
+  by corrections, from an earlier day, never imported, never corrected, with only its
+  own verified payments so far (an estimate: still Pending/Accepted, unlinked, no time
+  or invoice yet) and no other unsent prepared work depending on it. Calendar and
+  same-day settled records are refused (their schedule settles them). The compiler
+  re-proves inside the writer fence that the original still belongs to the party,
+  carries only its own payment links, and that its fresh open balance covers the
+  amount; read-back already reconciles each invoice or bill balance to its verified
+  settlements, and financial movements count each payment once. A partly paid own
+  invoice cannot be corrected (existing rule); a fully collected one can be refunded.
+  Choices: `ownOpenInvoices`, `ownOpenBills` (balance, due date, terms, eligibility)
+  and `ownOpenEstimates`. Effective without owner action: the standing grant covers new
+  workflows (only a changed published business needs re-approval,
+  `business-agent-work.js`). Known limits: only published customers, suppliers and
+  services (no added roles); only field-service estimates convert (they bill recorded
+  time) and only whole; collections are always deposited the same day (no grouped
+  bank deposit of several payments yet); stock sales from the activity batch are not
+  built; a stock order received on a day the same item is sold at a different unit
+  cost is refused by the existing FIFO proof (reorder at the published unit cost);
+  partial PO receipts remain unavailable. Not yet run on Production.
 
 ## Constraint that shapes every workflow
 

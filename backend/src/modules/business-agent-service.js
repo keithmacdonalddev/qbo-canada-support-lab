@@ -12,15 +12,18 @@ const { createBusinessAgentUsage, reviewPause, reviewOutcome } = require('./busi
 const { DEFAULT_SETTINGS, validateControl, reduceControl, fail, ID } = require('./business-agent-policy');
 const { runAsActor } = require('./actor-context');
 const cadence = require('./business-agent-cadence');
+const management = require('./business-management-review');
 const iso=value=>value?new Date(value).toISOString():null;
 const at=value=>value?new Date(value).getTime():0;
 // Bounded source refresh before writes: one allowance per review attempt, never replenished by later checks.
 const FRESHNESS=Object.freeze({requests:40,ms:60000,tickRequests:12,writeWithinMs:120000});
+// A review is a full working session (owner 2026-10-31: no artificial limits): ten minutes and 60 tool calls.
+const REVIEW_LIMITS=Object.freeze({ms:600000,rounds:30,calls:60});
 // Consecutive freshness yields wait 1, 2, 5, then 15 minutes before the next review; a completed review resets the count.
 const YIELD_RETRY_MINUTES=Object.freeze([1,2,5,15]);
 const yieldDelayMs=count=>YIELD_RETRY_MINUTES[Math.min(Math.max(count,1),YIELD_RETRY_MINUTES.length)-1]*60000;
 const sourceSignature=view=>(view.sources||[]).map(source=>source.entity+':'+source.status+':'+(source.lastSuccessAt||'')).join('|')+'#'+(view.summaryAt||'');
-const safeError=error=>require('./log-diagnostic').redactLogSecrets(/^(BUSINESS_|QBO_)/.test(error?.code||'')?error.message:error?.aiProvider?'The model service could not finish this review. Check the AI connection in Settings.':'The business worker could not finish. Saved records, decisions and cursors are retained.').slice(0,700);
+const safeError=error=>require('./log-diagnostic').redactLogSecrets(/^(BUSINESS_|QBO_)/.test(error?.code||'')?error.message:error?.code==='AI_PROVIDER_TIMEOUT'?'The review ran out of time before it finished. Saved work is kept and the next review continues it.':error?.aiProvider?'The model service could not finish this review. Check the AI connection in Settings.':'The business worker could not finish. Saved records, decisions and cursors are retained.').slice(0,700);
 function publicSync(row,clock){
   const settings={...DEFAULT_SETTINGS,...(row?.settings||{})},view=row?.syncView;
   if(!view)return {status:settings.monitoring?'initializing':'not-configured',lastSuccessAt:null,sources:[],company:{counts:{},totals:{currency:'CAD'},recent:[]}};
@@ -42,7 +45,8 @@ function createBusinessAgentService(options={}) {
   // lease ({ token, now }): the worker's exact lease, fenced inside governed preparation and approval.
   const governanceFor=options.governanceFor||((origin,lease=null)=>require('./business-governance-service').createBusinessGovernanceService({...(origin?{agentAuthority:origin,Agents:store.models.Agents,...(lease?{agentLease:lease}:{})}:{})}));
   const requestMeter=options.requestMeter||require('./qbo-request-meter').getQboRequestMeter();
-  const coverageFor=options.coverageFor||(scope=>{try{return require('./coverage').getCached(scope.realmId);}catch{return null;}});
+  // The feature check: the latest QuickBooks coverage check, else today's check from the local company copy.
+  const coverageFor=options.coverageFor||(scope=>{try{return require('./coverage').getCached(scope.realmId)||management.cachedCoverage(scope);}catch{return null;}});
   const jobs=new Map();let interval=null,scanPromise=null,closed=false,lastScanError=null;
   // Today's counted same-day activity under the day's frozen rhythm (saved records only).
   // fresh:true bypasses the display cache (write admission, post-review scheduling).
@@ -59,12 +63,21 @@ function createBusinessAgentService(options={}) {
   async function obligationsFor(scope){if(typeof store.dueObligations!=='function')return null;try{return await store.dueObligations(scope,cadence.localParts(now()).date);}catch{return null;}}
   // What the accountant sees of today: counts, the due slot and the next slot time (Halifax).
   const todayContext=today=>{const {slots,reservedByRun,...rest}=today||{};return {...rest,...(rest.nextSlotAt?{nextSlotTime:cadence.localTime(rest.nextSlotAt)}:{})};};
-  const decideCadence=(row,business,today,ownerRequested,owned=[],obligations=null,requests=null)=>cadence.decide({now:now(),settings:row.settings,business,agent:{id:String(row._id),grant:row.grant||null},today,owned,obligations,requests,state:row.cadence||{},ownerRequested});
+  // The daily management review (business-management-review.js): the latest saved plan; null turns the review off.
+  async function managementFor(row){if(!row||typeof store.latestDailyPlan!=='function')return null;try{const plan=await store.latestDailyPlan(row);return {lastPlanDay:plan?.day||null,plan};}catch{return null;}}
+  async function capabilityRequestsFor(row){if(!row||typeof store.capabilityRequests!=='function')return [];try{return await store.capabilityRequests(row);}catch{return [];}}
+  const decideCadence=(row,business,today,ownerRequested,owned=[],obligations=null,requests=null,daily=null)=>cadence.decide({now:now(),settings:row.settings,business,agent:{id:String(row._id),grant:row.grant||null},today,owned,obligations,requests,state:row.cadence||{},ownerRequested,management:daily});
   // Today's enforced QuickBooks request budget from the Phase 0 meter (unreadable counts as reached).
   const requestsFor=async scope=>cadence.requestBudget(await requestMeter.summary(scope).catch(()=>null));
   // An owner request (run now, instructions, a decision response) outranks the cadence once.
   const ownerAsked=row=>at(row.reviewRequestedAt)>at(row.cadence?.lastReviewAt);
   const cadenceRecord=decision=>({...decision.state,kind:decision.kind,reason:decision.reason,decidedAt:new Date(now()).toISOString()});
+  // The management review's measures, from the local company copy (no QuickBooks calls); a failure is stated, never fatal.
+  async function managementContextFor(scope,row,today,events,decisions){
+    const requestsList=await capabilityRequestsFor(row);
+    try{const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now()});return management.managementContext({snapshot,today,events,decisions,requests:requestsList,nowMs:now()});}
+    catch{return management.managementContext({snapshot:null,today,events,decisions,requests:requestsList,nowMs:now(),error:'The local company measures could not be read this time; use the read tools.'});}
+  }
   const leaseMs=240000,scanMs=5000;
   async function bind(user,action='operations.read') {
     const ownerId=String(user?.id||''),actorId=String(user?.actorId||user?.id||'');
@@ -87,12 +100,22 @@ function createBusinessAgentService(options={}) {
     // Duty facts come from saved records only; any failure just omits them.
     let facts=null;if(row&&business.published&&typeof store.workFacts==='function'){try{facts=await store.workFacts(bound.scope);}catch{facts=null;}}
     const requests=cadence.requestBudget(qboRequests);
+    const daily=row?await managementFor(row):null,buildList=row?management.openRequests(await capabilityRequestsFor(row)):[];
+    if(!options.coverageFor&&business.published&&store.models?.Records)management.warm(bound.scope,store.models.Records,now());
     const today=row&&business.published?await todayFor(bound.scope,row):null,calendarClose=business.published?cadence.nextClose(business,cadence.localParts(now()).date):null,owned=row&&business.published?await ownedFor(bound.scope,row):[];
     return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
       agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':row.status||'ready',summary:row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),memory:row?.memory||'',currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:row?.lastError||lastScanError,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
-      sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities(),
+      management:managementView(daily,buildList,today),sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business,events,decisions,capabilities:businessAgentCapabilities(),
       work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
       rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today,calendarClose,requests,cadence:row?.cadence||null})};
+  }
+  // Today's plan and the build list for the first page: the plan only for today, progress from today's counted activity.
+  function managementView(daily,buildList,today){
+    const day=cadence.localParts(now()).date,plan=daily?.plan&&daily.plan.day===day?daily.plan:null;
+    return {available:Boolean(daily),day,label:cadence.dayLabel(day),reviewAt:new Date(cadence.managementAt(day)).toISOString(),
+      plan:plan?{id:plan.id,at:plan.at,title:plan.title,note:plan.detail,findings:plan.findings||[],changes:plan.changes||[]}:null,lastPlanDay:daily?.lastPlanDay||null,
+      progress:today&&!today.unavailable?{target:today.target,saved:today.saved,verified:today.verified,reserved:today.reserved,slotCount:today.slotCount,currentSlot:today.currentSlot}:null,
+      capabilityRequests:buildList.slice(0,40)};
   }
   async function status(user){const bound=await bind(user);return workspace(bound,await store.get(bound.scope));}
   // The live activity feed (business-agent-live.js): light enough to poll every few seconds while
@@ -218,7 +241,7 @@ function createBusinessAgentService(options={}) {
       return syncer;
     };
     // When current, the next sync waits for the earliest due source (the combined change read is due every
-    // 5 minutes in business hours, 15 outside), never sooner than the monitoring interval nor later than 15 minutes.
+    // 5 minutes while the day's activity runs, which is all day under rhythm v3), never sooner than the monitoring interval nor later than 15 minutes.
     const nextSyncAt=view=>{const clock=now(),interval=row.settings.syncIntervalSeconds*1000;if(view.status!=='current')return new Date(clock+5000);return new Date(Math.min(clock+900000,Math.max(clock+interval,at(view.nextDueAt))));};
     const syncSlice=async(maxRequests,timeoutMs,freshWithinMs)=>{const view=await (await syncFor()).tick({maxRequests,...(timeoutMs?{timeoutMs}:{}),...(freshWithinMs?{freshWithinMs}:{})});await update({syncView:view,nextSyncAt:nextSyncAt(view)});return view;};
     // A write needs every source current and every change-tracked source read within the last two minutes;
@@ -305,17 +328,17 @@ function createBusinessAgentService(options={}) {
         const dueMain=at(row.nextDecisionAt)<=now(),dueSpecialist=row.settings.specialists.find(role=>at(row.specialists?.[role]?.nextDecisionAt)<=now());
         // The cadence decides from saved state whether this wake needs a model review at all
         // (business-agent-cadence.js); when it does not, only the next time and its reason are saved.
-        let role=null,decision=null,business=null,today=null,owned=[],obligations=null,requests=null;
+        let role=null,decision=null,business=null,today=null,owned=[],obligations=null,requests=null,daily=null;
         if(dueMain){
-          business=await store.business(scope);today=await todayFor(scope,row);owned=await ownedFor(scope,row);obligations=await obligationsFor(scope);requests=await requestsFor(scope);
+          business=await store.business(scope);today=await todayFor(scope,row);owned=await ownedFor(scope,row);obligations=await obligationsFor(scope);requests=await requestsFor(scope);daily=await managementFor(row);
           let retired=false;for(const run of owned.filter(run=>run.disposition==='unsent').slice(0,3))retired=(await retireUnsent(run))||retired;
           if(retired){business=await store.business(scope);owned=await ownedFor(scope,row);if(typeof store.forgetToday==='function')store.forgetToday();today=await todayFor(scope,row);}
-          decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests);
+          decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);
           if(decision.callModel)role='accountant';
           else await update({cadence:cadenceRecord(decision),nextDecisionAt:new Date(decision.nextReviewAt),currentWork:''});
         }
         if(!role&&dueSpecialist){
-          // Specialists run in business hours under the same daily review ceiling.
+          // Specialists run in the day's activity hours (all day under rhythm v3) under the same daily review ceiling.
           const allowed=cadence.specialistAllowed({now:now(),state:row.cadence||{}});
           if(allowed.allowed)role=dueSpecialist;
           else await update({specialists:{...(row.specialists||{}),[dueSpecialist]:{...(row.specialists?.[dueSpecialist]||{}),status:'waiting',nextDecisionAt:allowed.nextAt}}});
@@ -338,10 +361,10 @@ function createBusinessAgentService(options={}) {
         if(transcripts)transcripts.prune(String(row._id)).catch(()=>{});
         business=await store.business(scope);const decisions=await store.decisions(row),events=await store.events(row);
         const calendarClose=cadence.nextClose(business,cadence.localParts(now()).date);
-        const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
+        const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,managementFor:async()=>({todaysPlan:management.planContext((await managementFor(row))?.plan||null,cadence.localParts(now()).date),...await managementContextFor(scope,row,today,events,decisions)}),persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
-        const context={usage:usageState,ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,cadence:row.cadence||null}).items};
-        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:120000,maxRounds:8,maxCalls:24,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
+        const context={usage:usageState,ownerInstructions:row.settings.instructions,memory:role==='accountant'?row.memory:row.specialists?.[role]?.memory||'',company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions,specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,cadence:row.cadence||null}).items};
+        let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(tools.execute),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:REVIEW_LIMITS.ms,maxRounds:REVIEW_LIMITS.rounds,maxCalls:REVIEW_LIMITS.calls,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
           // Model calls are not writes: they need authority, not current sources. Write steps refresh sources themselves.
           await guard('authority');
           const state=await usageView(scope,row);
@@ -353,7 +376,7 @@ function createBusinessAgentService(options={}) {
           if(final!==outcome){row=await store.update(row,token,failedState(new Error('The review result could not be recorded.')));return;}
           if(role==='accountant'){
             // The next review time comes from the cadence with fresh saved state; this also records whether the review made progress.
-            let after=null;try{after=decideCadence(row,await store.business(scope),await todayFor(scope,row,{fresh:true}),false,await ownedFor(scope,row),await obligationsFor(scope),await requestsFor(scope));}catch{after=null;}
+            let after=null;try{after=decideCadence(row,await store.business(scope),await todayFor(scope,row,{fresh:true}),false,await ownedFor(scope,row),await obligationsFor(scope),await requestsFor(scope),await managementFor(row));}catch{after=null;}
             await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:after?new Date(after.nextReviewAt):next,...(after?{cadence:cadenceRecord(after)}:{}),status:business.blockers.length?'attention':'ready',activePass:null,lastError:null,reviewYields:0});
           }
           else await update({reviewYields:0,specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',summary:result.summary,lastDecisionAt:new Date(now()).toISOString(),nextDecisionAt:next.toISOString()}},nextDecisionAt:new Date(Math.min(at(row.nextDecisionAt)||now(),now()+60000)),activePass:null,status:'ready'});

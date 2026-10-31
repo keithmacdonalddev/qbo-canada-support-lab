@@ -2,10 +2,15 @@
 // Business choices only. This module never accepts a QBO payload or performs I/O.
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
-// Policy v7 adds correct-own-record: the accountant reverses one of its OWN earlier
-// records today (business-correction.js derives and proves every term).
-const POLICY = Object.freeze({ version: 7, key: 'business-activity-v7', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order', 'add-customer', 'add-supplier', 'add-item', 'correct-own-record'] });
-// Frozen exactly as it was published (its hash is unchanged), so v6 batches rebuild.
+// Policy v8 adds business lifecycles over time: a service invoice or operating bill
+// left open on payment terms, and later full or partial collection or payment of the
+// accountant's OWN open terms invoices and bills; a field-service estimate sent on its
+// own and later converted into time and an invoice on terms; and a stock purchase
+// order received later (business-own-settlement.js derives and proves each original).
+// v7 added correct-own-record (business-correction.js).
+const POLICY = Object.freeze({ version: 8, key: 'business-activity-v8', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order', 'add-customer', 'add-supplier', 'add-item', 'correct-own-record', 'invoice-on-terms', 'collect-own-invoice', 'bill-on-terms', 'pay-own-bill', 'send-estimate', 'convert-own-estimate', 'order-stock'] });
+// Frozen exactly as they were published (hashes unchanged), so v6 and v7 batches rebuild.
+const POLICY_V7 = Object.freeze({ version: 7, key: 'business-activity-v7', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order', 'add-customer', 'add-supplier', 'add-item', 'correct-own-record'] });
 const POLICY_V6 = Object.freeze({ version: 6, key: 'business-activity-v6', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order', 'add-customer', 'add-supplier', 'add-item'] });
 const POLICY_V5 = Object.freeze({ version: 5, key: 'business-activity-v5', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order'] });
 // Settlements of adopted (imported) obligations name the QuickBooks record and its
@@ -18,7 +23,16 @@ const POLICY_V1 = Object.freeze({ version: 1, key: 'non-stock-business-activity-
 const POLICY_V2 = Object.freeze({ version: 2, key: 'business-activity-v2', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill'] });
 const POLICY_V3 = Object.freeze({ version: 3, key: 'business-activity-v3', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit'] });
 const POLICY_V4 = Object.freeze({ version: 4, key: 'business-activity-v4', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry'] });
-const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [hash(POLICY_V3), POLICY_V3], [hash(POLICY_V4), POLICY_V4], [hash(POLICY_V5), POLICY_V5], [hash(POLICY_V6), POLICY_V6], [POLICY_HASH, POLICY]]);
+const SAVED_POLICIES = new Map([[hash(POLICY_V1), POLICY_V1], [hash(POLICY_V2), POLICY_V2], [hash(POLICY_V3), POLICY_V3], [hash(POLICY_V4), POLICY_V4], [hash(POLICY_V5), POLICY_V5], [hash(POLICY_V6), POLICY_V6], [hash(POLICY_V7), POLICY_V7], [POLICY_HASH, POLICY]]);
+// Policy v8 payment terms: whole days from the transaction date to the due date.
+const TERMS_DAYS = Object.freeze([7, 15, 30, 45, 60]);
+// Policy v8 stock purchase orders: whole units per line.
+const STOCK_ORDER_QUANTITY = 500;
+// Policy v8 settlements of the accountant's own open terms invoices and bills.
+const OWN_SETTLEMENT = Object.freeze({ 'collect-own-invoice': { entity: 'Invoice', idKey: 'invoiceId', partyKey: 'customerKey' }, 'pay-own-bill': { entity: 'Bill', idKey: 'billId', partyKey: 'vendorKey' } });
+// Every v8 activity that builds on one of the accountant's own earlier records, whose
+// `source` the server derives (a settlement, or converting a sent estimate).
+const OWN_SOURCED = Object.freeze({ ...OWN_SETTLEMENT, 'convert-own-estimate': { entity: 'Estimate', idKey: 'estimateId', partyKey: 'customerKey' } });
 // Policy v7 corrections. Each kind reverses one wholly unpaid or fully collected
 // non-stock original, dated today, with its ORIGINAL lines, party and tax. Applications
 // are zero-funds settlements linking the original and its reversal. Step keys are
@@ -162,6 +176,40 @@ function correctionChoice(row) {
   if (gross < 1 || gross > POLICY.maxSettlementCents) fail('This correction exceeds the per-record correction capacity.');
   return { value: { type: row.type, target: { entity: target.entity, qboId: target.qboId }, purpose: text(row.purpose, 10, 500), correction: value }, cents: gross };
 }
+// ---- Policy v8 settlements of the accountant's own open terms invoices and bills ----
+// The agent names the record, its party and the amount; the server adds `source` (the
+// original's identity and its saved dependency closure) from its immutable creation.
+function ownSettlementChoice(row) {
+  const spec = OWN_SETTLEMENT[row.type];
+  exact(row, ['type', spec.idKey, spec.partyKey, 'amountCents', 'purpose', ...(row.source !== undefined ? ['source'] : [])]);
+  if (!QBO_ID.test(row[spec.idKey] || '') || !(spec.entity === 'Invoice' ? PARTY : /^overhead-supplier-[1-3]$/).test(row[spec.partyKey] || '')) fail('Choose one of your own open ' + (spec.entity === 'Invoice' ? 'invoices on terms and its customer' : 'bills on terms and its supplier') + ' from the business choices.');
+  const value = { type: row.type, [spec.idKey]: row[spec.idKey], [spec.partyKey]: row[spec.partyKey], amountCents: integer(row.amountCents, POLICY.maxSettlementCents), purpose: text(row.purpose, 10, 500) };
+  if (row.source !== undefined) value.source = ownSource(row.source, spec.entity);
+  return value;
+}
+function ownSource(source, entity) {
+  exact(source, ['logicalKey', 'txnDate', 'sources']);
+  if (!HASH.test(source.logicalKey || '')) fail('Use the source derived by the server for one of your own records.');
+  const original = { logicalKey: source.logicalKey, entity, txnDate: correctionDate(source.txnDate) };
+  return { logicalKey: original.logicalKey, txnDate: original.txnDate, sources: correctionSources(source.sources, original) };
+}
+// Converting a sent estimate (policy v8): the agent names the estimate, its customer and
+// the invoice terms; the server adds `source` and the quoted `quote` from the estimate's
+// immutable creation. Only field-service quotes, which bill their recorded time.
+function estimateConversionChoice(row) {
+  const derived = row.source !== undefined || row.quote !== undefined;
+  exact(row, ['type', 'estimateId', 'customerKey', 'termsDays', 'purpose', ...(derived ? ['source', 'quote'] : [])]);
+  if (!QBO_ID.test(row.estimateId || '') || !/^field-client-0(?:0[1-9]|1[0-5])$/.test(row.customerKey || '')) fail('Choose one of your own open field-service estimates and its customer from the business choices.');
+  if (!TERMS_DAYS.includes(row.termsDays)) fail('Use payment terms of ' + TERMS_DAYS.join(', ') + ' days.');
+  const value = { type: row.type, estimateId: row.estimateId, customerKey: row.customerKey, termsDays: row.termsDays, purpose: text(row.purpose, 10, 500) };
+  if (derived) {
+    exact(row.quote, ['itemKey', 'quantity', 'unitPriceCents']);
+    if (row.quote.itemKey !== 'field-service-hour') fail('Only field-service estimates can be converted.');
+    value.source = ownSource(row.source, 'Estimate');
+    value.quote = { itemKey: row.quote.itemKey, quantity: integer(row.quote.quantity, POLICY.maxQuantity), unitPriceCents: integer(row.quote.unitPriceCents, POLICY.maxUnitPriceCents) };
+  }
+  return value;
+}
 function correctionDetail(c, stepKey) {
   const base = c.lines.reduce((sum, line) => sum + (line.postingType === 'Credit' ? 0 : line.amountCents), 0);
   const sale = { customerKey: c.customerKey, lines: structuredClone(c.lines), baseAmountCents: base, taxMapping: 'salesTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax', originalTax: structuredClone(c.tax) };
@@ -260,6 +308,58 @@ function validateChoices(input, policy = POLICY) {
       for (const source of checked.value.correction?.sources || []) { if (settled.has('Source:' + source.logicalKey)) fail('Corrections in one batch cannot share an original record.'); settled.add('Source:' + source.logicalKey); }
       cents += checked.cents; return checked.value;
     }
+    // Policy v8: a published service invoiced on payment terms and left open (with the
+    // field quote and time entry, as for a settled sale), or an operating bill on terms.
+    if (row?.type === 'invoice-on-terms' || row?.type === 'bill-on-terms') {
+      const invoice = row.type === 'invoice-on-terms';
+      exact(row, invoice ? ['type', 'customerKey', 'itemKey', 'quantity', 'unitPriceCents', 'termsDays', 'purpose'] : ['type', 'vendorKey', 'category', 'amountCents', 'termsDays', 'purpose']);
+      if (!TERMS_DAYS.includes(row.termsDays)) fail('Use payment terms of ' + TERMS_DAYS.join(', ') + ' days.');
+      if (invoice) {
+        if (!PARTY.test(row.customerKey || '') || !SERVICES.includes(row.itemKey)) fail('Choose an observed service and customer role from the published business.');
+        const quantity = integer(row.quantity, POLICY.maxQuantity), unitPriceCents = integer(row.unitPriceCents, POLICY.maxUnitPriceCents); cents += quantity * unitPriceCents;
+        return { type: row.type, customerKey: row.customerKey, itemKey: row.itemKey, quantity, unitPriceCents, termsDays: row.termsDays, purpose: text(row.purpose, 10, 500) };
+      }
+      if (!/^overhead-supplier-[1-3]$/.test(row.vendorKey || '') || !['premises', 'utilities', 'software'].includes(row.category)) fail('Choose a published operating supplier and expense category.');
+      const amountCents = integer(row.amountCents, POLICY.maxExpenseCents); cents += amountCents;
+      return { type: row.type, vendorKey: row.vendorKey, category: row.category, amountCents, termsDays: row.termsDays, purpose: text(row.purpose, 10, 500) };
+    }
+    // Policy v8: a field-service estimate sent today (stays open until accepted), or the
+    // conversion of an earlier one into today's time entry and an invoice on terms.
+    if (row?.type === 'send-estimate') {
+      exact(row, ['type', 'customerKey', 'quantity', 'unitPriceCents', 'purpose']);
+      if (!/^field-client-0(?:0[1-9]|1[0-5])$/.test(row.customerKey || '')) fail('Estimates are sent to published field-service customers.');
+      const quantity = integer(row.quantity, POLICY.maxQuantity), unitPriceCents = integer(row.unitPriceCents, POLICY.maxUnitPriceCents);
+      return { type: row.type, customerKey: row.customerKey, quantity, unitPriceCents, purpose: text(row.purpose, 10, 500) };
+    }
+    if (row?.type === 'convert-own-estimate') {
+      const value = estimateConversionChoice(row), target = 'Estimate:' + value.estimateId;
+      if (settled.has(target)) fail('Convert each estimate once per activity batch.'); settled.add(target);
+      for (const source of value.source?.sources || []) { if (settled.has('Source:' + source.logicalKey)) fail('Activities in one batch cannot share an original record.'); settled.add('Source:' + source.logicalKey); }
+      if (value.quote) cents += value.quote.quantity * value.quote.unitPriceCents;
+      return value;
+    }
+    // Policy v8: a purchase order for workshop stock from a published stock supplier. It
+    // posts nothing; receive-purchase-order later turns it into the inventory bill.
+    if (row?.type === 'order-stock') {
+      exact(row, ['type', 'vendorKey', 'lines', 'purpose']);
+      if (!/^stock-supplier-[1-3]$/.test(row.vendorKey || '') || !Array.isArray(row.lines) || !row.lines.length || row.lines.length > 5) fail('Order one to five workshop stock items from a published stock supplier.');
+      const seen = new Set();
+      const lines = row.lines.map(line => {
+        exact(line, ['itemKey', 'quantity', 'unitPriceCents']);
+        if (!/^workshop-stock-[1-5]$/.test(line.itemKey || '') || seen.has(line.itemKey)) fail('Order each published workshop stock item once per purchase order.'); seen.add(line.itemKey);
+        return { itemKey: line.itemKey, quantity: integer(line.quantity, STOCK_ORDER_QUANTITY), unitPriceCents: integer(line.unitPriceCents, POLICY.maxUnitPriceCents) };
+      });
+      const total = lines.reduce((sum, line) => sum + line.quantity * line.unitPriceCents, 0);
+      if (total > POLICY.maxSettlementCents) fail('This purchase order exceeds the per-order capacity.');
+      cents += total;
+      return { type: row.type, vendorKey: row.vendorKey, lines, purpose: text(row.purpose, 10, 500) };
+    }
+    if (OWN_SETTLEMENT[row?.type]) {
+      const value = ownSettlementChoice(row), spec = OWN_SETTLEMENT[row.type], target = spec.entity + ':' + value[spec.idKey];
+      if (settled.has(target)) fail('Settle each of your own ' + spec.entity.toLowerCase() + 's once per activity batch.'); settled.add(target);
+      for (const source of value.source?.sources || []) { if (settled.has('Source:' + source.logicalKey)) fail('Activities in one batch cannot share an original record.'); settled.add('Source:' + source.logicalKey); }
+      cents += value.amountCents; return value;
+    }
     if (row?.type === 'collect-adopted-invoice' || row?.type === 'pay-adopted-bill') {
       const invoice = row.type === 'collect-adopted-invoice', idKey = invoice ? 'invoiceId' : 'billId', partyKey = invoice ? 'customerKey' : 'vendorKey';
       exact(row, ['type', idKey, partyKey, 'amountCents', 'purpose']);
@@ -268,7 +368,7 @@ function validateChoices(input, policy = POLICY) {
       const amountCents = integer(row.amountCents, POLICY.maxSettlementCents); cents += amountCents;
       return { type: row.type, [idKey]: row[idKey], [partyKey]: row[partyKey], amountCents, purpose: text(row.purpose, 10, 500) };
     }
-    fail('Only settled service sales, paid non-stock overhead, new customers, suppliers and service items, cash expenses, supplier credits, customer credits and refunds, bank transfers, journal entries, settlements of adopted invoices or bills and corrections of your own records are supported in these additional activity batches.');
+    fail('Only settled service sales, service invoices and operating bills on terms, collections and payments of your own open invoices and bills, paid non-stock overhead, new customers, suppliers and service items, cash expenses, supplier credits, customer credits and refunds, bank transfers, journal entries, settlements of adopted invoices or bills and corrections of your own records are supported in these additional activity batches.');
   });
   if (cents > POLICY.maxBatchCents) fail('This activity batch exceeds its exact-cent capacity.');
   return { decisionKey, purpose, activities };
@@ -277,6 +377,8 @@ function makeActivityBatch({ scope, businessKey, day, choices, policy = POLICY }
   choices = validateChoices(choices, policy); date(day);
   if (choices.activities.some(row => row.type === 'correct-own-record' && row.correction === undefined)) fail('Correction terms are derived by the server from your own original record. Prepare corrections through the accountant activity tool.');
   if (choices.activities.some(row => row.type === 'correct-own-record' && row.correction.original.txnDate >= day)) fail('Correct a record from verified preceding history; a record from today can be corrected tomorrow.');
+  if (choices.activities.some(row => OWN_SOURCED[row.type] && row.source === undefined)) fail('The original record is derived by the server from your own earlier work. Prepare collections, payments and estimate conversions through the accountant activity tool.');
+  if (choices.activities.some(row => OWN_SOURCED[row.type] && row.source.txnDate >= day)) fail('Use a record from verified preceding history; a record from today can be settled or converted tomorrow.');
   const requestHash = hash(choices), key = hash({ version: 1, scope, businessKey, day, decisionKey: choices.decisionKey });
   return { version: 1, policyHash: hash(policy), key, requestHash, day, ...choices };
 }
@@ -290,11 +392,14 @@ function buildBatchActivity(batch, scope, businessKey) {
   for (const [index, choice] of batch.activities.entries()) {
     const ruleKey = 'activity-' + batch.key.slice(0, 20) + '-' + String(index + 1).padStart(3, '0');
     const rows = new Map();
+    // A parent is a step key of this activity, or (policy v8) an existing earlier
+    // record { logicalKey, entity } that is one of the batch's prerequisites.
+    const parentOf = key => typeof key === 'string' ? rows.get(key) : key;
     const add = (stepKey, entity, parents, detail) => {
       const logicalKey = hash({ realmId: scope.realmId, environment: scope.environment, businessKey, ruleKey, occurrence: batch.day, stepKey });
-      const event = { logicalKey, ruleKey, occurrence: batch.day, stepKey, entity, txnDate: batch.day, dependsOn: parents.map(key => rows.get(key).logicalKey), intent: { purpose: choice.purpose } };
+      const event = { logicalKey, ruleKey, occurrence: batch.day, stepKey, entity, txnDate: batch.day, dependsOn: parents.map(key => parentOf(key).logicalKey), intent: { purpose: choice.purpose } };
       event.fingerprint = hash({ version: 1, batchKey: batch.key, requestHash: batch.requestHash, ruleKey, stepKey, entity, txnDate: batch.day });
-      const details = { version: 1, currency: 'CAD', policyStatus: 'proposed', references: parents.map(key => ({ logicalKey: rows.get(key).logicalKey, entity: rows.get(key).entity })), baseAmountCents: null, taxStatus: 'not_applicable', lines: [], activityBatch: { key: batch.key, index, stepKey, purpose: choice.purpose }, ...detail };
+      const details = { version: 1, currency: 'CAD', policyStatus: 'proposed', references: parents.map(key => ({ logicalKey: parentOf(key).logicalKey, entity: parentOf(key).entity })), baseAmountCents: null, taxStatus: 'not_applicable', lines: [], activityBatch: { key: batch.key, index, stepKey, purpose: choice.purpose }, ...detail };
       rows.set(stepKey, event); events.push(event); byLogicalKey[logicalKey] = { logicalKey, details, detailsHash: hash({ calendarFingerprint: event.fingerprint, details }) };
     };
     if (choice.type === 'add-customer' || choice.type === 'add-supplier') {
@@ -310,6 +415,40 @@ function buildBatchActivity(batch, scope, businessKey) {
       add('invoice', 'Invoice', field ? ['estimate', 'time'] : [], { ...sale, dueDate: batch.day });
       add('payment', 'Payment', ['invoice'], { customerKey, bankMapping: null, cashDirection: 'inflow', destination: 'undeposited_funds', amountRule: 'saved_originating_total', amountSourceKey: rows.get('invoice').logicalKey, taxStatus: 'included_in_originating_total' });
       add('deposit', 'Deposit', ['payment'], { customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
+    } else if (choice.type === 'invoice-on-terms') {
+      // As a settled sale, but the invoice stays open until its due date: no payment.
+      const field = choice.itemKey === 'field-service-hour', customerKey = choice.customerKey;
+      const line = { key: 'primary', itemKey: choice.itemKey, quantity: choice.quantity, unit: field ? 'hours' : 'month', unitPriceCents: choice.unitPriceCents, amountCents: choice.quantity * choice.unitPriceCents, accountMapping: field ? 'serviceIncome' : 'careIncome' };
+      const sale = { customerKey, lines: [line], baseAmountCents: line.amountCents, taxMapping: 'salesTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' };
+      if (field) { add('estimate', 'Estimate', [], sale); add('time', 'TimeActivity', ['estimate'], { customerKey, itemKey: choice.itemKey, hours: choice.quantity, billable: true, workerKey: 'field-technician', amountRule: 'time_only' }); }
+      add('invoice', 'Invoice', field ? ['estimate', 'time'] : [], { ...sale, dueDate: shift(batch.day, choice.termsDays), paymentTerms: { days: choice.termsDays } });
+    } else if (choice.type === 'bill-on-terms') {
+      add('bill', 'Bill', [], { vendorKey: choice.vendorKey, expenseCategory: choice.category, dueDate: shift(batch.day, choice.termsDays), paymentTerms: { days: choice.termsDays }, lines: [{ key: 'primary', accountMapping: 'operatingExpense', amountCents: choice.amountCents, billableStatus: 'NotBillable' }], baseAmountCents: choice.amountCents, taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax' });
+    } else if (choice.type === 'order-stock') {
+      const lines = choice.lines.map((line, n) => ({ key: 'line-' + (n + 1), itemKey: line.itemKey, quantity: line.quantity, unit: 'each', unitPriceCents: line.unitPriceCents, amountCents: line.quantity * line.unitPriceCents, accountMapping: 'inventoryAsset' }));
+      add('purchase-order', 'PurchaseOrder', [], { vendorKey: choice.vendorKey, lines, baseAmountCents: lines.reduce((sum, line) => sum + line.amountCents, 0), taxMapping: 'purchaseTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax', stockOrder: true });
+    } else if (choice.type === 'send-estimate') {
+      const line = { key: 'primary', itemKey: 'field-service-hour', quantity: choice.quantity, unit: 'hours', unitPriceCents: choice.unitPriceCents, amountCents: choice.quantity * choice.unitPriceCents, accountMapping: 'serviceIncome' };
+      add('estimate', 'Estimate', [], { customerKey: choice.customerKey, lines: [line], baseAmountCents: line.amountCents, taxMapping: 'salesTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax', quoteOnly: true });
+    } else if (choice.type === 'convert-own-estimate') {
+      // The accepted estimate (an existing prerequisite) is worked today and billed on terms.
+      const source = choice.source, quote = choice.quote, estimate = { logicalKey: source.logicalKey, entity: 'Estimate' }, customerKey = choice.customerKey;
+      if (source.txnDate >= batch.day) fail('Convert an estimate from verified preceding history.');
+      for (const row of source.sources) prerequisites.push({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.txnDate, dependsOn: [...row.dependsOn] });
+      const line = { key: 'primary', itemKey: quote.itemKey, quantity: quote.quantity, unit: 'hours', unitPriceCents: quote.unitPriceCents, amountCents: quote.quantity * quote.unitPriceCents, accountMapping: 'serviceIncome' };
+      add('time', 'TimeActivity', [estimate], { customerKey, itemKey: quote.itemKey, hours: quote.quantity, billable: true, workerKey: 'field-technician', amountRule: 'time_only' });
+      add('invoice', 'Invoice', [estimate, 'time'], { customerKey, lines: [line], baseAmountCents: line.amountCents, taxMapping: 'salesTax', taxStatus: 'unresolved', amountRule: 'lines_before_tax', dueDate: shift(batch.day, choice.termsDays), paymentTerms: { days: choice.termsDays } });
+    } else if (OWN_SETTLEMENT[choice.type]) {
+      // The original terms invoice or bill and its saved dependency closure are existing
+      // prerequisites; the compiler re-proves its open balance inside the writer fence.
+      const spec = OWN_SETTLEMENT[choice.type], source = choice.source, original = { logicalKey: source.logicalKey, entity: spec.entity };
+      if (source.txnDate >= batch.day) fail('Settle a record from verified preceding history.');
+      for (const row of source.sources) prerequisites.push({ logicalKey: row.logicalKey, entity: row.entity, txnDate: row.txnDate, dependsOn: [...row.dependsOn] });
+      const ownSettlement = { entity: spec.entity, qboId: choice[spec.idKey], logicalKey: source.logicalKey, amountCents: choice.amountCents };
+      if (spec.entity === 'Invoice') {
+        add('payment', 'Payment', [original], { customerKey: choice.customerKey, bankMapping: null, cashDirection: 'inflow', destination: 'undeposited_funds', amountRule: 'own_open_balance', amountSourceKey: source.logicalKey, taxStatus: 'included_in_originating_total', ownSettlement });
+        add('deposit', 'Deposit', ['payment'], { customerKey: choice.customerKey, destination: 'operating_bank', bankMapping: 'operatingBank', cashDirection: 'internal_transfer', amountRule: 'saved_originating_total', amountSourceKey: rows.get('payment').logicalKey, taxStatus: 'included_in_originating_total' });
+      } else add('bill-payment', 'BillPayment', [original], { vendorKey: choice.vendorKey, bankMapping: 'operatingBank', cashDirection: 'outflow', fundingSource: 'operating_bank', amountRule: 'own_open_balance', amountSourceKey: source.logicalKey, taxStatus: 'included_in_originating_total', ownSettlement });
     } else if (choice.type === 'correct-own-record') {
       // The original and its saved dependency closure are existing prerequisites. The
       // reversal steps take their identity from the ORIGINAL (rule key and occurrence),
@@ -372,7 +511,8 @@ function validateActivityBatch(batch, candidate) {
     // Dated tax is independently added from the published authority by preparation.
     const { datedTax, ...actual } = entry.step?.details || {};
     if (!event || entry.step.entity !== event.entity || entry.step.txnDate !== batch.day || entry.step.calendarFingerprint !== event.fingerprint || canonical(actual) !== canonical(detail) || canonical((entry.step.dependencies || []).map(row => row.logicalKey).sort()) !== canonical([...event.dependsOn].sort())) fail('Additional activity differs from the retained business choices.');
-    if (!detail.purchaseOrderReceipt && entry.step.references?.some(ref => ref.entity === 'Item' && !SERVICES.includes(ref.key) && !ADDED.item.test(ref.key))) fail('Additional activity cannot introduce inventory movement.');
+    // A stock purchase order (policy v8) references stock items but moves no stock.
+    if (!detail.purchaseOrderReceipt && detail.stockOrder !== true && entry.step.references?.some(ref => ref.entity === 'Item' && !SERVICES.includes(ref.key) && !ADDED.item.test(ref.key))) fail('Additional activity cannot introduce inventory movement.');
     expectedKeys.delete(event.logicalKey);
   }
   if (expectedKeys.size) fail('Additional activity contains duplicate or missing records.');
@@ -381,9 +521,9 @@ function validateActivityBatch(batch, candidate) {
 function batchLifecycle(step) {
   const value = step?.details?.activityBatch, d = step?.details;
   exact(value, ['key', 'index', 'stepKey', 'purpose']);
-  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit', 'credit', 'refund', 'transfer', 'journal', 'receive-bill', 'customer', 'supplier', 'item', ...Object.keys(CORRECTION_MODES)].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
+  if (!HASH.test(value.key || '') || !Number.isInteger(value.index) || value.index < 0 || value.index >= POLICY.maxActivities || !['estimate', 'time', 'invoice', 'payment', 'deposit', 'bill', 'bill-payment', 'expense', 'vendor-credit', 'credit', 'refund', 'transfer', 'journal', 'receive-bill', 'purchase-order', 'customer', 'supplier', 'item', ...Object.keys(CORRECTION_MODES)].includes(value.stepKey)) fail('The additional activity lifecycle is incomplete.');
   text(value.purpose, 10, 500); date(step.txnDate);
-  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit', credit: 'CreditMemo', refund: 'RefundReceipt', transfer: 'Transfer', journal: 'JournalEntry', 'receive-bill': 'Bill', customer: 'Customer', supplier: 'Vendor', item: 'Item', 'correction-credit': 'CreditMemo', 'correction-application': 'Payment', 'correction-refund': 'RefundReceipt', 'correction-vendor-credit': 'VendorCredit', 'correction-bill-application': 'BillPayment', 'correction-journal': 'JournalEntry' }[value.stepKey];
+  const entity = { estimate: 'Estimate', time: 'TimeActivity', invoice: 'Invoice', payment: 'Payment', deposit: 'Deposit', bill: 'Bill', 'bill-payment': 'BillPayment', expense: 'Purchase', 'vendor-credit': 'VendorCredit', credit: 'CreditMemo', refund: 'RefundReceipt', transfer: 'Transfer', journal: 'JournalEntry', 'receive-bill': 'Bill', 'purchase-order': 'PurchaseOrder', customer: 'Customer', supplier: 'Vendor', item: 'Item', 'correction-credit': 'CreditMemo', 'correction-application': 'Payment', 'correction-refund': 'RefundReceipt', 'correction-vendor-credit': 'VendorCredit', 'correction-bill-application': 'BillPayment', 'correction-journal': 'JournalEntry' }[value.stepKey];
   if (step.entity !== entity) fail('The additional activity step changed its transaction type.');
   if (d.activityTemplateVersion !== undefined || d.origin !== undefined || d.settlement !== undefined || d.stockQuantityRule !== undefined || d.creditAdjustment !== undefined || d.creditSettlement !== undefined) fail('An additional activity cannot borrow a monthly, stock or credit lifecycle.');
   const contract = { version: 4, activityBatch: structuredClone(value), mode: 'standard' };
@@ -401,6 +541,18 @@ function batchLifecycle(step) {
     return contract;
   }
   if (d.listRole !== undefined || d.incomeMapping !== undefined) fail('Only an added customer, supplier or item may carry a list role.');
+  // Policy v8: a stock purchase order, exact whole-unit inventory lines, no postings.
+  if (step.entity === 'PurchaseOrder' || d.stockOrder !== undefined) {
+    const items = new Set((d.lines || []).map(line => line.itemKey));
+    if (d.stockOrder !== true || step.entity !== 'PurchaseOrder' || value.stepKey !== 'purchase-order' || (step.dependencies || []).length || !/^stock-supplier-[1-3]$/.test(d.vendorKey || '') || !Array.isArray(d.lines) || !d.lines.length || d.lines.length > 5 || items.size !== d.lines.length || d.lines.some((line, n) => line.key !== 'line-' + (n + 1) || !/^workshop-stock-[1-5]$/.test(line.itemKey || '') || line.unit !== 'each' || line.accountMapping !== 'inventoryAsset' || !Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.quantity > STOCK_ORDER_QUANTITY || !Number.isSafeInteger(line.unitPriceCents) || line.unitPriceCents < 1 || line.unitPriceCents > POLICY.maxUnitPriceCents || line.amountCents !== line.quantity * line.unitPriceCents) || d.baseAmountCents !== d.lines.reduce((sum, line) => sum + line.amountCents, 0) || d.baseAmountCents > POLICY.maxSettlementCents || d.taxMapping !== 'purchaseTax' || d.amountRule !== 'lines_before_tax' || d.customerKey !== undefined || d.bankMapping !== undefined) fail('A stock purchase order keeps its exact supplier and whole-unit stock lines.');
+    contract.mode = 'stock-order';
+  }
+  // Policy v8: an estimate sent on its own stays open until a later conversion.
+  if (d.quoteOnly !== undefined) {
+    const line = d.lines?.[0];
+    if (d.quoteOnly !== true || step.entity !== 'Estimate' || value.stepKey !== 'estimate' || (step.dependencies || []).length || d.lines?.length !== 1 || line.itemKey !== 'field-service-hour' || line.unit !== 'hours' || line.accountMapping !== 'serviceIncome' || line.amountCents !== line.quantity * line.unitPriceCents || d.baseAmountCents !== line.amountCents || !/^field-client-0(?:0[1-9]|1[0-5])$/.test(d.customerKey || '') || d.taxMapping !== 'salesTax') fail('A sent estimate keeps its exact field-service quote.');
+    contract.quoteOnly = true;
+  }
   if (d.adoptedSettlement !== undefined) {
     // Settles one adopted obligation; it never depends on a managed record.
     const s = d.adoptedSettlement, payment = step.entity === 'Payment';
@@ -408,8 +560,23 @@ function batchLifecycle(step) {
     if (!['Payment', 'BillPayment'].includes(step.entity) || s.entity !== (payment ? 'Invoice' : 'Bill') || !QBO_ID.test(s.qboId || '') || !Number.isSafeInteger(s.amountCents) || s.amountCents < 1 || s.amountCents > POLICY.maxSettlementCents || d.amountRule !== 'adopted_open_balance' || d.amountSourceKey !== undefined || (step.dependencies || []).length || (payment ? !PARTY.test(d.customerKey || '') || d.destination !== 'undeposited_funds' : !SUPPLIER.test(d.vendorKey || '') || d.fundingSource !== 'operating_bank' || d.bankMapping !== 'operatingBank')) fail('The adopted settlement terms are incomplete.');
     contract.mode = 'adopted-settlement'; contract.adopted = { entity: s.entity, qboId: s.qboId, amountCents: s.amountCents };
   } else if (d.amountRule === 'adopted_open_balance') fail('An adopted settlement must name its exact obligation.');
-  if (['Invoice', 'Bill'].includes(step.entity)) { if (d.dueDate !== step.txnDate) fail('These settled activities require immediate terms.'); contract.dueDate = d.dueDate; }
-  else if (d.dueDate !== undefined) fail('Only an invoice or bill may carry payment terms.');
+  if (d.ownSettlement !== undefined) {
+    // Policy v8: settles one of the accountant's own open terms invoices or bills, which
+    // is this step's only dependency (an existing prerequisite of the batch).
+    const s = d.ownSettlement, payment = step.entity === 'Payment', links = step.dependencies || [];
+    exact(s, ['entity', 'qboId', 'logicalKey', 'amountCents']);
+    if (!['Payment', 'BillPayment'].includes(step.entity) || value.stepKey !== (payment ? 'payment' : 'bill-payment') || s.entity !== (payment ? 'Invoice' : 'Bill') || !QBO_ID.test(s.qboId || '') || !HASH.test(s.logicalKey || '') || !Number.isSafeInteger(s.amountCents) || s.amountCents < 1 || s.amountCents > POLICY.maxSettlementCents || d.amountRule !== 'own_open_balance' || d.amountSourceKey !== s.logicalKey || d.adoptedSettlement !== undefined || d.lines?.length || links.length !== 1 || links[0].logicalKey !== s.logicalKey || links[0].entity !== s.entity || (payment ? !PARTY.test(d.customerKey || '') || d.destination !== 'undeposited_funds' || d.bankMapping !== null || d.cashDirection !== 'inflow' : !/^overhead-supplier-[1-3]$/.test(d.vendorKey || '') || d.fundingSource !== 'operating_bank' || d.bankMapping !== 'operatingBank' || d.cashDirection !== 'outflow')) fail('The settlement of your own open record keeps its exact original and amount.');
+    contract.mode = payment ? 'own-collection' : 'own-bill-payment'; contract.ownSettlement = { entity: s.entity, qboId: s.qboId, logicalKey: s.logicalKey, amountCents: s.amountCents };
+  } else if (d.amountRule === 'own_open_balance') fail('A settlement of your own record must name its exact original.');
+  if (['Invoice', 'Bill'].includes(step.entity)) {
+    // Policy v8 terms: due a published number of days after the transaction date.
+    if (d.paymentTerms !== undefined) {
+      exact(d.paymentTerms, ['days']);
+      if (!TERMS_DAYS.includes(d.paymentTerms.days) || value.stepKey !== (step.entity === 'Invoice' ? 'invoice' : 'bill') || d.dueDate !== shift(step.txnDate, d.paymentTerms.days)) fail('The approved payment terms changed.');
+      contract.paymentTerms = { days: d.paymentTerms.days };
+    } else if (d.dueDate !== step.txnDate) fail('These settled activities require immediate terms.');
+    contract.dueDate = d.dueDate;
+  } else if (d.dueDate !== undefined || d.paymentTerms !== undefined) fail('Only an invoice or bill may carry payment terms.');
   if (['Purchase', 'VendorCredit'].includes(step.entity)) {
     // One nonbillable operating-expense line with purchase tax; a cash expense is paid
     // from the operating bank, a supplier credit reduces accounts payable.
@@ -454,7 +621,7 @@ function correctionLifecycle(step, value, contract) {
   const spec = CORRECTION[c.kind], row = spec?.steps.find(entry => entry[0] === value.stepKey), original = originalTerms(c.original);
   if (!row || row[1] !== step.entity || !spec.targets.includes(original.entity) || original.txnDate >= step.txnDate) wrong();
   if (credit && (correctionDate(c.earliestSourceTxnDate) > original.txnDate)) wrong();
-  for (const key of ['listRole', 'incomeMapping', 'adoptedSettlement', 'purchaseOrderReceipt', 'toBankMapping', 'dueDate', 'expenseCategory', 'originalTax', 'destination', 'fundingSource', 'bankMapping', 'customerKey', 'vendorKey', 'taxMapping', 'amountSourceKey'].filter(key => d[key] !== undefined)) {
+  for (const key of ['listRole', 'incomeMapping', 'adoptedSettlement', 'ownSettlement', 'paymentTerms', 'quoteOnly', 'stockOrder', 'purchaseOrderReceipt', 'toBankMapping', 'dueDate', 'expenseCategory', 'originalTax', 'destination', 'fundingSource', 'bankMapping', 'customerKey', 'vendorKey', 'taxMapping', 'amountSourceKey'].filter(key => d[key] !== undefined)) {
     const allowed = { 'correction-credit': ['customerKey', 'taxMapping', 'originalTax'], 'correction-refund': ['customerKey', 'taxMapping', 'originalTax', 'bankMapping', 'fundingSource'], 'correction-application': ['customerKey', 'bankMapping', 'destination', 'amountSourceKey'], 'correction-vendor-credit': ['vendorKey', 'expenseCategory', 'taxMapping', 'originalTax'], 'correction-bill-application': ['vendorKey', 'bankMapping', 'fundingSource', 'amountSourceKey'], 'correction-journal': [] }[value.stepKey];
     if (!allowed.includes(key)) wrong();
   }
@@ -485,4 +652,4 @@ function correctionLifecycle(step, value, contract) {
 function assertBatchPreparation(active, batch, now) {
   if (active.calendar.verifiedThrough === null || batch.day !== businessDate(new Date(now)) || shift(active.calendar.verifiedThrough, 1) !== batch.day) fail('Verify business history through yesterday before preparing today’s additional activity. Keep today open for further hourly work.');
 }
-module.exports = { ADDED, addedRoleKey, SAVED_POLICIES, JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, CORRECTION, CORRECTION_MODES, CORRECTION_TARGETS, correctionRuleKey, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };
+module.exports = { ADDED, addedRoleKey, SAVED_POLICIES, TERMS_DAYS, OWN_SETTLEMENT, OWN_SOURCED, JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, CORRECTION, CORRECTION_MODES, CORRECTION_TARGETS, correctionRuleKey, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };

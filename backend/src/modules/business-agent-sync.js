@@ -9,17 +9,18 @@ const amounts = require('./business-agent-reconciliation');
 // Request economy (docs/plans/continuous-business-activity-2026-10-30.md, sync tuning). The app
 // makes almost every change itself, so the cadence is adaptive:
 // - every incremental change-tracked source is read together in ONE change (CDC) call, every
-//   5 minutes in business hours (America/Halifax, business-agent-cadence.js) and every 15 outside;
+//   5 minutes during the day's activity hours (America/Halifax, business-agent-cadence.js; all day
+//   under rhythm v3) and every 15 outside;
 // - a write-bearing step asks for a read within the last two minutes (tick freshWithinMs), and
 //   that combined call is what satisfies the write gate;
 // - a combined response at the change limit, or one QuickBooks rejects, falls back to per-source
 //   reads (each source's own CDC call, and a full re-read if that is saturated too);
-// - snapshot sources are re-read every 30 minutes in business hours and 2 hours outside
+// - snapshot sources are re-read every 30 minutes during activity hours and 2 hours outside
 //   (TimeActivity) or every 6 hours (tax codes and rates, company info, preferences);
 // - from 02:00 Halifax a nightly sweep compares each change-tracked source's QuickBooks COUNT
 //   with the mirror and fully re-reads any source that differs; a cursor older than 29 days
 //   is always fully re-read.
-// Steady state is about 280 requests on a weekday, fewer on weekends.
+// Steady state under the all-day rhythm v3 is about 370 requests a day.
 const ENTITIES = Object.freeze(['Preferences', 'CompanyInfo', 'Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
 const SNAPSHOT_ONLY = new Set(['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']);
 const SINGLETONS = new Set(['CompanyInfo', 'Preferences']);
@@ -453,4 +454,4 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
   async function snapshot() { return publicSnapshot(await stateRead(), entities, now(), intervalMs); }
   return { tick, snapshot };
 }
-module.exports = { createBusinessAgentSync, summarizeCompanyMirror, ENTITIES, SNAPSHOT_ONLY: Object.freeze([...SNAPSHOT_ONLY]), PAGE_SIZE, CDC_LIMIT };
+module.exports = { recordSummary, createBusinessAgentSync, summarizeCompanyMirror, ENTITIES, SNAPSHOT_ONLY: Object.freeze([...SNAPSHOT_ONLY]), PAGE_SIZE, CDC_LIMIT };

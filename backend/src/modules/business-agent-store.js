@@ -143,7 +143,10 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   const UNFINISHED=['approved','reserved','running','blocked','stopped','awaiting-evidence','committing'];
   async function unfinishedRuns(scope,agentId,grant=null){
     if(!agentId)return [];
-    const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,status:{$in:UNFINISHED},...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
+    // An activity preview from an earlier business day was never approved and can never run
+    // (approval fences the calendar revision it was prepared against): retire it unsent.
+    const today=require('./business-activity-preview').businessDate(new Date(now()));
+    const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,$or:[{status:{$in:UNFINISHED}},{status:'previewed','activityBatch.day':{$lt:today}}],...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
     const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending nextOrdinal').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
     if(!rows.length)return [];
     const calendar=models.Calendars?await models.Calendars.findOne(scope).select('currentOperationId').maxTimeMS(3000).lean():null;
@@ -183,13 +186,26 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     ]).option({maxTimeMS:3000});
     return rows.map(value=>{const response=value.responses[0];return {...publicEvent(value),status:response?response.data.choice:'pending',response:response?publicEvent(response):null};});
   }
+  // Owner questions and the accountant's own management decisions, for this agent only. Any other id
+  // gets a refusal that says what it is and which tool reads it.
+  const OTHER_IDS=Object.freeze({'daily-plan':'today’s plan; read it with getManagementReview or getBusinessState (management)','capability-request':'a build-list request; read it with getManagementReview','specialist-report':'a specialist report; it is in context.specialistReports','decision-response':'an owner answer; read the decision it answers'});
   async function decision(row,id){
     if(!/^[a-f0-9]{24}$/.test(id||''))fail('Choose a saved business decision.',400);
-    const value=await Events.findOne({_id:id,agentId:String(row._id),kind:'decision'}).maxTimeMS(3000).lean();
-    if(!value)fail('This decision does not belong to the selected business.');
+    const agentId=String(row._id),value=await Events.findOne({_id:id,agentId,kind:{$in:['decision','management-decision']}}).maxTimeMS(3000).lean();
+    if(!value){
+      const other=await Events.findOne({_id:id,agentId}).select('kind').maxTimeMS(3000).lean();
+      if(other)fail('That id is '+(OTHER_IDS[other.kind]||'a recorded activity event ('+String(other.kind).slice(0,40)+'), not a decision; it is summarized in the activity feed')+'.');
+      if(models.Runs&&await models.Runs.exists({_id:id,...scopeOf(row)}).maxTimeMS(3000))fail('That id is a saved accounting operation, not a decision; read it with inspectBusinessOperation.');
+      fail('No decision with this id belongs to the selected business. Decision ids appear in context.decisions and getBusinessState.');
+    }
+    // The accountant's own decision has no owner answer: it is recorded, not pending.
+    if(value.kind==='management-decision')return {...publicEvent(value),status:'recorded',ownerQuestion:false,response:null};
     const response=await Events.findOne({agentId:String(row._id),kind:'decision-response','data.decisionId':id}).maxTimeMS(3000).lean();
     return {...publicEvent(value),status:response?response.data.choice:'pending',response:response?publicEvent(response):null};
   }
+  // The daily management review's records (business-management-review.js): the latest daily plan and the build list.
+  async function latestDailyPlan(row){const value=await Events.findOne({agentId:String(row._id),kind:'daily-plan'}).sort({at:-1,_id:-1}).maxTimeMS(3000).lean();return value?publicEvent(value):null;}
+  async function capabilityRequests(row){const rows=await Events.find({agentId:String(row._id),kind:'capability-request'}).sort({at:-1,_id:-1}).limit(60).maxTimeMS(3000).lean();return rows.map(publicEvent);}
   async function due(limit=20){return Agents.find({'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]}).select('_id').sort({nextWakeAt:1,_id:1}).limit(limit).maxTimeMS(3000).lean();}
   async function claim(id,token,leaseMs){return Agents.findOneAndUpdate({_id:id,'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]},{$set:{leaseToken:token,leaseExpiresAt:new Date(now()+leaseMs),currentWork:'Checking the current business state'}},{new:true}).lean();}
   async function current(row,token){const value=await Agents.findOne({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}}).maxTimeMS(3000).lean();if(!value)fail('The business worker was paused, changed or lost its lease.');return value;}
@@ -202,6 +218,6 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function liveActivity(scope,options){liveReader||=require('./business-agent-live').createLiveActivityReader({models,now});return liveReader(scope,options);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.activities.type').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
+  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

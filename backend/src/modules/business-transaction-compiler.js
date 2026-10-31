@@ -318,7 +318,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
     if (invoice) Object.assign(payload, { DepositToAccountRef: ref(account('undepositedFunds', 'Other Current Asset', 'UndepositedFunds').Id), ARAccountRef: ref(control), ProcessPayment: false });
     else Object.assign(payload, { APAccountRef: ref(control), PayType: 'Check', CheckPayment: { BankAccountRef: ref(account(details.bankMapping, 'Bank').Id), PrintStatus: 'NotSet' } });
   } else {
-    if ((!lifecycle?.settlement && !['credit-application', 'credit-remainder', 'correction-application', 'correction-bill-application'].includes(lifecycle?.mode) && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
+    if ((!lifecycle?.settlement && !['credit-application', 'credit-remainder', 'correction-application', 'correction-bill-application', 'own-collection', 'own-bill-payment'].includes(lifecycle?.mode) && details.amountRule !== 'saved_originating_total') || details.lines.length) fail('Settlement must use its saved source total.');
     const source = parent({ Payment: 'Invoice', BillPayment: 'Bill', Deposit: 'Payment' }[step.entity]);
     if (details.amountSourceKey !== source.logicalKey) fail('Settlement names another originating transaction.');
     const original = cents(source.record.TotalAmt); let amount = original; if (!amount) fail('Settlement requires a positive saved total.');
@@ -357,6 +357,13 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
       const creditControl = payment ? (record.ARAccountRef !== undefined ? record.ARAccountRef?.value : require('./business-receivables-route').verifyAccountPosting({ observed: credit, operationId: observationFence.operationId, writerRevision: observationFence.writerRevision, now })) : record.APAccountRef?.value;
       if (step.entity !== (lifecycle.mode === 'correction-application' ? 'Payment' : 'BillPayment') || source.logicalKey !== terms.logicalKey || source.qboId !== terms.qboId || record[party]?.value !== payload[party].value || creditControl !== control || (payment ? receivables(source, control) !== control : source.record.APAccountRef?.value !== control) || credited !== original || cents(source.record.Balance) !== original || cents(payment ? record.RemainingCredit : record.Balance) !== credited || links(record).length || links(source.record).some(link => !['Estimate', 'TimeActivity'].includes(link.TxnType))) fail('The original and its reversal no longer form one wholly unsettled pair; nothing was applied.');
       amount = 0;
+    } else if (['own-collection', 'own-bill-payment'].includes(lifecycle?.mode)) {
+      // Policy v8: a full or partial settlement of the accountant's own open terms
+      // invoice or bill, re-proved inside this writer fence: still owed by this party,
+      // settled only by its own payments so far, and the open balance covers the amount.
+      const terms = lifecycle.ownSettlement, payment = lifecycle.mode === 'own-collection', balance = cents(source.record.Balance);
+      if (step.entity !== (payment ? 'Payment' : 'BillPayment') || source.entity !== terms.entity || source.logicalKey !== terms.logicalKey || source.qboId !== terms.qboId || source.record.Id !== terms.qboId || source.record.CurrencyRef?.value !== 'CAD' || details.amountRule !== 'own_open_balance' || links(source.record).some(link => !(payment ? ['Estimate', 'TimeActivity', 'Payment'] : ['BillPayment']).includes(link.TxnType)) || !Number.isSafeInteger(terms.amountCents) || terms.amountCents < 1 || terms.amountCents > balance || balance > original) fail('Your own ' + terms.entity.toLowerCase() + ' changed or its open balance no longer covers this settlement; nothing was sent.');
+      amount = terms.amountCents;
     } else if (step.entity !== 'Deposit' && cents(source.record.Balance) !== amount) fail('The source is already partly or fully settled.');
     payload.TotalAmt = money(amount); payload.Line = [{ Amount: money(amount), LinkedTxn: [relate(source, 'Line.0.LinkedTxn')] }];
     if (['credit-application', 'correction-application', 'correction-bill-application'].includes(lifecycle?.mode)) {

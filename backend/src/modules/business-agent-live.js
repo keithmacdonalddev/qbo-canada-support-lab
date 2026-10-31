@@ -85,6 +85,8 @@ const EVENTS = {
   'decision-response': event => ['done', clean(event.title, MAX_TEXT) || 'You answered a decision', ''],
   control: event => ['info', oneLine(event.detail, MAX_TEXT) || 'You changed business controls', ''],
   'case-linked': () => ['done', 'Linked a troubleshooting case', ''],
+  'daily-plan': event => ['done', 'Set today’s plan', summary(event.detail)],
+  'capability-request': event => ['info', 'Added to the build list: ' + clean(String(event.title || '').replace(/^Build: /, ''), MAX_TEXT), ''],
 };
 
 // input: { now, configured, settings, reviewing, progress, activePass, cadence, events, runs, steps, records, unavailable }

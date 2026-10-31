@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, BookOpen, FilePen, LoaderCircle, NotebookPen, RefreshCw, Search, Table2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, BookOpen, FilePen, GraduationCap, LoaderCircle, NotebookPen, RefreshCw, Search, Table2 } from 'lucide-react'
 import Layout from '../components/Layout'
 import { Button } from '../components/ui/button'
 import client from '../api/client'
@@ -35,8 +35,10 @@ export default function AccountantTools() {
         It has <strong>{catalog.counts.tools} tools</strong>; <strong>{catalog.counts.changesQuickBooks}</strong> of them change QuickBooks.
         It can create <strong>{catalog.counts.canCreate} of {catalog.counts.recordTypes}</strong> record types, only inside fixed, checked workflows.
         {' '}<strong>{catalog.counts.notBuilt}</strong> record types are not built yet. It cannot edit or void records yet.
+        {catalog.counts.core !== undefined && <>{' '}<strong>{catalog.counts.core}</strong> tools are loaded on every review; the other <strong>{catalog.counts.deferred}</strong> are found by search when needed, and it loads one of its <strong>{catalog.counts.skills} skills</strong> before specialised work.</>}
       </p>
       <div className="act-columns">
+        <div className="act-stack">
         <section className="bw-panel" aria-labelledby="act-tools-title">
           <header className="bw-panel-heading"><h2 id="act-tools-title"><FilePen aria-hidden="true" />Tools</h2></header>
           {catalog.groups.map(group => {
@@ -45,13 +47,32 @@ export default function AccountantTools() {
             return <div key={group.key} className="act-group">
               <h3><Icon aria-hidden="true" />{group.label}<span>{tools.length}</span></h3>
               <ul>{tools.map(tool => <li key={tool.name}>
-                <div className="act-tool-head"><code>{tool.name}</code></div>
+                <div className="act-tool-head"><code>{tool.name}</code>{tool.disclosure && <span className={'act-pill act-pill--' + (tool.disclosure === 'core' ? 'quiet' : 'working')}>{tool.disclosure === 'core' ? 'Always loaded' : 'Found by search'}</span>}</div>
                 <p>{tool.summary}</p>
                 <details><summary>What the accountant is told</summary><p>{tool.instructions}</p></details>
               </li>)}</ul>
             </div>
           })}
+          {catalog.discovery?.length > 0 && <div className="act-group">
+            <h3><Search aria-hidden="true" />Finding tools and skills<span>{catalog.discovery.length}</span></h3>
+            <ul>{catalog.discovery.map(tool => <li key={tool.name}>
+              <div className="act-tool-head"><code>{tool.name}</code><span className="act-pill act-pill--quiet">Always loaded</span></div>
+              <p>{tool.summary}</p>
+              <details><summary>What the accountant is told</summary><p>{tool.instructions}</p></details>
+            </li>)}</ul>
+          </div>}
         </section>
+        {catalog.skills?.length > 0 && <section className="bw-panel" aria-labelledby="act-skills-title">
+          <header className="bw-panel-heading"><h2 id="act-skills-title"><GraduationCap aria-hidden="true" />Skills</h2></header>
+          <div className="act-group">
+            <p className="act-note">Procedures and reference knowledge it loads only when the work needs them. It sees each name and description on every review.</p>
+            <ul>{catalog.skills.map(skill => <li key={skill.name}>
+              <div className="act-tool-head"><code>{skill.name}</code>{skill.references > 0 && <span className="act-pill act-pill--quiet">{skill.references} reference {skill.references === 1 ? 'file' : 'files'}</span>}</div>
+              <p>{skill.description}</p>
+            </li>)}</ul>
+          </div>
+        </section>}
+        </div>
         <section className="bw-panel" aria-labelledby="act-coverage-title">
           <header className="bw-panel-heading"><h2 id="act-coverage-title"><Table2 aria-hidden="true" />What it can do in QuickBooks</h2></header>
           <table className="act-table">

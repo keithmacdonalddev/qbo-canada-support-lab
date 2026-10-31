@@ -17,12 +17,13 @@ const build = (correction, key = 'correct-001', day = '2026-12-01') => { const b
 const stepOf = (activity, event) => ({ logicalKey: event.logicalKey, entity: event.entity, txnDate: event.txnDate, dependencies: event.dependsOn.map(key => ({ logicalKey: key, entity: [...activity.prerequisites, ...activity.events].find(row => row.logicalKey === key).entity })), details: structuredClone(activity.detailProposal.byLogicalKey[event.logicalKey].details) });
 
 test('policy v7 adds corrections; v6 is frozen with its exact published semantics', () => {
-  assert.equal(batchTools.POLICY.version, 7); assert.equal(batchTools.POLICY.key, 'business-activity-v7');
-  assert.deepEqual(batchTools.POLICY.workflows.at(-1), 'correct-own-record');
+  // v8 (business lifecycles on terms) keeps corrections; v7 is frozen as published.
+  assert.ok(batchTools.POLICY.version >= 7); assert.ok(batchTools.POLICY.workflows.includes('correct-own-record'));
+  assert.ok([...batchTools.SAVED_POLICIES.values()].some(policy => policy.version === 7 && policy.key === 'business-activity-v7' && policy.workflows.at(-1) === 'correct-own-record'));
   const v6 = { version: 6, key: 'business-activity-v6', maxActivities: 12, maxQuantity: 8, maxUnitPriceCents: 100000, maxExpenseCents: 1000000, maxSettlementCents: 5000000, maxBatchCents: 12000000, workflows: ['settled-service-sale', 'paid-operating-expense', 'collect-adopted-invoice', 'pay-adopted-bill', 'paid-cash-expense', 'supplier-credit', 'customer-credit', 'customer-refund', 'bank-transfer', 'journal-entry', 'receive-purchase-order', 'add-customer', 'add-supplier', 'add-item'] };
   assert.equal(canonical(batchTools.SAVED_POLICIES.get(hash(v6))), canonical(v6));
   assert.notEqual(batchTools.POLICY_HASH, hash(v6));
-  assert.deepEqual([...batchTools.SAVED_POLICIES.values()].map(policy => policy.version).sort(), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual([...batchTools.SAVED_POLICIES.values()].map(policy => policy.version).sort(), [1, 2, 3, 4, 5, 6, 7, 8]);
   // Saved v1–v6 batches cannot claim the new workflow and keep rebuilding unchanged.
   for (const policy of [...batchTools.SAVED_POLICIES.values()].filter(value => value.version < 7)) {
     assert.throws(() => batchTools.makeActivityBatch({ scope, businessKey: 'b', day: '2026-12-01', choices: choices(saleTerms()), policy }), /not part of the saved activity policy/);

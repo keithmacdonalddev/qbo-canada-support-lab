@@ -11,7 +11,11 @@
 .act-group ul { list-style: none; margin: 0; padding: 0; }
 .act-group li { padding: 10px 0; border-top: 1px solid var(--line); }
 .act-group li:first-child { border-top: 0; }
+.act-stack { display: grid; gap: 16px; min-width: 0; }
+.act-tool-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.act-tool-head .act-pill { height: 20px; padding: 0 7px; font-size: 11px; }
 .act-tool-head code { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.act-note { margin: 10px 0 4px; color: var(--ink-3); font-size: 12px; line-height: 1.5; }
 .act-group li > p { margin: 2px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
 .act-group details { margin-top: 4px; }
 .act-group summary { width: fit-content; color: var(--bw-accent); font-size: 11.5px; font-weight: 550; cursor: pointer; }

@@ -13,6 +13,17 @@ test('every live accountant tool has an owner-facing summary and its exact instr
   assert.equal(catalog.tools.find(tool => tool.name === 'executeBusinessPeriod').changesQuickBooks, true);
 });
 
+test('the catalog shows the core/deferred split, the discovery tools and the skills', () => {
+  const catalog = agentToolCatalog();
+  assert.equal(catalog.tools.find(tool => tool.name === 'getBusinessState').disclosure, 'core');
+  assert.equal(catalog.tools.find(tool => tool.name === 'resumeBusinessOperation').disclosure, 'deferred');
+  assert.equal(catalog.counts.core + catalog.counts.deferred, catalog.counts.tools);
+  assert.deepEqual(catalog.discovery.map(tool => tool.name), ['searchTools', 'useTool', 'listSkills', 'loadSkill', 'readSkillReference']);
+  for (const tool of catalog.discovery) { assert.ok(tool.summary.length > 10); assert.ok(tool.instructions.length > 10); }
+  assert.equal(catalog.counts.skills, catalog.skills.length);
+  assert.ok(catalog.skills.find(skill => skill.name === 'qbo-api-records').references >= 5);
+});
+
 test('coverage counts what the accountant can and cannot create', () => {
   const { coverage, counts } = agentToolCatalog();
   assert.equal(counts.recordTypes, coverage.length);

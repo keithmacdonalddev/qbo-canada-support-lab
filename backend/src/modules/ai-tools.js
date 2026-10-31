@@ -1413,4 +1413,8 @@ module.exports = {
   escapeQueryString,
   unwrapBody,
   recordSummary,
+  // The business accountant answers the same read tools from the synced copy
+  // (business-local-reads.js) with these exact matching rules and result shapes.
+  compactRecord,
+  SEARCH_RULES: { PEOPLE_TYPES, NAME_SEARCH_TYPES, LIST_TYPES, UNSEARCHABLE_TEXT_TYPES, SORTABLE_LIST_TYPES, CUSTOMER_TXN_TYPES, VENDOR_TXN_TYPES, ACCOUNT_TYPES, ITEM_TYPES },
 };

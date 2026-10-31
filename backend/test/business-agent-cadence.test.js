@@ -21,8 +21,8 @@ test('Halifax time uses real offsets across daylight saving, including the missi
   assert.equal(c.localTime('2026-10-30T17:15:00Z'), '2:15 PM');
 });
 
-test('each day has its own rhythm: weekday, Saturday precedence and a closed Sunday', () => {
-  const friday = c.dayRhythm('2026-10-30'), saturday = c.dayRhythm('2026-10-31'), sunday = c.dayRhythm('2026-11-01');
+test('days before v3 keep their own rhythm: weekday, Saturday precedence and a closed Sunday', () => {
+  const friday = c.dayRhythm('2026-10-30'), saturday = c.dayRhythm('2026-10-24'), sunday = c.dayRhythm('2026-10-25');
   assert.deepEqual([friday.target, friday.ceiling, friday.slots.length, friday.open, friday.close], [150, 300, 10, 480, 1080]);
   assert.deepEqual([saturday.target, saturday.ceiling, saturday.slots.length, saturday.open, saturday.close], [30, 60, 4, 600, 840]);
   assert.deepEqual([sunday.target, sunday.ceiling, sunday.slots.length, sunday.open], [0, 0, 0, null]);
@@ -31,16 +31,43 @@ test('each day has its own rhythm: weekday, Saturday precedence and a closed Sun
   assert.deepEqual(saturday.slots.map(slot => slot.minute), [630, 690, 750, 810], 'hourly slices 10:30-13:30');
   const frozen = { ...friday, target: 12, ceiling: 24 };
   assert.equal(c.frozenRhythm({ rhythm: frozen }, '2026-10-30').target, 12, 'the day keeps its first rhythm');
-  assert.equal(c.frozenRhythm({ rhythm: frozen }, '2026-11-02').target, 150, 'a new day takes a new rhythm');
+  assert.equal(c.frozenRhythm({ rhythm: frozen }, '2026-11-02').target, 220, 'a new day takes a new rhythm');
   const v1 = { version: 1, day: '2026-10-30', target: 20, ceiling: 40, open: 480, close: 1080, slots: [{ n: 1, minute: 510 }] };
   assert.equal(c.frozenRhythm({ rhythm: v1 }, '2026-10-30').target, 20, 'a day frozen under an earlier rhythm version keeps it');
+});
+
+test('v3: the business runs every hour of every day with a believable hourly shape', () => {
+  for (const day of ['2026-10-31', '2026-11-01', '2026-12-25', '2027-07-04']) {
+    const r = c.dayRhythm(day);
+    assert.deepEqual([r.version, r.target, r.ceiling, r.slots.length, r.open, r.close], [3, 220, 440, 24, 0, 1440], day);
+  }
+  const r = c.dayRhythm('2026-11-01');
+  assert.deepEqual(r.slots.map(slot => slot.minute), Array.from({ length: 24 }, (_, hour) => hour * 60 + 30), 'hourly slices 00:30-23:30');
+  assert.ok(r.slots.every(slot => slot.weight > 0), 'no hour is ever empty');
+  const day = todayAt(at('2026-11-01', '23:45')), share = n => day.slots[n - 1].expected - (n > 1 ? day.slots[n - 2].expected : 0);
+  assert.equal(day.slots.at(-1).expected, 220);
+  assert.ok(share(12) > share(20) && share(20) > share(3), 'heavier 08:00-18:00, lighter evenings, lightest overnight');
+  assert.equal(day.sliceCap, 30, 'twice the busiest hour’s share of 15');
+  // Today (Oct 31) was frozen under v2 before the switch: it moves to v3 with its saved records kept.
+  const v2 = { ...c.dayRhythm('2026-10-24'), day: '2026-10-31' };
+  assert.equal(c.frozenRhythm({ rhythm: v2 }, '2026-10-31').version, 3);
+  const now = at('2026-10-31', '02:40'), saved = todayAt(now, [{ id: 'v2', status: 'verified', decisionKey: 'slot-20261031-r2-s1', createdAt: now - MIN, createCount: 5 }], Array.from({ length: 5 }, (_, i) => ({ operationId: 'v2', entity: 'invoice', logicalKey: 'k' + i })));
+  assert.equal(saved.saved, 5, 'work done under v2 still counts');
+  assert.deepEqual(saved.dueSlot, { n: 3, records: 6, decisionKey: 'slot-20261031-r3-s3' }, 'only the v3 shortfall is due, never a repeat');
+});
+
+test('v3: obligations and specialists work at any hour', () => {
+  const now = at('2026-11-01', '03:10');
+  const due = c.decide({ now, settings, agent, today: todayAt(now, [{ id: 'f', status: 'verified', decisionKey: 'slot-20261101-r3-s3', createdAt: now - MIN, createCount: 3 }], Array.from({ length: 30 }, (_, i) => ({ operationId: 'f', entity: 'invoice', logicalKey: 'k' + i }))), obligations: { count: 2 }, state: {}, business: current('2026-11-01') });
+  assert.deepEqual([due.kind, due.callModel], ['obligations', true], 'due obligations are settled overnight too');
+  assert.equal(c.specialistAllowed({ now, state: {} }).allowed, true);
 });
 
 test('today counts unique native create receipts, separating saved from verified, and reserves in-flight work', () => {
   const now = at('2026-10-30', '11:45');
   const runs = [
-    { id: 'r1', status: 'verified', decisionKey: c.slotKey('2026-10-30', c.RHYTHM_VERSION, 1), createdAt: now - 3 * 3600000, createCount: 3 },
-    { id: 'r2', status: 'running', decisionKey: c.slotKey('2026-10-30', c.RHYTHM_VERSION, 2), createdAt: now - 60 * MIN, createCount: 5 },
+    { id: 'r1', status: 'verified', decisionKey: c.slotKey('2026-10-30', 2, 1), createdAt: now - 3 * 3600000, createCount: 3 },
+    { id: 'r2', status: 'running', decisionKey: c.slotKey('2026-10-30', 2, 2), createdAt: now - 60 * MIN, createCount: 5 },
     { id: 'r3', status: 'retired', decisionKey: 'old-free-key-0001', createdAt: now - 4 * 3600000, createCount: 9 },
     { id: 'r4', status: 'previewed', decisionKey: 'stale-preview-0001', createdAt: now - 3 * 3600000, recordCount: 7 },
   ];
@@ -59,15 +86,15 @@ test('today counts unique native create receipts, separating saved from verified
 
 test('one live batch per slot; a retired slot batch gets the next identity; late slices are capped', () => {
   const now = at('2026-10-30', '10:05');
-  assert.equal(todayAt(now, [{ id: 'x', status: 'previewed', decisionKey: c.slotKey('2026-10-30', c.RHYTHM_VERSION, 2), createdAt: now - MIN, createCount: 3 }]).dueSlot, null, 'a prepared slot batch fills the slot');
-  assert.equal(todayAt(now, [{ id: 'x', status: 'retired', decisionKey: c.slotKey('2026-10-30', c.RHYTHM_VERSION, 2), createdAt: now - MIN, createCount: 3 }]).dueSlot.decisionKey, 'slot-20261030-r2-s2-b2');
+  assert.equal(todayAt(now, [{ id: 'x', status: 'previewed', decisionKey: c.slotKey('2026-10-30', 2, 2), createdAt: now - MIN, createCount: 3 }]).dueSlot, null, 'a prepared slot batch fills the slot');
+  assert.equal(todayAt(now, [{ id: 'x', status: 'retired', decisionKey: c.slotKey('2026-10-30', 2, 2), createdAt: now - MIN, createCount: 3 }]).dueSlot.decisionKey, 'slot-20261030-r2-s2-b2');
   assert.deepEqual(c.slotOf('slot-20261030-r1-s2-b2'), { day: '2026-10-30', version: 1, n: 2, batch: 2 });
   assert.equal(c.slotOf('free-form-key'), null);
   // At 16:05 with nothing done the cumulative gap is 120, but one slice carries at most twice a slot's share.
   assert.equal(todayAt(at('2026-10-30', '16:05')).dueSlot.records, 30);
   assert.equal(todayAt(at('2026-10-30', '07:59')).dueSlot, null, 'nothing is due before business hours');
   assert.equal(todayAt(at('2026-10-30', '18:30')).dueSlot, null, 'a shortfall is not replayed after hours');
-  assert.equal(todayAt(at('2026-11-01', '12:00')).dueSlot, null, 'Sunday has no slices');
+  assert.equal(todayAt(at('2026-10-25', '12:00')).dueSlot, null, 'a v2 Sunday has no slices');
   assert.equal(c.isSlice([{ type: 'add-customer' }]), false);assert.equal(c.isSlice([{ type: 'receive-purchase-order' }, { type: 'settled-service-sale' }]), true);
 });
 
@@ -93,9 +120,9 @@ test('cadence precedence: owner, active execution, recovery, held, catch-up, sli
   assert.deepEqual([blocked.kind, blocked.callModel], ['held', false]);assert.match(blocked.reason, /a QuickBooks request needs recovery/);
   const behind = decide({ business: current(day, { verifiedThrough: '2026-10-27' }) });
   assert.deepEqual([behind.kind, behind.callModel, behind.reason], ['catch-up', true, 'closing Oct 28–Oct 29']);
-  const slice = decide();assert.deepEqual([slice.kind, slice.callModel, slice.reason], ['slice', true, 'business hours']);
+  const slice = decide();assert.deepEqual([slice.kind, slice.callModel, slice.reason], ['slice', true, 'an activity slot is due']);
   // Slots 4 and 5 are filled: nothing is due until slot 6 at 1:30 PM.
-  const noon = at(day, '12:40'), slotRun = [4, 5].map(n => ({ id: 'f' + n, status: 'verified', decisionKey: c.slotKey(day, c.RHYTHM_VERSION, n), createdAt: noon - MIN, createCount: 3 }));
+  const noon = at(day, '12:40'), slotRun = [4, 5].map(n => ({ id: 'f' + n, status: 'verified', decisionKey: c.slotKey(day, 2, n), createdAt: noon - MIN, createCount: 3 }));
   const waiting = todayAt(noon, slotRun);
   const idle = c.decide({ now: noon, settings, agent, today: waiting, state: { day, lastReviewAt: new Date(noon - 10 * MIN).toISOString() }, business: current(day) });
   assert.deepEqual([idle.kind, idle.callModel, idle.nextReviewAt, idle.reason], ['idle', false, waiting.nextSlotAt, 'next activity slot'], 'the 1:30 PM slot comes before the hourly re-check');
@@ -103,7 +130,7 @@ test('cadence precedence: owner, active execution, recovery, held, catch-up, sli
   const elapsed = decide({ today: filled, state: { day, lastReviewAt: new Date(now - 61 * MIN).toISOString() } });
   assert.deepEqual([elapsed.kind, elapsed.callModel], ['idle', false], 'nothing actionable never calls the model, however long since the last review');
   const night = c.decide({ now: at(day, '22:00'), settings, agent, today: todayAt(at(day, '22:00')), state: {}, business: current(day) });
-  assert.deepEqual([night.kind, night.callModel, night.reason, Date.parse(night.nextReviewAt) - at(day, '22:00')], ['quiet', false, 'after business hours', 60 * MIN], 'overnight with nothing actionable: no model call');
+  assert.deepEqual([night.kind, night.callModel, night.reason, Date.parse(night.nextReviewAt) - at(day, '22:00')], ['quiet', false, 'outside that day’s activity hours', 60 * MIN], 'a v2 evening with nothing actionable: no model call');
   const late = c.decide({ now: at(day, '23:30'), settings, agent, today: todayAt(at(day, '23:30')), state: {}, business: current(day) });
   assert.equal(late.nextReviewAt, new Date(at('2026-10-31', '00:05')).toISOString(), 'the wake after midnight closes the day just ended');
 });
@@ -113,7 +140,7 @@ test('quiet hours never suppress the calendar close after midnight', () => {
   const close = c.decide({ now, settings, agent, today: todayAt(now), state: { day: '2026-10-30', reviews: 60 }, business: current('2026-10-30') });
   assert.deepEqual([close.kind, close.callModel, close.reason], ['catch-up', true, 'closing Oct 30']);
   assert.equal(close.state.reviews, 0, 'the review ceiling resets at Halifax midnight');
-  assert.equal(c.decide({ now: at('2026-11-01', '12:00'), settings, agent, today: todayAt(at('2026-11-01', '12:00')), state: {}, business: current('2026-11-01') }).reason, 'closed today');
+  assert.equal(c.decide({ now: at('2026-10-25', '12:00'), settings, agent, today: todayAt(at('2026-10-25', '12:00')), state: {}, business: current('2026-10-25') }).reason, 'no activity was planned that day');
 });
 
 test('catch-up is spaced while it progresses and backs off durably when it does not', () => {
@@ -149,24 +176,24 @@ test('an execution that stops advancing gets a bounded recovery review', () => {
 });
 
 test('the hard daily review ceiling pauses every automatic review until midnight; the owner can still ask', () => {
-  const day = '2026-10-30', now = at(day, '11:35'), state = { day, reviews: 80 };
+  const day = '2026-10-30', now = at(day, '11:35'), state = { day, reviews: 160 };
   const capped = c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-25' }), today: todayAt(now), state });
   assert.deepEqual([capped.kind, capped.callModel, capped.nextReviewAt], ['ceiling', false, new Date(at('2026-10-31', '00:00')).toISOString()]);
-  assert.match(capped.reason, /limit of 80 reviews/);
+  assert.match(capped.reason, /limit of 160 reviews/);
   assert.equal(c.decide({ now, settings, agent, business: current(day), today: todayAt(now), state }).kind, 'ceiling', 'slices and idle reviews are capped too');
   const asked = c.decide({ now, settings, agent, business: current(day), today: todayAt(now), state, ownerRequested: true });
   assert.deepEqual([asked.kind, asked.callModel], ['ceiling', false], 'the ceiling is hard: an owner request at the limit is reported, not run');
-  assert.match(asked.reason, /^you asked for a review, but today’s limit of 80 reviews is reached/);
+  assert.match(asked.reason, /^you asked for a review, but today’s limit of 160 reviews is reached/);
   assert.equal(c.decide({ now, settings, agent, business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }), today: todayAt(now), state }).kind, 'ceiling', 'recovery is capped too');
   assert.deepEqual(c.specialistAllowed({ now, state }), { allowed: false, nextAt: new Date(at('2026-10-31', '00:00')).toISOString() }, 'specialists cannot bypass the ceiling');
   assert.equal(c.countReview({ day, reviews: 3 }, now).reviews, 4);
   assert.equal(c.countReview({ day: '2026-10-29', reviews: 59 }, now).reviews, 1);
 });
 
-test('specialists run only in business hours', () => {
+test('specialists run in a day’s activity hours, which are all day from v3', () => {
   assert.equal(c.specialistAllowed({ now: at('2026-10-30', '10:00'), state: {} }).allowed, true);
-  assert.deepEqual(c.specialistAllowed({ now: at('2026-10-30', '19:00'), state: {} }), { allowed: false, nextAt: new Date(at('2026-10-31', '10:00')).toISOString() }, 'Saturday opens at 10:00');
-  assert.equal(c.specialistAllowed({ now: at('2026-10-31', '15:00'), state: {} }).nextAt, new Date(at('2026-11-02', '08:00')).toISOString(), 'Sunday is closed');
+  assert.deepEqual(c.specialistAllowed({ now: at('2026-10-30', '19:00'), state: {} }), { allowed: false, nextAt: new Date(at('2026-10-31', '00:00')).toISOString() }, 'v3 opens at midnight on Oct 31');
+  assert.equal(c.specialistAllowed({ now: at('2026-11-01', '03:00'), state: {} }).allowed, true, 'Sunday overnight is open');
 });
 
 test('the next calendar close never crosses a month-end and is at most 31 days', () => {
@@ -238,12 +265,12 @@ test('due obligations are actionable in business hours, spaced and backed off, a
 // GPT-6.1 Sol final review (2026-10-30): per-slice allowance and the enforced daily request budget.
 test('an oversized prepared slice neither fills its slot nor reserves, so a smaller batch can take the slot', () => {
   const now = at('2026-10-30', '08:40');
-  const today = todayAt(now, [{ id: 'big', status: 'previewed', decisionKey: c.slotKey('2026-10-30', c.RHYTHM_VERSION, 1), createdAt: now - MIN, createCount: 60 }]);
+  const today = todayAt(now, [{ id: 'big', status: 'previewed', decisionKey: c.slotKey('2026-10-30', 2, 1), createdAt: now - MIN, createCount: 60 }]);
   assert.equal(today.sliceCap, 30, 'twice the slot share of 15');
   assert.deepEqual(today.plannedByRun, { big: 60 }, 'planned native creates come from the saved plan');
   assert.equal(today.reserved, 0);
   assert.deepEqual(today.dueSlot, { n: 1, records: 15, decisionKey: 'slot-20261030-r2-s1-b2' });
-  assert.equal(c.dayRhythm('2026-10-31').slots.length && todayAt(at('2026-10-31', '10:40')).sliceCap, 16, 'Saturday: twice ceil(30 / 4)');
+  assert.equal(c.dayRhythm('2026-10-24').slots.length && todayAt(at('2026-10-24', '10:40')).sliceCap, 16, 'a v2 Saturday: twice ceil(30 / 4)');
 });
 // Sync tuning (2026-10-31): only metered (CorePlus) categories count; sync never starves activity.
 const meter = (today = {}, month = today) => ({ today: { attempts: { sync: 0, read: 0, query: 0, report: 0, write: 0, ...today } }, month: { attempts: { sync: 0, read: 0, query: 0, report: 0, write: 0, ...month } } });

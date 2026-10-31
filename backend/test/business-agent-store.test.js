@@ -29,7 +29,9 @@ test('unfinished owned operations are found whether or not they hold the calenda
  const row={_id:'7'.repeat(24),status:'approved',fromDate:'2026-10-30',throughDate:'2026-10-30',activityBatch:{day:'2026-10-30'},agentAuthority:{agentId:'a'},executionRequest:null,nextOrdinal:0};
  const store=createBusinessAgentStore({models:{Agents:{},Events:{},Runs:{find:value=>{query=value;return chain([row]);}}},connection:{},transaction:async work=>work({})});
  const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a');
- assert.deepEqual([...query.status.$in].sort(),['approved','awaiting-evidence','blocked','committing','reserved','running','stopped']);assert.equal(query['agentAuthority.agentId'],'a');
+ assert.deepEqual([...query.$or[0].status.$in].sort(),['approved','awaiting-evidence','blocked','committing','reserved','running','stopped']);assert.equal(query['agentAuthority.agentId'],'a');
+ // An activity preview from an earlier business day is found too, so it is retired unsent.
+ assert.equal(query.$or[1].status,'previewed');assert.match(query.$or[1]['activityBatch.day'].$lt,/^\d{4}-\d{2}-\d{2}$/);
  assert.deepEqual(runs,[{operationId:'7'.repeat(24),status:'approved',planHash:null,fromDate:'2026-10-30',throughDate:'2026-10-30',day:'2026-10-30',agentAuthority:{agentId:'a'},executionPending:false,completedRecords:0,holdsSlot:false,disposition:'continue'}]);
 });
 

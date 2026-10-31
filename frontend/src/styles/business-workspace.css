@@ -315,3 +315,39 @@
 .bw-usage-models { list-style: none; margin: .75rem 0; padding: 0; display: grid; gap: .5rem; }
 .bw-usage-models li { display: flex; flex-direction: column; gap: .15rem; overflow-wrap: anywhere; font-size: .8rem; }
 .bw-usage .bw-notice { margin: .75rem 0; }
+/* Today's plan: the daily management review's findings per goal, today's changes and the build list. */
+.bpl { margin: 2px 0 18px; padding: 18px 22px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.bpl-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 18px; }
+.bpl-head h2 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.bpl-head h2 svg { width: 17px; height: 17px; color: var(--bw-accent); }
+.bpl-day { margin-left: 4px; color: var(--ink-3); font-size: 12.5px; font-weight: 550; }
+.bpl-progress { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bpl-progress strong { color: var(--ink); font-weight: 650; }
+.bpl-meter { position: relative; width: 120px; height: 6px; border-radius: 6px; background: var(--sunken); overflow: hidden; }
+.bpl-meter > span { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--bw-good); }
+.bpl-progress-note { color: var(--ink-3); font-size: 12px; }
+.bpl-note { margin: 10px 0 0; color: var(--ink); font-size: 13.5px; line-height: 1.55; }
+.bpl-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 22px; margin-top: 14px; }
+.bpl-grid h3 { margin: 0 0 6px; color: var(--ink-3); font-size: 10.5px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+.bpl-findings, .bpl-changes, .bpl-requests { list-style: none; margin: 0; padding: 0; }
+.bpl-finding { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+.bpl-finding:first-child, .bpl-changes li:first-child, .bpl-request:first-child { border-top: 0; }
+.bpl-req { display: flex; flex-direction: column; color: var(--ink); font-weight: 600; }
+.bpl-req em { font-style: normal; font-size: 11px; font-weight: 600; color: var(--ink-3); }
+.bpl-finding--gap .bpl-req em { color: var(--bw-warn); }
+.bpl-finding--attention .bpl-req em { color: var(--bw-warn); opacity: .85; }
+.bpl-finding--on-track .bpl-req em { color: var(--bw-good); }
+.bpl-changes li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+.bpl-area { color: var(--ink); font-weight: 600; }
+.bpl-foot { display: block; margin-top: 10px; color: var(--ink-3); font-size: 12px; }
+.bpl-muted { margin: 8px 0 0; color: var(--ink-3); font-size: 12.5px; line-height: 1.5; }
+.bpl-empty { margin-top: 10px; }
+.bpl-build { margin-top: 6px; padding-top: 2px; border-top: 1px solid var(--line); }
+.bpl-request { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.bpl-request h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.bpl-request p { margin: 2px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.bpl-request .bpl-request-meta { color: var(--ink-3); font-size: 12px; }
+.bpl-priority { align-self: start; display: inline-flex; justify-content: center; height: 20px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--sunken); color: var(--ink-2); font-size: 11px; font-weight: 650; text-transform: capitalize; }
+.bpl-priority--high { background: color-mix(in srgb, var(--bw-warn) 14%, var(--surface)); color: var(--bw-warn); }
+.bpl-more { margin-top: 6px; }
+@media (max-width: 900px) { .bpl-grid { grid-template-columns: 1fr; } }

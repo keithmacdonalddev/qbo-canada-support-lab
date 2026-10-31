@@ -78,6 +78,7 @@ const FIXED = Object.freeze({
   getBusinessDecision: 'Reading a retained decision',
   getBusinessState: 'Checking the business state',
   getBusinessWork: 'Reading its work list',
+  queryCompanyData: 'Searching the synced company records',
   inspectBusinessOperation: 'Checking a saved accounting plan',
   getBusinessActivityChoices: 'Reviewing customers, suppliers and open items it can use',
   prepareBusinessPeriod: 'Preparing the dated business calendar',
@@ -85,6 +86,9 @@ const FIXED = Object.freeze({
   resumeBusinessOperation: 'Resuming interrupted work in QuickBooks',
   rememberBusinessContext: 'Saving notes for its next review',
   linkReproductionCase: 'Linking a troubleshooting case',
+  getManagementReview: 'Reading today’s plan and business measures',
+  recordDailyPlan: 'Recording today’s plan',
+  requestCapability: 'Adding a missing tool to the build list',
 });
 // One table maps every governed tool to a short label; unknown tools get a humanised name.
 function stepLabel(name, input) {

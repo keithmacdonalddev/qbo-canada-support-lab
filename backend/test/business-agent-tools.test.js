@@ -81,15 +81,15 @@ test('a same-day slice takes the due slot identity; duty and list batches keep t
  await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/No same-day activity slot is due now; the next one opens at 12:30 PM \(Halifax\)/);
  await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,3,'standing duties stay available between slots');
 });
-test('the daily ceiling, a closed day and an unreadable count stop new discretionary slices',async()=>{
+test('the daily ceiling, a day with no planned activity and an unreadable count stop new discretionary slices',async()=>{
  const h=slotFixture();
  h.today={...h.today,ceilingReached:true,saved:300};await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/ceiling of 300 records is reached/);
  h.today={unavailable:true,day:'2026-10-30',label:'Fri Oct 30',target:20,ceiling:40};await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/could not be read/);
- const sunday=slotFixture({now:Date.parse('2026-11-01T16:00:00Z')});await assert.rejects(sunday.tools.execute('prepareBusinessActivity',sale),/closed today \(Sun Nov 1\)/);
+ const sunday=slotFixture({now:Date.parse('2026-10-25T16:00:00Z')});await assert.rejects(sunday.tools.execute('prepareBusinessActivity',sale),/No same-day activity is planned for Sun Oct 25/);
  assert.equal(h.prepared.length+sunday.prepared.length,0);
 });
-test('obligations and other standing duties are never limited by the target or ceiling, including on Sunday',async()=>{
- const sunday=slotFixture({now:Date.parse('2026-11-01T16:00:00Z')});
+test('obligations and other standing duties are never limited by the target or ceiling, including on a day with no planned activity',async()=>{
+ const sunday=slotFixture({now:Date.parse('2026-10-25T16:00:00Z')});
  await sunday.tools.execute('prepareBusinessActivity',additions);assert.equal(sunday.prepared.length,1);
  const h=slotFixture();h.today={...h.today,ceilingReached:true,saved:300,reserved:0,reservedByRun:{}};
  await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared[0].decisionKey,'list-additions-0001');

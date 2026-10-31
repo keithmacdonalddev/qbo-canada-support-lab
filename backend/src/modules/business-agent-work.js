@@ -108,6 +108,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
     add({key,owner:ACCOUNTANT,state:stale||!running?'waiting':now?'working':'on-duty',...item,next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':now?'Doing this now in the current operation.':idle,...(summary?{facts:summary}:{})});
   };
   if(published)duty('receive-purchase-orders',['receive-purchase-order'],{title:'Receive open purchase orders into supplier bills',detail:'Receives wholly unreceived purchase orders created by its own workflows or adopted import, in full at their original inventory cost. Partially received orders are unavailable.',capability:'purchase-order-receiving'},'Looks for open orders to receive at each business review.');
+  if(published)duty('own-receivables-payables',['invoice-on-terms','collect-own-invoice','bill-on-terms','pay-own-bill','send-estimate','convert-own-estimate','order-stock'],{title:'Run sales and purchases over time',detail:'Invoices customers and records supplier bills on payment terms, leaves them open until they fall due, and later collects or pays them in full or in part. Sends estimates and converts accepted ones into invoices, and orders stock for later receiving.'},'Raises, collects and pays open invoices and bills at each business review.');
   if(published)duty('correct-own-records',['correct-own-record'],{title:'Correct its own mistakes',detail:'Reverses its own earlier records dated today when they were wrong: a full credit applied to an unpaid service invoice, a refund of a fully collected service sale, a supplier credit applied to an unpaid operating bill, or the exact reverse of a journal entry, at the original tax rate. Originals are never edited, and each record is corrected at most once.'},'Checks its recent records for mistakes at each business review.');
   // Approved work that holds no calendar slot (for example, approval saved but queueing failed).
   // Unsent work outside the slot is retired automatically and is not shown.
@@ -127,7 +128,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   if(published&&today){
     const due=today.dueSlot,line=todayLine(today);
     const detail=today.unavailable?'Today’s count could not be read; same-day activity waits for the next review.'
-      :!today.target?'The business is closed today. New sales and expenses resume on the next business day; obligations and corrections continue.'
+      :!today.target?'No same-day activity is planned for this day. Obligations and corrections continue.'
       :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
       :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
       :requests?.reached&&today.remaining>0?(reason=>reason.charAt(0).toUpperCase()+reason.slice(1)+'.')(require('./business-agent-cadence').requestBudgetReason(requests))
@@ -135,7 +136,7 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
       :today.remaining===0?'Today’s planned activity is in QuickBooks.'
       :today.nextSlotAt?'Next activity slot at '+halifaxTime(today.nextSlotAt)+'.':'Today’s activity slots are finished; any shortfall is not replayed.';
     add({key:'todays-activity',owner:ACCOUNTANT,state:stale||!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
-      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':nextAt?'Next review '+nextAt+(cadence?.reason?' ('+cadence.reason+')':'')+'.':'Spread across business hours in small batches.'});
+      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':nextAt?'Next review '+nextAt+(cadence?.reason?' ('+cadence.reason+')':'')+'.':'Spread across the day in small hourly batches.'});
   }
   if(business.adoptedThrough)duty('inherited-obligations',['collect-adopted-invoice','pay-adopted-bill'],{title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',capability:'adopted-obligations'},'Collects and pays them at business reviews as customers pay and bills fall due.');
   for(const blocker of blockers)if(!KNOWN.has(blocker.code))add({key:'blocker-'+(blocker.code||'unknown'),owner:ACCOUNTANT,state:'blocked',title:blocker.title||'Business work is held',detail:blocker.detail||'',next:'Retried on the next review.',href:blocker.href||'/company/manage'});

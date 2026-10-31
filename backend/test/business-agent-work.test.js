@@ -237,8 +237,8 @@ test('today’s activity states planned, saved, verified and in-progress counts 
   assert.match(item.detail, /Activity slot 6 of 10 is due now: about 30 records of genuine business work/);
   assert.equal(item.next, 'Next review 2:30 PM (next activity slot).');
   assert.equal(work.needsOwner, 0);
-  const closed = businessWork({ ...running, today: cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2026-11-01'), now: Date.parse('2026-11-01T16:00:00Z') }) });
-  assert.match(byKey(closed, 'todays-activity').detail, /closed today/);
+  const closed = businessWork({ ...running, today: cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2026-10-25'), now: Date.parse('2026-10-25T16:00:00Z') }) });
+  assert.match(byKey(closed, 'todays-activity').detail, /No same-day activity is planned/);
 });
 test('a calendar behind yesterday shows what is closed, what is closing and when it tries next', () => {
   const calendarClose = cadenceModule.nextClose({ verifiedThrough: '2026-10-27' }, '2026-10-30');

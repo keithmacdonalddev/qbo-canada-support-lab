@@ -230,6 +230,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       await checkAdoptedSettlements(scope, active, batch, client);
       const receiving = batch.activities.filter(row => row.type === 'receive-purchase-order');
       if (receiving.length && !active.value.stockRoot) fail('Receiving needs the published FIFO stock-cost evidence.');
+      if (batch.activities.some(row => row.type === 'order-stock') && !active.value.stockRoot) fail('Ordering stock needs the published FIFO stock-cost evidence, so the order can later be received.');
       const receiptReader = require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, history: planStore(bound).history, readRecord: async (scope, entity, id) => { const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity]; return { scope, entity, record, recordHash: hash(record), observedAt: new Date(now()).toISOString() }; }, now });
       for (const choice of receiving) require('./business-purchase-order-receipt').assertChoice(choice, await receiptReader(scope, choice, { signal }), active.view.masterBindings);
       // Accountant-added roles: new names must be free; roles used must be verified,
@@ -245,6 +246,9 @@ function createBusinessGovernanceService(dependencies = {}) {
         const cutoff = [current.policy.periodControl.closedThrough, current.policy.periodControl.reconciledThrough, setup.observations?.closedThrough].filter(Boolean).sort().at(-1) || null;
         await require('./business-correction').assertCorrectionsEligible({ models, scope, ownerId, businessKey: active.value.businessKey, batch, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], cutoff, setup });
       }
+      // Collections, payments and estimate conversions of own records (policy v8): the original re-derived
+      // and its open balance, ownership and freedom from other work proved before saving.
+      if (batch.activities.some(row => batchTools.OWN_SOURCED[row.type])) await require('./business-own-settlement').assertOwnSettlementsEligible({ models, scope, ownerId, businessKey: active.value.businessKey, batch, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
       const activity = batchTools.buildBatchActivity(batch, scope, active.value.businessKey);
       prepared = prepareBusinessOperation(view, request, setup, masters, new Date(now()), activity, usedRoles);
       prepared.activityBatch = batch;
@@ -405,22 +409,45 @@ function createBusinessGovernanceService(dependencies = {}) {
       const cutoff = [control?.closedThrough, control?.reconciledThrough, setup.observations?.closedThrough].filter(Boolean).sort().at(-1) || null;
       correctableRecords = await require('./business-correction').correctableRecords({ models, scope, ownerId: bound.ownerId, businessKey: active.value.businessKey, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], day, cutoff, setup, signal });
     } catch (error) { if (signal?.aborted) throw error; correctionUnavailable = 'Correction choices could not be read: ' + error.message; }
+    // Own invoices and bills on terms still open (policy v8), each with its eligibility.
+    let own = { ownOpenInvoices: [], ownOpenBills: [], ownOpenEstimates: [] }, ownUnavailable = null;
+    try { own = await require('./business-own-settlement').ownOpenRecords({ models, scope, ownerId: bound.ownerId, businessKey: active.value.businessKey, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity], day, signal }); }
+    catch (error) { if (signal?.aborted) throw error; ownUnavailable = 'Open own invoices and bills could not be read: ' + error.message; }
     await access.authorize(scope, 'operations.preview', { signal });
-    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, correctableRecords, correctionLimitation: correctionUnavailable || 'Corrections reverse your own verified records from earlier days, dated today: a wholly unpaid service invoice gets a full credit applied to it, a fully collected service sale gets a refund from the operating bank, a wholly unpaid operating bill gets a full supplier credit applied to it, and a journal entry gets its exact reverse. The original tax rate is repeated. Paid bills, partly paid records, records with credits, stock, imported records, corrections of corrections and voids are unavailable. Each record can be corrected once.', receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
+    return { scope, day, policy: policy.POLICY, customers, services, vendors, ...added, correctableRecords, ...own, ownSettlementLimitation: ownUnavailable || 'invoice-on-terms and bill-on-terms leave a record open until its due date (' + policy.TERMS_DAYS.join(', ') + ' days). ownOpenInvoices and ownOpenBills list your own open terms records from earlier days with their open balance; collect-own-invoice and pay-own-bill settle one in full or in part (up to its open balance). order-stock raises a purchase order for one to five workshop stock items (vendorKey, lines of itemKey, quantity up to 500 and unitPriceCents before tax); from tomorrow it appears in receivablePurchaseOrders. send-estimate quotes field-service hours to a field customer; ownOpenEstimates lists your own open sent estimates from earlier days, and convert-own-estimate turns one into today’s time entry and an invoice on terms at the quoted hours and price. Imported records use collect-adopted-invoice and pay-adopted-bill; scheduled monthly records are settled by their own schedule.', correctionLimitation: correctionUnavailable || 'Corrections reverse your own verified records from earlier days, dated today: a wholly unpaid service invoice gets a full credit applied to it, a fully collected service sale gets a refund from the operating bank, a wholly unpaid operating bill gets a full supplier credit applied to it, and a journal entry gets its exact reverse. The original tax rate is repeated. Paid bills, partly paid records, records with credits, stock, imported records, corrections of corrections and voids are unavailable. Each record can be corrected once.', receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, ready: active.calendar.verifiedThrough === shift(day,-1) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Additional activity requires verified history through yesterday and an idle company writer. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     let choices = require('./business-activity-batch').validateChoices(input);
     const bound = await bind(user, 'operations.preview', true);
-    const requestKey = hash({ scope: bound.scope, ownerId: bound.ownerId, kind: 'business-activity-batch', decisionKey: choices.decisionKey });
-    if (choices.activities.some(row => row.type === 'correct-own-record')) choices = await correctionChoices(bound, requestKey, choices, signal);
+    const requestKey = await activityRequestKey(bound, choices.decisionKey);
+    const derived = require('./business-activity-batch').OWN_SOURCED;
+    if (choices.activities.some(row => row.type === 'correct-own-record' || derived[row.type])) choices = await correctionChoices(bound, requestKey, choices, signal);
     return prepare(user, { requestKey, throughDate: businessDate(new Date(now())) }, { signal, batchChoices: choices });
   }
-  // The agent names a correction's target and reason; the server derives its terms.
-  // A lost-response retry returns the original saved terms, never re-derived ones (the
-  // original's balance has changed once the correction ran).
+  // A decision key identifies one decision and its lost-response retries. When its
+  // operation is an expired preview from an earlier business day (never approved, so it
+  // can never run: approval fences the calendar revision it was prepared against) or was
+  // retired unsent, today's preparation under the same key gets its own day-scoped
+  // operation. A key whose earlier-day operation was approved or ran is refused plainly,
+  // so a past decision is never repeated.
+  async function activityRequestKey(bound, decisionKey) {
+    const { scope, ownerId, actorId } = bound, day = businessDate(new Date(now()));
+    const legacy = hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey });
+    const run = await read(models.Runs, { _id: hash({ scope, actorId, requestKey: legacy }).slice(0, 24), ...scope });
+    const runDay = run?.activityBatch?.day || run?.throughDate;
+    if (!run || !runDay || runDay >= day) return legacy;
+    const operationId = String(run._id);
+    const effects = await read(models.Receipts, { environment: scope.environment, realmId: scope.realmId, operationId }) || await models.Steps.findOne({ environment: scope.environment, realmId: scope.realmId, operationId }).select('_id').maxTimeMS(3000).lean();
+    if (!['previewed', 'retired'].includes(run.status) || effects) fail('decisionKey ' + decisionKey + ' was already used by operation ' + operationId + ' on ' + runDay + ' (' + run.status + '). Choose a new decisionKey for today’s decision; that earlier work is not repeated.');
+    return hash({ scope, ownerId, kind: 'business-activity-batch', decisionKey, day });
+  }
+  // The agent names a correction's target and reason (or, policy v8, the own record it
+  // collects or pays); the server derives the terms. A lost-response retry returns the
+  // original saved terms, never re-derived ones (the original's balance has changed once
+  // the correction or settlement ran).
   async function correctionChoices(bound, requestKey, choices, signal) {
     const { scope, actorId, access } = bound, operationId = hash({ scope, actorId, requestKey }).slice(0, 24);
-    const minimal = activities => activities.map(row => row.type === 'correct-own-record' ? { type: row.type, target: row.target, purpose: row.purpose } : row);
+    const minimal = activities => activities.map(row => { if (row.type === 'correct-own-record') return { type: row.type, target: row.target, purpose: row.purpose }; const { source, quote, ...rest } = row; return rest; });
     const existing = await read(models.Runs, { _id: operationId, ...scope });
     if (existing) {
       const saved = (await read(models.Plans, { _id: existing.planId, ...scope }))?.manifest?.activityBatch;
@@ -428,7 +455,8 @@ function createBusinessGovernanceService(dependencies = {}) {
       return { decisionKey: saved.decisionKey, purpose: saved.purpose, activities: saved.activities };
     }
     const client = await access.resolveClient(scope, { signal });
-    return require('./business-correction').expandCorrections({ choices, models, scope, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] });
+    const input = { models, scope, history: planStore(bound).history, readRecord: async (entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity] };
+    return require('./business-own-settlement').expandOwnSettlements({ ...input, choices: await require('./business-correction').expandCorrections({ ...input, choices }) });
   }
   function reportObservation(scope, period, value) {
     const { sourceHash, evaluation: ignored, ...source } = value || {}, startedAt = Date.parse(source.startedAt), observedAt = Date.parse(source.observedAt);
