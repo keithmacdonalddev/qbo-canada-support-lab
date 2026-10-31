@@ -142,7 +142,9 @@ function createBusinessAgentService(options={}) {
   // res: an Express response. Replays the latest attempt after the cursor, then sends entries as they
   // are produced. Re-checks access every minute and closes after 15 minutes; the page reconnects.
   async function transcriptStream(user,{cursor=null}={},req,res,{lifetimeMs=900000,heartbeatMs=20000,recheckMs=60000}={}){
-    const {agentId}=await transcriptOwner(user);
+    const {bound,agentId}=await transcriptOwner(user);
+    // The stream belongs to the company it was opened for; a later company switch never redirects it.
+    const opened={environment:bound.scope.environment,realmId:bound.scope.realmId,connectionId:String(bound.scope.connectionId)};
     if((streams.get(agentId)||0)>=10)fail('Too many live views are open for this company. Close one and try again.',429);
     streams.set(agentId,(streams.get(agentId)||0)+1);
     const {subscribe}=require('./business-agent-transcript'),sent=new Map(),buffered=[];
@@ -163,7 +165,16 @@ function createBusinessAgentService(options={}) {
     replaying=false;for(const entry of buffered.splice(0))send(entry);
     write('event: ready\ndata: {}\n\n');
     heartbeat=setInterval(()=>write(': ping\n\n'),heartbeatMs);heartbeat.unref?.();
-    recheck=setInterval(()=>{bind(user).then(next=>next.access.authorize(next.scope,'operations.read')).then(()=>{},close);},recheckMs);recheck.unref?.();
+    // Every minute: the selected company must still be the opened one, with read access and the same agent.
+    let checking=false;
+    const stillOpenedScope=async()=>{
+      const next=await bind(user);
+      if(['environment','realmId','connectionId'].some(key=>String(next.scope[key])!==String(opened[key])))fail('The selected company changed.',403);
+      await next.access.authorize(opened,'operations.read');
+      const current=await store.get(opened);
+      if(!current||String(current._id)!==agentId)fail('The company monitoring changed.',403);
+    };
+    recheck=setInterval(()=>{if(checking||closed)return;checking=true;stillOpenedScope().catch(close).finally(()=>{checking=false;});},recheckMs);recheck.unref?.();
     lifetime=setTimeout(close,lifetimeMs);lifetime.unref?.();
     return close;
   }

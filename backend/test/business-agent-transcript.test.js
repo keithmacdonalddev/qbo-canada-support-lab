@@ -129,16 +129,17 @@ test('the engine records Codex events and tool calls made through the bridge', a
   assert.equal(saved[3].status, 'failed');
 });
 
-function streamService(entries) {
+// state.selected: the company the user has selected now; state.denied(scope): access lost for that scope.
+function streamService(entries, state = { selected: scope, denied: () => false }) {
   const live = [];
   const store = {
-    models: {}, get: async () => ({ _id: 'agent-1', ...scope, revision: 3, settings: { monitoring: true } }),
+    models: {}, get: async target => ({ _id: target.realmId === scope.realmId ? 'agent-1' : 'agent-2', ...target, revision: 3, settings: { monitoring: true } }),
     transcripts: { latest: async () => ATTEMPT, entries: async (agentId, attemptId, after) => entries.filter(entry => entry.seq > after), attempts: async () => [], save: async () => {}, prune: async () => {} },
   };
   const service = createBusinessAgentService({ store, now: () => NOW, usage: { summary: async () => ({}) }, engine: {}, execution: {}, requestMeter: { summary: async () => ({}) }, createSync: () => ({}), coverageFor: () => null,
-    resolveContext: async () => ({ environment: scope.environment, connection: { connected: true, realmId: scope.realmId, connectionId: scope.connectionId, companyName: 'Fixture' } }),
-    accessFor: () => ({ authorize: async () => {} }) });
-  return { service, live };
+    resolveContext: async () => ({ environment: state.selected.environment, connection: { connected: true, realmId: state.selected.realmId, connectionId: state.selected.connectionId, companyName: 'Fixture' } }),
+    accessFor: () => ({ authorize: async target => { if (state.denied(target)) throw Object.assign(new Error('denied'), { status: 403 }); } }) });
+  return { service, live, state };
 }
 function fakeResponse() {
   const res = { chunks: [], headers: null, ended: false, writableEnded: false, headersSent: false, writeHead(status, headers) { this.status = status; this.headers = headers; this.headersSent = true; }, write(text) { this.chunks.push(text); return true; }, end() { this.ended = this.writableEnded = true; } };
@@ -188,4 +189,30 @@ test('saved transcripts prune to the newest attempts and read bounded pages', as
   await saved.entries('agent-1', ATTEMPT, 4);
   assert.deepEqual(calls[0][1], { agentId: 'agent-1', attemptId: ATTEMPT, seq: { $gt: 4 } });
   assert.ok(calls.some(([op, value]) => op === 'limit' && value <= 500));
+});
+
+test('a stream stays pinned to the company it was opened for and closes on a switch or lost access', async () => {
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const open = async state => { const made = streamService([], state), req = new EventEmitter(), res = fakeResponse(); const close = await made.service.transcriptStream({ id: 'a'.repeat(24) }, {}, req, res, { heartbeatMs: 100000, recheckMs: 15 }); return { ...made, res, close }; };
+  // Unchanged company and access: the stream stays open across rechecks.
+  const steady = await open({ selected: scope, denied: () => false });
+  await wait(60);
+  assert.equal(steady.res.ended, false);
+  steady.close(); steady.service.close();
+  // The user switches to company B: the stream for company A closes and B's entries never reach it.
+  const other = { environment: 'production', realmId: '987654321', connectionId: 'e'.repeat(24) };
+  const switched = await open({ selected: scope, denied: () => false });
+  switched.state.selected = other;
+  await wait(60);
+  assert.equal(switched.res.ended, true, 'a company switch closes the stream');
+  T.publish('agent-2', { attemptId: ATTEMPT, seq: 9, kind: 'message', text: 'company B' });
+  T.publish('agent-1', { attemptId: ATTEMPT, seq: 9, kind: 'message', text: 'company A after close' });
+  assert.equal(frames(switched.res).length, 0);
+  switched.close(); switched.service.close();
+  // Access to the original company is withdrawn while it is still selected: the stream closes.
+  const revoked = await open({ selected: scope, denied: () => false });
+  revoked.state.denied = target => target.realmId === scope.realmId;
+  await wait(60);
+  assert.equal(revoked.res.ended, true, 'lost access to the opened company closes the stream');
+  revoked.close(); revoked.service.close();
 });
