@@ -241,3 +241,72 @@ test('a pre-dispatch verification refusal retains its claim and an early retry c
  await assert.rejects(h.execute(),error=>error.code===undefined&&error.message==='Activity is busy, already dispatched or requires recovery');
  assert.equal(h.sent.length,0);assert.equal(h.row().attempts,1);
 });
+
+// A same-operation invoice can bill time while its query/mirror still shows the
+// pre-invoice Billable representation. Never substitute just that status field.
+function billedTimeRuntime({ source = 'query', queriedStatus = 'Billable', standalone = false, change = () => {} } = {}) {
+  const value = graph(); value.entries = value.entries.slice(0, standalone ? 2 : 3);
+  const estimate = value.entries[0], time = value.entries[1], invoice = value.entries[2];
+  if (invoice) {
+    invoice.observed.record.Balance = invoice.observed.record.TotalAmt;
+    invoice.observed.record.LinkedTxn = invoice.observed.record.LinkedTxn.filter(link => link.TxnType === 'TimeActivity');
+    estimate.observed.record.TxnStatus = 'Pending'; delete estimate.observed.record.LinkedTxn;
+  } else {
+    delete estimate.observed.record.TxnStatus;
+    delete estimate.observed.record.LinkedTxn;
+    time.observed.record.BillableStatus = 'Billable'; delete time.observed.record.LinkedTxn;
+  }
+  for (const e of value.entries) e.observed.recordHash = hash(e.observed.record);
+  const queried = clone(time.observed); queried.record.BillableStatus = queriedStatus;
+  delete queried.record.LinkedTxn; queried.recordHash = hash(queried.record);
+  const live = clone(time.observed); change(live.record); live.recordHash = hash(live.record);
+  const h = harness(value), ownerId = 'c'.repeat(24), actorId = 'd'.repeat(24), calls = [];
+  h.models.findOne = filter => { const q = { select() { return q; }, maxTimeMS() { return q; }, lean: async () => clone(value.entries.find(e => filter.logicalKey ? e.step.logicalKey === filter.logicalKey : e.step.entity === filter.entity && e.step.qboId === filter.qboId)?.step || null) }; return q; };
+  const local = (entity, id) => {
+    const e = value.entries.find(e => e.step.entity === entity && e.step.qboId === id);
+    return { ...clone(e.observed), source: { kind: 'qbo-current-mirror' } };
+  };
+  const observations = { read: async (_s, entity, id) => entity !== 'TimeActivity' ? local(entity, id) : source === 'mirror' ? { ...clone(queried), source: { kind: 'qbo-current-mirror' } } : null,
+    saved: async (_s, entity) => entity === 'TimeActivity' && source === 'saved' ? { ...clone(queried), source: { kind: 'qbo-write-response' } } : null, retain: async () => {} };
+  const client = Object.create(QBOClient.prototype);
+  Object.defineProperty(client, 'apiBase', { value: 'https://sandbox-quickbooks.api.intuit.com/v3/company/123' });
+  Object.assign(client, { realmId: scope.realmId, connection: { _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' }, _requestLog: [], _retryAfterUntil: 0, _windowMs: 60000, ensureFreshToken: async () => {}, requestMeter: { record() {} }, oauthClient: { makeApiCall: async options => {
+    assert.equal(options.method, 'GET'); calls.push(options.url);
+    if (options.url.includes('/query?')) {
+      assert.match(new URL(options.url).searchParams.get('query'), /FROM TimeActivity WHERE Id IN/);
+      return { status: 200, json: { QueryResponse: { TimeActivity: [clone(queried.record)], startPosition: 1, maxResults: 1 } } };
+    }
+    assert.ok(options.url.endsWith('/timeactivity/' + time.step.qboId), options.url);
+    return { status: 200, json: { TimeActivity: clone(live.record) } };
+  } } });
+  const runtime = createBusinessVerificationRuntime({ scope, operationId: h.writer.operationId, planHash: hash('operation plan'), Steps: h.models, transaction: h.dependencies.transaction, assertReady: h.dependencies.assertReady, access: { authorize: async () => ({ ownerId, actorId }), resolveClient: async () => client }, writerFence: { graphSnapshot: async () => clone(h.writer) }, plans: { loadIntent: async (_s, _o, key) => clone(value.entries.find(e => e.step.logicalKey === key).intent) }, observations, retainSources: true, now: () => h.clock });
+  return { h, calls, time, queried, live, read: () => runtime.loadGraphReadback({ scope, roots: value.roots }) };
+}
+for (const source of ['query', 'mirror', 'saved']) test('same-operation conversion refreshes Billable time from ' + source + ' using one exact GET', async () => {
+  const h = billedTimeRuntime({ source }), original = clone(h.queried);
+  const result = await h.read(); assert.equal(result.complete, true, JSON.stringify(result.failures));
+  assert.equal(h.calls.filter(url => url.includes('/timeactivity/')).length, 1);
+  assert.equal(h.calls.length, source === 'query' ? 2 : 1);
+  const retained = JSON.parse(result.sourcesJson).find(e => e.step.entity === 'TimeActivity').observed;
+  assert.equal(retained.source.kind, 'qbo-full-entity-get'); assert.deepEqual(retained.record, h.live.record);
+  assert.equal(retained.recordHash, hash(h.live.record)); assert.deepEqual(h.queried, original);
+  assert.ok(result.records.find(r => r.entity === 'Invoice').proof.estimateLinkDropped);
+  assert.equal(h.h.opened, h.h.closed);
+});
+test('a live time GET still returning Billable cannot verify conversion', async () => {
+  const h = billedTimeRuntime({ change: record => { record.BillableStatus = 'Billable'; } });
+  const result = await h.read(); assert.equal(result.complete, false);
+  assert.ok(result.failures.some(f => f.entity === 'Invoice' && f.issues.includes('The complete Estimate conversion links, states or economics remain unverified.')));
+  assert.ok(result.records.every(r => r.proof === null));
+});
+test('refresh cannot hide changed time economics, customer or unrelated invoice links', async () => {
+  for (const change of [r => { r.Hours++; }, r => { r.CustomerRef.value = '999'; }, r => { r.LinkedTxn = [{ TxnType: 'Invoice', TxnId: '999' }]; }]) {
+    const h = billedTimeRuntime({ change }), result = await h.read(); assert.equal(result.complete, false);
+  }
+});
+test('already billed or standalone time adds no confirmation GET', async () => {
+  for (const options of [{ queriedStatus: 'HasBeenBilled' }, { standalone: true }]) {
+    const h = billedTimeRuntime(options), result = await h.read(); assert.equal(result.complete, true, JSON.stringify(result.failures));
+    assert.equal(h.calls.length, 1); assert.ok(h.calls[0].includes('/query?'));
+  }
+});

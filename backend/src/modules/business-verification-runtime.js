@@ -46,7 +46,23 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
   const liveRecord = createBusinessTransactionReader({ authorize: authority, resolveClient, now, observationStore: null });
   const preparedRecords = new WeakSet();
   const readBatch = createBusinessTransactionBatchReader({ access: { authorize: authority, resolveClient }, observations, now });
-  const prepareRecords = async (...args) => { const records = await readBatch(...args); for (const record of records.values()) preparedRecords.add(record); return records; };
+  const prepareRecords = async (value, steps, options = {}) => {
+    const records = await readBatch(value, steps, options);
+    // A linked invoice can change the computed billing state of its time entry
+    // without changing its SyncToken. Confirm an apparently unbilled query/mirror
+    // with one exact GET; the conversion verifier still requires HasBeenBilled.
+    const billedParents = new Set(steps.filter(step => step.entity === 'Invoice').flatMap(step =>
+      step.compilation.relationships.filter(link => link.entity === 'TimeActivity' && link.kind === 'linked')
+        .map(link => link.logicalKey + ':' + link.qboId)));
+    for (const step of steps) {
+      const key = step.entity + ':' + step.qboId, observed = records.get(key);
+      if (step.entity === 'TimeActivity' && billedParents.has(step.logicalKey + ':' + step.qboId) && observed?.record.BillableStatus === 'Billable' && observed.source?.kind !== 'qbo-full-entity-get') {
+        records.set(key, await liveRecord(value, step.entity, step.qboId, options));
+      }
+    }
+    for (const record of records.values()) preparedRecords.add(record);
+    return records;
+  };
   const references = createBusinessReferenceReader({ authorize: authority, resolveClient, now });
   const readFence = async (value, { signal } = {}) => {
     checkScope(value); checkSignal(signal); await assertReady();
