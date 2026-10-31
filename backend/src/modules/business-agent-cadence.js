@@ -22,17 +22,27 @@ const SCHEDULES = Object.freeze({
   weekday: Object.freeze({ open: 8 * 60, close: 18 * 60, target: 150, slots: Object.freeze([510, 570, 630, 690, 750, 810, 870, 930, 990, 1050]) }), // hourly 08:30-17:30
   saturday: Object.freeze({ open: 10 * 60, close: 14 * 60, target: 30, slots: Object.freeze([630, 690, 750, 810]) }), // hourly 10:30-13:30
 });
+// Continuous operation (owner direction 2026-10-31): while work is due the accountant runs back to back,
+// one minute after the previous review. It pauses only when nothing is due or a hard limit is reached.
 // Minimum minutes between model reviews of each kind while it keeps making progress.
-const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 2, 'catch-up': 2, management: 15, slice: 15, obligations: 15 });
+const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 1, 'catch-up': 1, management: 1, slice: 1, obligations: 1 });
+// With nothing due, saved state is re-checked at least this often (the owner's interval can only shorten it).
+const PAUSE_RECHECK_MINUTES = 15;
+// Same-day slices may add at most this many new records in any rolling hour, on top of the daily ceiling,
+// so a business that fell behind catches up steadily instead of in one burst.
+const HOURLY_CAP = 60;
+// Under the all-day rhythm a review starts once at least this many records are due (or the rest of the day's
+// target, if fewer remain), so the accountant keeps pace through the hour instead of waiting for a slot.
+const MIN_DUE = 5;
 // The daily management review (business-management-review.js): 00:10 Halifax every day, right after
 // the previous day's close and before the first slice. At most two attempts a day; the day's saved plan ends it.
 const MANAGEMENT_MINUTES = Object.freeze({ everyDay: 10 });
 const MANAGEMENT_ATTEMPTS = 2;
-// Consecutive model reviews without progress wait 5, 15, 30, then 60 minutes.
-const BACKOFF_MINUTES = Object.freeze([5, 15, 30, 60]);
-// Hard ceiling on model reviews per Halifax day across every role and outcome: 24 slices plus the
-// management review, recovery, catch-up and obligations with room for backoff retries.
-const REVIEW_CEILING = 160;
+// Consecutive model reviews that fail or make no progress wait 5, 15, then 30 minutes. Waiting on QuickBooks is
+// polled without a model, and a review that saved or queued records resets the count.
+const BACKOFF_MINUTES = Object.freeze([5, 15, 30]);
+// Hard ceiling on model reviews per Halifax day across every role and outcome, sized for back-to-back reviews.
+const REVIEW_CEILING = 400;
 const MIDNIGHT_CLOSE_MINUTES = 5;
 // QuickBooks request budget (Phase 0 meter: transport attempts by UTC day, unsaved counts included).
 // Intuit's Builder tier allows 500,000 metered ("CorePlus") calls a month: reads, queries and reports.
@@ -179,10 +189,10 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   }
   let saved = 0, verified = 0, reserved = 0, inFlight = 0;const reservedByRun = {}, plannedByRun = {};
   for (const [id, keys] of savedByRun) { saved += keys.size; if (runs.some(run => String(run.id) === id && run.status === 'verified')) verified += keys.size; }
-  // Each slot's share follows its weight (v3 hourly weights; earlier rhythms are uniform). One slice carries
-  // at most twice the largest slot's share.
+  // Each slot's share follows its weight (v3 hourly weights; earlier rhythms are uniform). One slice, and all
+  // slices in any rolling hour, carry at most HOURLY_CAP new records.
   const count = rhythm.slots.length, weights = rhythm.slots.map(slot => Number.isFinite(slot.weight) && slot.weight > 0 ? slot.weight : 1), totalWeight = weights.reduce((sum, value) => sum + value, 0) || 1;
-  const sliceCap = count ? 2 * Math.ceil(rhythm.target * Math.max(...weights) / totalWeight) : 0;
+  const sliceCap = count ? HOURLY_CAP : 0;
   let cumulative = 0;const shares = weights.map(value => (cumulative += value));
   const plannedOf = run => Number.isSafeInteger(run.createCount) ? run.createCount : Number(run.recordCount) || 0;
   // A prepared slice over the slot allowance can never be approved, so it neither fills its slot nor reserves.
@@ -196,21 +206,42 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
     if (left) { reserved += left; inFlight++; reservedByRun[String(run.id)] = left; }
   }
   const used = saved + reserved, local = localParts(now);
+  // The rolling hour: live slices created in the last 60 minutes, by their planned or saved records.
+  const hourByRun = {};let hourUsed = 0, hourFirst = Infinity;
+  for (const run of runs) {
+    if (!live(run) || !isSliceKey(run.decisionKey, rhythm) || !(Number(run.createdAt) > now - 60 * MINUTE)) continue;
+    const records = Math.max(run.status === 'verified' ? 0 : plannedOf(run), savedByRun.get(String(run.id))?.size || 0);
+    if (!records) continue;
+    hourByRun[String(run.id)] = records;hourUsed += records;hourFirst = Math.min(hourFirst, Number(run.createdAt));
+  }
+  const hourLeft = Math.max(0, HOURLY_CAP - hourUsed);
   const slots = rhythm.slots.map((slot, index) => {
     const owned = runs.filter(run => { const value = slotOf(run.decisionKey); return value && value.day === rhythm.day && value.version === rhythm.version && value.n === slot.n; });
     return { n: slot.n, at: new Date(zonedTime(rhythm.day, slot.minute)).toISOString(), expected: roundHalfUp(rhythm.target * shares[index] / totalWeight), filled: owned.some(live), batches: owned.length };
   });
-  const elapsed = inHours(rhythm, local) ? slots.filter(slot => Date.parse(slot.at) <= now).at(-1) || null : null;
   const ceilingReached = used >= rhythm.ceiling;
-  // One live batch per slot; a shortfall rolls into the next slot and is never replayed after hours.
-  const due = elapsed && !elapsed.filled && used < elapsed.expected && !ceilingReached
-    // A late slot never lumps the whole missed day into one slice: at most twice a slot's share.
-    ? { n: elapsed.n, records: Math.min(elapsed.expected - used, rhythm.ceiling - used, sliceCap), decisionKey: slotKey(rhythm.day, rhythm.version, elapsed.n, elapsed.batches + 1) } : null;
-  const next = slots.find(slot => Date.parse(slot.at) > now) || null;
+  // The all-day rhythm (v3, one weighted slot per hour) expects work continuously: the cumulative share of every
+  // finished hour plus the elapsed part of the current one. Earlier rhythms expect each slot's share at its time.
+  const hourly = rhythm.version >= 3 && count === 24;
+  const expectedAtMinute = minute => { const h = Math.min(23, Math.floor(minute / 60)); return Math.floor(rhythm.target * ((h ? shares[h - 1] : 0) + weights[h] * Math.min(1, (minute - h * 60) / 60)) / totalWeight); };
+  const nowMinute = local.date === rhythm.day ? local.minutes + local.seconds / 60 : null;
+  const elapsed = inHours(rhythm, local) ? hourly ? slots[Math.min(23, Math.floor(local.minutes / 60))] : slots.filter(slot => Date.parse(slot.at) <= now).at(-1) || null : null;
+  const expectedNow = !elapsed ? 0 : hourly ? expectedAtMinute(nowMinute) : elapsed.expected;
+  const behind = Math.max(0, expectedNow - used), enough = Math.max(1, Math.min(hourly ? MIN_DUE : 1, rhythm.target - used));
+  // Work is due whenever today is behind its expected count, batch after batch, within the daily ceiling and the
+  // rolling hourly cap; a v2 shortfall is never replayed after that day's hours.
+  const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0
+    ? { n: elapsed.n, records: Math.min(behind, rhythm.ceiling - used, hourLeft), decisionKey: slotKey(rhythm.day, rhythm.version, elapsed.n, elapsed.batches + 1) } : null;
+  // Behind but at the hourly cap: work continues when the oldest slice of the hour leaves the window.
+  const hourResetAt = elapsed && behind >= enough && !ceilingReached && !hourLeft && Number.isFinite(hourFirst) ? new Date(hourFirst + 60 * MINUTE).toISOString() : null;
+  // When more work is next due: under v3 the minute today's expected count first runs `enough` ahead of what is done.
+  let next = null;
+  if (hourly && nowMinute !== null && used < rhythm.target) { for (let m = Math.ceil(nowMinute); m < 24 * 60; m++) if (expectedAtMinute(m) - used >= enough) { next = { at: new Date(zonedTime(rhythm.day, m)).toISOString() }; break; } }
+  else if (!hourly) next = slots.find(slot => Date.parse(slot.at) > now) || null;
   // Prepared or unfinished batches of today: a prepared slice is executed, never prepared again.
   const open = runs.filter(run => live(run) && run.status !== 'verified').slice(0, 10).map(run => ({ operationId: String(run.id), status: run.status, decisionKey: run.decisionKey || null }));
   return { day: rhythm.day, label: dayLabel(rhythm.day), rhythmVersion: rhythm.version, target: rhythm.target, ceiling: rhythm.ceiling, saved, verified, reserved, inFlight, byEntity,
-    reservedByRun, plannedByRun, sliceCap, open, currentSlot: elapsed ? elapsed.n : null, slotCount: count, remaining: Math.max(0, rhythm.target - used), ceilingReached, businessHours: inHours(rhythm, local), slots, dueSlot: due, nextSlotAt: next ? next.at : null };
+    reservedByRun, plannedByRun, sliceCap, hourCap: HOURLY_CAP, hourUsed, hourByRun, hourResetAt, behind, expectedNow, open, currentSlot: elapsed ? elapsed.n : null, slotCount: count, remaining: Math.max(0, rhythm.target - used), ceilingReached, businessHours: inHours(rhythm, local), slots, dueSlot: due, nextSlotAt: next ? next.at : null };
 }
 
 // Progress means the calendar cursor, the retained operation, today's verified creates, or
@@ -248,7 +279,7 @@ function nextClose(business, todayDay) {
 // requests: requestBudget(...) for today; when reached, no new discretionary slice is scheduled.
 // management: see managementDue; after recovery and catch-up, before slices and even while work is held.
 function decide({ now, settings = {}, business = {}, agent = {}, today = null, owned = [], obligations = null, requests = null, state = {}, ownerRequested = false, ceiling = REVIEW_CEILING, management = null }) {
-  const local = localParts(now), day = local.date, interval = Math.max(5, Number(settings.decisionIntervalMinutes) || 60) * MINUTE;
+  const local = localParts(now), day = local.date, interval = Math.max(5, Number(settings.decisionIntervalMinutes) || 60) * MINUTE, recheck = Math.min(interval, PAUSE_RECHECK_MINUTES * MINUTE);
   let s = { ...(state || {}) };
   if (s.day !== day) s = { ...s, day, reviews: 0 };
   const rhythm = frozenRhythm(s, day);s.rhythm = rhythm;
@@ -277,7 +308,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // A held state waits for the daily management review, which plans and files build requests without writing.
   let held = null;
   if (!kind && op && RETAINED.has(op.status)) {
-    if (!ownRetained(op, agent)) held = result('held', false, now + interval, 'held by work the accountant did not start');
+    if (!ownRetained(op, agent)) held = result('held', false, now + recheck, 'held by work the accountant did not start');
     else { kind = 'recovery'; reason = 'finishing its interrupted work'; }
   }
   // An approved plan that never started holds no calendar slot, so it is found here; it runs
@@ -285,16 +316,16 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   if (!kind && !held && ownRuns.some(run => dispositionOf(run) === 'continue')) { kind = 'recovery'; reason = 'finishing approved work that has not started'; }
   // Stopped outside the calendar slot after saving records: no tool can continue it yet, so no model
   // call; it keeps holding new work (and the calendar) until it is continued.
-  if (!kind && !held && ownRuns.some(run => dispositionOf(run) === 'stranded')) held = result('held', false, Math.min(now + interval, midnight), 'held: stopped work with saved records needs a recovery capability');
+  if (!kind && !held && ownRuns.some(run => dispositionOf(run) === 'stranded')) held = result('held', false, Math.min(now + recheck, midnight), 'held: stopped work with saved records needs a recovery capability');
   // Other blockers (uncertain writes, imported history, stops) have no accountant tool yet: no model call.
   if (!kind && !held && blockers.length) {
-    held = result('held', false, Math.min(now + interval, midnight), 'held: ' + String(blockers[0].title || 'business work is blocked').replace(/^./, c => c.toLowerCase()));
+    held = result('held', false, Math.min(now + recheck, midnight), 'held: ' + String(blockers[0].title || 'business work is blocked').replace(/^./, c => c.toLowerCase()));
   }
   if (!kind && !held && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
   const budgetSpent = Boolean(requests?.reached), budgetReason = requestBudgetReason(requests, '');
   if (!kind && !budgetSpent && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
   if (!kind && held) return held;
-  if (!kind && today && !today.unavailable && today.dueSlot && !budgetSpent) { kind = 'slice'; reason = 'an activity slot is due'; }
+  if (!kind && today && !today.unavailable && today.dueSlot && !budgetSpent) { kind = 'slice'; reason = 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule'; }
   const open = rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close;
   // Due saved obligations are actionable in activity hours (all day under v3), spaced and backed off like any review,
   // so an obligation that cannot be settled never loops.
@@ -310,11 +341,13 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // Nothing actionable: no model call, only a cheap re-check of saved state.
   const nextSlot = today?.nextSlotAt && !today.unavailable && !today.ceilingReached && today.remaining > 0 && !budgetSpent ? Date.parse(today.nextSlotAt) : Infinity;
   const hours = open;
-  const why = capped ? limit : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s activity is in QuickBooks' : '') : '';
+  const hourReset = today && !today.unavailable && today.hourResetAt && !budgetSpent ? Date.parse(today.hourResetAt) : Infinity;
+  const why = capped ? limit : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s target is met' : Number.isFinite(hourReset) ? 'the hourly limit of ' + (today.hourCap || HOURLY_CAP) + ' new records is reached; work continues at ' + localTime(hourReset) : '') : '';
   if (hours) {
-    // An all-day rhythm (v3) runs to the close just after midnight.
-    const close = rhythm.close >= 24 * 60 ? midnight : zonedTime(day, rhythm.close), check = now + interval;
-    return result('idle', false, Math.min(check, nextSlot, close), why || (nextSlot <= check ? 'next activity slot' : 'watching for new work'));
+    // An all-day rhythm (v3) runs to the close just after midnight. Paused: nothing is due, so saved state is
+    // re-checked at the next share, the hourly window or within 15 minutes.
+    const close = rhythm.close >= 24 * 60 ? midnight : zonedTime(day, rhythm.close), check = now + recheck;
+    return result('idle', false, Math.min(check, nextSlot, close, hourReset), why || (today && !today.unavailable && rhythm.target && nextSlot <= check ? 'on schedule; more work is due at ' + localTime(nextSlot) : 'nothing is due right now'));
   }
   // Only an earlier (v2) day has hours without activity.
   return result('quiet', false, Math.min(now + interval, nextOpen(), midnight, nextSlot), why || (rhythm.open === null ? 'no activity was planned that day' : 'outside that day’s activity hours'));
@@ -344,5 +377,5 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
   return { allowed: false, nextAt: new Date(now + 86400000).toISOString() };
 }
 
-module.exports = { V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
+module.exports = { MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
   localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

@@ -210,7 +210,7 @@ test('an owner request outranks the cadence once and counts toward the daily cei
  h.service.close();
 });
 test('at the daily review ceiling reviews pause until Halifax midnight',async()=>{
- const h=fixture();h.row.cadence={day:'2026-10-23',reviews:160};
+ const h=fixture();h.row.cadence={day:'2026-10-23',reviews:400};
  await h.service._worker(agentId,new AbortController());
  assert.equal(h.engineCalls,0);assert.equal(h.row.cadence.kind,'ceiling');assert.equal(new Date(h.row.nextDecisionAt).toISOString(),'2026-10-24T03:00:00.000Z');
  h.service.close();
@@ -219,12 +219,12 @@ test('a due slot gives the accountant today’s counts and slot, and an unproduc
  const h=fixture();h.store.todayActivity=async()=>({runs:[],receipts:[]});
  await h.service._worker(agentId,new AbortController());
  assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'slice');
- assert.deepEqual(h.passContext.today.dueSlot,{n:4,records:30,decisionKey:'slot-20261023-r2-s4'});assert.equal(h.passContext.today.target,150);
+ assert.deepEqual(h.passContext.today.dueSlot,{n:4,records:60,decisionKey:'slot-20261023-r2-s4'});assert.equal(h.passContext.today.target,150);
  assert.equal(h.row.cadence.reviews,1);assert.equal(h.row.cadence.misses,1,'nothing changed during the review');
- assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+15*60000,'a retry is never sooner than the 15-minute slice spacing');
+ assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+5*60000,'a review without progress waits 5 minutes; a productive one is followed a minute later');
  const view=await h.service.status({id:ownerId});
  assert.equal(view.rightNow.today.line,'Today (Fri Oct 23): 150 planned · 0 in QuickBooks');
- assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/Activity slot 4 of 10 is due now: about 30 records/);
+ assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/^Working continuously: today is 60 records behind schedule; the next batch of about 60 records/);
  h.service.close();
 });
 
@@ -242,9 +242,9 @@ test('settings changes are not review requests, and an owner request at the ceil
  const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');
  await h.service.control({id:ownerId},{command:'configure',settings:{syncIntervalSeconds:30,decisionIntervalMinutes:60},expectedRevision:1,requestKey:'fixture_configure_0001'});await h.service.drain();
  assert.equal(h.engineCalls,0);assert.equal(h.row.reviewRequestedAt,undefined);
- const capped=fixture();capped.row.cadence={day:'2026-10-23',reviews:160};
+ const capped=fixture();capped.row.cadence={day:'2026-10-23',reviews:400};
  await capped.service.control({id:ownerId},{command:'run-now',expectedRevision:1,requestKey:'fixture_run_now_0001'});await capped.service.drain();
- assert.equal(capped.engineCalls,0,'review 161 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 160 reviews is reached/);
+ assert.equal(capped.engineCalls,0,'review 401 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 400 reviews is reached/);
  assert.equal(new Date(capped.row.nextDecisionAt).toISOString(),'2026-10-24T03:00:00.000Z','the request runs after Halifax midnight');
  [h,capped].forEach(value=>value.service.close());
 });
@@ -361,4 +361,13 @@ test('between reviews, recovered work is continued without waiting for the backo
  await h.service._worker(agentId,new AbortController());
  assert.equal(h.requested,1);assert.equal(h.engineCalls||0,0);
  assert.ok(new Date(h.row.nextDecisionAt).getTime()<=h.clock,'the next review is due now');assert.equal(h.row.cadence.misses,0);
+});
+test('a productive review is followed by the next one about a minute later while today is behind',async()=>{
+ const h=fixture();let receipts=[];h.store.todayActivity=async()=>({runs:receipts.length?[{id:'r1',status:'verified',decisionKey:'slot-20261023-r2-s4',createdAt:h.clock,recordCount:5}]:[],receipts});
+ h.onRun=async()=>{receipts=Array.from({length:5},(_,i)=>({operationId:'r1',entity:'invoice',logicalKey:'k'+i}));};
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.misses,0,'records were saved');
+ assert.deepEqual([h.row.cadence.kind,new Date(h.row.nextDecisionAt).getTime()],['slice',h.clock+60000]);
+ const view=await h.service.status({id:ownerId});assert.match(view.work.items.find(item=>item.key==='todays-activity').next,/^Working continuously/);
+ h.service.close();
 });

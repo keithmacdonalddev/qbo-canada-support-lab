@@ -61,6 +61,8 @@ function todayLine(today){
   if(!today.target)return 'Today ('+today.label+'): closed'+(today.saved?' · '+today.saved+' in QuickBooks':'');
   return 'Today ('+today.label+'): '+today.target+' planned · '+today.saved+' in QuickBooks'+(today.verified<today.saved?' ('+today.verified+' verified)':'')+(today.reserved?' · '+today.reserved+' in progress':'');
 }
+// Cadence kinds that mean the accountant is working now or straight after the current review.
+const CONTINUOUS=new Set(['slice','obligations','recovery','catch-up','management','owner','poll']);
 const halifaxTime=value=>require('./business-agent-cadence').localTime(value);
 function businessWork({settings,agent,business,sync,coverage=null,activityPolicyHash=null,usage=null,facts=null,today=null,calendarClose=null,cadence=null,owned=[],requests=null}={}){
   settings=settings||{};agent=agent||{};business=business||{};sync=sync||{};
@@ -132,11 +134,12 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
       :calendarClose?'Same-day activity starts once the calendar is closed through yesterday.'
       :today.ceilingReached?'Today’s ceiling of '+today.ceiling+' records is reached. Same-day activity resumes tomorrow.'
       :requests?.reached&&today.remaining>0?(reason=>reason.charAt(0).toUpperCase()+reason.slice(1)+'.')(require('./business-agent-cadence').requestBudgetReason(requests))
-      :due?'Activity slot '+due.n+' of '+today.slotCount+' is due now: about '+plural(due.records,'record')+' of genuine business work.'
-      :today.remaining===0?'Today’s planned activity is in QuickBooks.'
-      :today.nextSlotAt?'Next activity slot at '+halifaxTime(today.nextSlotAt)+'.':'Today’s activity slots are finished; any shortfall is not replayed.';
+      :due?'Working continuously: today is '+plural(Number.isSafeInteger(today.behind)?today.behind:due.records,'record')+' behind schedule; the next batch of about '+plural(due.records,'record')+' of genuine business work runs now.'
+      :today.remaining===0?'Today’s target is met.'
+      :today.hourResetAt?'Paused: the hourly limit of '+today.hourCap+' new records is reached. Work continues at '+halifaxTime(today.hourResetAt)+'.'
+      :today.nextSlotAt?'On schedule. More work is due at '+halifaxTime(today.nextSlotAt)+'.':'Today’s schedule is complete; any shortfall is not replayed.';
     add({key:'todays-activity',owner:ACCOUNTANT,state:stale||!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
-      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':nextAt?'Next review '+nextAt+(cadence?.reason?' ('+cadence.reason+')':'')+'.':'Spread across the day in small hourly batches.'});
+      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':CONTINUOUS.has(cadence?.kind)?'Working continuously'+(cadence?.reason?' ('+cadence.reason+')':'')+'.':nextAt?'Paused until '+nextAt+(cadence?.reason?': '+cadence.reason:'')+'.':'Works through the day in small batches.'});
   }
   if(business.adoptedThrough)duty('inherited-obligations',['collect-adopted-invoice','pay-adopted-bill'],{title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',capability:'adopted-obligations'},'Collects and pays them at business reviews as customers pay and bills fall due.');
   for(const blocker of blockers)if(!KNOWN.has(blocker.code))add({key:'blocker-'+(blocker.code||'unknown'),owner:ACCOUNTANT,state:'blocked',title:blocker.title||'Business work is held',detail:blocker.detail||'',next:'Retried on the next review.',href:blocker.href||'/company/manage'});

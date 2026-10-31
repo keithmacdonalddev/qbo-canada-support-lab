@@ -416,7 +416,8 @@ function createBusinessAgentService(options={}) {
           if(role==='accountant'){
             // The next review time comes from the cadence with fresh saved state; this also records whether the review made progress.
             let after=null;try{after=decideCadence(row,await store.business(scope),await todayFor(scope,row,{fresh:true}),false,await ownedFor(scope,row),await obligationsFor(scope),await requestsFor(scope),await managementFor(row));}catch{after=null;}
-            await update({summary:result.summary,lastDecisionAt:new Date(now()),nextDecisionAt:after?new Date(after.nextReviewAt):next,...(after?{cadence:cadenceRecord(after)}:{}),status:business.blockers.length?'attention':'ready',activePass:null,lastError:null,reviewYields:0});
+            await update({summary:result.summary,lastDecisionAt:new Date(now()),// While work is due the next review starts about a minute after this one finished (continuous operation).
+            nextDecisionAt:after?new Date(Math.max(Date.parse(after.nextReviewAt),after.callModel?now()+60000:0)):next,...(after?{cadence:cadenceRecord(after)}:{}),status:business.blockers.length?'attention':'ready',activePass:null,lastError:null,reviewYields:0});
           }
           else await update({reviewYields:0,specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),status:'waiting',summary:result.summary,lastDecisionAt:new Date(now()).toISOString(),nextDecisionAt:next.toISOString()}},nextDecisionAt:new Date(Math.min(at(row.nextDecisionAt)||now(),now()+60000)),activePass:null,status:'ready'});
         }});

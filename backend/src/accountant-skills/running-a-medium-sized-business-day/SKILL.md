@@ -6,7 +6,7 @@ description: A realistic day in this medium-sized business: sizing each slice fr
 # Running a medium-sized business day
 
 ## Read the day first
-`context.today` (or `getBusinessState`) gives the target, what QuickBooks already received, work in progress, the ceiling, the due slot and its size (`dueSlot.records`), and the slice allowance (`sliceCap`). The server owns the rhythm and slot identity: prepare **one batch for the due slot**, of about `dueSlot.records` new records; never exceed `sliceCap` or the ceiling, and never pad. With no slot due, do standing duties only (receiving, settlements, corrections, list additions).
+`context.today` (or `getBusinessState`) gives the target, what QuickBooks already received, work in progress, the ceiling, how far today is behind schedule (`behind`), the due batch and its size (`dueSlot.records`), and the limits of 60 new records per batch (`sliceCap`) and per rolling hour (`hourCap`, `hourUsed`). The accountant works continuously: while `dueSlot` is present, prepare **one batch**, of about `dueSlot.records` new records, execute it, and the next review follows about a minute later. The server owns the batch identity. Never exceed the hourly limit or the ceiling, and never pad. With nothing due, do standing duties only (receiving, settlements, corrections, list additions).
 
 ## Record counts per activity (for sizing)
 | Activity | New records |

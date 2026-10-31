@@ -79,14 +79,14 @@ test('the management review runs once a day at 00:10, before the first slice, an
   // Later days wait for 00:10, right after the previous day's close and before the 00:30 slice.
   d = decide(at(sun, '00:07'), { management: { lastPlanDay: sat } });assert.notEqual(d.kind, 'management');
   d = decide(at(sun, '00:40'), { management: { lastPlanDay: sat } });assert.equal(d.kind, 'management', 'it precedes the due slice');
-  d = decide(at(sun, '00:40'), { management: { lastPlanDay: sun } });assert.equal(d.kind, 'slice', 'once today’s plan is saved the slice runs');
+  d = decide(at(sun, '01:30'), { management: { lastPlanDay: sun } });assert.equal(d.kind, 'slice', 'once today’s plan is saved the slice runs');
   assert.equal(new Date(c.managementAt('2026-11-02')).toISOString(), '2026-11-02T04:10:00.000Z', '00:10 Halifax (AST)');
   assert.equal(c.managementMinutes('2026-11-01'), 10, 'every day, Sunday included');
   // The previous day's close comes first.
   d = c.decide({ now: at(sun, '00:15'), settings, business: current(sun, { verifiedThrough: '2026-10-30' }), agent, today: todayAt(at(sun, '00:15')), management: { lastPlanDay: sat } });
   assert.equal(d.kind, 'catch-up');
   // Without the management input (feature unavailable) nothing changes.
-  assert.equal(decide(at(sun, '00:40')).kind, 'slice');
+  assert.equal(decide(at(sun, '01:30')).kind, 'slice');
 });
 
 test('management attempts are capped per day and never count as a review without progress', () => {

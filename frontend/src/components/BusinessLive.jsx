@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowDown, ArrowRight, Brain, Check, Circle, Clock3, Coins, LoaderCircle, MessageSquare, OctagonPause, RefreshCw, Send, Wrench, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowDown, ArrowRight, Brain, Check, Circle, Clock3, Coins, LoaderCircle, MessageSquare, OctagonPause, RefreshCw, Send, Wrench, X } from 'lucide-react'
 import { dateTime, timeOfDay } from '../lib/format'
 import { recordLink } from '../lib/business-workspace.mjs'
 
@@ -24,6 +24,8 @@ const number = value => Number.isFinite(Number(value)) && value !== null ? Numbe
 
 // The one-line "now" statement. The feed knows about reviews and sends as they happen;
 // the workspace status knows pauses, limits, catch-up and the next review time.
+// Cadence kinds that mean work is due now or straight after the current step.
+const CONTINUOUS = new Set(['slice', 'obligations', 'recovery', 'catch-up', 'management', 'owner', 'poll'])
 function nowLine(feed, rightNow, clock) {
   const next = stamp(rightNow?.nextReviewAt), reason = rightNow?.cadence?.reason
   // Either source may notice a review first; both polls catch up within seconds.
@@ -41,7 +43,12 @@ function nowLine(feed, rightNow, clock) {
     case 'usage-paused': return { tone: 'held', Icon: OctagonPause, title: 'Paused for its AI usage limit', detail: next ? 'reviews resume ' + when(next, clock) : 'reviews wait until the limit allows them' }
     case 'catching-up': return { tone: 'working', Icon: RefreshCw, title: 'Catching up with QuickBooks', detail: 'the next review starts once every record type is current' }
     case 'recovering': return { tone: 'working', Icon: RefreshCw, title: 'Recovering', detail: 'picking up where the last review stopped' }
-    default: return { tone: 'idle', Icon: Clock3, title: 'Idle', detail: (next === null ? 'next review is queued' : next <= clock ? 'next review starting shortly' : 'next review at ' + when(next, clock) + ' (in ' + minutes(next - clock) + ')') + (reason ? ' · ' + reason : '') }
+    default: {
+      // The accountant works back to back while anything is due; otherwise it is paused, with the exact reason.
+      const due = next === null ? 'next step is queued' : next <= clock ? 'next step starting now' : 'next step in ' + minutes(next - clock)
+      if (CONTINUOUS.has(rightNow?.cadence?.kind)) return { tone: 'working', Icon: Activity, title: 'Working continuously', detail: due + (reason ? ' · ' + reason : '') }
+      return { tone: 'idle', Icon: Clock3, title: 'Paused', detail: (reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Nothing is due right now') + (next === null ? '' : next <= clock ? ' · checking again now' : ' · checks again at ' + when(next, clock)) }
+    }
   }
 }
 // "Today (Fri Oct 30): 20 planned · 7 in QuickBooks", or the calendar catch-up state, from the server.
@@ -153,7 +160,7 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
       <span>{today}</span>
       {sending !== null && <span className="bwl-bar" role="progressbar" aria-label="Records sent" aria-valuemin={0} aria-valuemax={100} aria-valuenow={sending}><span style={{ width: sending + '%' }} /></span>}
     </div>
-    <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant session and activity, oldest first">
+    <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant activity, oldest first">
       {rows.length ? <ol>
         {rows.map(row => row.entry ? <EntryRow key={row.id} entry={row.entry} clock={clock} /> : <FeedRow key={row.id} item={row.item} clock={clock} />)}
       </ol> : <p className="bwl-empty">{!feed ? failed ? 'Live activity could not be read yet. Retrying automatically.' : 'Loading the latest activity…' : 'Nothing recorded yet. The accountant’s next review appears here as it happens: what it reads, what it decides and every record it sends to QuickBooks.'}</p>}

@@ -230,12 +230,14 @@ const friday = cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2
   receipts: [...Array.from({ length: 7 }, (_, i) => ({ operationId: 'r1', entity: 'invoice', logicalKey: 'a' + i })), { operationId: 'r2', entity: 'invoice', logicalKey: 'b' }] });
 test('today’s activity states planned, saved, verified and in-progress counts and the next slot', () => {
   assert.equal(friday.saved, 8);
-  const work = businessWork({ ...running, today: friday, cadence: { kind: 'idle', reason: 'next activity slot', nextReviewAt: '2026-10-30T17:30:00.000Z' } });
+  const work = businessWork({ ...running, today: friday, cadence: { kind: 'slice', reason: 'today is 78 records behind schedule', nextReviewAt: '2026-10-30T17:16:00.000Z' } });
   const item = byKey(work, 'todays-activity');
   assert.equal(item.owner, 'accountant');assert.equal(item.state, 'on-duty');
   assert.equal(item.facts, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
-  assert.match(item.detail, /Activity slot 6 of 10 is due now: about 30 records of genuine business work/);
-  assert.equal(item.next, 'Next review 2:30 PM (next activity slot).');
+  assert.equal(item.detail, 'Working continuously: today is 78 records behind schedule; the next batch of about 60 records of genuine business work runs now.');
+  assert.equal(item.next, 'Working continuously (today is 78 records behind schedule).');
+  const paused = byKey(businessWork({ ...running, today: friday, cadence: { kind: 'idle', reason: 'nothing is due right now', nextReviewAt: '2026-10-30T17:30:00.000Z' } }), 'todays-activity');
+  assert.equal(paused.next, 'Paused until 2:30 PM: nothing is due right now.');
   assert.equal(work.needsOwner, 0);
   const closed = businessWork({ ...running, today: cadenceModule.summarizeToday({ rhythm: cadenceModule.dayRhythm('2026-10-25'), now: Date.parse('2026-10-25T16:00:00Z') }) });
   assert.match(byKey(closed, 'todays-activity').detail, /No same-day activity is planned/);

@@ -77,8 +77,10 @@ test('a same-day slice takes the due slot identity; duty and list batches keep t
  // The slot's batch was prepared: another slice in the same slot is refused and points at that plan.
  h.today=cadence.summarizeToday({rhythm:cadence.dayRhythm('2026-10-30'),runs:[{id:operationId,status:'previewed',decisionKey:'slot-20261030-r2-s4',createdAt:NOON-60000,createCount:3}],now:NOON});
  await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/already has a prepared batch \(operation e{24}\)/);
- h.today={...h.today,open:[]};
- await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/No same-day activity slot is due now; the next one opens at 12:30 PM \(Halifax\)/);
+ h.today={...h.today,open:[],dueSlot:null};
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/No same-day activity is due now: today is on schedule; more is due at 12:30 PM \(Halifax\)/);
+ h.today={...h.today,hourResetAt:new Date(NOON+20*60000).toISOString()};
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/hourly limit of 60 new records is reached; work continues at 12:20 PM \(Halifax\)/);
  await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,3,'standing duties stay available between slots');
 });
 test('the daily ceiling, a day with no planned activity and an unreadable count stop new discretionary slices',async()=>{
@@ -145,11 +147,13 @@ test('the unfinished-work query is filtered to the current grant, and governed c
 });
 
 // GPT-6.1 Sol final review (2026-10-30): per-slice allowance at approval and the daily request budget.
-test('approval refuses a slice whose saved plan exceeds the slot allowance; obligations are not limited',async()=>{
+test('approval refuses a slice over the batch or rolling-hour limit; obligations are not limited',async()=>{
  const h=slotFixture();h.today={...h.today,saved:0,reserved:0,reservedByRun:{},plannedByRun:{[operationId]:60},sliceCap:30};h.run.recordCount=5;
- await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/plans 60 new records, more than this slot\u2019s allowance of 30\. It was not approved\. Prepare a smaller batch/);
+ await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/plans 60 new records, more than the limit of 30 for one batch\. It was not approved\. Prepare a smaller batch/);
  assert.deepEqual([h.approved,h.queued],[0,0],'the saved plan count wins over the run row');
- h.today.plannedByRun={[operationId]:15};await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'});assert.equal(h.approved,1);
+ h.today={...h.today,plannedByRun:{[operationId]:15},hourCap:60,hourUsed:55,hourByRun:{other:50,[operationId]:5}};
+ await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/bring the last hour to 65 new records, over the hourly limit of 60/);
+ h.today.hourUsed=45;h.today.hourByRun={other:40,[operationId]:5};await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'});assert.equal(h.approved,1,'its own preparation is not counted twice');
  const duty=slotFixture();duty.today={...duty.today,plannedByRun:{[operationId]:60},sliceCap:30};duty.run.activityBatch.activities=[{type:'pay-adopted-bill'}];
  await duty.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Pay the adopted bill that fell due today.'});assert.equal(duty.approved,1);
 });
