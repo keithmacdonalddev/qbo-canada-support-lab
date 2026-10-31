@@ -2,6 +2,10 @@
 
 Updated 2026-10-18 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Orchestrator handoff — 2026-10-31 (read first)
+
+The next Claude orchestrator starts with `docs/agent-harness/handoff-2026-10-31-orchestrator.md`: owner intent and verbatim directions, the architecture built Oct 29–31, live state, the open work in priority order, how to operate Sol workers, and the lessons from this session.
+
 ## Open TODO: landing page overhaul — 2026-10-31
 
 The landing page (`/company`, `BusinessWorkspace.jsx`) needs an overhaul. Owner asked to record the review: see `docs/plans/landing-page-overhaul-todo-2026-10-31.md`. Not started. A rendered slice needs owner acceptance before broad adoption.

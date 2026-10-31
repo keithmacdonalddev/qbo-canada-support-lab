@@ -1,0 +1,345 @@
+# Orchestrator handoff, 2026-10-31
+
+From the Claude orchestrator of session `1f8ad8d6` (Oct 29–31) to the next Claude orchestrator.
+
+You will run the work in this document. Read it end to end before acting. It covers:
+- the owner's intent and their exact words;
+- what was built and why;
+- the live state at hand-off;
+- the open work, in priority order;
+- how to operate the Sol workers;
+- the mistakes that cost the most time, and the rules that prevent them.
+
+Supersedes nothing in `AGENTS.md`, `CLAUDE.md` or `AGENT_WORKFLOW.md`, which still apply.
+
+---
+
+## 0. First 15 minutes (do this before anything else)
+
+1. `git status --short --branch`.
+   - Expect `main...origin/main` and only `.claude/agent-memory/qbo-safety-reviewer/MEMORY.md` modified. That file is not ours; never stage it.
+   - **Another session is also committing in this repo.** `9f7b101` and `969042d` are not from this session. Re-read files before editing.
+2. Read the live state (read-only; the helper mints an owner token in memory and never prints it):
+   ```bash
+   cd C:/Projects/qbo/artifacts/luna/tmp
+   MSYS_NO_PATHCONV=1 API_OUT=$CLAUDE_JOB_DIR/tmp/s.json node api.js GET /company/business-agent
+   MSYS_NO_PATHCONV=1 API_OUT=$CLAUDE_JOB_DIR/tmp/b.json node api.js GET /company/business-agent/blockers
+   ```
+   Fields to check:
+   - `data.rightNow.today.line`: records in QuickBooks today vs the 220 target;
+   - `data.rightNow.cadence`: what the scheduler is doing and why;
+   - `data.agent.summary`: the accountant's last summary;
+   - `data.management.capabilityRequests`: the accountant's **build list**;
+   - `blockers`: structured errors, grouped.
+3. Check the Sol jobs still running at hand-off (section 6). Fetch their results and commit them (section 5).
+4. Report the live count and blockers to the owner in a few plain sentences.
+
+---
+
+## 1. Who the owner is and how to work with them
+
+- **About the owner:**
+  - a self-taught solo developer;
+  - wants **short, plain-English answers**: lead with the result, no jargon, no tool narration;
+  - uses the app **on desktop only**; no mobile or 390px checks.
+- **Judge work by outcomes in the live company, not by tests or reviews.** Owner, verbatim: "who cares about tests and reviews". Report records in QuickBooks today against target, blockers and features used. Keep tests and reviews quiet and in the background.
+- **Full autonomy** (2026-10-29): "do any thing you need to ... i want you to do everything until fullly complete without my input from here". Don't ask permission for routine work. Ask only for genuinely owner-only, irreversible decisions; multicurrency is one.
+- **It's a test company, so no real money moves.** The QBO realm 9130357222392856 (Production, QBO Advanced Canada) is a simulated business. Don't re-prompt the owner for approvals of new workflows.
+- **Not this chat's Sol-only rule.** It was for session `1f8ad8d6` only. Your own rules are set out in the next bullet.
+- **The owner's orders for the next session**, verbatim:
+  - "the sol only subagents will pass to the next chat session only. with claude as the orchestrator."
+
+  **You (Claude) orchestrate. All building, fixing, reviewing and testing goes to GPT-6.1 Sol at extra-high effort through the Codex companion.**
+  - Don't spawn Claude subagents.
+  - Keep your own token use low: short messages, few tool calls.
+  - Use read-only checks yourself only when a quick look is cheaper than a Sol round-trip.
+- **Don't overcompensate.** After a mistake, fix the cause, say so plainly once, and move on.
+
+---
+
+## 2. What the app is for (the owner's intent)
+
+The owner's three jobs for the app:
+1. **Reproduce customer issues in QuickBooks**, not in this app.
+2. **Manage the QuickBooks company like a real, running business, 24/7, through the API.**
+3. **Make sure every QuickBooks feature gets used** as a natural part of running the business, and measure the gaps.
+
+Formal requirements R01–R16 are in `docs/plans/continuous-business-operator-completion-2026-10-24.md` §2 (product contract: `prd.md`). In short:
+- **R01:** a believable test business for Intuit troubleshooting, teaching and learning. Support usefulness beats record count.
+- **R02:** medium-sized and very active, all the time.
+- **R03–R05:** an in-app AI accountant orchestrates everything. It is the head accountant, manager, consultant and decision-maker, with every tool and skill the job needs.
+- **R06:** the owner is also a decision-maker; their instructions persist.
+- **R07:** complete UI so the owner can manage the same things.
+- **R08–R09:** autonomous for days or weeks, with no end date.
+- **R10:** always synced with QBO; real-time monitoring.
+- **R11:** show what happened, what is unfinished, and what's next.
+- **R12:** a UI and experience beyond what the owner would expect.
+- **R13–R14:** optional specialists, only when they're worth it.
+
+**Owner directions given in this session** (verbatim, and binding):
+- **On activity and scale:**
+  - "this is supposed to be a continual active business. the accountant should be simulating the real business in the qbo account all the time."
+  - "that is not a mediunm sized business, why is this so lazy". The target is now **220 records/day**, which is a medium business.
+  - "business run 24/7 365. more over, ai and systems dont need limitiations like that". No business hours, no closed days.
+  - "why are theree accountant sessions?" / "you worked for that long and didnt do what i asked?" **Continuous means back to back while work exists**, never a timer or slot schedule.
+- **On the accountant's reach and setup:**
+  - "why doesnt the accountant know all that... its a fronteir model". **Don't hand-code fixed transaction shapes**; give the model general governed API reach.
+  - "give the accountant all the tools, all the api skills, the ability to fully search all of the synced data in this app, be able to write /read do anything else in qbo, why is it so narrow"
+  - "the accountant needs to be setup like you, you have skills, tools ... progressive disclousure for tools, and tool search, also with skills"
+  - "if this app syncs automatically and its proven to be in line with all the qbo data, why waste qbo reads". Use the synced copy, and prove it matches.
+- **On the daily review and stalls:**
+  - "why doesnt it review the busienss data, look for ways to improve the intent of the app within the scope ive discussed every day" (the daily management review).
+  - "why would it stop though". **A check failing on an already-saved record must never stop the business.**
+  - "why can there only be single batch writes". Multiple batches must run in parallel.
+- **On the live view:**
+  - "and why cant i see what the accountant is doing live on the first page of this app". The Live panel shows reasoning, tool calls, sends and receives.
+- **On how the orchestrator works:**
+  - "you need to manage them properly". Keep every Sol slot busy, track jobs, commit promptly, and verify live.
+  - "why didnt you know this alraedy and why didnt the accountant agent know this", followed by "fix why it was overlooked, why error surfacing with proper error data didnt get to where it needs to go". This produced the structured errors, the blockers feed, stuck detection, and the rule that the build list is acted on.
+- **On the landing page:**
+  - "archive it as a todo ... the page needs an overhaul and your review". See `docs/plans/landing-page-overhaul-todo-2026-10-31.md`.
+
+---
+
+## 3. What exists now (architecture, by area, with commits)
+
+The flow is: model → tools → governed write pipeline → QuickBooks → read-back and verification → day close → calendar.
+
+### 3.1 Accountant runtime
+- **The model:**
+  - runs as Codex CLI (`gpt-6.1-sol`) on the owner's ChatGPT subscription;
+  - falls back to Anthropic only when the Codex login is not ready, and only before a run starts (`ed7ad03`, fixed by `82d2cde`).
+- **Engine and service:** `business-agent-engine.js`, `business-agent-service.js`.
+  - Each "review" is one model run, up to 10 minutes and 60 tool calls (`REVIEW_LIMITS`; a hidden 24-call cap was removed in `e56f54d`).
+- **Continuous cadence:** `business-agent-cadence.js`, rhythm v3 (`4d1bbdc`, `6f319c1`).
+  - Runs 24/7/365, 220 records/day, weighted heavier during the day and never zero at night.
+  - Reviews run back to back about 1 minute apart while anything is due. The day's expected count rises minute by minute.
+  - Caps: 60 records per batch, 60 per rolling hour, a daily ceiling of 2× target, and 400 reviews/day.
+  - Backoff of 5, 15 then 30 minutes, only for consecutive failures. It is capped at 5 minutes while the day is behind.
+  - Up to 3 operations can be in flight at once. New work runs alongside recovery.
+  - The daily management review runs at 00:10 Halifax.
+- **Tools and skills** (`6dbcd6d`):
+  - Progressive disclosure through `business-agent-toolbox.js`: a small core set, `searchTools` and `useTool` for deferred tools, and `listSkills`/`loadSkill`/`readSkillReference`.
+  - The skills are in `backend/src/accountant-skills/*/SKILL.md`. They are read on demand and changing them needs no restart. Latest content is `3301c67`: recurring billing, month-end, support scenarios, and the 24-hour mix.
+- **Daily management review:**
+  - module `business-management-review.js`;
+  - tools `recordDailyPlan`, `requestCapability` (the **build list**) and `getManagementReview`;
+  - the UI card `BusinessTodayPlan.jsx`.
+- **Search over synced data:**
+  - `queryCompanyData` (`business-company-query.js`) supports find, aggregate and link-following across the local mirror (`CompanySyncRecord`, about 11k records), with no QBO calls;
+  - the lookups `searchEntities`, `getEntityDetail` and similar answer from the mirror when it is current (`business-local-reads.js`).
+- **Diagnostics:**
+  - `inspectBlocker` (`business-blocker-inspection.js`) gives a field-by-field reason for any blocked operation;
+  - structured errors come from `business-error-detail.js`.
+
+### 3.2 Writes
+- **Fixed workflows:** activity policy v8 in `business-activity-batch.js`, and earlier ones.
+  - Terms invoices and bills, collecting your own invoices and paying your own bills in full or part, estimate → invoice, and order-stock (`6dbcd6d`, `8619270`).
+  - These still exist and are still used.
+- **General governed write tool** `manageQboRecord`, plus `getQboEntitySchema`:
+  - **Contract:** `docs/plans/general-governed-write-tool-2026-10-31.md`, rev 3, approved after two Sol design reviews.
+  - **Modules:** `general-write-*.js`.
+  - **Sending:** `GENERAL_WRITE_DISPATCH_ENABLED=true`, set in `.env`.
+  - **What it can do:**
+    - create, update and delete non-inventory records;
+    - unapplied payments and overpayments;
+    - mixed tax codes per line;
+    - deposits net of fees;
+    - voids of its own Invoice, Payment, SalesReceipt and BillPayment (`73dddf2`).
+  - **Inventory** is built but off: `GENERAL_WRITE_INVENTORY_ENABLED` defaults off (`91df204`). Returns are unfinished.
+  - **Safety:**
+    - batch transport through `qbo-write-gate.js` with a receipt saved before every send;
+    - exact replay after a lost response;
+    - a day-close gate that checks each general record's GL rows against its own lines (`general-write-close-gate.js`);
+    - a durable dirty-history marker before history edits; edits to verified history are partly supported (`ac17891`, job H);
+    - 11 Sol review findings fixed (`22912ec`, `0540813`).
+  - **First live record:** 2026-10-31 at about 22:05 UTC, Anna Katz's $1,000 credit application.
+- **Owner UI:** the "Record something" panel (`OwnerRecordComposer.jsx`, `54197e9`) goes through the same governed path. **It has not yet been inspected rendered.**
+- **Concurrency:**
+  - resource-scoped claims replace the single company writer (`d80f312`);
+  - at most 4 QBO requests at a time per company;
+  - day close and history edits are exclusive.
+
+### 3.3 Verification and recovery (where today's stalls came from)
+- **Fresh reads:** verification always reads transactions fresh from QuickBooks (`50868c8`). One fixture per business chain lives in `business-operation-freshness.test.js`.
+- **A failed check never stops everything:**
+  - a failed check on a saved record re-reads it once;
+  - if it still fails, only that step is marked `needs-check` and independent steps continue;
+  - the day close still waits for it (`b37ecdd`);
+  - re-checks run every minute (job H).
+- **Lost replies settle themselves:** a lost response is resolved automatically under the standing grant, by attribution or proved-not-created, then the work continues (`07aeb27`, `714d8b8`).
+- **Definition checks:** list and tax definitions compare canonically (`81af99a`, `c9b0942`, `2f48c45`, `ac17891`).
+  - **The root cause of the care-plan stall:** QuickBooks added `Item.DeferredRevenue=false` to live reads. Absent and default-empty values now compare as equal.
+- **An earlier day's close doesn't block today's work** (job G, `ac17891`).
+- **Structured errors and stuck detection** (`ac17891`, job S, plus `fbd8e82`):
+  - every refusal carries its code, the failing check's file:line, the record, and field differences;
+  - this reaches runs, steps, the accountant's context, transcripts, the Live panel ("Blocked: …", no spinner), the work list and the build list;
+  - anything stuck for more than 15 minutes becomes an attention item and a build-list entry;
+  - `GET /api/company/business-agent/blockers` returns the current list.
+
+### 3.4 Sync and QBO usage
+- **Change-data-capture sync** (`a98df80`) keeps the mirror current. A nightly amount reconciliation against the AR/AP aging reports and bank balances proves it matches (`ffd92b8`).
+- **Fewer calls per record:** about 2.5 metered calls per saved record in principle (`6d59455`). Fresh reads in verification (`50868c8`) add back about 7–39 GETs per operation chain, offset by report reuse (`6f319c1`).
+  - Calls per purpose show in `qboRequests.today.callers`.
+  - The budget is 10,000 metered non-sync calls/day and 450,000/month (Intuit's free tier is 500,000).
+
+### 3.5 Other
+- **Reproduction:** cases search existing records first and write through the governed path (`ac17891`, job M).
+- **Codex subscription deployment:** `docs/deployment.md`, plus `ed7ad03`.
+- **nodemon:** `backend/nodemon.json` watches `src` only, with a 3-second delay (`efb208e`). This took effect after the owner restarted at about 18:50 UTC.
+- **Skills and the "lock" protocol for parallel builders:** section 6.
+
+---
+
+## 4. Live state at hand-off (update this section at the pause point)
+
+These numbers are the latest when written. Re-read them live first (section 0).
+
+- **Records:** Saturday 2026-10-31 (Halifax). 73 records in QuickBooks today, 72 verified, against a target of 220. The day lost about 10 hours to the stalls described in section 8.
+- **Calendar:** verified through 2026-10-30. Tonight's 00:05 Halifax (03:05 UTC) close of Oct 31 is the first close that includes a general-write record.
+  - The `generaldaycloses` collection and its index were added at about 22:20 UTC through the new governed additive setup (`1568826`):
+    - preview: `POST /api/company/business-setup/storage/preview {"profile":"general-writes"}`;
+    - apply: `POST .../storage/apply {"profile":"general-writes","planHash":...}`, which returned `complete`;
+    - index confirmed.
+
+    Use the same route for any future missing collection or index.
+- **First general-write record:** Anna Katz's $1,000 credit application. The accountant still needs to verify the related balances.
+- **Six overdue imported invoices, CAD 1,591.44,** are still unsettled. The old key blocker is fixed. The accountant now needs to actually collect them.
+- **Blocking sales at hand-off** (job W is fixing both):
+  - the three regional customers the accountant added are refused as "changed after creation" (`business-added-roles.js` ~170, same class as the DeferredRevenue issue);
+  - the general tool refuses current-day taxable sales with tax code 16 (NS HST 14% from 2025-04-01).
+- **The full backend suite** was 2427 tests: 2425 pass and 2 are intentionally skipped, as of `ac17891`.
+
+---
+
+## 5. How to operate (procedures that work)
+
+### Sol workers (the only builders)
+
+```bash
+cd C:/Projects/qbo
+S=.claude/skills/qbo-team-delivery/scripts/codex.sh
+bash $S task --background --write --model gpt-6.1-sol --effort xhigh "<prompt>"   # builder
+bash $S task --background --model gpt-6.1-sol --effort xhigh "<prompt>"           # read-only reviewer
+bash $S status <task-id>      # running/completed/failed
+bash $S result <task-id>      # final answer
+```
+
+Arm a Monitor on `bash .claude/skills/qbo-team-delivery/scripts/codex-watch.sh <task-id>` in the same step as starting the job. Codex jobs don't notify Claude by themselves.
+
+**Shared prompt preamble** (copy from `$CLAUDE_JOB_DIR/tmp/common.txt` if it still exists; otherwise reuse this):
+- no commits, services, QBO calls or MongoDB writes; read-only queries are allowed (dotenv from `C:/Projects/qbo/.env`, mongoose from `backend/node_modules`; never print secrets);
+- each job owns its listed files;
+- other files need a lock: `mkdir C:/Users/NewAdmin/AppData/Local/Temp/qbo-locks/<basename>.lock`, a minimal edit, then `rmdir`. This folder is writable by Sol's sandbox. The helper script `.../jobs/1f8ad8d6/tmp/lock.sh` will vanish with this job;
+- **prepare and test first, then write `backend/src` files in one final batch**, because every save restarts the live backend and kills the accountant's run in flight;
+- run the affected `node --test` files;
+- "Do not stop to ask; record decisions";
+- the final answer lists what changed, files and tests.
+
+**Rules that made Sol jobs work:**
+- **Give it the live evidence:** the error text, `errorDetail`, ids, stack.
+- **Require an offline replay of the real stored data before saving.** Three blind fixes failed today because the replays didn't follow the live path.
+- **Disjoint file ownership** per parallel job.
+- **`codex.sh cancel` is unreliable on Windows.** It often leaves the job running. Prefer letting a job finish.
+- **Sol's sandbox can't open `localhost:5173`.** Rendered UI checks must be done by you, minimal and only when needed.
+
+### Committing
+- After each job: `git status`; stage that job's files only. Check for hunks from other jobs in shared files such as `business-agent-tools.js` and `business-agent-service.js`.
+- Commit with a plain-English subject and `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, then `git push`.
+- When jobs are interleaved, commit them together after one full run of `npm run test --workspace=backend` (about 10 minutes; run it in the background).
+
+### Live checks (cheap)
+- **The accountant's runs:** a watcher script polls `/company/business-agent/transcripts` and prints each finished attempt.
+- **Why a run is blocked:** read `operationruns.executionRequest.result.errorDetail` read-only, or `/blockers`.
+- **Codex login:** `node -e "require('./src/modules/codex-cli').getStatus({refresh:true})..."` from `backend/`. Expect `status: 'ready'`.
+
+### Runtime ownership
+- The owner owns starting and stopping services. Never kill a port owner.
+- nodemon reloads on every `backend/src` save. The `.env` file is not watched, but any `src` save reloads it.
+- Turning a flag on in `.env` is allowed when it's needed for the owner's goal. Append it without reading or printing the file.
+
+---
+
+## 6. In flight at hand-off
+
+| Job | Task id | What | When it finishes |
+|---|---|---|---|
+| V | task-mvwy98pl-d2a54w | Governed additive storage preparation | **DONE.** Committed `1568826` and applied live (section 4). |
+| W | task-mvwyf9c4-bnefef | Fix the added-customer fingerprint refusal and the general-write tax code 16 refusal, with an offline replay of real data. | Commit. Confirm the accountant's next run prepares sales for the 3 regional customers and taxable general sales. |
+
+---
+
+## 7. Open work, in priority order
+
+Every item needs live proof: records in QuickBooks, a day closing, or a blocker gone.
+
+1. **Keep the business producing.**
+   - The target is 220/day across 24 hours, with several batches in parallel.
+   - After V and W, watch `/blockers`, `today.line` and `agent.summary` on every check. Send every new blocker straight to Sol with its `errorDetail`.
+   - **The build list is the work queue.** Read `management.capabilityRequests` at every check.
+   - At hand-off it held 20 items, about half already fixed by today's commits. Have Sol triage it: mark resolved items with evidence, and fix the rest.
+   - Open items include:
+     - existing-payment deposits and a second bank role;
+     - legacy credit and payment application;
+     - legacy corrections, including HST and equity journals;
+     - inventory quantity adjustments;
+     - a close checklist with evidence;
+     - billable expense invoicing;
+     - credit card and cheque workflows;
+     - master-data maintenance;
+     - classes, locations and custom fields on activity;
+     - foreign-currency bills (needs multicurrency, which is owner-only and irreversible).
+2. **Tonight's close of Oct 31 (03:05 UTC), the first close with general-write records.** Watch it. If it fails, `errorDetail` says why.
+3. **Collect the six overdue imported invoices (CAD 1,591.44),** and verify the Anna Katz credit application's balances.
+4. **QuickBooks call economy.** Check `qboRequests.today.callers` and keep the average at 3 or fewer metered calls per saved record. Fresh reads in verification raised it. Find any remaining waste.
+5. **Turn inventory on in the general tool** once general writes have had a clean day:
+   - finish returns (`docs/plans/general-inventory-write-implementation-2026-10-31.md`);
+   - then set `GENERAL_WRITE_INVENTORY_ENABLED`.
+6. **History re-verification for fixed-workflow and adopted records.** Job H covered general records only (`docs/plans/history-reverification-job-h-2026-10-31.md`).
+7. **Inspect the "Record something" panel rendered** on desktop (`/company`, Directions & controls tab), and fix any problems.
+8. **Landing page overhaul.** This is a TODO with a full review in `docs/plans/landing-page-overhaul-todo-2026-10-31.md`. Build a polished rendered slice and get the owner's acceptance before rolling it out.
+9. **Multicurrency** is the owner's one-time, irreversible switch in QBO settings. Ask once, plainly, when everything else is stable.
+10. **Specialists (R13/R14)** only if they would measurably help.
+11. **Deployment on the Codex subscription:** `docs/deployment.md` is written but untested on a server.
+
+Full blocker audit, ranked by impact: `artifacts/blocker-audit-2026-10-31.md`. Most of its top items are now fixed; re-check it.
+
+---
+
+## 8. Lessons from this session (what cost the most, and the rule that prevents it)
+
+| What happened | Rule |
+|---|---|
+| The accountant was built around 15 hand-coded transaction shapes, giving 2–9 records/day. | Give the model general governed reach. Don't hand-code shapes. |
+| "Continuous" was built as hourly slots, and the owner found out. | Continuous means back to back while work exists. Read the owner's literal words. |
+| An efficiency change (verify from saved responses and the mirror) broke verification whenever a later step changed an earlier record. That caused 3+ separate stalls. | A change to the write or verify pipeline needs a single-operation fixture per business chain, with stale copies present (`business-operation-freshness.test.js`). |
+| A failed check on an already-saved record stopped the whole business for hours. | Stop the business only for real book risk: a rejected write, a proven wrong posting, or an unknown outcome that could duplicate. Everything else marks needs-check and continues. |
+| Three blind fixes for one error (care-plan Item). The cause was a new QBO field, `DeferredRevenue`. | Instrument first: `errorDetail` with stack, source and field differences. Never ship a fix without replaying the real failing data. |
+| The accountant's build list diagnosed the problem at 20:03 and nobody acted on it. | Read the build list and `/blockers` at every check. They are the work queue. |
+| Builder file saves restarted the backend and killed live runs and replies. | Sol writes `src` once at the end of a job. `nodemon.json` watches `src` with a delay. |
+| A deployment change (`--ignore-user-config` on `codex login status`) silently switched the accountant to Anthropic, and every run failed. | After any provider or runtime change, check `codex-cli getStatus()` returns `ready` and that the next run's provider is `codex`. |
+| I reported "this should unblock it" before seeing live proof. | Report only what the live company shows. |
+| Status messages were long and repeated. | Keep messages short. Don't re-explain background events that changed nothing. |
+
+---
+
+## 9. Key documents
+
+- Owner contract and requirements:
+  - `prd.md`
+  - `docs/plans/continuous-business-operator-completion-2026-10-24.md`
+- Continuous activity plan: `docs/plans/continuous-business-activity-2026-10-30.md`
+- General write tool contract: `docs/plans/general-governed-write-tool-2026-10-31.md`
+- Capabilities and decisions:
+  - `docs/plans/general-write-capabilities-2026-10-31.md`
+  - `docs/plans/general-inventory-write-implementation-2026-10-31.md`
+  - `docs/plans/history-reverification-job-h-2026-10-31.md`
+  - `docs/plans/business-error-surfacing-job-s-2026-10-31.md`
+  - `docs/plans/request-economy-2026-10-31.md`
+  - `docs/architecture/business-observation-freshness.md`
+  - `docs/architecture/business-agent-sync-reconciliation.md`
+- Full tooling history: `docs/plans/accountant-full-tooling-2026-10-29.md`
+- Landing page TODO: `docs/plans/landing-page-overhaul-todo-2026-10-31.md`
+- Deployment: `docs/deployment.md`
+- Blocker audit: `artifacts/blocker-audit-2026-10-31.md`
+- Handoff log (newest first): `docs/agent-harness/FULL_GOAL_EXECUTION.md`
