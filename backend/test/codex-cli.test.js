@@ -212,7 +212,7 @@ test('login status and refresh use the service file store and never send backend
   await adapter.getStatus({ refresh: true }); assert.equal(calls.filter(c => c.args.includes('status')).length, 2);
   const call = calls.find(c => c.args.includes('status'));
   assert.deepEqual(call.args, ['-c', 'cli_auth_credentials_store="file"', 'login', 'status']);
-  assert.equal(call.options.windowsHide, true); assert.equal(call.options.timeout, 5000);
+  assert.equal(call.options.windowsHide, true); assert.equal(call.options.timeout, 15000);
   for (const name of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'QBO_CLIENT_SECRET', 'JWT_SECRET', 'MONGODB_URI']) assert.equal(call.options.env[name], undefined);
   assert.ok(!Object.hasOwn(health, 'stdout')); assert.ok(!Object.hasOwn(health, 'stderr'));
 });
