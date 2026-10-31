@@ -209,10 +209,19 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only the exact retained operation belonging to this standing grant can resume.');
       if(input.reason.trim().length<20||input.reason.length>2000)fail('Record the exact recovery reason in 20–2000 characters.',400);
       const governor=governed(run.agentAuthority);
+      // An uncertain create is resolved automatically first (attributed, or proved not created).
+      let recovery=null;
+      if(typeof governor.resolveUnknownAutomatically==='function'){
+        try{recovery=await governor.resolveUnknownAutomatically(user,input.operationId,{planHash:input.planHash},{signal});}catch(error){recovery={state:'ambiguous',message:error.message};}
+        await guard(true);
+      }
+      if(recovery&&['waiting','ambiguous'].includes(recovery.state))result={success:false,held:true,recovery,error:recovery.message};
+      else{
       if(run.status==='stopped'){const reviewed=await governor.reviewResume(user,input.operationId,{planHash:input.planHash});await guard(true);await governor.resume(user,input.operationId,{planHash:input.planHash,reviewHash:reviewed.reviewHash,reason:input.reason.trim()});}
       else if(!['approved','reserved','running','blocked','awaiting-evidence'].includes(run.status))fail('This operation is not awaiting a supported continuation.');
       await guard(true);await store.event(row,'plan-decision','Main accountant continued retained business work',input.reason,{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'resume',revision:run.executionRevision||0}),role);
-      await guard(true);result={success:true,data:await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'resume-execute',revision:run.executionRevision||0})})};
+      await guard(true);result={success:true,data:{...await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'resume-execute',revision:run.executionRevision||0})}),...(recovery&&recovery.state!=='none'?{recovery}:{})}};
+      }
     }else if(name==='recordBusinessDecision'){
       if(input.title.length>160||input.detail.length>5000)fail('Keep the decision title and evidence concise.',400);
       const kind=input.requiresOwner?'decision':role==='accountant'?'management-decision':'specialist-report';

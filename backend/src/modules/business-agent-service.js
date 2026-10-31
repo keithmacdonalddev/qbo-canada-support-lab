@@ -315,6 +315,20 @@ function createBusinessAgentService(options={}) {
       try{await store.event(row,'plan-decision','Main accountant retired unsent work',reason,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant',qboWrites:0},null,hash({operationId:run.operationId,phase:'retire-unsent'}),'accountant');}catch{/* The governed retirement audit is the durable record. */}
       return true;
     };
+    // An uncertain create of its own operation is resolved automatically under the standing grant
+    // (business-unknown-recovery.js resolveUnknownAutomatically): one coverage read of that entity,
+    // then exactly one matching record is attributed, or none proves it was not created. Several
+    // candidates stay held and are reported. No owner decision is asked.
+    const resolveUncertain=async run=>{
+      if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.ownerId!==ownerId||!run.planHash)return false;
+      await guard('authority');
+      let outcome;
+      try{outcome=await governanceFor(run.agentAuthority,{token,now}).resolveUnknownAutomatically(user,run.operationId,{planHash:run.planHash});}
+      catch(error){if(error?.businessAgentFatal)throw error;outcome={state:'ambiguous',message:safeError(error)};}
+      if(['attributed','not-created'].includes(outcome.state)){try{await store.event(row,'plan-decision',outcome.state==='attributed'?'Main accountant attributed an uncertain QuickBooks request':'Main accountant proved an uncertain QuickBooks request created nothing',outcome.message,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant',qboWrites:0,...(outcome.qboId?{qboId:outcome.qboId}:{})},null,hash({operationId:run.operationId,phase:'auto-unknown',state:outcome.state,qboId:outcome.qboId||null}),'accountant');}catch{/* The recovery audit is the durable record. */}return true;}
+      if(outcome.state==='ambiguous'){try{await store.event(row,'attention','An uncertain QuickBooks request is held',outcome.message,{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-unknown-held',message:outcome.message}),'accountant');}catch{/* Visible on the next pass. */}}
+      return false;
+    };
     const failedState=error=>({status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
@@ -332,6 +346,7 @@ function createBusinessAgentService(options={}) {
         if(dueMain){
           business=await store.business(scope);today=await todayFor(scope,row);owned=await ownedFor(scope,row);obligations=await obligationsFor(scope);requests=await requestsFor(scope);daily=await managementFor(row);
           let retired=false;for(const run of owned.filter(run=>run.disposition==='unsent').slice(0,3))retired=(await retireUnsent(run))||retired;
+          if(business.blockers?.some(item=>item.code==='uncertain-write'))for(const run of owned.filter(run=>run.holdsSlot).slice(0,1))retired=(await resolveUncertain(run))||retired;
           if(retired){business=await store.business(scope);owned=await ownedFor(scope,row);if(typeof store.forgetToday==='function')store.forgetToday();today=await todayFor(scope,row);}
           decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);
           if(decision.callModel)role='accountant';
