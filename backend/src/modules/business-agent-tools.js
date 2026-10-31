@@ -89,8 +89,8 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     const budget=cadence.requestBudget(await requestsFor().catch(()=>null));
     if(budget.reached){const reason=cadence.requestBudgetReason(budget);fail(reason.charAt(0).toUpperCase()+reason.slice(1)+'. No new same-day sales or expenses were started.');}
   }
-  async function requireNoUnfinished(except=null){
-    const open=(await unfinished()).filter(run=>run.operationId!==except&&run.disposition!=='unsent');
+  async function requireNoUnfinished(except=null,{allowGeneral=false}={}){
+    const open=(await unfinished()).filter(run=>run.operationId!==except&&run.disposition!=='unsent'&&(!allowGeneral||run.contract!=='general-write-v1'));
     if(open.length)fail(open[0].disposition==='stranded'?'Your operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') stopped outside the calendar after saving records. It must be continued before new periods or batches; that recovery capability is not available yet, so record it and continue independent work.':'Finish your unfinished operation '+open[0].operationId+' ('+open[0].status+(open[0].day?', '+open[0].day:'')+') first with resumeBusinessOperation; new periods and batches wait until it is done.');
   }
   // Calendar periods and specialized batches retain their immutable calendar fence. General
@@ -207,7 +207,9 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     else if(name==='prepareBusinessActivity'){
       const batch = require('./business-activity-batch'); batch.validateChoices(input);
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
-      await requireNoUnfinished();
+      // General plans reserve their exact resources at transport admission; a retained
+      // unsent plan does not own the specialized batch's calendar slot.
+      await requireNoUnfinished(null,{allowGeneral:true});
       await requireActivityCapacity(business,input.decisionKey);
       if(typeof todayFor==='function'&&cadence.isSlice(input.activities)){
         const today=await todayFor({fresh:true});todayLimit(today);await requireRequestBudget();
@@ -232,7 +234,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       result={success:true,data:await governed(origin).prepare(user,{requestKey:hash({agentId:row._id,grantId:row.grant.id,passId,throughDate:input.throughDate}),throughDate:input.throughDate},{signal})};
     }else if(name==='executeBusinessPeriod'){
       await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only exact retained plans belonging to this agent grant can be executed.');
-      if(run.status==='previewed'){await requireNoUnfinished(String(run._id));await requireActivityCapacity(await store.business(scope),null,String(run._id));}
+      if(run.status==='previewed'){await requireNoUnfinished(String(run._id),{allowGeneral:Boolean(run.activityBatch)});await requireActivityCapacity(await store.business(scope),null,String(run._id));}
       // Capacity admission for a new same-day slice: fresh counts (no cache), checked immediately
       // before approval. The agent's exclusive lease is the fence: guard(true) re-verifies it before
       // approve, and only the lease holder admits batches for this agent. Obligations and recovery

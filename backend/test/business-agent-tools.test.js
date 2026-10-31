@@ -186,3 +186,14 @@ test('independent general batches prepare beside recovery and the fourth operati
   business={blockers:[{code:'current-operation'}],currentOperation:{operationId:'foreign',agentAuthority:{...origin,grantId:'other'}}};await assert.rejects(tools.execute('manageQboRecord',input),/held|authorization/);
  }finally{generalModule.createDefaultGeneralWrite=original;}
 });
+
+test('an unsent general credit plan does not block independent activity, but still holds calendar closing',async()=>{
+ const h=slotFixture();h.owned=[{operationId:'7'.repeat(24),contract:'general-write-v1',status:'prepared',day:'2026-10-30',disposition:'prepared',holdsSlot:false,agentAuthority:h.run.agentAuthority}];
+ await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1);
+ await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute independent regional service activity.'});assert.equal(h.approved,1);assert.equal(h.queued,1);
+ await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/Finish your unfinished operation/);
+ assert.equal(h.periods.length,0);
+ h.owned.push({operationId:'8'.repeat(24),status:'approved',day:'2026-10-30',disposition:'continue',agentAuthority:h.run.agentAuthority});
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation 8{24}/);
+ assert.equal(h.prepared.length,1,'specialized operations keep their original calendar fence');
+});

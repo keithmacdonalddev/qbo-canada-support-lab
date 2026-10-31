@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 const { hash } = require('./business-calendar');
 const storage = new AsyncLocalStorage();
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/i, QBO_ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
-function denied(message, unknown = false) { return Object.assign(new Error(message), { status: unknown ? 503 : 409, qboStage: unknown ? 'write_receipt' : 'write_admission', outcomeUnknown: unknown }); }
+function denied(message, unknown = false) { return Object.assign(new Error(message), { status: unknown ? 503 : 409, code: unknown ? 'QBO_WRITE_OUTCOME_UNKNOWN' : 'QBO_WRITE_ADMISSION_DENIED', qboStage: unknown ? 'write_receipt' : 'write_admission', outcomeUnknown: unknown, businessDetail: { qboStage: unknown ? 'write_receipt' : 'write_admission', outcomeUnknown: unknown } }); }
 function scoped(scope) {
   if (!scope || typeof scope.realmId !== 'string' || !QBO_ID.test(scope.realmId) || !['sandbox', 'production'].includes(scope.environment) || typeof scope.connectionId !== 'string' || !ID.test(scope.connectionId)) throw denied('The write needs an exact company connection.');
   return { realmId: scope.realmId, environment: scope.environment, connectionId: scope.connectionId };

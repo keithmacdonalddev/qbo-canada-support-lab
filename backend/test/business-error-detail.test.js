@@ -122,3 +122,19 @@ test('twenty near-limit step errors keep inspection under budget with primary ev
  const models={Runs:{findOne:()=>chain({_id:op,status:'blocked',planHash:'f'.repeat(64),executionRequest:{result:{errorDetail:detail}}})},Steps:{find:()=>chain(saved)},Intents:{findOne:()=>chain(intents[0]),find:()=>chain(intents)}};
  const result=await createBlockerInspection({models,scope,now:()=>now})(op);assert.ok(Buffer.byteLength(JSON.stringify(result.data))<=85000);assert.deepEqual(result.data.errorDetail,detail);assert.deepEqual(result.data.steps[0].errorDetail,saved[0].errorDetail);assert.ok(result.data.limitations.some(s=>s.includes('step diagnostics omitted')));
 });
+
+test('write denials retain the actual reason, stage and caller through saved and JSON boundaries',()=>{
+ const {denied}=require('../src/modules/qbo-write-contract');
+ for(const unknown of [false,true]){
+  const e=denied('The exact saved general batch is not ready to send.',unknown);
+  e.stack='Error: denied\n    at denied (C:\\Projects\\qbo\\backend\\src\\modules\\qbo-write-contract.js:7:20)\n    at Object.admit (C:\\Projects\\qbo\\backend\\src\\modules\\general-write-transport.js:143:12)';
+  const d=attachBusinessError(e,{operationId:op,detail:{batch:0}}).errorDetail;
+  assert.equal(d.code,unknown?'QBO_WRITE_OUTCOME_UNKNOWN':'QBO_WRITE_ADMISSION_DENIED');assert.equal(d.message,e.message);
+  assert.equal(d.detail.batch,0);assert.equal(d.detail.qboStage,unknown?'write_receipt':'write_admission');assert.equal(d.detail.outcomeUnknown,unknown);
+  assert.equal(d.check.function,'Object.admit');assert.equal(d.check.module,'general-write-transport');
+  assert.deepEqual(businessErrorDetail(JSON.parse(JSON.stringify(d))),d);
+  assert.equal(failureFields(null,e,{},now).errorDetail.message,e.message);
+ }
+ const arbitrary=businessErrorDetail(new Error('untrusted provider payload'));
+ assert.equal(arbitrary.message,'Business work could not finish. Saved progress is retained.');
+});

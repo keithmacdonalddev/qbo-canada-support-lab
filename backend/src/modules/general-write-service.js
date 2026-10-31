@@ -177,7 +177,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       // A response settled by the gate survives a crash before this service ingests it.
       let response = batch.transport?.response;
       if (!response) {
-      run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, sends: (row.sends || 0) + 1 } : row) });
+      run = await save(run, { ...(['prepared', 'held'].includes(run.status) ? { status: 'sending' } : {}), batches: run.batches.map(row => row.index === batch.index ? { ...row, sends: (row.sends || 0) + 1 } : row) });
       batch = run.batches.find(row => row.index === batch.index);
       if (batch.sends > 10) { run = await save(run, { status: 'unknown', lastError: 'This batch used its transport attempts; its outcome must be attributed before anything else is sent.' }); return report(run); }
       try { response = await transport.sendBatch(scope, { runId: run._id, batch }); run = await refreshSettlement(run, batch); }

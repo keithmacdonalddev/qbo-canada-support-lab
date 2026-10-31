@@ -279,3 +279,22 @@ test('general admission fences the calendar in its transaction so Stop cannot ra
   assert.equal((await context(scope, { get: () => null, map: new Map() }, { session })).calendarClosePending, true); assert.equal(touches, 1);
   raced = true; await assert.rejects(context(scope, { get: () => null, map: new Map() }, { session }), /changed or stopped/);
 });
+for (const retainedStatus of ['prepared', 'held']) test('a retained '+retainedStatus+' batch re-enters sending after a definite admission refusal', async () => {
+  const h=company(), s=service(h), {denied}=require('../src/modules/qbo-write-contract');
+  const prepared=await s.api.prepare(bound,input('retry-admission-'+retainedStatus,[invoiceOp]));
+  const send=h.transport.sendBatch; let attempts=0, firstBatch;
+  h.transport.sendBatch=async (scope,request)=>{
+    const run=s.Runs.rows.get(prepared.runId);
+    assert.equal(run.status,'sending','saved run must be eligible at exact gate admission');
+    if(++attempts===1){firstBatch=structuredClone(request.batch);throw denied('The company resource is temporarily busy.');}
+    assert.equal(request.batch.requestId,firstBatch.requestId);assert.deepEqual(request.batch.items,firstBatch.items);
+    return send(scope,request);
+  };
+  await assert.rejects(s.api.execute(bound,prepared.runId),/temporarily busy/);
+  const retained=s.Runs.rows.get(prepared.runId);
+  assert.equal(retained.status,'prepared');assert.equal(retained.batches[0].sends,0);assert.equal(h.sent.length,0);
+  assert.equal(retained.errorDetail.code,'QBO_WRITE_ADMISSION_DENIED');assert.match(retained.errorDetail.message,/temporarily busy/);
+  retained.status=retainedStatus;
+  assert.equal((await s.api.execute(bound,prepared.runId)).status,'complete');
+  assert.equal(attempts,2);assert.equal(h.sent.length,1);assert.equal(retained.batches.length,1);
+});

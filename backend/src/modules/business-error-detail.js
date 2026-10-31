@@ -15,7 +15,7 @@ function bounded(value, depth = 0, seen = new WeakSet()) {
     Object.fromEntries(Object.entries(value).slice(0, 30).filter(([k]) => !['__proto__','constructor','prototype','stack','request','response','headers','config','body','record','payload'].includes(k)).map(([k,v]) => [text(k,80), bounded(v, depth + 1, seen)]));
 }
 function checkFrom(error) {
-  const frame = String(error?.stack || '').split('\n').slice(1).find(line => /backend[\\/]src[\\/]/.test(line) && !/business-error-detail\.js/.test(line) && !/at (?:fail|invalid) /.test(line)) 
+  const frame = String(error?.stack || '').split('\n').slice(1).find(line => /backend[\\/]src[\\/]/.test(line) && !/business-error-detail\.js/.test(line) && !/at (?:fail|invalid|denied) /.test(line)) 
     || String(error?.stack || '').split('\n').slice(1).find(line => /backend[\\/]src[\\/]/.test(line) && !/business-error-detail\.js/.test(line)) || '';
   const match = /at (?:(.*?) \()?((?:[A-Za-z]:)?[^()\n]*?\.js):(\d+):\d+\)?$/.exec(frame.trim());
   const file = match ? match[2].replace(/\\/g,'/').replace(/^.*?(backend\/src\/)/,'$1') : null;
@@ -26,7 +26,7 @@ function businessErrorDetail(error, context = {}) {
   const source = existing || error;
   const code = /^[A-Z][A-Z0-9_]{2,99}$/.test(source?.code || '') ? source.code : 'BUSINESS_OPERATION_FAILED';
   const known = /^(BUSINESS_|GENERAL_WRITE_|QBO_|AI_|CODEX_)/.test(source?.code || '');
-  let detail = bounded(redact(existing?.detail || { ...(error?.businessDetail || context.detail || {}), ...((error?.referenceDiagnostic || error?.diagnostic?.reference) ? { reference: error.referenceDiagnostic || error.diagnostic.reference } : {}) }));
+  let detail = bounded(redact(existing?.detail || { ...(context.detail || {}), ...(error?.businessDetail || {}), ...((error?.referenceDiagnostic || error?.diagnostic?.reference) ? { reference: error.referenceDiagnostic || error.diagnostic.reference } : {}) }));
   if (Buffer.byteLength(JSON.stringify(detail)) > 3500) detail = { truncated: true, note: 'Diagnostic detail exceeded its retained budget.' };
   const check = { ...checkFrom(error), ...(existing?.check || context.check || error?.businessCheck || {}) };
   const result = { version:1, code, message:known ? text(source?.message || source?.error || context.message || 'Business work needs attention.') : 'Business work could not finish. Saved progress is retained.',
