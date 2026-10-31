@@ -2,6 +2,7 @@
 const { randomUUID, createHash } = require('node:crypto');
 const { scoped } = require('./qbo-write-contract');
 const { localParts, dayRhythm } = require('./business-agent-cadence');
+const amounts = require('./business-agent-reconciliation');
 
 // These sources match the current app's structured read-tool surface. Unsupported
 // CDC entities and singleton preferences use complete replacement observations.
@@ -113,6 +114,7 @@ function sourceStart(entity, clock, previous) {
     startedAt: iso(clock), since: null, lastId: null, observed: 0, count: previous?.count ?? 0,
     lastSuccessAt: previous?.lastSuccessAt || null, ...(Number.isSafeInteger(previous?.everyMs) ? { everyMs: previous.everyMs } : {}), nextAt: null, error: null };
 }
+const cdcExpired = (source, clock) => source && !SNAPSHOT_ONLY.has(source.entity) && source.phase === 'incremental' && (stamp(source.since) === null || clock - stamp(source.since) > MAX_AGE_MS || stamp(source.lastSuccessAt) !== null && clock - stamp(source.lastSuccessAt) > MAX_AGE_MS);
 function publicSnapshot(state, entities, clock, intervalMs) {
   const sources = entities.map(entity => {
     const row = state.sources?.[entity];
@@ -133,9 +135,11 @@ function publicSnapshot(state, entities, clock, intervalMs) {
   // When the next source read is due (a source without a saved schedule is due now).
   const nextDueAt = entities.reduce((min, entity) => Math.min(min, stamp(state.sources?.[entity]?.nextAt) ?? clock), Infinity);
   const error = sources.some(row => ['error', 'saturated'].includes(row.status)) || Boolean(state.summaryError);
-  return { status: complete && summaryFresh ? 'current' : error ? 'attention' : sources.some(row => row.status === 'stale') ? 'stale' : 'catching-up',
+  const amountProblem = ['attention', 'resyncing'].includes(state.amountReconciliation?.status);
+  return { status: amountProblem ? 'attention' : complete && summaryFresh ? 'current' : error ? 'attention' : sources.some(row => row.status === 'stale') ? 'stale' : 'catching-up',
     lastSuccessAt: complete ? sources.map(row => row.lastSuccessAt).sort()[0] : null, sources,
-    company: { ...(state.company || { counts: {}, totals: {}, recent: [] }), provisional: !complete || !summaryFresh },
+    company: { ...(state.company || { counts: {}, totals: {}, recent: [] }), provisional: !complete || !summaryFresh || amountProblem },
+    amountReconciliation: state.amountReconciliation ? copy(state.amountReconciliation) : null,
     summaryAt: state.summaryAt || null, summaryFreshUntil: stamp(state.summaryAt) === null ? null : iso(stamp(state.summaryAt) + summaryWindow), summaryError: state.summaryError || null, nextDueAt: Number.isFinite(nextDueAt) ? iso(nextDueAt) : null };
 }
 async function summarizeCompanyMirror({ Records, scope, homeCurrency = null, now = () => Date.now() }) {
@@ -222,6 +226,86 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
       await save(state);
     }
   }
+  // Amount checks share the same persisted company state, lease, transport and slice allowance.
+  // Keep a pending resync across slices/restarts; never reset its one-recheck limit at midnight.
+  function prepareAmounts(state) {
+    const clock = now(), local = localParts(clock), definitions = amounts.DEFINITIONS.filter(row => entities.includes(row.entity));
+    const previous = state.amountReconciliation, invalidated = Boolean(previous && previous.basisVersion !== 2);
+    // Obsolete Invoice/Bill-only evidence must stop affecting status even while
+    // its replacement source is still bootstrapping or was restarted today.
+    if (invalidated) delete state.amountReconciliation;
+    if (!definitions.length || local.minutes < RECONCILE_FROM_MINUTES) return invalidated;
+    if (previous?.basisVersion === 2 && (previous.day === local.date || Object.values(previous.checks).some(row => ['waiting', 'resyncing'].includes(row.status)))) return false;
+    // Bootstrap/catchup already consumes its allowance. The first nightly proof is on the next
+    // Halifax day, alongside the first COUNT sweep (no implicit report calls during bootstrap).
+    if (!definitions.every(({ entity }) => {
+      const source = state.sources[entity];
+      return source?.phase === 'incremental' && source.status === 'current' && stamp(source.startedAt) !== null && localParts(stamp(source.startedAt)).date < local.date;
+    })) return invalidated;
+    state.amountReconciliation = { version: 1, basisVersion: 2, day: local.date, status: 'checking', startedAt: iso(clock), checkedAt: null,
+      toleranceCents: 0, note: amounts.TIMING_NOTE, checks: Object.fromEntries(definitions.map(({ key, entity }) => [key, { entity, status: 'waiting', attempts: 0, refreshAfter: iso(clock) }])) };
+    return true;
+  }
+  function amountFreshnessDue(state, entity, clock) {
+    const proof = state.amountReconciliation;
+    const source = state.sources[entity];
+    return source?.phase === 'incremental' && source.status === 'current' && Object.values(proof?.checks || {}).some(row =>
+      ['waiting', 'resyncing'].includes(row.status) && (row.entity === entity || amounts.agingEntities(row.entity).includes(entity))
+      && (stamp(source.lastSuccessAt) < stamp(row.refreshAfter) || clock - stamp(source.lastSuccessAt) > 120000));
+  }
+  async function reconcileAmounts(state, canRequest, charge, control, readCurrent) {
+    const proof = state.amountReconciliation;
+    if (!proof || proof.basisVersion !== 2) return;
+    for (const { key, entity, report } of amounts.DEFINITIONS) {
+      const previous = proof.checks[key], source = state.sources[entity];
+      if (!previous || !['waiting', 'resyncing'].includes(previous.status) || source?.phase !== 'incremental' || source.status !== 'current') continue;
+      // Saturation or an expired multi-slice bootstrap can replace the recovery generation.
+      // A complete newer full read is valid recovery evidence; an older generation is not.
+      if (previous.status === 'resyncing' && source.generation !== previous.resyncGeneration && !(stamp(source.startedAt) >= stamp(previous.refreshAfter))) continue;
+      const dependencies = report ? amounts.agingEntities(entity).filter(type => entities.includes(type)) : [entity];
+      if (dependencies.some(type => state.sources[type]?.phase !== 'incremental' || state.sources[type]?.status !== 'current' || amountFreshnessDue(state, type, now())) || !canRequest()) continue;
+      let result;
+      try {
+        await check();
+        const mirrored = report ? Object.fromEntries(await Promise.all(dependencies.map(async type => [type, await amounts.readAmountMirror(Records, scope, type)])))
+          : await amounts.readAmountMirror(Records, scope, entity); await check();
+        if (!canRequest()) return;
+        charge();
+        if (report) {
+          const params = new URLSearchParams({ aging_method: 'Current', report_date: localParts(now()).date });
+          const body = await readCurrent(() => client.apiCall('GET', 'reports/' + report + '?' + params, undefined, 0, 0, control)); await check();
+          const live = amounts.parseAgingReport(body, report, observedHomeCurrency, now());
+          const expected = amounts.agingMirrorTotal(entity, mirrored, observedHomeCurrency);
+          const differenceCents = expected.mirrorCents === null ? null : live.qboCents - expected.mirrorCents;
+          if (differenceCents !== null && !Number.isSafeInteger(differenceCents)) throw fail('The aging difference exceeds the exact cent amount budget.');
+          result = { ...live, ...expected, differenceCents,
+            status: expected.mirrorCents === null ? 'unverified' : expected.mirrorCents === live.qboCents ? 'matched' : 'mismatched', note: amounts.REPORT_NOTE };
+        } else {
+          const body = await readCurrent(() => client.query('SELECT * FROM Account WHERE Active IN (true, false) MAXRESULTS ' + PAGE_SIZE, control)); await check();
+          const parsed = parseBody(body, entity, false, now());
+          if (parsed.rows.length >= PAGE_SIZE) throw fail('The single Account query reached its page limit; account amounts are unverified.');
+          result = { ...amounts.compareAccounts(mirrored, parsed.rows, observedHomeCurrency), qboAt: iso(parsed.serverTime) };
+        }
+      } catch (error) {
+        signal?.throwIfAborted(); if (control.signal.aborted) return;
+        result = { status: 'error', error: sourceError(error) };
+      }
+      const checkedAt = iso(now());
+      const next = { ...previous, ...result, attempts: previous.attempts + 1, cdcAt: source.lastSuccessAt, checkedAt };
+      if (result.status === 'mismatched' && previous.attempts === 0) {
+        next.initialMismatch = { ...result, checkedAt, cdcAt: source.lastSuccessAt };
+        const replacement = sourceStart(entity, now(), source);
+        // Keep the nightly count result: the amount recovery must not spend another COUNT.
+        replacement.reconciledOn = source.reconciledOn;
+        replacement.reconcileError = 'The nightly amount check differs from QuickBooks. This source is being fully re-read before one re-check.';
+        state.sources[entity] = replacement;
+        next.status = 'resyncing'; next.resyncGeneration = replacement.generation; next.refreshAfter = replacement.startedAt;
+      } else if (result.status === 'mismatched') {
+        next.error = 'The amount still differs from QuickBooks after a full resync and one re-check. Treat these figures as unverified.';
+      }
+      proof.checks[key] = next; proof.checkedAt = checkedAt; proof.status = amounts.amountStatus(proof.checks); await save(state);
+    }
+  }
   async function perform() {
     const state = await stateRead(); observedHomeCurrency = state.homeCurrency || homeCurrency; let attempts = 0, requests = 0, changed = false, observedSource = false;
     const controller = new AbortController(), abort = () => controller.abort();
@@ -236,17 +320,18 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
     });
     const control = { signal: controller.signal, beforeAttempt: async () => { controller.signal.throwIfAborted(); await check(); if (attempts >= maxRequests) throw Object.assign(fail('This sync slice has used its request allowance.'), { allowance: true }); attempts++; }, onFailure: () => {} };
     try {
+      if (prepareAmounts(state)) await save(state);
       // One combined change read covers every incremental change-tracked source that is not
       // being read on its own. It runs when any of them is due, and each covered source is then
       // current as of that response; nothing is persisted from a response at the change limit.
       const groupClock = now(), grouped = new Set(entities.filter(entity => {
         const source = state.sources[entity];
-        return source && !SNAPSHOT_ONLY.has(entity) && !badCursor(source, entity) && source.phase === 'incremental' && source.solo !== true && stamp(source.since) !== null && groupClock - stamp(source.since) <= MAX_AGE_MS;
+        return source && !SNAPSHOT_ONLY.has(entity) && !badCursor(source, entity) && source.phase === 'incremental' && source.solo !== true && !cdcExpired(source, groupClock);
       }));
       const members = [...grouped];
       // freshWithinMs (write gate): also read when any covered source was last read longer ago.
       const tooOld = entity => perform.freshWithinMs && !(groupClock - (stamp(state.sources[entity].lastSuccessAt) ?? -Infinity) <= perform.freshWithinMs);
-      if (members.length && members.some(entity => !(stamp(state.sources[entity].nextAt) > groupClock) || tooOld(entity))) {
+      if (members.length && members.some(entity => !(stamp(state.sources[entity].nextAt) > groupClock) || tooOld(entity) || amountFreshnessDue(state, entity, groupClock))) {
         const originals = Object.fromEntries(members.map(entity => [entity, copy(state.sources[entity])]));
         const since = iso(Math.min(...members.map(entity => stamp(originals[entity].since)))), started = now(); requests++;
         // Sources handed to their own reads are read in this same slice when its allowance permits.
@@ -282,8 +367,8 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         if (source && badCursor(source, entity)) throw fail('A saved source cursor is invalid.');
         // A source read on its own also answers the write gate's freshness demand.
         const demanded = source && source.phase === 'incremental' && !SNAPSHOT_ONLY.has(entity) && perform.freshWithinMs && !(clock - (stamp(source.lastSuccessAt) ?? -Infinity) <= perform.freshWithinMs);
-        if (stamp(source?.nextAt) !== null && stamp(source.nextAt) > clock && !demanded) continue;
-        if (!source || clock - stamp(source.startedAt) > MAX_AGE_MS && source.phase !== 'incremental' || source.phase === 'incremental' && (stamp(source.since) === null || clock - stamp(source.since) > MAX_AGE_MS) || SNAPSHOT_ONLY.has(entity) && source.phase === 'incremental') source = sourceStart(entity, clock, source);
+        if (stamp(source?.nextAt) !== null && stamp(source.nextAt) > clock && !demanded && !cdcExpired(source, clock) && !amountFreshnessDue(state, entity, clock)) continue;
+        if (!source || clock - stamp(source.startedAt) > MAX_AGE_MS && source.phase !== 'incremental' || cdcExpired(source, clock) || SNAPSHOT_ONLY.has(entity) && source.phase === 'incremental') source = sourceStart(entity, clock, source);
         else source = copy(source);
         state.sources[entity] = source;
         const originalSource = copy(source);
@@ -304,7 +389,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
               if (!/^[A-Z]{3}$/.test(currency || '')) throw fail('The company home currency could not be independently observed.');
               if (state.homeCurrency !== currency) {
                 for (const other of Object.keys(state.sources)) if (other !== entity) delete state.sources[other];
-                state.company = null; state.summaryAt = null;
+                state.company = null; state.summaryAt = null; delete state.amountReconciliation;
               }
               state.homeCurrency = currency; observedHomeCurrency = currency;
             }
@@ -350,6 +435,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         } catch (error) { signal?.throwIfAborted(); state.summaryError = 'The company summary could not be refreshed. Earlier figures may be stale.'; await save(state); }
       }
       if (!changed && observedSource && state.company && state.summaryAt && !state.summaryError) { state.summaryAt = iso(now()); await save(state); }
+      await reconcileAmounts(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
       await reconcile(state, () => requests < maxRequests && !controller.signal.aborted, () => { requests++; }, control, readCurrent);
       return publicSnapshot(state, entities, now(), intervalMs);
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
