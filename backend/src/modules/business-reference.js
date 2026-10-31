@@ -22,7 +22,10 @@ function definitionFields(entity, record) {
     if (!value || typeof value !== 'object') return value;
     return Object.fromEntries(Object.entries(value).filter(([field]) => !(field === 'name' && /Ref$/.test(key) && typeof value.value === 'string')).map(([field, entry]) => [field, copy(entry, field)]));
   }
-  return copy(Object.fromEntries(Object.entries(record).filter(([key]) => !METADATA.has(key) && !['CreateTime', 'LastUpdatedTime'].includes(key) && !(DYNAMIC[entity] || []).includes(key))));
+  // Provider party identifiers are not editable business definitions. Only the known
+  // empty ClientEntityId default is omitted; real client links remain bound.
+  const party = ['Customer', 'Vendor'].includes(entity);
+  return copy(Object.fromEntries(Object.entries(record).filter(([key, value]) => !(party && (key === 'V4IDPseudonym' || key === 'ClientEntityId' && value === '0')) && !METADATA.has(key) && !['CreateTime', 'LastUpdatedTime'].includes(key) && !(DYNAMIC[entity] || []).includes(key))));
 }
 // Absent and default-empty values are the same definition: QuickBooks adds new fields
 // (e.g. Item.DeferredRevenue: false) to live reads that older copies never carried.
@@ -188,4 +191,4 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
 }
 const createBusinessReferenceReader = options => createBusinessRecordReader(options);
 const createBusinessTransactionReader = options => createBusinessRecordReader({ observationStore: null, ...options }, true);
-module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition, definitionFields, matchesReferenceDefinition };
+module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition, definitionFields, sameCanonicalDefinition, matchesReferenceDefinition };

@@ -48,6 +48,16 @@ Tax policies retain the raw source recordHash for evidence integrity. Revalidati
 
 Read-only Mongo inspection confirmed operation 3359607d8aee4df04a3d88da at ordinal 21 and its approved Item 44 version-1 digest matching the current mirror. The failed live response was not retained, so its exact differing field remains unverified. The independent quote refusal was separately confirmed as the historical-only general-write allowlist, despite the publication containing the dated transition. No operation was resumed as part of this correction.
 
+## Added-role provider fields and stored replay (2026-10-31)
+
+Added Customer, Vendor and Item roles retain their original definition hashes. For canonical comparison, party definitions omit the provider-only V4IDPseudonym and the exact empty ClientEntityId string "0"; nonzero client links and all other unknown fields remain bound. Absent/default-empty values and reference display labels use the existing canonical rules.
+
+The added-role registry privately retains a creation baseline only after the saved response bytes match the audited responseHash and its definition matches the independently verified listDefinitionHash (version 1 or 2). Its transport receipt, transport audits, step verification and whole-operation completion still must verify. The baseline stays in a WeakMap, outside serialized choices and unusable records. Current records must still be complete, active and at least as new as that creation baseline. Refusals include differing field paths through business-error-detail without retaining customer field values.
+
+Read-only stored-data replay of all three customers from verified list operation 53a8f3c7452ef127d45d0bef found only added ClientEntityId/V4IDPseudonym fields. Original source refused all three; the candidate accepts all three unchanged and refuses changed contact details. No company record was recreated or edited.
+
+The exact retained three-estimate proposal also passes the current general-write context with code 16 and its 14-percent effective rate; code 12, a changed rate and missing dated history refuse. Its historical-only policy refusal occurred at 20:00 UTC, before the 81af99a fix at 20:17 UTC. No further tax allowlist change was needed. The source still selects the published regime for the current open day; broader historical-edit policy is separate. Regression coverage uses sanitized equivalents, with raw replay inputs kept in ignored local artifacts. Nova Scotia's 14-percent rate from April 1, 2025 is confirmed by the [CRA rate table](https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/gst-hst-businesses/charge-collect-which-rate/calculator.html).
+
 ## Evidence
 
 107 focused reference/compiler/plan/read-back/graph tests pass, backend syntax covers 104 files, and diff checks pass. Tests include unchanged intent/request through newer inventory/balance observations, changed evidence hashes, insufficient stock, unchanged-version tampering, account/customer/tax-code definition changes, partial evidence, wrong scopes, version downgrade, full GET shape, actor/connection changes, deadlines and cancellation. Required independent source reviews are clear. These are synthetic fixtures, not live Canadian acceptance or a completed business period.
