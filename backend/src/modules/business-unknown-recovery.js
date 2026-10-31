@@ -256,6 +256,20 @@ function createBusinessUnknownRecovery({models,connection,transaction,now,bind,f
     }
     return {state:'ambiguous',message:(matching.length>1?matching.length+' matching '+step.entity+' records ('+evidence.matching.join(', ')+')':'The only matching record belongs to another request')+'; the operation stays held for review.',evidence};
   }
-  return {reviewUnknown:review,attributeUnknown:approve,resolveUnknownAutomatically:resolveAutomatically};
+  // After an automatic attribution or not-created settlement, the operation's own remaining
+  // steps can run at once. Pending: the latest automatic resolution of this operation is newer
+  // than its last execution request, and nothing is queued or running.
+  async function automaticRecoveryPending(user,operationId,input){
+    exact(input,['planHash']); if(!ID.test(operationId || '') || !HASH.test(input.planHash || ''))fail('Choose the exact saved operation and plan.');
+    const {scope}=await bind(user,'operations.execute',true);
+    const run=await read(models.Runs,{_id:operationId,...scope,planHash:input.planHash});
+    if(!run || !['blocked','running','reserved'].includes(run.status) || run.executionRequest?.pending || (run.leaseToken && new Date(run.leaseExpiresAt).getTime()>now()))return {pending:false};
+    const attributed=await models.Authorities.find({...scope,'payload.kind':'owner-attributed-business-creation','payload.operationId':operationId,'payload.automatic.source':AUTOMATIC_SOURCE}).select('payload.approvedAt').limit(20).maxTimeMS(3000).lean();
+    const settled=await models.Receipts.find({environment:scope.environment,realmId:scope.realmId,operationId,'reconciliation.outcome':'not-created','reconciliation.source':AUTOMATIC_SOURCE}).select('reconciliation.at').limit(20).maxTimeMS(3000).lean();
+    const at=[...attributed.map(row=>row.payload?.approvedAt),...settled.map(row=>row.reconciliation?.at)].filter(value=>Number.isFinite(Date.parse(value || ''))).sort().at(-1) || null;
+    const requested=Date.parse(run.executionRequest?.requestedAt || '');
+    return {pending:Boolean(at && (!Number.isFinite(requested) || requested<Date.parse(at))),at};
+  }
+  return {reviewUnknown:review,attributeUnknown:approve,resolveUnknownAutomatically:resolveAutomatically,automaticRecoveryPending};
 }
 module.exports={createBusinessUnknownRecovery,CLOCK_TOLERANCE_MS,matchesCreation,AUTOMATIC_SOURCE};

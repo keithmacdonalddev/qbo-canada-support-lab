@@ -329,6 +329,21 @@ function createBusinessAgentService(options={}) {
       if(outcome.state==='ambiguous'){try{await store.event(row,'attention','An uncertain QuickBooks request is held',outcome.message,{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-unknown-held',message:outcome.message}),'accountant');}catch{/* Visible on the next pass. */}}
       return false;
     };
+    // After an automatic recovery the operation continues at once under the standing grant (the same
+    // execution request resumeBusinessOperation queues), without waiting for a model review.
+    const continueRecovered=async run=>{
+      if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.ownerId!==ownerId||!run.planHash||run.executionPending)return false;
+      await guard('authority');
+      const governor=governanceFor(run.agentAuthority,{token,now});
+      if(typeof governor.automaticRecoveryPending!=='function')return false;
+      let check;try{check=await governor.automaticRecoveryPending(user,run.operationId,{planHash:run.planHash});}catch(error){if(error?.businessAgentFatal)throw error;return false;}
+      if(!check.pending)return false;
+      await guard('authority');
+      try{await execution.request(user,run.operationId,{planHash:run.planHash,requestKey:hash({operationId:run.operationId,phase:'auto-recovery-continue',at:check.at})});}
+      catch(error){if(error?.businessAgentFatal)throw error;try{await store.event(row,'attention','Recovered work could not be continued',safeError(error),{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-recovery-continue-failed',at:check.at}),'accountant');}catch{/* Visible on the next pass. */}return false;}
+      try{await store.event(row,'plan-decision','Main accountant continued its recovered work',`The uncertain QuickBooks request was resolved automatically; the operation's remaining records are being sent.`,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({operationId:run.operationId,phase:'auto-recovery-continued',at:check.at}),'accountant');}catch{/* The execution audit is the durable record. */}
+      return true;
+    };
     const failedState=error=>({status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
@@ -343,10 +358,19 @@ function createBusinessAgentService(options={}) {
         // The cadence decides from saved state whether this wake needs a model review at all
         // (business-agent-cadence.js); when it does not, only the next time and its reason are saved.
         let role=null,decision=null,business=null,today=null,owned=[],obligations=null,requests=null,daily=null;
+        // Between reviews, recovered work is continued as soon as it is resolved (no backoff wait).
+        if(!dueMain){
+          let continued=false;for(const run of (await ownedFor(scope,row)).filter(run=>run.holdsSlot&&run.status==='blocked').slice(0,1))continued=(await continueRecovered(run))||continued;
+          if(continued)await update({nextDecisionAt:new Date(now()),cadence:{...(row.cadence||{}),misses:0,reviewSignature:null,lastSignature:null}});
+        }
         if(dueMain){
           business=await store.business(scope);today=await todayFor(scope,row);owned=await ownedFor(scope,row);obligations=await obligationsFor(scope);requests=await requestsFor(scope);daily=await managementFor(row);
           let retired=false;for(const run of owned.filter(run=>run.disposition==='unsent').slice(0,3))retired=(await retireUnsent(run))||retired;
           if(business.blockers?.some(item=>item.code==='uncertain-write'))for(const run of owned.filter(run=>run.holdsSlot).slice(0,1))retired=(await resolveUncertain(run))||retired;
+          // A resolved request continues its operation now, and that counts as progress (no backoff).
+          let continued=false;
+          if(retired||!business.blockers?.some(item=>item.code==='uncertain-write'))for(const run of (retired?await ownedFor(scope,row):owned).filter(run=>run.holdsSlot&&run.status==='blocked').slice(0,1))continued=(await continueRecovered(run))||continued;
+          if(continued){retired=true;row.cadence={...(row.cadence||{}),misses:0,reviewSignature:null,lastSignature:null};}
           if(retired){business=await store.business(scope);owned=await ownedFor(scope,row);if(typeof store.forgetToday==='function')store.forgetToday();today=await todayFor(scope,row);}
           decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);
           if(decision.callModel)role='accountant';

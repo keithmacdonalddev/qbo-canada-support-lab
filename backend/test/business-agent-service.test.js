@@ -333,3 +333,32 @@ test('a slice can re-read the management review through its tools',async()=>{
  assert.deepEqual(review.data.todaysPlan.changes,[{area:'items',change:'Add two service items.'}]);assert.equal(review.data.measures.parties.suppliers,1);
  h.service.close();
 });
+
+// Automatic unknown-outcome recovery (2026-10-31): a resolved request continues its operation
+// at once under the standing grant, and that counts as progress for the cadence.
+const heldRun=h=>({operationId:'8'.repeat(24),status:'blocked',planHash:'d'.repeat(64),day:'2026-10-23',agentAuthority:{version:1,agentId,grantId:h.row.grant.id,authorityHash,ownerId},executionPending:false,completedRecords:4,holdsSlot:true,disposition:'continue'});
+test('an automatically recovered operation is continued at once and the no-progress backoff resets',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.owned=[heldRun(h)];h.row.cadence={...(h.row.cadence||{}),misses:3,reviewSignature:null};const calls=[];
+ // The queued request makes the run's execution pending, as the execution service does.
+ h.governance={automaticRecoveryPending:async(user,id,input)=>{calls.push(['pending',id,input.planHash]);h.owned=[{...heldRun(h),executionPending:true,disposition:'active'}];return {pending:true,at:'2026-10-24T01:55:00.000Z'};}};
+ await h.service._worker(agentId,new AbortController());
+ assert.deepEqual(calls,[['pending','8'.repeat(24),'d'.repeat(64)]]);assert.equal(h.engineCalls||0,0,'the queued work is polled, not reviewed');assert.equal(h.requested,1,'the same execution request resume uses');
+ assert.ok(h.events.some(event=>event.title==='Main accountant continued its recovered work'));
+ assert.equal(h.row.cadence.misses||0,0,'automatic recovery counts as progress');
+});
+test('an uncertain request resolved in the pass continues in the same pass; without a fresh resolution nothing is queued',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.owned=[heldRun(h)];h.business.blockers=[{code:'uncertain-write',title:'A QuickBooks request needs recovery'}];const calls=[];
+ h.governance={resolveUnknownAutomatically:async()=>{calls.push('resolve');h.business.blockers=[];return {state:'attributed',qboId:'1073742965',message:'TimeActivity 1073742965 was attributed.'};},automaticRecoveryPending:async()=>{calls.push('pending');return {pending:true,at:'2026-10-24T02:00:00.000Z'};}};
+ await h.service._worker(agentId,new AbortController());
+ assert.deepEqual(calls,['resolve','pending']);assert.equal(h.requested,1);
+ const k=fixture();moveTo(k,'2026-10-24T02:00:00Z');k.owned=[heldRun(k)];k.governance={automaticRecoveryPending:async()=>({pending:false})};
+ await k.service._worker(agentId,new AbortController());
+ assert.equal(k.requested||0,0);
+});
+test('between reviews, recovered work is continued without waiting for the backoff',async()=>{
+ const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.owned=[heldRun(h)];h.row.nextDecisionAt=new Date(h.clock+30*60000);h.row.cadence={...(h.row.cadence||{}),misses:3};
+ h.governance={automaticRecoveryPending:async()=>({pending:true,at:'2026-10-24T01:58:00.000Z'})};
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.requested,1);assert.equal(h.engineCalls||0,0);
+ assert.ok(new Date(h.row.nextDecisionAt).getTime()<=h.clock,'the next review is due now');assert.equal(h.row.cadence.misses,0);
+});
