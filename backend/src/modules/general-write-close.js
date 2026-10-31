@@ -69,7 +69,12 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx }) {
     if (row.unavailable) failures.push({ key, reason: 'Its current version is unavailable; a retained response cannot substitute for current evidence.' });
     if (classified.kind === 'accountant') {
       try {
-        if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, row.current)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
+        // QBO may replace the receipt's DepositToAccountRef with the destination bank
+        // after an owned Deposit. Its original request still described Undeposited Funds.
+        const proof = row.evidence?.accountant, ownDeposit = ['Payment', 'SalesReceipt'].includes(row.entity) && explainedByOwnSettlements(proof?.record, row.current, ownSettlements, row.entity)
+          && headerLinks(row.current).some(key => key.startsWith('Deposit:') && ownSettlements.has(key));
+        const requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
+        if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, requestedView)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const comparison = compareLedger(postingsOf(row.entity, row.deleted ? null : row.current, ctx), ledger[key] || []);
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });

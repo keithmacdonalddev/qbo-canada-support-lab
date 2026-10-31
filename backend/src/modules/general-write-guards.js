@@ -10,7 +10,7 @@
 // merged with a sparse update, and the current record that a void or delete removes.
 // checkGeneralWrite returns { ok, problems, plan }; problems name each operation by its
 // ref and say plainly what to change, so the model can correct and re-propose.
-const { ENTITIES, REF_TARGETS, ACCOUNT_TYPES, readOnlyFields } = require('./qbo-entity-schema');
+const { ENTITIES, VOID_SUPPORT, REF_TARGETS, ACCOUNT_TYPES, readOnlyFields } = require('./qbo-entity-schema');
 const REF = /^[a-z][a-z0-9-]{0,39}$/, QBO_ID = /^\d{1,30}$/, DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_CAPS = Object.freeze({ record: 5000000, operation: 12000000, journalLine: 1000000, quantity: 1000000, operations: 60, lines: 100, bytes: 65536 });
 const TAXED_LINES = ['SalesItemLineDetail', 'ItemBasedExpenseLineDetail', 'AccountBasedExpenseLineDetail'];
@@ -45,6 +45,8 @@ function effectiveRecord(op, existing, payload) {
 function netCents(entity, record) {
   if (!record) return 0;
   if (entity === 'Transfer') return cents(record.Amount) || 0;
+  // Fee offsets must not hide gross money moved from the amount caps.
+  if (entity === 'Deposit') return (record.Line || []).reduce((sum, line) => sum + Math.abs(cents(line.Amount) || 0), 0);
   if (['Payment', 'BillPayment'].includes(entity)) return cents(record.TotalAmt) || 0;
   const lines = Array.isArray(record.Line) ? record.Line : [];
   if (entity === 'JournalEntry') return lines.filter(line => line?.JournalEntryLineDetail?.PostingType === 'Debit').reduce((sum, line) => sum + (cents(line.Amount) || 0), 0);
@@ -93,6 +95,7 @@ function checkGeneralWrite({ proposal, local, context }) {
   const ops = proposal.operations;
   if (!ops.length || ops.length > caps.operations) say(null, 'Send 1 to ' + caps.operations + ' operations.');
   const byRef = new Map(), applied = new Map(), deposited = new Set(), reverify = new Set(), external = [], touched = new Map();
+  const accountFor = target => { const name = target?.$ref ?? target?.value?.$ref; return name ? byRef.get(name)?.after : local.get('Account', String(target?.value)); };
   let exposure = 0;
   // dirty: the date's postings change (the record's own old and new dates). A linked
   // source keeps its postings; its balance and backlinks change, so it is protected only.
@@ -130,6 +133,8 @@ function checkGeneralWrite({ proposal, local, context }) {
       const key = op.entity + ':' + op.id;
       if (touched.has(key)) say(ref, op.entity + ' ' + op.id + ' is already changed by ' + touched.get(key) + ' in this operation; combine the changes.'); touched.set(key, ref);
       entry.id = op.id; entry.before = existing; entry.targetVersion = existing.SyncToken ?? null;
+      if (op.op === 'void' && (!VOID_SUPPORT[op.entity]?.enabled || !local.owned(op.entity, op.id))) say(ref, 'Only accountant-created transactions with a confirmed QBO API void endpoint can be voided.');
+      if (op.op === 'void' && allLinks(existing).some(link => link.TxnType === 'Deposit' || op.entity === 'Invoice' && link.TxnType === 'Payment')) say(ref, 'Unlink the existing payment or deposit before voiding this transaction.');
       if (!local.owned(op.entity, op.id)) {
         if (typeof op.reason !== 'string' || op.reason.trim().length < 10 || op.reason.length > 1000) say(ref, op.entity + ' ' + op.id + ' was not created by the accountant: state a reason (10 to 1,000 characters). Its before and after images are audited.');
         external.push({ ref, entity: op.entity, id: op.id, op: op.op });
@@ -152,12 +157,25 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (!(spec.lines || []).includes(type) && !((spec.lines || []).includes('LinkedOnly') && linked && type === undefined)) say(ref, 'Line DetailType ' + type + ' is not used on ' + op.entity + '.');
       if (type === 'DiscountLineDetail') say(ref, 'Discount lines are not in general-write-v1 yet; reduce the line price instead.');
       const amount = line?.Amount === undefined ? 0 : cents(line.Amount);
-      if (amount === null || amount < 0) say(ref, 'Line amounts are non-negative exact cents.');
+      const fee = op.entity === 'Deposit' && type === 'DepositLineDetail' && !linked && amount < 0;
+      if (amount === null || amount < 0 && !fee) say(ref, 'Line amounts are non-negative exact cents, except a Deposit expense fee line.');
+      if (fee) {
+        const account = accountFor(line.DepositLineDetail?.AccountRef);
+        if (!account || account.Active === false || !['Expense', 'Other Expense'].includes(account.AccountType)) say(ref, 'A negative deposit fee needs an active Expense or Other Expense account.');
+        if (line.DepositLineDetail?.TaxCodeRef || line.DepositLineDetail?.TaxApplicableOn) say(ref, 'Deposit fees support no tax overrides; record taxable fees separately.');
+      }
       const qty = line?.[type]?.Qty;
       if (qty !== undefined && (typeof qty !== 'number' || !Number.isFinite(qty) || qty < 0 || qty > caps.quantity)) say(ref, 'Line quantities are from 0 to ' + caps.quantity + '.');
       if (type === 'JournalEntryLineDetail' && amount > caps.journalLine) say(ref, 'Each journal line is at most $' + caps.journalLine / 100 + '.');
       // QuickBooks computes tax from the published codes; no tax overrides.
       if (line?.[type]?.TaxInclusiveAmt !== undefined || line?.[type]?.TaxAmount !== undefined) say(ref, 'Leave tax amounts out; QuickBooks computes tax from the TaxCodeRef.');
+    }
+    if (op.entity === 'Deposit' && after) {
+      const lines = Array.isArray(after.Line) ? after.Line : [];
+      if (lines.some(line => (cents(line.Amount) || 0) < 0) && (!lines.some(line => (line.LinkedTxn || []).length && cents(line.Amount) > 0) || lines.reduce((sum, line) => sum + (cents(line.Amount) || 0), 0) <= 0)) say(ref, 'A processor fee must accompany linked undeposited payments and leave a positive net bank deposit.');
+      for (const line of lines) if ((line.LinkedTxn || []).length && (line.LinkedTxn.length !== 1 || line.DepositLineDetail?.AccountRef)) say(ref, 'Each linked deposit line names exactly one payment or receipt and has no account override.');
+      const bank = accountFor(after.DepositToAccountRef);
+      if (!bank || bank.AccountType !== 'Bank') say(ref, 'A Deposit needs a Bank destination account.');
     }
     // Inventory is gated off in general-write-v1 (before or after the change).
     const stock = inventoryTouch(op.entity, existing, local, byRef) || inventoryTouch(op.entity, after, local, byRef);
@@ -226,6 +244,8 @@ function checkGeneralWrite({ proposal, local, context }) {
     for (const { level, line, link } of linksIn(existing)) if (level === 'line') { const key = linkType(link.TxnType) + ':' + link.TxnId; previously.set(key, (previously.get(key) || 0) + (cents(line.Amount) || 0)); }
     for (const { level, line, link } of linksIn(after)) {
       const type = linkType(link?.TxnType), target = String(link?.TxnId ?? '');
+      // Read-only settlement backlinks on a saved record are not outgoing applications.
+      if (level === 'header' && existing && payload.LinkedTxn === undefined && !(rules.header || []).includes(type)) continue;
       if (!(rules[level] || []).includes(type)) { say(ref, op.entity + ' cannot link ' + type + ' at ' + level + ' level.'); continue; }
       if (isRefObject(link.TxnId) || link.$ref !== undefined) { const name = link.TxnId?.$ref ?? link.$ref, earlier = byRef.get(name); if (!earlier || earlier.order >= order || earlier.entity !== type) say(ref, 'A link $ref must name an earlier create of a ' + type + '.'); else entry.dependsOn.add(name); continue; }
       const record = QBO_ID.test(target) && local.get(type, target);
@@ -248,10 +268,13 @@ function checkGeneralWrite({ proposal, local, context }) {
       else if (type === 'TimeActivity') { if (record.BillableStatus !== 'Billable' && !previously.has(key)) say(ref, 'Time entry ' + target + ' is not billable or was already billed.'); }
       else if (type === 'PurchaseOrder') { if (record.POStatus !== 'Open') say(ref, 'Purchase order ' + target + ' is closed.'); }
     }
-    if (party && after && Array.isArray(after.Line) && (op.op === 'create' || payload.Line !== undefined || payload.TotalAmt !== undefined)) {
-      const credit = op.entity === 'Payment' ? 'CreditMemo' : 'VendorCredit', sum = after.Line.reduce((total, line) => total + (linkType(line?.LinkedTxn?.[0]?.TxnType) === credit ? -1 : 1) * (cents(line?.Amount) || 0), 0);
-      if (after.Line.some(line => line?.LinkedTxn?.length !== 1)) say(ref, 'Each ' + op.entity + ' line links exactly one record.');
-      if (cents(after.TotalAmt) !== sum) say(ref, 'TotalAmt must equal the applied lines minus applied credits ($' + sum / 100 + '); unapplied prepayments are not supported yet.');
+    if (party && after) {
+      const total = cents(after.TotalAmt);
+      if (total === null || total < 0) say(ref, 'TotalAmt must be non-negative exact cents.');
+      const applicationLines = Array.isArray(after.Line) ? after.Line : [];
+      const credit = op.entity === 'Payment' ? 'CreditMemo' : 'VendorCredit', sum = applicationLines.reduce((total, line) => total + (linkType(line?.LinkedTxn?.[0]?.TxnType) === credit ? -1 : 1) * (cents(line?.Amount) || 0), 0);
+      if (applicationLines.some(line => line?.LinkedTxn?.length !== 1)) say(ref, 'Each ' + op.entity + ' line links exactly one record.');
+      if (sum < 0 || (op.entity === 'Payment' ? total < sum : total !== sum)) say(ref, 'TotalAmt must equal or, for customer payments, exceed the applied lines minus applied credits (' + sum / 100 + '); applied credits cannot exceed invoice applications.');
     }
   });
   if (!problems.length && [...byRef.values()].some(entry => entry.stock && !['Estimate', 'PurchaseOrder'].includes(entry.entity))) {

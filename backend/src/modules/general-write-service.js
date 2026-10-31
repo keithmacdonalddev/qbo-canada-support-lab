@@ -78,7 +78,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
   async function guard(scope, operations, extras = [], stale = new Set(), session) {
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
-    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session });
+    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, salesTaxCodes: [...new Set(operations.filter(op => ['Invoice', 'SalesReceipt'].includes(op?.entity)).flatMap(op => (Array.isArray(op.payload?.Line) ? op.payload.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value)).filter(id => typeof id === 'string'))] });
     return { result: checkGeneralWrite({ proposal: { operations }, local, context }), local, context };
   }
   // Preparation: validate, guard and save the plan. Nothing is sent.
@@ -93,9 +93,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       return { runId: _id, status: existing.status, reused: true, admitted, plan: summary(existing.plan) };
     }
     const { result, context } = await guard(scope, input.operations);
-    // Void through the batch endpoint is not confirmed against the QuickBooks reference yet.
-    const voids = input.operations.filter(op => op?.op === 'void').map(op => ({ ref: op.ref, message: 'Void is not enabled for general writes yet; delete the record you created, or correct it with a credit or reversing entry.' }));
-    if (!result.ok || voids.length) return { runId: null, status: 'refused', problems: [...(result.problems || []), ...voids] };
+    if (!result.ok) return { runId: null, status: 'refused', problems: result.problems };
     await Runs.create([{ _id, contract: 'general-write-v1', ...scope, ownerId: bound.ownerId, actorId: bound.actorId, agentAuthority: bound.agentAuthority || null, decisionKey: input.decisionKey, contentHash, purpose: input.purpose.trim(), day: context.day, plan: result.plan, status: 'prepared' }]);
     return { runId: _id, status: 'prepared', reused: false, plan: summary(result.plan) };
   }
@@ -139,7 +137,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if (!result.ok) { run = await save(run, { status: 'needs-correction', lastError: 'The company changed since preparation: ' + result.problems.map(row => (row.ref ? row.ref + ': ' : '') + row.message).join(' ') }); return report(run, result.problems); }
         const first = new Set(result.plan.layers[0]), attempt = run.batches.length + 1;
         const items = result.plan.operations.filter(op => first.has(op.ref)).map((op, n) => {
-          const current = op.id ? local.get(op.entity, op.id) : null, body = op.op === 'create' ? op.payload : op.op === 'update' ? { ...op.payload, Id: op.id, SyncToken: current.SyncToken, sparse: true } : { Id: op.id, SyncToken: current.SyncToken };
+          const current = op.id ? local.get(op.entity, op.id) : null, body = op.op === 'create' ? op.payload : op.op === 'update' ? { ...op.payload, Id: op.id, SyncToken: current.SyncToken, sparse: true } : { Id: op.id, SyncToken: current.SyncToken, ...(op.op === 'void' ? { sparse: true } : {}) };
           if (unresolved(body)) fail('Operation ' + op.ref + ' still names an unsaved earlier record; nothing was sent.');
           return { bId: String(n + 1), ref: op.ref, op: op.op, entity: op.entity, ...(op.id ? { id: op.id, before: current } : {}), operation: op.op, payload: body };
         });
@@ -228,7 +226,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
 // The published business context the guards need: open day, protected and verified dates,
 // published tax codes and their total percentages (from the copy's TaxCode/TaxRate).
 function createGeneralWriteContext({ models, now = () => Date.now() }) {
-  return async (scope, local, { session } = {}) => {
+  return async (scope, local, { session, salesTaxCodes = [] } = {}) => {
     const { businessDate } = require('./business-activity-preview'), { shift } = require('./business-calendar');
     const calendar = await models.Calendars.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId }).session(session).lean();
     const control = (await models.Policies.findOne({ environment: scope.environment, realmId: scope.realmId }).select('periodControl').session(session).lean())?.periodControl;
@@ -246,14 +244,19 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
     const { bindDatedTax, datedTaxChoice } = require('./business-dated-tax');
     const dated = bindDatedTax(published.view.business, mappings);
     const selected = key => dated ? datedTaxChoice(dated, key, day).id : mappings[key];
-    const taxCodes = { sales: [selected('salesTax')].filter(Boolean).map(String), purchases: [selected('purchaseTax')].filter(Boolean).map(String) };
+    const primarySales = String(selected('salesTax') || '');
+    // The synced company supplies line-specific Canadian sales codes. Every referenced
+    // code still needs complete active dated rates below; the published default remains bound.
+    const outdatedSales = dated ? String(dated.before.salesTax === primarySales ? dated.after.salesTax : dated.before.salesTax) : null;
+    const salesCodes = salesTaxCodes.filter(id => id !== outdatedSales && (local.get('TaxCode', id)?.SalesTaxRateList || local.get('TaxCode', id)?.Taxable === false));
+    const taxCodes = { sales: [...new Set([primarySales, ...salesCodes].filter(Boolean))], purchases: [selected('purchaseTax')].filter(Boolean).map(String) };
     if (!taxCodes.sales.length || !taxCodes.purchases.length) fail('The published business has no sales and purchase tax codes.');
     const taxPercent = {};
     for (const [direction, ids] of Object.entries(taxCodes)) for (const id of ids) {
       const code = local.get('TaxCode', id);
       // Only referenced records are loaded; unrelated writes need no tax read.
       if (!code) continue;
-      const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail;
+      const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail ?? (code.Taxable === false ? [] : undefined);
       if (code.Active !== true || code.sparse === true || !Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length)) fail('The published tax code has no complete current rates.');
       const ids = new Set();
       const percent = details.reduce((sum, row) => {
@@ -264,7 +267,7 @@ function createGeneralWriteContext({ models, now = () => Date.now() }) {
         if (rate?.sparse === true) fail('The published tax rate is incomplete.');
         return sum + require('./business-tax-policy').applicableRate(rate, day);
       }, 0);
-      if (dated && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', day).percent) fail('The published dated tax rate differs from its approved policy.');
+      if (dated && (direction !== 'sales' || id === primarySales) && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', day).percent) fail('The published dated tax rate differs from its approved policy.');
       taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
     }
     const features = require('../config').features || {};

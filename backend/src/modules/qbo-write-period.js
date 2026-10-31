@@ -52,7 +52,15 @@ function settlementSources(request, payload) {
   const contracts = { payment: ['Invoice'], billpayment: ['Bill'], invoice: ['Estimate', 'TimeActivity'], bill: ['PurchaseOrder'], deposit: ['Payment', 'SalesReceipt'] };
   const types = contracts[request.entity], links = linksIn(payload);
   if (!types || !links.length || links.some(link => !types.includes(link.entity)) || !Array.isArray(payload.Line) || !payload.Line.length) return false;
-  if (['payment', 'billpayment', 'deposit'].includes(request.entity)) return payload.LinkedTxn === undefined && payload.Line.every(line => Number.isFinite(line.Amount) && line.Amount > 0 && Array.isArray(line.LinkedTxn) && line.LinkedTxn.length === 1 && types.includes(line.LinkedTxn[0].TxnType));
+  if (request.entity === 'deposit') {
+    const linked = line => Number.isFinite(line.Amount) && line.Amount > 0 && Array.isArray(line.LinkedTxn) && line.LinkedTxn.length === 1 && types.includes(line.LinkedTxn[0].TxnType);
+    const fee = line => Number.isFinite(line.Amount) && line.Amount < 0 && Number.isSafeInteger(Math.round(line.Amount * 100)) && Math.abs(line.Amount * 100 - Math.round(line.Amount * 100)) < 0.00001
+      && line.DetailType === 'DepositLineDetail' && ID.test(line.DepositLineDetail?.AccountRef?.value || '') && !(line.LinkedTxn || []).length && !line.DepositLineDetail?.TaxCodeRef && !line.DepositLineDetail?.TaxApplicableOn;
+    // The general admission guards separately prove each fee account is an active expense.
+    // Both the linked cash and its fee post today; historical receipts stay prerequisites.
+    return payload.LinkedTxn === undefined && payload.Line.some(linked) && payload.Line.every(line => linked(line) || fee(line)) && payload.Line.reduce((sum,line) => sum + line.Amount, 0) > 0;
+  }
+  if (['payment', 'billpayment'].includes(request.entity)) return payload.LinkedTxn === undefined && payload.Line.every(line => Number.isFinite(line.Amount) && line.Amount > 0 && Array.isArray(line.LinkedTxn) && line.LinkedTxn.length === 1 && types.includes(line.LinkedTxn[0].TxnType));
   // Conversions have explicit source links and positive item amounts. Unsupported
   // credits/relinks are never inferred to be harmless historical prerequisites.
   return payload.Line.every(line => Number.isFinite(line.Amount) && line.Amount > 0 && ['SalesItemLineDetail', 'ItemBasedExpenseLineDetail'].includes(line.DetailType));

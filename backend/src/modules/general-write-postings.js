@@ -20,8 +20,14 @@ const id = ref => ref?.value == null ? null : String(ref.value);
 function postingsOf(entity, record, ctx) {
   const out = new Map(), add = (account, amount) => { if (!account) fail(entity + ' has a posting without an account.'); if (amount) out.set(account, (out.get(account) || 0) + amount); };
   if (!record || NON_POSTING.has(entity)) return out;
-  if (record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) return out;
+  if (record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) {
+    if (!require('./general-write-recovery').voidedRecord(record)) fail('A void must have zero amounts, tax and quantities.');
+    return out;
+  }
   const lines = Array.isArray(record.Line) ? record.Line : [];
+  // A deposit clears the receipt's original Undeposited Funds posting even when
+  // QBO's current receipt now names the deposit's bank.
+  const receiptAccount = () => (record.LinkedTxn || []).some(link => link.TxnType === 'Deposit') ? ctx.undepositedFunds : id(record.DepositToAccountRef) || ctx.undepositedFunds;
   const sales = SALES[entity], purchases = PURCHASES[entity];
   if (sales !== undefined || purchases !== undefined) {
     // Each line posts to its own account (the item's income or expense account), with the
@@ -59,7 +65,7 @@ function postingsOf(entity, record, ctx) {
     }
     const control = entity === 'Invoice' || entity === 'CreditMemo' ? id(record.ARAccountRef) || ctx.receivables
       : entity === 'Bill' || entity === 'VendorCredit' ? id(record.APAccountRef) || ctx.payables
-      : entity === 'Purchase' ? id(record.AccountRef) : id(record.DepositToAccountRef) || ctx.undepositedFunds;
+      : entity === 'Purchase' ? id(record.AccountRef) : receiptAccount();
     // A Purchase with Credit:true is a refund from the payee: every sign flips.
     const flip = entity === 'Purchase' && record.Credit === true ? -1 : 1;
     if (flip === -1) for (const [account, amount] of out) out.set(account, -amount);
@@ -68,9 +74,11 @@ function postingsOf(entity, record, ctx) {
   }
   switch (entity) {
     case 'Payment': {
-      // Receivables down, money in. A zero-funds credit application posts nothing.
+      // All cash received (including unapplied/overpaid cash) credits receivables.
+      // Later applications of the same cash do not post a second receipt.
+      // A zero-funds credit application posts nothing.
       const total = cents(record.TotalAmt || 0); if (!total) return out;
-      add(id(record.ARAccountRef) || ctx.receivables, -total); add(id(record.DepositToAccountRef) || ctx.undepositedFunds, total); return out;
+      add(id(record.ARAccountRef) || ctx.receivables, -total); add(receiptAccount(), total); return out;
     }
     case 'BillPayment': {
       const total = cents(record.TotalAmt || 0); if (!total) return out;
@@ -82,6 +90,7 @@ function postingsOf(entity, record, ctx) {
       for (const line of lines) {
         const amount = cents(line.Amount); total += amount;
         if ((line.LinkedTxn || []).length) add(ctx.undepositedFunds, -amount);
+        // A negative fee debits its expense; linked cash still clears in full.
         else add(id(line.DepositLineDetail?.AccountRef), -amount);
       }
       add(id(record.DepositToAccountRef), total); return out;

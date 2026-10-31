@@ -11,7 +11,7 @@
 //   settle      inside the gate's result transaction: item outcomes saved on the run.
 // QuickBooks dedupes a batch by requestid, so a replay after a lost response reuses the
 // same requestid and bIds under a new transport attempt (a new receipt and dispatch key).
-const { matchesRequest } = require('./general-write-recovery');
+const { matchesRequest, matchesVoid } = require('./general-write-recovery');
 const { hash, canonical, date } = require('./business-calendar');
 const { denied, freezeWriteRequest, classifyWriteResponse, responsePayload } = require('./qbo-write-contract');
 const { readWritePeriodEvidence, assertWritePeriod, assertPeriodControl, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE } = require('./qbo-write-period');
@@ -22,12 +22,17 @@ function itemRequest(scope, item) {
   if (item.operation === 'create') return freezeWriteRequest(scope, 'POST', entity, item.payload);
   if (item.operation === 'update') return freezeWriteRequest(scope, 'POST', entity, item.payload);
   if (item.operation === 'delete') return freezeWriteRequest(scope, 'POST', entity + '?operation=delete', item.payload);
+  if (item.operation === 'void') {
+    const rule = require('./qbo-entity-schema').VOID_SUPPORT[item.entity];
+    if (!rule?.enabled) throw denied('This entity has no confirmed QBO API void endpoint.');
+    return freezeWriteRequest(scope, 'POST', entity + '?' + rule.query, item.payload);
+  }
   throw denied('Batch ' + item.operation + ' is not enabled for general writes until it is confirmed against the QuickBooks batch reference.');
 }
 // The exact batch wire body for a saved general batch.
 function buildGeneralBatch(scope, batch) {
   if (!REQUEST.test(batch?.requestId || '') || !Array.isArray(batch.items) || !batch.items.length || batch.items.length > MAX_BATCH) throw denied('A general batch needs a saved requestid and 1 to 30 items.');
-  const items = batch.items.map(item => { itemRequest(scope, item); return { bId: item.bId, operation: item.operation, [item.entity]: item.payload }; });
+  const items = batch.items.map(item => { itemRequest(scope, item); return { bId: item.bId, operation: item.operation === 'void' ? 'update' : item.operation, ...(item.operation === 'void' ? { optionsData: 'void' } : {}), [item.entity]: item.payload }; });
   if (new Set(items.map(item => item.bId)).size !== items.length) throw denied('General batch item identities are duplicated.');
   return freezeWriteRequest(scope, 'POST', 'batch?requestid=' + batch.requestId, { BatchItemRequest: items });
 }
@@ -41,7 +46,7 @@ function classifyGeneralResponse(scope, batch, response, intuitTid = '') {
     if (group.length !== 1) return { bId: item.bId, ref: item.ref, outcome: 'unknown' };
     const { bId, ...body } = group[0], status = body.Fault?.type === 'ValidationFault' ? 400 : response.status;
     const observed = classifyWriteResponse(itemRequest(scope, item), { status, json: body }, intuitTid);
-    if (observed.outcome === 'saved' && item.op !== 'delete' && !matchesRequest(item.payload, body[item.entity])) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
+    if (observed.outcome === 'saved' && item.op !== 'delete' && !(item.op === 'void' ? matchesVoid(item, body[item.entity]) : matchesRequest(item.payload, body[item.entity]))) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
     return { bId, ref: item.ref, ...observed };
   });
   return { ...base, outcome: items.every(item => ['saved', 'rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };

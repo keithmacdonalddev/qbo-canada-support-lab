@@ -12,6 +12,19 @@
 //                         under a new identity; without a reliable correlation the item
 //                         stays UNRESOLVED and blocks everything that shares its resources.
 const STALE = '5010';
+// A response must prove the void, not merely echo the target id or a user-entered note.
+function voidedRecord(record) {
+  return Boolean(record && (record.status === 'Voided' || /^Voided(?:$|[\s:])/.test(record.PrivateNote || '')) && record.TotalAmt === 0
+    && ['Balance', 'UnappliedAmt', 'HomeBalance', 'HomeTotalAmt'].every(key => record[key] === undefined || record[key] === 0)
+    && (record.TxnTaxDetail?.TotalTax === undefined || record.TxnTaxDetail.TotalTax === 0)
+    && (record.TxnTaxDetail?.TaxLine || []).every(line => line.Amount === 0)
+    && (record.Line || []).every(line => line.Amount === 0 && (line[line.DetailType]?.Qty === undefined || line[line.DetailType].Qty === 0)));
+}
+function matchesVoid(item, record) {
+  const version = item.before?.SyncToken ?? item.targetVersion ?? item.payload?.SyncToken;
+  return voidedRecord(record) && String(record.Id) === String(item.id || item.payload?.Id)
+    && /^(0|[1-9]\d{0,63})$/.test(record.SyncToken || '') && /^(0|[1-9]\d{0,63})$/.test(version || '') && BigInt(record.SyncToken) > BigInt(version);
+}
 // Compare every requested nested field, including line account/item/tax and links.
 // QuickBooks may add computed fields and reference display names.
 function matchesRequest(sent, saved) {
@@ -52,6 +65,7 @@ function itemOutcomes(batch, response) {
     const record = row[item.entity], valid = entity === item.entity && record && typeof record.Id === 'string' && /^\d{1,30}$/.test(record.Id) && (!item.id || record.Id === String(item.id));
     if (item.op === 'delete') return valid && record.Id === String(item.id || item.payload?.Id) && record.status === 'Deleted' ? { ref: item.ref, bId: item.bId, outcome: 'deleted', record } : { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'The exact deletion is not proved by this response.' } };
     if (!valid || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken)) return { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'The saved entity identity or version is incomplete.' } };
+    if (item.op === 'void' && !matchesVoid(item, record)) return { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'A newer zero-amount void response is required.' } };
     return { ref: item.ref, bId: item.bId, outcome: entity === item.entity ? 'saved' : 'unknown', record: row[entity] || null, ...(entity === item.entity ? {} : { next: { action: 'unresolved', reason: 'The response carried another entity type.' } }) };
   });
   return { lost: false, items };
@@ -64,4 +78,4 @@ function blockedRefs(outcomes, resources, dependsOn) {
   const held = new Set(open.flatMap(ref => resources[ref] || []));
   return Object.keys(resources).filter(ref => !outcomes.some(row => row.ref === ref) && ((resources[ref] || []).some(key => held.has(key)) || (dependsOn[ref] || []).some(name => failed.has(name)))).sort();
 }
-module.exports = { itemOutcomes, blockedRefs, correlation, STALE, matchesRequest };
+module.exports = { itemOutcomes, blockedRefs, correlation, STALE, matchesRequest, voidedRecord, matchesVoid };
