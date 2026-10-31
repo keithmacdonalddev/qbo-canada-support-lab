@@ -89,6 +89,8 @@ const FIXED = Object.freeze({
   getManagementReview: 'Reading today’s plan and business measures',
   recordDailyPlan: 'Recording today’s plan',
   requestCapability: 'Adding a missing tool to the build list',
+  getQboEntitySchema: 'Reading the QuickBooks record format',
+  manageQboRecord: 'Preparing QuickBooks records',
 });
 // One table maps every governed tool to a short label; unknown tools get a humanised name.
 function stepLabel(name, input) {
