@@ -2,6 +2,10 @@
 
 Updated 2026-10-18 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
+## Open TODO: landing page overhaul — 2026-10-31
+
+The landing page (`/company`, `BusinessWorkspace.jsx`) needs an overhaul. Owner asked to record the review: see `docs/plans/landing-page-overhaul-todo-2026-10-31.md`. Not started. A rendered slice needs owner acceptance before broad adoption.
+
 ## Bulk relationship repairs verified and settings restored — 2026-10-18
 
 The owner explicitly corrected repeated permission questions: all original link repairs and their necessary temporary setting window are approved. Do not ask again for this existing scope. The prior one-trial/pending-extension wording below is historical and superseded by that current direction. Full accounting/receipt/company boundaries still apply.
