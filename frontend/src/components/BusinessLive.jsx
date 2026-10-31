@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, AlertTriangle, ArrowDown, ArrowRight, Brain, Check, Circle, Clock3, Coins, LoaderCircle, MessageSquare, OctagonPause, RefreshCw, Send, Wrench, X } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowUp, ArrowRight, Brain, Check, Circle, Clock3, Coins, LoaderCircle, MessageSquare, OctagonPause, RefreshCw, Send, Wrench, X } from 'lucide-react'
 import { dateTime, timeOfDay } from '../lib/format'
 import { recordLink } from '../lib/business-workspace.mjs'
 import ActivityMetadata from './ActivityMetadata'
@@ -59,7 +59,7 @@ function todayLine(rightNow) {
   return rightNow?.today?.line || ''
 }
 
-// One timeline, oldest first: the review session transcript plus the runner's record lines and
+// One timeline, newest first: the review session transcript plus the runner's record lines and
 // key events. Review-step summaries are left out when the full session is shown.
 function timeline(feed, transcript) {
   const entries = transcript?.entries || []
@@ -77,7 +77,7 @@ function timeline(feed, transcript) {
     }),
     ...items.filter(item => !(entries.length && (item.kind === 'review-step' || item.kind === 'review')) && inWindow(item)).map(item => ({ id: 'f:' + item.id, at: stamp(item.at) ?? 0, order: 0, item })),
   ]
-  return rows.sort((a, b) => a.at - b.at || a.order - b.order)
+  return rows.sort((a, b) => b.at - a.at || b.order - a.order)
 }
 
 const ITEM_ICONS = { running: LoaderCircle, done: Check, failed: X, attention: AlertTriangle, info: Circle }
@@ -133,17 +133,17 @@ function attemptLabel(row, clock) {
 // The live panel at the top of the first page: what the accountant is doing now, its session as
 // it streams (reasoning, messages, tool calls and results) and every record sent to QuickBooks.
 // Fixed height so updates never move the rest of the page; it follows the newest line unless
-// the owner scrolls up.
+// the owner scrolls down to older activity.
 export default function BusinessLive({ feed, failed, transcript, rightNow, now }) {
   const [mountedAt] = useState(Date.now)
   const list = useRef(null), stick = useRef(true)
   const [behind, setBehind] = useState(false)
   const rows = rightNow && rightNow.state !== 'not-configured' ? timeline(feed, transcript) : []
-  const lastId = rows.at(-1)?.id
+  const firstId = rows[0]?.id
   useLayoutEffect(() => {
     const node = list.current
-    if (node && stick.current) node.scrollTop = node.scrollHeight
-  }, [lastId, rows.length])
+    if (node && stick.current) node.scrollTop = 0
+  }, [firstId, rows.length])
   useEffect(() => { stick.current = true }, [transcript?.attemptId])
   if (!rightNow || rightNow.state === 'not-configured') return null
   const clock = now ?? mountedAt
@@ -151,9 +151,9 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
   const live = line.tone === 'working'
   const sending = feed?.state === 'sending' && feed.sending?.total ? Math.min(100, Math.round(100 * feed.sending.done / feed.sending.total)) : null
   const attempts = transcript?.attempts || []
-  const onScroll = event => { const node = event.currentTarget; const atEnd = node.scrollHeight - node.scrollTop - node.clientHeight < 24; stick.current = atEnd; setBehind(!atEnd) }
+  const onScroll = event => { const node = event.currentTarget; const atStart = node.scrollTop < 24; stick.current = atStart; setBehind(!atStart) }
   const pauseForDetails = () => { stick.current = false; setBehind(true) }
-  const jump = () => { const node = list.current; if (node) { node.scrollTop = node.scrollHeight; stick.current = true; setBehind(false) } }
+  const jump = () => { const node = list.current; if (node) { node.scrollTop = 0; stick.current = true; setBehind(false) } }
   const status = failed ? 'Reconnecting…' : transcript?.mode === 'streaming' ? 'Streaming' : transcript?.mode === 'polling' ? 'Updating every 2 s' : feed?.asOf ? 'Updated ' + clockTime(feed.asOf, clock) : ''
   return <section className={'bwl bwl--' + line.tone} aria-labelledby="business-live-title">
     <header className="bwl-head">
@@ -168,12 +168,12 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
       <span>{today}</span>
       {sending !== null && <span className="bwl-bar" role="progressbar" aria-label="Records sent" aria-valuemin={0} aria-valuemax={100} aria-valuenow={sending}><span style={{ width: sending + '%' }} /></span>}
     </div>
-    <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant activity, oldest first">
+    <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant activity, newest first">
       {rows.length ? <ol>
         {rows.map(row => row.entry ? <EntryRow key={row.id} entry={row.entry} clock={clock} metadata={row.metadata} onOpen={pauseForDetails} /> : <FeedRow key={row.id} item={row.item} clock={clock} onOpen={pauseForDetails} />)}
       </ol> : <p className="bwl-empty">{!feed ? failed ? 'Live activity could not be read yet. Retrying automatically.' : 'Loading the latest activity…' : 'Nothing recorded yet. The accountant’s next review appears here as it happens: what it reads, what it decides and every record it sends to QuickBooks.'}</p>}
     </div>
-    {behind && <button type="button" className="bwl-jump" onClick={jump}><ArrowDown aria-hidden="true" />Scrolling paused · jump to latest</button>}
+    {behind && <button type="button" className="bwl-jump" onClick={jump}><ArrowUp aria-hidden="true" />Scrolling paused · jump to latest</button>}
     {feed?.stale && <p className="bwl-stale">Showing the last activity read. New activity appears once the next read succeeds.</p>}
   </section>
 }
