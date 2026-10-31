@@ -60,7 +60,7 @@ Supersedes nothing in `AGENTS.md`, `CLAUDE.md` or `AGENT_WORKFLOW.md`, which sti
 ## 2. What the app is for (the owner's intent)
 
 The owner's three jobs for the app:
-1. **Ensure complete data in QuickBooks for every potential situation**, so the owner can reproduce any customer issue that may arise (in QuickBooks, not in this app). This is the purpose (prd.md); volume serves it.
+1. **Ensure complete data in QuickBooks for every potential situation**, so the owner can reproduce any customer issue that may arise (in QuickBooks, not in this app). This is in addition to job 2, running the business; both are goals (prd.md).
 2. **Manage the QuickBooks company like a real, running business, 24/7, through the API.**
 3. **Make sure every QuickBooks feature gets used**, more than naturally: deliberately cover every feature, setting, edge case and record state, and measure the gaps.
 
