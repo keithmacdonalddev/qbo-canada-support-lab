@@ -265,7 +265,7 @@ Arm a Monitor on `bash .claude/skills/qbo-team-delivery/scripts/codex-watch.sh <
 | Job | Task id | What | When it finishes |
 |---|---|---|---|
 | V | task-mvwy98pl-d2a54w | Governed additive storage preparation | **DONE.** Committed `1568826` and applied live (section 4). |
-| W | task-mvwyf9c4-bnefef | Fix the added-customer fingerprint refusal and the general-write tax code 16 refusal, with an offline replay of real data. | Commit. Confirm the accountant's next run prepares sales for the 3 regional customers and taxable general sales. |
+| W | task-mvwyf9c4-bnefef | Added-customer fingerprint and tax code 16 | **DONE.** Committed with this document; confirm live sales to the 3 regional customers. |
 
 ---
 
@@ -334,8 +334,8 @@ Each item is a known current fact; verify it before relying on it.
 
 | Area | Issue | Status / next step |
 |---|---|---|
-| Sales | Accountant-added customers refused as "changed after creation" | Job W (in flight) |
-| Tax | General tool refuses taxable sales with code 16 (NS HST 14%) | Job W (in flight) |
+| Sales | Accountant-added customers refused as "changed after creation" | Fixed by job W; confirm live sales to the 3 regional customers |
+| Tax | Code 16 sales refusal | Already fixed by `81af99a` (replay confirmed); confirm live |
 | Accountant memory | Retained notes go stale and contradict live state (it believed the six collections and the care-plan item were still blocked after they were fixed) | Current state now overrides some notes (`6f319c1`). Watch for it, and have Sol make retained "blocked" notes expire when the blocker clears. |
 | QBO economy | Fresh reads in verification (`50868c8`) added about 7–39 GETs per operation chain | Measure with `qboRequests.today.callers`, then have Sol trim it |
 | Inventory | General-tool inventory is off; returns unfinished | §7 item 5 |
@@ -378,6 +378,71 @@ Each item is a known current fact; verify it before relying on it.
 | Status messages were long and repeated. | Keep messages short. Don't re-explain background events that changed nothing. |
 
 ---
+
+## 8a. Every issue that came up in this session (chronological): cause, fix, status
+
+| # | Issue observed | Cause | Fix (commit) | Status |
+|---|---|---|---|---|
+| 1 | Calendar stuck at Oct 28 for about 20 hours | Re-issuing the agent grant changed the "immutable agent origin" | `af5ab28` (`sameAgentLineage`) | Fixed |
+| 2 | Accountant chased an operation id that didn't exist (it was an event id) | Unclear tool error | `51ff130` | Fixed |
+| 3 | 2–9 records a day; "lazy", "not medium-sized" | Hourly reviews, low targets, 15 hand-coded workflow shapes | Cadence `bc2acd5` → `4d1bbdc`; general tool `1865beb`…`73dddf2` | Fixed in design. Volume not yet proven live. |
+| 4 | Sync used about 1,000 QBO requests an hour | Full polling | CDC `a98df80`; reconciliation `ffd92b8` | Fixed |
+| 5 | Owner couldn't see what the accountant was doing | No live view | `5cb327b`, `43fe361`, later `R3` | Fixed. Word-by-word streaming not done. |
+| 6 | Six overdue collections blocked all day | Expired Oct 29 preview kept its decisionKey; accountant also kept a stale "blocked" note | `6dbcd6d`, `8619270` (repeat-decision guard), `91df204` (readiness) | Key fixed; collections still not done |
+| 7 | v8 review: partial payment could repeat on day 3; terms work bypassed slice limits | Day-scoped key logic; missing `SLICE_TYPES` | `8619270` | Fixed |
+| 8 | About 100 QBO calls per saved record | Re-reads, 7 reports per change, live lookups | `6d59455`, `6f319c1` | Improved. Fresh reads (`50868c8`) added some back; re-measure. |
+| 9 | Business stalled about 6 hours (receivables bracket) | Saved create response compared after a same-operation payment changed the invoice | `c5b1c27`, `12e5be8`, `07cacfb`, `50868c8` | Fixed |
+| 10 | Business stalled: lost time-entry reply needed an owner decision | Unknown-outcome recovery required the owner | `07aeb27`, `714d8b8` (automatic attribution or not-created, then continue) | Fixed, proven live (TimeActivity 1073742965) |
+| 11 | Builder file saves killed live runs and replies | nodemon restarted on every save | `efb208e`; Sol writes once per job | Mitigated |
+| 12 | "Sessions": hourly slots with 15–60 minute waits | Timer design | `4d1bbdc` (continuous) | Fixed |
+| 13 | One failed check stopped the whole business | All failures treated as book risk | `b37ecdd` (needs-check), H re-checks | Fixed |
+| 14 | Only one batch could write at a time | Single company writer | `d80f312`, `6f319c1` | Fixed in code. Several batches running together not yet seen live. |
+| 15 | A review stopped after 24 tool calls | Hidden cap of 24 despite the configured 60 | `e56f54d` | Fixed |
+| 16 | Estimate → time → invoice chain never verified | Time entry observed "Billable" after it was billed | `11e334f`, `50868c8` | Fixed |
+| 17 | Care-plan Item 44 refused about 2 hours; 3 blind fixes failed | QBO added `Item.DeferredRevenue=false` to live reads | Diagnostics R3; fix `ac17891` (absent ≡ default) | Fixed, proven live |
+| 18 | New quotes refused: tax-policy mismatch | General guard allowed only the old tax code 12 | `81af99a` | Fixed; the 20:00 refusal predated the fix (job W confirmed by replay) |
+| 19 | Every run failed and switched to Anthropic | `--ignore-user-config` passed to `codex login status` (`ed7ad03`) | `82d2cde`, `318d99d` | Fixed |
+| 20 | Live panel showed "Sending to QuickBooks…" with a spinner for an hour on a blocked step | No blocked state in the feed | R3 (`ac17891`) | Fixed |
+| 21 | The accountant's build list had diagnosed the item problem; nobody acted | Build list not read by the orchestrator | Process rule + stuck detection + `/blockers` (`ac17891`) | Fixed (process) |
+| 22 | Errors were one line with no location or fields | Errors flattened when recorded | Job S `business-error-detail.js` (`ac17891`), `fbd8e82` keeps denial messages | Fixed |
+| 23 | First general-write plan (credit application) refused 6 times | Retries left the run "prepared" instead of "sending" | `fbd8e82` | Fixed; the record saved live |
+| 24 | General close table and index missing in MongoDB | v6 storage profile never applied; no route for populated storage | `1568826` + live preview and apply | Fixed |
+| 25 | Added regional customers refused as "changed after creation" | QBO adds `ClientEntityId: "0"` and `V4IDPseudonym` to live Customer reads; no authenticated canonical baseline | Job W (`business-added-roles.js:161`), commit after this table | Fixed; live use not yet seen |
+| 26 | Several Sol jobs: lock folder not writable by Sol; Sol mistook its own earlier edits for another session's; `codex.sh cancel` unreliable | Sandbox and Windows limits | Locks moved to `%TEMP%/qbo-locks`; prompts say leftover edits are the job's own | Known; see §5 |
+| 27 | Claude usage limits reached twice | Four parallel Claude builders | Owner: Sol-only builders, Claude orchestrates | Rule for the next session |
+| 28 | Orchestrator over-claimed ("this should unblock it") and wrote long status messages | Reporting before live proof | Rules in §1 and §8 | Ongoing discipline |
+
+## 8b. What the previous orchestrator did wrong, and what to avoid
+
+Plainly, so you don't repeat it.
+
+1. **Built the wrong thing and called it done.**
+   - "Continuous" was built as hourly slots.
+   - "Fully tooled" was built as 15 fixed forms.
+   - Both were reported complete.
+
+   **Avoid:** before building, restate the owner's literal words and check the design against them. Before reporting done, prove it in the live company.
+2. **Reported intentions as results.** "This should unblock it" was said three times, and it didn't. **Avoid:** report only what the live company shows: records, blockers, closes.
+3. **Fixed blind.** Three fixes for one error went out before anyone knew which field or code path failed. **Avoid:** instrument first (`errorDetail`, stack, field differences), and replay the real failing data before shipping.
+4. **Ignored the accountant's own build list.** It had the right diagnosis hours earlier. **Avoid:** read `/blockers` and the build list at every check, and act on high-priority items immediately.
+5. **Optimized before it worked.** The request-economy change replaced live reads in a strict verification pipeline and caused several outages. **Avoid:** correctness and flow first, economy second, and only with a fixture per business chain.
+6. **Treated every doubt as "stop the business".** **Avoid:** stop only for real book risk. Everything else marks needs-check, carries on, and retries.
+7. **Ran four Claude builders at once.** That hit usage limits twice. They also edited the same files, and their saves restarted the live backend. **Avoid:**
+   - Sol builders only;
+   - disjoint file ownership;
+   - one write batch per job;
+   - commit per job;
+   - keep a job board.
+8. **Left Sol slots idle, then over-launched.** **Avoid:** keep a steady queue. Start the next job when one finishes; don't launch five at once without a plan for overlapping files.
+9. **Changed runtime-critical code without a live check afterwards.** The Codex login regression made every run fail and fall back to Anthropic. **Avoid:** after any provider, runtime or config change, confirm the next live run immediately.
+10. **Didn't look at the UI.** The Live panel showed a spinner on a blocked step for over an hour. **Avoid:** look at the rendered first page after UI-affecting changes, and whenever the owner sends a screenshot.
+11. **Long, repetitive messages; over-apologizing; re-explaining background noise.** **Avoid:**
+    - a few plain sentences: the result, then the next step;
+    - say nothing about background notices that changed nothing;
+    - own mistakes once, without overcompensating.
+12. **Asked or hedged when the owner had already decided.** **Avoid:** act within the standing autonomy grant. Ask only for genuinely owner-only, irreversible choices such as multicurrency.
+13. **Committed mixed trees late.** **Avoid:** commit each job's own files as soon as it lands, and run the full suite in the background after combined commits.
+14. **Let watchers expire or duplicate.** **Avoid:** one attempts watcher at a time, re-armed every 30 minutes, plus one watcher per Sol job.
 
 ## 9. Key documents
 
