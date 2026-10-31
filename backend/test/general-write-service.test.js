@@ -9,9 +9,10 @@ const bound = { scope, ownerId: 'b'.repeat(24), actorId: 'b'.repeat(24) };
 function fakeRuns() {
   const rows = new Map(), copy = value => structuredClone(value);
   const match = (row, filter) => Object.entries(filter).every(([key, want]) => key === 'owned' ? (row.owned || []).some(item => Object.entries(want.$elemMatch).every(([k, v]) => item[k] === v)) : row[key] === want);
-  const query = value => ({ select() { return this; }, maxTimeMS() { return this; }, lean: async () => copy(value) });
+  const query = value => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean: async () => copy(value) });
   return {
     rows,
+    find: filter => query([...rows.values()].filter(row => match(row, filter))),
     findOne: filter => query([...rows.values()].find(row => match(row, filter)) || null),
     create: async ([row]) => { if (rows.has(row._id)) throw new Error('duplicate'); rows.set(row._id, { batches: [], items: {}, dirty: [], owned: [], revision: 0, lastError: null, ...copy(row) }); },
     findOneAndUpdate: (filter, update) => { const row = rows.get(filter._id); if (!row || row.revision !== filter.revision) return query(null); Object.assign(row, copy(update.$set)); row.revision++; return query(row); },
@@ -32,8 +33,8 @@ function company() {
     const body = item.payload;
     if (item.operation === 'create') {
       const net = (body.Line || []).reduce((sum, line) => sum + (line.Amount || 0), 0), tax = body.Line?.some(line => line.SalesItemLineDetail) ? Math.round(net * 15) / 100 : 0;
-      const record = { ...structuredClone(body), Id: String(++sequence), SyncToken: '0', MetaData: { CreateTime: '2026-12-02T12:00:00Z', LastUpdatedTime: '2026-12-02T12:00:00Z' }, ...(item.entity === 'Invoice' ? { TotalAmt: net + tax, Balance: net + tax, TxnTaxDetail: { TotalTax: tax } } : {}) };
-      if (item.entity === 'Payment') for (const line of body.Line) { const invoice = records.get('Invoice:' + line.LinkedTxn[0].TxnId); invoice.Balance = Math.round((invoice.Balance - line.Amount) * 100) / 100; }
+      const record = { ...structuredClone(body), Id: String(++sequence), SyncToken: '0', MetaData: { CreateTime: '2026-12-02T12:00:00Z', LastUpdatedTime: '2026-12-02T12:00:00Z' }, ...(item.entity === 'Invoice' ? { TotalAmt: net + tax, Balance: net + tax, TxnTaxDetail: { TotalTax: tax, TaxLine: [{ Amount: tax, TaxLineDetail: { TaxRateRef: { value: '8' } } }] } } : {}) };
+      if (item.entity === 'Payment') for (const line of body.Line) { const invoice = records.get('Invoice:' + line.LinkedTxn[0].TxnId); invoice.Balance = Math.round((invoice.Balance - line.Amount) * 100) / 100; (invoice.LinkedTxn ||= []).push({ TxnType: 'Payment', TxnId: record.Id }); }
       records.set(item.entity + ':' + record.Id, record); return { [item.entity]: structuredClone(record) };
     }
     const current = records.get(item.entity + ':' + body.Id);
@@ -153,4 +154,51 @@ test('unresolved pre-opening dirty markers refuse new general work against an ol
     GeneralWriteRuns: { findOne: filter => { assert.equal(filter.dirty.$elemMatch.date.$lte, '2026-12-01'); return chain({ _id: 'old-dirty-run' }); } },
   } });
   await assert.rejects(context(scope, { get: () => null }, { session }), /General history invalidation is unresolved/);
+});
+
+// Caller-to-classifier regression: the only transport and stores here are in-memory.
+function settlementClose(h, s, invoiceId, paymentId) {
+  const { createGeneralCloseGate } = require('../src/modules/general-write-close-gate');
+  h.records.get('Item:40').IncomeAccountRef = { value: '400' };
+  const closes = [], query = value => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, maxTimeMS() { return this; }, lean: async () => structuredClone(value) });
+  const models = {
+    GeneralWriteRuns: s.Runs,
+    Steps: { find: () => query([]) },
+    Records: { find: () => query([{ qboId: '210', record: { AccountSubType: 'GlobalTaxPayable' } }]) },
+    GeneralDayCloses: { findOne: () => query(null), create: async ([row]) => closes.push(row) },
+  };
+  const entry = (type, id, debit, credit) => ({ type: 'Data', ColData: [{ value: DAY }, { value: type, id }, { value: debit }, { value: credit }] });
+  const section = (id, Row) => ({ type: 'Section', Header: { ColData: [{ id }] }, Rows: { Row } });
+  // Independent expected postings: invoice $200 + $30 tax, full $230 collection.
+  const readLedger = async () => ({ Header: { ReportName: 'GeneralLedger', ReportBasis: 'Accrual', StartPeriod: DAY, EndPeriod: DAY },
+    Columns: { Column: ['tx_date', 'txn_type', 'debt_amt', 'credit_amt'].map(ColType => ({ ColType })) },
+    Rows: { Row: [section('120', [entry('Invoice', invoiceId, '230.00', ''), entry('Payment', paymentId, '', '230.00')]),
+      section('400', [entry('Invoice', invoiceId, '', '200.00')]), section('210', [entry('Invoice', invoiceId, '', '30.00')]),
+      section('125', [entry('Payment', paymentId, '230.00', '')])] } });
+  const gate = createGeneralCloseGate({ models, copy: h.copy });
+  return { closes, close: () => gate.assertPeriodReady(scope, { fromDate: DAY, throughDate: DAY, verifiedThrough: '2026-12-01', mappings: { accountsReceivable: '120', undepositedFunds: '125' }, readLedger }) };
+}
+
+test('an invoice created then fully paid through the general tool passes calendar close', async () => {
+  const h = company(), s = service(h), payment = structuredClone(payOp);
+  payment.payload.TotalAmt = 230; payment.payload.Line[0].Amount = 230;
+  const prepared = await s.api.prepare(bound, input('general-paid-invoice-close', [invoiceOp, payment]));
+  const done = await s.api.execute(bound, prepared.runId);
+  assert.equal(done.status, 'complete');
+  assert.equal(h.records.get('Invoice:' + done.items.inv1.qboId).Balance, 0);
+  const gate = settlementClose(h, s, done.items.inv1.qboId, done.items.pay1.qboId);
+  assert.equal((await gate.close()).results[0].ok, true);
+  assert.deepEqual(gate.closes[0].records.map(row => row.kind), ['accountant', 'accountant']);
+});
+
+test('an invoice created through the general tool but paid externally still fails calendar close', async () => {
+  const h = company(), s = service(h);
+  const prepared = await s.api.prepare(bound, input('external-paid-invoice-close', [invoiceOp]));
+  const done = await s.api.execute(bound, prepared.runId), invoiceId = done.items.inv1.qboId;
+  const payment = structuredClone(payOp.payload);
+  payment.TotalAmt = 230; payment.Line[0].Amount = 230; payment.Line[0].LinkedTxn[0].TxnId = invoiceId;
+  const [response] = await h.transport.sendBatch(scope, { batch: { requestId: 'external-payment', items: [{ bId: '1', operation: 'create', entity: 'Payment', payload: payment }] } });
+  const gate = settlementClose(h, s, invoiceId, response.Payment.Id);
+  await assert.rejects(gate.close(), /Invoice changed after it was proved/);
+  assert.equal(gate.closes[0].ok, false);
 });

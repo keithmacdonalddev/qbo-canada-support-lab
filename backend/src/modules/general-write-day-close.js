@@ -7,7 +7,10 @@
 // existing period assertion and the dirty ranges that must be re-verified. No QuickBooks
 // call is made here: the caller supplies the report (one set of reports per day close).
 const { hash } = require('./business-calendar');
-const { evaluateDay, dirtyRange } = require('./general-write-close');
+const { evaluateDay, dirtyRange, explainedByOwnSettlements } = require('./general-write-close');
+const SETTLEMENT_ENTITIES = new Set(['Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Deposit']);
+const settlementKey = link => (link.TxnType === 'BillPaymentCheck' ? 'BillPayment' : link.TxnType) + ':' + String(link.TxnId);
+function settlementLinks(record) { return [...(record?.LinkedTxn || []), ...(record?.Line || []).flatMap(line => line.LinkedTxn || [])].filter(link => /^\d{1,30}$/.test(String(link?.TxnId || ''))).map(settlementKey); }
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED' }); }
 // General Ledger transaction-type labels (Canadian and US wording) -> entity.
 const LABELS = Object.freeze({
@@ -87,28 +90,44 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
       else previous.dates = dates;
     }
   }
-  const records = [];
+  const records = [], settlementVersions = [];
   for (const { item, op, before, id, dates, request } of candidates.values()) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
     const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
+    if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
     const deleted = item.outcome === 'deleted';
     records.push({ entity: item.entity, id, current: current || null, deleted, unavailable: !deleted && !current, before: item.op === 'create' ? null : before,
       evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request } } });
   }
-  return { records, dirty, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
+  // Ownership is target-specific and must still explain the current settlement,
+  // including settlements dated outside this close. Resolve deposits/credit applications
+  // from exact saved versions first, then their own explained parent changes.
+  const trusted = new Map(), pending = settlementVersions.filter(row => row.outcome === 'saved' && row.op !== 'void' && row.targets.length && row.current && row.record?.Id && row.record.status !== 'Voided' && !row.record.PrivateNote?.startsWith?.('Voided') && row.current.status !== 'Voided' && !row.current.PrivateNote?.startsWith?.('Voided'));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const row of pending) {
+      if (trusted.has(row.key)) continue;
+      if (hash(row.record) !== hash(row.current) && !explainedByOwnSettlements(row.record, row.current, trusted, row.key.split(':')[0])) continue;
+      trusted.set(row.key, new Set(row.targets)); changed = true;
+    }
+  }
+  const ownSettlements = [...trusted].map(([key, targets]) => ({ key, targets: [...targets] })).sort((a, b) => a.key.localeCompare(b.key));
+  settlementVersions.sort((a, b) => a.key.localeCompare(b.key));
+  return { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
 }
 // The day close for general records: classification, current postings against the
 // ledger, movements for the period assertion, and dirty ranges through the cursor.
 // Ledger rows of transactions that are not general records belong to the fixed
 // workflows' own period proof and are returned for it, never silently accepted.
-async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = new Set(), verifiedThrough, openingDate, gathered = null }) {
-  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), { records, dirty } = gathered || await generalRecordsFor({ Runs, scope, day, through, copy });
-  const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements, ctx });
+async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
+  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
+  const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, new Set(row.targets)]));
+  const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx });
   const general = new Set(records.map(row => row.entity + ':' + row.id));
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();
   if (ledger.unknown.length) evaluation.failures.push({ key: null, reason: ledger.unknown.length + ' General Ledger rows name a transaction type the close cannot attribute.', rows: ledger.unknown });
   return { ok: evaluation.failures.length === 0, day, through, records: evaluation.results, movements: evaluation.movements, failures: evaluation.failures, fixedWorkflowKeys: others, reverify: dirtyRange({ markers: dirty, verifiedThrough, openingDate }) };
 }
-module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS };
+module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS, settlementLinks, SETTLEMENT_ENTITIES };

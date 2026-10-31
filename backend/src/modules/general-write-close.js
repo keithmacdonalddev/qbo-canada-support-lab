@@ -15,15 +15,17 @@ function headerLinks(record) { return (record?.LinkedTxn || []).map(link => (lin
 function lineView(record) { return (record?.Line || []).map(line => { const { LinkedTxn, ...rest } = line || {}; return rest; }); }
 // proven: the version last proved; current: the copy's version; ownSettlements: set of
 // 'Type:id' of the accountant's own VERIFIED settlements (payments, credits, deposits…).
+// Close supplies a Map from each settlement key to its exact parent keys. Pure callers
+// may supply a Set when parent ownership has already been established.
 // True when current differs from proven only by those settlements' effects.
-function explainedByOwnSettlements(proven, current, ownSettlements) {
+function explainedByOwnSettlements(proven, current, ownSettlements, entity) {
   if (!proven || !current) return false;
   const strip = record => Object.fromEntries(Object.entries(record).filter(([key]) => !SETTLEMENT_FIELDS.has(key) && key !== 'Line'));
   if (canonical(strip(proven)) !== canonical(strip(current)) || canonical(lineView(proven)) !== canonical(lineView(current))) return false;
   const before = new Set(headerLinks(proven)), added = headerLinks(current).filter(key => !before.has(key));
   const lineLinks = record => (record?.Line || []).flatMap(line => (line?.LinkedTxn || []).map(link => link.TxnType + ':' + link.TxnId));
   if (canonical(lineLinks(proven)) !== canonical(lineLinks(current))) return false;
-  return added.length > 0 && headerLinks(proven).every(key => headerLinks(current).includes(key)) && added.every(key => ownSettlements.has(key));
+  return added.length > 0 && headerLinks(proven).every(key => headerLinks(current).includes(key)) && added.every(key => ownSettlements.has(key) && (!(ownSettlements instanceof Map) || ownSettlements.get(key).has(entity + ':' + current.Id)));
 }
 // evidence: { accountant: { versionHash, record } | null, fixed: { observedHash, record } |
 // null, adopted: { proofHash, record } | null }. Returns { kind, reason }.
@@ -34,7 +36,7 @@ function classifyRecord({ entity, current, deleted = false, evidence = {}, ownSe
     if (deleted && kind === 'accountant' && proof.deleted === true && proof.operation === 'delete' && !current) return { kind: 'accountant', reason: 'Deletion is proved by the accountant’s successful delete outcome.' };
     if (deleted || proof.deleted) return { kind: 'external-change', reason: entity + ' was deleted outside the accountant’s own work.' };
     if (proof[field] === now) return { kind, reason: 'Current version is the proved version.' };
-    if (explainedByOwnSettlements(proof.record, current, ownSettlements)) return { kind, reason: 'Changed only by the accountant’s own verified settlements.' };
+    if (explainedByOwnSettlements(proof.record, current, ownSettlements, entity)) return { kind, reason: 'Changed only by the accountant’s own verified settlements.' };
     return { kind: 'external-change', reason: entity + ' changed after it was proved (not by the accountant’s own settlements).' };
   }
   return { kind: 'external-change', reason: deleted ? entity + ' was deleted and has no proof.' : entity + ' has no accountant, workflow or import proof.' };

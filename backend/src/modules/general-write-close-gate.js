@@ -2,7 +2,7 @@
 // General closes bind every run, current record and posting reference version. Historical
 // edits remain unavailable until downstream periods and opening evidence can be re-proved.
 const { hash } = require('./business-calendar');
-const { closeGeneralDay, ledgerEndpoint, generalRecordsFor } = require('./general-write-day-close');
+const { closeGeneralDay, ledgerEndpoint, generalRecordsFor, settlementLinks, SETTLEMENT_ENTITIES } = require('./general-write-day-close');
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED' }); }
 const TAX_SUBTYPES = ['GlobalTaxPayable', 'GlobalTaxSuspense', 'SalesTaxPayable', 'OtherCurrentLiabilities'];
 function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
@@ -29,16 +29,43 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
       // rate-to-account proof; guessing or collapsing them could hide a substitution.
       taxAccount: () => { if (tax.length !== 1) fail('The tax posting account cannot be attributed uniquely; retain a rate-to-account proof before close.'); return tax[0]; }, accountKey: id => String(id) };
   }
+  async function fixedSettlementsFor(scope, gathered) {
+    const own = new Set((gathered.settlementVersions || []).map(row => row.key)), wanted = new Map();
+    for (const row of gathered.records) for (const key of settlementLinks(row.current)) {
+      if (own.has(key) || !SETTLEMENT_ENTITIES.has(key.split(':')[0])) continue;
+      if (!wanted.has(key)) wanted.set(key, new Set());
+      wanted.get(key).add(row.entity + ':' + row.id);
+    }
+    const evidence = [];
+    if (!wanted.size) return evidence;
+    const Steps = models.Steps || require('../models/OperationStep');
+    // Only the linked IDs are needed; no broad workflow scan or live operation occurs.
+    const keys = [...wanted.keys()].sort();
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const page = keys.slice(offset, offset + 100);
+      const rows = await Steps.find({ ...company(scope), state: 'verified', $or: page.map(key => { const [entity, qboId] = key.split(':'); return { entity, qboId }; }) }).select('entity qboId state receipt dispatch verification revision').sort({ _id: 1 }).limit(page.length + 1).maxTimeMS(3000).lean();
+      if (rows.length > page.length) fail('Settlement ownership evidence is duplicated; close is incomplete.');
+      for (const row of rows) {
+        const key = row.entity + ':' + row.qboId, proof = row.verification;
+        if (!wanted.has(key) || row.state !== 'verified' || row.receipt?.qboId !== row.qboId || proof?.kind !== 'business-readback' || !proof.observedHash || !row.dispatch?.compilationHash || proof.compilationHash !== row.dispatch.compilationHash || !proof.relationships?.some(link => wanted.get(key).has(link.entity + ':' + link.qboId))) continue;
+        const current = await copy.read(scope, row.entity, row.qboId);
+        if (!current || hash(current) !== proof.observedHash) continue;
+        evidence.push({ key, targets: settlementLinks(current).filter(target => wanted.get(key).has(target) && proof.relationships.some(link => link.entity + ':' + link.qboId === target)).sort(), revision: row.revision, verification: proof, record: current });
+      }
+    }
+    return evidence.sort((a, b) => a.key.localeCompare(b.key));
+  }
   async function verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered }) {
     const preview = gathered || await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy }), ctx = await contextFor(scope, mappings, preview.records);
-    const snapshotHash = hash({ fromDate, throughDate, ...preview, context: ctx.evidence });
+    const settlements = await fixedSettlementsFor(scope, preview);
+    const snapshotHash = hash({ fromDate, throughDate, ...preview, settlements, context: ctx.evidence });
     const prior = await Closes.findOne({ ...company(scope), fromDate, throughDate, kind: 'period', ok: true, snapshotHash }).sort({ verifiedAt: -1 }).maxTimeMS(3000).lean();
     if (prior?.snapshotHash === snapshotHash) return prior;
     const report = await readLedger(fromDate, throughDate);
     const after = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy });
-    const afterContext = await contextFor(scope, mappings, after.records);
-    if (hash(preview) !== hash(after) || hash(ctx.evidence) !== hash(afterContext.evidence)) fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
-    const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview });
+    const afterContext = await contextFor(scope, mappings, after.records), afterSettlements = await fixedSettlementsFor(scope, after);
+    if (hash(preview) !== hash(after) || hash(ctx.evidence) !== hash(afterContext.evidence) || hash(settlements) !== hash(afterSettlements)) fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
+    const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
     const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures.map(row => ({ key: row.key, reason: row.reason })), records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], verifiedAt: new Date(now()) };
     await Closes.create([row]);
     return row;
