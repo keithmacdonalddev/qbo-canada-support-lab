@@ -89,11 +89,24 @@ const EVENTS = {
   'capability-request': event => ['info', 'Added to the build list: ' + clean(String(event.title || '').replace(/^Build: /, ''), MAX_TEXT), ''],
 };
 
+// Timestamps describe elapsed wall time, including waiting/recovery, never invented active work.
+function activityTiming(startedAt, finishedAt, running, label, clock) {
+  const start = time(startedAt), finish = time(finishedAt);
+  return { label, startedAt: start === null ? null : iso(start), finishedAt: finish === null ? null : iso(finish), running: Boolean(running), durationMs: start === null || (finish === null && !running) || (finish !== null && finish < start) ? null : Math.max(0, (finish ?? clock) - start) };
+}
+function linkedReview(reviews, reference) {
+  const id = reference.attemptId || reference.usageId;
+  if (id) return reviews.find(review => review.attemptId === id) || null;
+  const matches = reference.passId ? reviews.filter(review => review.passId === reference.passId) : [];
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // input: { now, configured, settings, reviewing, progress, activePass, cadence, events, runs, steps, records, unavailable }
 // Returns { state, active, pollMs, startedAt, role, reason, sending, items, asOf }.
-function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, reviewing = false, progress = null, activePass = null, cadence = null, events = [], runs = [], steps = [], records = [], unavailable = false } = {}) {
+function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, reviewing = false, progress = null, activePass = null, cadence = null, events = [], runs = [], steps = [], records = [], reviews = [], metadataUnavailable = false, unavailable = false } = {}) {
   const items = [], clock = time(now) ?? Date.now();
   const push = (id, at, kind, status, text, extra = {}) => { const ms = time(at); if (ms === null || !text) return; items.push({ id, at: iso(ms), kind, status, text: clean(text, MAX_TEXT), ...extra }); };
+  const metadata = (timing, reference = {}, ownReview = false) => ({ timing, review: linkedReview(reviews, reference), attribution: metadataUnavailable ? 'unavailable' : ownReview ? 'review' : 'associated-review' });
   const detail = value => { const text = clean(value, MAX_DETAIL); return text ? { detail: text } : {}; };
 
   // (a) Review progress: the start of the latest review and each tool step.
@@ -101,10 +114,10 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
   if (progress && typeof progress.passId === 'string' && time(progress.startedAt) !== null) {
     const pass = clean(progress.passId, 80), role = ROLE_NAMES[progress.role] || null;
     const why = ownPass && cadence?.reason ? clean(String(cadence.reason), 120) : '';
-    push('review:' + pass, progress.startedAt, 'review', ownPass ? 'running' : 'done', (role ? role + ' started a review' : 'Started a business review') + (why ? ' · ' + why : ''));
+    push('review:' + pass, progress.startedAt, 'review', ownPass ? 'running' : 'done', (role ? role + ' started a review' : 'Started a business review') + (why ? ' · ' + why : ''), { metadata: metadata(activityTiming(progress.startedAt, null, ownPass, 'Review time', clock), { attemptId: progress.attemptId }, true) });
     cleanSteps(progress.steps).forEach((step, index) => {
       const status = step.status === 'running' && !ownPass ? 'failed' : step.status;
-      push('review:' + pass + ':' + index, step.at, 'review-step', status, step.label, { ...detail(step.note), ...(status === 'failed' ? { outcome: 'did not finish' } : {}) });
+      push('review:' + pass + ':' + index, step.at, 'review-step', status, step.label, { ...detail(step.note), ...(status === 'failed' ? { outcome: 'did not finish' } : {}), metadata: metadata(activityTiming(step.at, step.finishedAt, ownPass && status === 'running', 'Tool time', clock), { attemptId: progress.attemptId }) });
     });
   }
 
@@ -116,15 +129,15 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
     const id = String(run._id), label = runLabel(run);
     knownRuns.set(id, run);
     const purpose = run.activityBatch ? oneLine(run.activityBatch.purpose, MAX_DETAIL) : '';
-    push('run:' + id + ':planned', run.createdAt, 'operation', 'done', label.text + (label.records ? ' · ' + label.records : ''), { ...detail(purpose), operationId: id });
+    push('run:' + id + ':planned', run.createdAt, 'operation', 'done', label.text + (label.records ? ' · ' + label.records : ''), { ...detail(purpose), operationId: id, metadata: { timing: activityTiming(null, null, false, 'Preparation time', clock), attribution: 'none' } });
     const status = run.status === 'previewed' ? null : runStatus(run, label);
-    if (status) push('run:' + id + ':status', run.updatedAt, 'operation', status[0], status[1], { operationId: id });
+    if (status) push('run:' + id + ':status', run.updatedAt, 'operation', status[0], status[1], { operationId: id, metadata: { timing: activityTiming(run.createdAt, run.updatedAt, false, 'Since prepared (to last update)', clock), attribution: 'none' } });
   }
   for (const step of Array.isArray(steps) ? steps : []) {
     if (!step || !step._id || !has(STEP_STATES, step.state)) continue;
     const [status, outcome] = STEP_STATES[step.state], qboId = recordId(step.qboId);
     const mirror = qboId ? mirrors.get(step.entity + ':' + qboId) : null;
-    push('step:' + String(step._id), step.updatedAt || step.createdAt, 'record', status, recordText({ entity: step.entity, qboId }, mirror), { outcome, ...(qboId && has(ENTITIES, step.entity) ? { record: { entity: step.entity, qboId } } : {}), ...(step.operationId ? { operationId: String(step.operationId) } : {}) });
+    push('step:' + String(step._id), step.updatedAt || step.createdAt, 'record', status, recordText({ entity: step.entity, qboId }, mirror), { outcome, ...(qboId && has(ENTITIES, step.entity) ? { record: { entity: step.entity, qboId } } : {}), ...(step.operationId ? { operationId: String(step.operationId) } : {}), metadata: { timing: activityTiming(step.createdAt, step.updatedAt, false, 'Record processing (to last update)', clock), attribution: 'none' } });
   }
 
   // (c) Key events.
@@ -132,7 +145,7 @@ function buildLiveFeed({ now = Date.now(), configured = true, settings = {}, rev
     if (!event || !has(EVENTS, event.kind)) continue;
     const [status, text, more] = EVENTS[event.kind](event);
     const operationId = typeof event.operationId === 'string' && /^[a-f0-9]{24}$/.test(event.operationId) ? event.operationId : null;
-    push('event:' + clean(String(event.id || ''), 80), event.at, 'event', status, text, { ...detail(more), ...(event.role === 'owner' ? { by: 'owner' } : {}), ...(operationId ? { operationId } : {}) });
+    push('event:' + clean(String(event.id || ''), 80), event.at, 'event', status, text, { ...detail(more), ...(event.role === 'owner' ? { by: 'owner' } : {}), ...(operationId ? { operationId } : {}), metadata: metadata(null, event, ['review-completed', 'review-yielded', 'review-cancelled', 'review-paused'].includes(event.kind) || (event.kind === 'specialist-report' && Boolean(event.outcome))) });
   }
 
   // Newest first; keep the recent window, but never fewer than the last few things done.

@@ -1,0 +1,14 @@
+.bwl-metadata { margin-top: 2px; min-width: 0; }
+.bwl .bwl-metadata > summary { width: fit-content; max-width: 100%; cursor: pointer; color: var(--bw-accent, var(--link)); font-size: 11px; line-height: 1.6; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.bwl .bwl-metadata > summary span { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.bwl .bwl-metadata > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
+.bwl-metadata-body { max-width: 760px; margin: 5px 0 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); color: var(--ink-2); font-size: 11.5px; }
+.bwl-metadata-body dl { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
+.bwl-metadata-body dt { color: var(--ink-3); font-size: 10.5px; }
+.bwl-metadata-body dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.bwl-metadata-body table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.bwl-metadata-body th, .bwl-metadata-body td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.bwl-metadata-body th:first-child { padding-left: 0; text-align: left; font-weight: 400; }
+.bwl-metadata-body thead th { color: var(--ink-3); font-weight: 500; }
+.bwl .bwl-metadata-note { margin: 7px 0 0; color: var(--ink-3); font-size: 11px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.bwl-metadata-note code { font-size: 10.5px; }

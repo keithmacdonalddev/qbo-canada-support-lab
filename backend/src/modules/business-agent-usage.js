@@ -74,6 +74,28 @@ const legacyRow = { $and: [{ $eq: ['$provider', 'codex'] }, { $ne: [{ $ifNull: [
 const legacySums = { legacyReviews: { $sum: { $cond: [legacyRow, 1, 0] } }, legacyInputTokens: { $sum: { $cond: [legacyRow, '$inputTokens', 0] } }, legacyOutputTokens: { $sum: { $cond: [legacyRow, '$outputTokens', 0] } } };
 const legacyKeys = Object.keys(legacySums);
 const emptyTotals = () => ({ reviews: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, estimatedCostUsd: 0, unpricedReviews: 0, missingUsageReviews: 0 });
+// Safe per-review evidence for activity details. No prompts, response text or credentials.
+function reviewMetadata(row, clock = Date.now()) {
+  const date = value => { const ms = value ? new Date(value).getTime() : NaN; return Number.isFinite(ms) ? ms : null; };
+  const start = date(row.startedAt), finish = date(row.finishedAt), running = finish === null && ['running', 'usage-unknown'].includes(row.outcome);
+  const validCount = value => Number.isSafeInteger(value) && value >= 0;
+  const split = row.provider === 'anthropic' || row.cacheSplit === true;
+  const input = count(row.inputTokens), output = count(row.outputTokens), cached = count(row.cacheReadTokens), writes = count(row.cacheWriteTokens), writes1h = Math.min(writes, count(row.cacheWrite1hTokens));
+  const total = input + output + cached + writes;
+  const missing = row.usageMissing === true || !validCount(row.inputTokens) || !validCount(row.outputTokens) || !validCount(row.totalTokens) || row.totalTokens !== total;
+  const tokens = missing && total === 0 ? null : { inputTokens: input + cached + writes, uncachedInputTokens: split ? input : null, outputTokens: output, cachedInputTokens: split ? cached : null, cacheWriteTokens: writes, cacheWrite1hTokens: writes1h, totalTokens: total };
+  const rate = rateFor(row.provider, row.model);
+  let cost = null;
+  if (rate && tokens) {
+    const group = { ...row, reviews: 1, estimatedCostUsd: estimateCost(row.provider, row.model, { inputTokens: input, outputTokens: output, cacheReadTokens: cached, cacheWriteTokens: writes, cacheWrite1hTokens: writes1h, usageMissing: false }), legacyReviews: split ? 0 : 1, legacyInputTokens: split ? 0 : input, legacyOutputTokens: split ? 0 : output };
+    const equivalent = apiEquivalent(group);
+    cost = { currency: 'USD', basis: row.provider === 'codex' ? 'api-equivalent' : 'api-estimate', lowUsd: equivalent.lowUsd, highUsd: equivalent.highUsd, partial: missing, cacheSplit: split,
+      components: { inputUsd: split ? input * rate.input / 1e6 : null, outputUsd: output * rate.output / 1e6, cachedInputUsd: split ? cached * rate.cacheRead / 1e6 : null, cacheWrite5mUsd: (writes - writes1h) * (rate.cacheWrite5m || 0) / 1e6, cacheWrite1hUsd: writes1h * (rate.cacheWrite1h || 0) / 1e6 } };
+  }
+  return { attemptId: String(row._id), passId: typeof row.passId === 'string' ? row.passId.slice(0, 64) : null, provider: row.provider, model: String(row.model || '').slice(0, 128), billing: row.billing, outcome: row.outcome,
+    startedAt: start === null ? null : new Date(start).toISOString(), finishedAt: finish === null ? null : new Date(finish).toISOString(), durationMs: start === null || (finish === null && !running) || (finish !== null && finish < start) ? null : Math.max(0, (finish ?? (running ? clock : start)) - start), running, usageMissing: missing, tokens, cost };
+}
+
 function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsage'), now = () => Date.now() } = {}) {
   let ready;
   async function setup() {
@@ -108,6 +130,16 @@ function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsag
     const windowTotals = key => ({ ...clean(result[key]?.[0]), apiEquivalent: combineEquivalent((result[key + 'Pricing'] || []).map(group => apiEquivalent({ ...group, ...group._id }))) });
     return { quota: quota ? { resetAt: quota.resetAt ? new Date(quota.resetAt).toISOString() : null, detectedAt: new Date(quota.finishedAt).toISOString() } : null, currency: 'USD', estimated: true, timezone: 'UTC', retentionDays: 180, ...Object.fromEntries(['today','week','month'].map(key => [key, windowTotals(key)])), models: (result.models || []).map(value => ({ ...clean(value), ...value._id, billing: value._id.billing || (value._id.provider === 'codex' ? 'billing unverified' : 'estimated API cost'), apiEquivalent: apiEquivalent({ ...value, ...value._id }) })), latest: result.latest?.[0] || null };
   }
-  return { begin, save, summary };
+  // Only references supplied by saved activity/transcript records are read, within the selected company.
+  async function details(scope, { attemptIds = [], passIds = [] } = {}) {
+    const ids = values => [...new Set(values.filter(value => typeof value === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(value)))].slice(0, 120);
+    const attempts = ids(attemptIds), passes = ids(passIds);
+    if (!attempts.length && !passes.length) return [];
+    const rows = await Usage.find({ environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId), $or: [...(attempts.length ? [{ _id: { $in: attempts } }] : []), ...(passes.length ? [{ passId: { $in: passes } }] : [])] })
+      .select('_id passId provider model billing role startedAt finishedAt outcome inputTokens outputTokens cacheReadTokens cacheWriteTokens cacheWrite1hTokens totalTokens cacheSplit usageMissing')
+      .sort({ startedAt: -1 }).limit(240).maxTimeMS(2000).lean();
+    return rows.map(row => reviewMetadata(row, now()));
+  }
+  return { begin, save, summary, details };
 }
-module.exports = { createBusinessAgentUsage, normalizeUsage, estimateCost, apiEquivalent, windows, reviewPause, reviewOutcome, REVIEW_OUTCOMES };
+module.exports = { createBusinessAgentUsage, normalizeUsage, estimateCost, apiEquivalent, reviewMetadata, windows, reviewPause, reviewOutcome, REVIEW_OUTCOMES };

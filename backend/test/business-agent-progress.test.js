@@ -47,7 +47,7 @@ test('wrap records running then done or failed, labels and times only, without d
   const text = JSON.stringify(writes);
   for (const leak of ['Jane Doe', 'raw upstream text', 'not found', 'secret']) assert.ok(!text.includes(leak), leak + ' must never be stored');
   assert.ok(writes.length < 6, 'writes coalesce while one is in flight');
-  for (const step of saved) assert.deepEqual(Object.keys(step).sort(), ['at', 'label', 'status']);
+  for (const step of saved) assert.deepEqual(Object.keys(step).sort(), ['at', 'finishedAt', 'label', 'status']);
 });
 
 test('the step list is capped and older steps drop off', async () => {

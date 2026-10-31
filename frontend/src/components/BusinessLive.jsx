@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { Activity, AlertTriangle, ArrowDown, ArrowRight, Brain, Check, Circle, Clock3, Coins, LoaderCircle, MessageSquare, OctagonPause, RefreshCw, Send, Wrench, X } from 'lucide-react'
 import { dateTime, timeOfDay } from '../lib/format'
 import { recordLink } from '../lib/business-workspace.mjs'
+import ActivityMetadata from './ActivityMetadata'
+import { transcriptMetadata } from '../lib/activity-metadata.mjs'
 
 const ROLE_NAMES = { receivables: 'Receivables specialist', payables: 'Payables specialist', inventory: 'Inventory specialist' }
 const stamp = value => { const time = value ? new Date(value).getTime() : NaN; return Number.isFinite(time) ? time : null }
@@ -69,14 +71,17 @@ function timeline(feed, transcript) {
     return at !== null && at >= first - 60000 && at <= last + 600000
   }
   const rows = [
-    ...entries.map(entry => ({ id: 't:' + entry.attemptId + ':' + entry.seq, at: stamp(entry.at) ?? 0, order: entry.seq, entry })),
+    ...entries.map(entry => {
+      const attempt = transcript?.attempts?.find(value => value.attemptId === entry.attemptId)
+      return { id: 't:' + entry.attemptId + ':' + entry.seq, at: stamp(entry.at) ?? 0, order: entry.seq, entry, metadata: transcriptMetadata(entry, entries, attempt?.metadata?.review, attempt?.metadata?.attribution === 'unavailable') }
+    }),
     ...items.filter(item => !(entries.length && (item.kind === 'review-step' || item.kind === 'review')) && inWindow(item)).map(item => ({ id: 'f:' + item.id, at: stamp(item.at) ?? 0, order: 0, item })),
   ]
   return rows.sort((a, b) => a.at - b.at || a.order - b.order)
 }
 
 const ITEM_ICONS = { running: LoaderCircle, done: Check, failed: X, attention: AlertTriangle, info: Circle }
-function FeedRow({ item, clock }) {
+function FeedRow({ item, clock, onOpen }) {
   const Icon = ITEM_ICONS[item.status] || Check
   return <li className={'bwl-item bwl-item--' + item.status + ' bwl-item--' + item.kind}>
     <time dateTime={item.at}>{clockTime(item.at, clock)}</time>
@@ -87,6 +92,7 @@ function FeedRow({ item, clock }) {
       {item.status === 'running' && <span className="bw-sr-only"> (in progress)</span>}
       {item.detail && <p>{item.detail}</p>}
       {item.kind === 'operation' && item.id.endsWith(':planned') && <Link className="bwl-inspect" to="/company/manage">Inspect<ArrowRight aria-hidden="true" /></Link>}
+      <ActivityMetadata metadata={item.metadata} recordedAt={item.at} clock={clock} onOpen={onOpen} />
     </div>
   </li>
 }
@@ -106,17 +112,18 @@ function usageText(json) {
   return ['Tokens', number(value.inputTokens) && number(value.inputTokens) + ' in' + (cached && cached !== '0' ? ' (' + cached + ' cached)' : ''), number(value.outputTokens) && number(value.outputTokens) + ' out', value.stopReason && 'stop: ' + value.stopReason].filter(Boolean).join(' · ')
 }
 const OUTCOMES = { completed: 'Review finished', incomplete: 'Review finished early', yielded: 'Review paused to refresh company data', cancelled: 'Review stopped', failed: 'Review needs attention', 'plan-limit': 'Review paused at the plan limit', 'cap-reached': 'Review paused at the usage cap', truncated: 'Transcript limit reached' }
-function EntryRow({ entry, clock }) {
+function EntryRow({ entry, clock, metadata, onOpen }) {
+  const details = <ActivityMetadata metadata={metadata} recordedAt={entry.at} clock={clock} onOpen={onOpen} />
   const time = <time dateTime={entry.at}>{clockTime(entry.at, clock)}</time>
   const truncated = entry.truncated ? <small className="bwl-cut"> (shortened for storage)</small> : null
   switch (entry.kind) {
-    case 'context': return <li className="bwl-entry bwl-entry--context">{time}<Send aria-hidden="true" /><details><summary>Sent to the model{entry.provider ? ' (' + entry.provider + (entry.name ? ' · ' + entry.name : '') + ')' : ''}: instructions, business context and tools</summary><Body text={entry.text} limit={4000} />{truncated}</details></li>
-    case 'reasoning': return <li className="bwl-entry bwl-entry--reasoning">{time}<Brain aria-hidden="true" /><div><span className="bwl-label">Thinking</span><p>{entry.text}</p>{truncated}</div></li>
-    case 'message': return <li className="bwl-entry bwl-entry--message">{time}<MessageSquare aria-hidden="true" /><div><p>{entry.text}</p>{truncated}</div></li>
-    case 'tool-call': return <li className="bwl-entry bwl-entry--call">{time}<Wrench aria-hidden="true" /><details><summary><strong>{entry.name || 'tool'}</strong> <code>{compact(entry.json)}</code></summary><Body text={entry.json} />{truncated}</details></li>
-    case 'tool-result': return <li className={'bwl-entry bwl-entry--result bwl-entry--' + (entry.status || 'ok')}>{time}{entry.status === 'ok' ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}<details><summary>{entry.name || 'tool'} {entry.status === 'ok' ? 'returned' : entry.status === 'failed' ? 'returned an error' : 'stopped'}{entry.json ? ' · ' + Math.max(1, Math.round(entry.json.length / 1024)) + ' KB' : ''}</summary><Body text={entry.json || entry.text} />{truncated}</details></li>
-    case 'usage': return <li className="bwl-entry bwl-entry--usage">{time}<Coins aria-hidden="true" /><span>{usageText(entry.json)}</span></li>
-    default: return <li className={'bwl-entry bwl-entry--outcome bwl-entry--' + (entry.status || 'done')}>{time}{entry.status === 'completed' ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}<div><strong>{OUTCOMES[entry.status] || 'Review ended'}</strong>{entry.text && <p>{entry.text}</p>}</div></li>
+    case 'context': return <li className="bwl-entry bwl-entry--context">{time}<Send aria-hidden="true" /><div><details><summary>Sent to the model{entry.provider ? ' (' + entry.provider + (entry.name ? ' · ' + entry.name : '') + ')' : ''}: instructions, business context and tools</summary><Body text={entry.text} limit={4000} />{truncated}</details>{details}</div></li>
+    case 'reasoning': return <li className="bwl-entry bwl-entry--reasoning">{time}<Brain aria-hidden="true" /><div><span className="bwl-label">Thinking</span><p>{entry.text}</p>{truncated}{details}</div></li>
+    case 'message': return <li className="bwl-entry bwl-entry--message">{time}<MessageSquare aria-hidden="true" /><div><p>{entry.text}</p>{truncated}{details}</div></li>
+    case 'tool-call': return <li className="bwl-entry bwl-entry--call">{time}<Wrench aria-hidden="true" /><div><details><summary><strong>{entry.name || 'tool'}</strong> <code>{compact(entry.json)}</code></summary><Body text={entry.json} />{truncated}</details>{details}</div></li>
+    case 'tool-result': return <li className={'bwl-entry bwl-entry--result bwl-entry--' + (entry.status || 'ok')}>{time}{entry.status === 'ok' ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}<div><details><summary>{entry.name || 'tool'} {entry.status === 'ok' ? 'returned' : entry.status === 'failed' ? 'returned an error' : 'stopped'}{entry.json ? ' · ' + Math.max(1, Math.round(entry.json.length / 1024)) + ' KB' : ''}</summary><Body text={entry.json || entry.text} />{truncated}</details>{details}</div></li>
+    case 'usage': return <li className="bwl-entry bwl-entry--usage">{time}<Coins aria-hidden="true" /><div><span>{usageText(entry.json)}</span>{details}</div></li>
+    default: return <li className={'bwl-entry bwl-entry--outcome bwl-entry--' + (entry.status || 'done')}>{time}{entry.status === 'completed' ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}<div><strong>{OUTCOMES[entry.status] || 'Review ended'}</strong>{entry.text && <p>{entry.text}</p>}{details}</div></li>
   }
 }
 function attemptLabel(row, clock) {
@@ -145,6 +152,7 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
   const sending = feed?.state === 'sending' && feed.sending?.total ? Math.min(100, Math.round(100 * feed.sending.done / feed.sending.total)) : null
   const attempts = transcript?.attempts || []
   const onScroll = event => { const node = event.currentTarget; const atEnd = node.scrollHeight - node.scrollTop - node.clientHeight < 24; stick.current = atEnd; setBehind(!atEnd) }
+  const pauseForDetails = () => { stick.current = false; setBehind(true) }
   const jump = () => { const node = list.current; if (node) { node.scrollTop = node.scrollHeight; stick.current = true; setBehind(false) } }
   const status = failed ? 'Reconnecting…' : transcript?.mode === 'streaming' ? 'Streaming' : transcript?.mode === 'polling' ? 'Updating every 2 s' : feed?.asOf ? 'Updated ' + clockTime(feed.asOf, clock) : ''
   return <section className={'bwl bwl--' + line.tone} aria-labelledby="business-live-title">
@@ -162,7 +170,7 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
     </div>
     <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant activity, oldest first">
       {rows.length ? <ol>
-        {rows.map(row => row.entry ? <EntryRow key={row.id} entry={row.entry} clock={clock} /> : <FeedRow key={row.id} item={row.item} clock={clock} />)}
+        {rows.map(row => row.entry ? <EntryRow key={row.id} entry={row.entry} clock={clock} metadata={row.metadata} onOpen={pauseForDetails} /> : <FeedRow key={row.id} item={row.item} clock={clock} onOpen={pauseForDetails} />)}
       </ol> : <p className="bwl-empty">{!feed ? failed ? 'Live activity could not be read yet. Retrying automatically.' : 'Loading the latest activity…' : 'Nothing recorded yet. The accountant’s next review appears here as it happens: what it reads, what it decides and every record it sends to QuickBooks.'}</p>}
     </div>
     {behind && <button type="button" className="bwl-jump" onClick={jump}><ArrowDown aria-hidden="true" />Scrolling paused · jump to latest</button>}

@@ -121,6 +121,7 @@ function cleanSteps(steps, max = MAX_STEPS) {
       at: Number.isFinite(new Date(step.at).getTime()) ? new Date(step.at).toISOString() : null,
       label: step.label.slice(0, MAX_LABEL),
       status: STATUSES.has(step.status) ? step.status : 'done',
+      ...(step.finishedAt && Number.isFinite(new Date(step.finishedAt).getTime()) && new Date(step.finishedAt) >= new Date(step.at) ? { finishedAt: new Date(step.finishedAt).toISOString() } : {}),
       ...(note ? { note } : {}),
     };
   });
@@ -144,7 +145,7 @@ function createReviewProgress({ write, now = () => Date.now(), max = MAX_STEPS, 
     const step = { at: new Date(now()).toISOString(), label: stepLabel(name, input), status: 'running' };
     steps = [...steps, step].slice(-max); save(); return step;
   }
-  function finish(step, status, note = '') { if (!step) return; step.status = status; if (note) step.note = note; save(); }
+  function finish(step, status, note = '') { if (!step) return; step.status = status; step.finishedAt = new Date(now()).toISOString(); if (note) step.note = note; save(); }
   function wrap(execute) {
     return async (name, input) => {
       let step = null;

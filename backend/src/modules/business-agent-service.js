@@ -121,6 +121,13 @@ function createBusinessAgentService(options={}) {
   // The live activity feed (business-agent-live.js): light enough to poll every few seconds while
   // work is happening. A failed read returns the last good feed for this agent, marked stale.
   const lastFeeds=new Map();
+  // Metadata failure must not hide company activity or trigger provider/database setup.
+  const reviewDetails=async(scope,refs,activeAttemptId=null)=>{
+    try{
+      if(typeof usage.details!=='function')return null;
+      return (await usage.details(scope,refs)).map(review=>!review.running||review.attemptId===activeAttemptId?review:{...review,running:false,durationMs:null,usageMissing:true,cost:review.cost?{...review.cost,partial:true}:null});
+    }catch{return null;}
+  };
   async function live(user){
     const bound=await bind(user),row=await store.get(bound.scope),{buildLiveFeed}=require('./business-agent-live');
     const settings={...DEFAULT_SETTINGS,...(row?.settings||{})},expired=row?.leaseToken&&at(row.leaseExpiresAt)<=now();
@@ -129,7 +136,8 @@ function createBusinessAgentService(options={}) {
     const key=String(row._id);let feed;
     try{
       const [events,activity]=await Promise.all([store.events(row),typeof store.liveActivity==='function'?store.liveActivity(bound.scope):{runs:[],steps:[],records:[]}]);
-      feed=buildLiveFeed({...base,events,...activity});
+      const reviews=await reviewDetails(bound.scope,{attemptIds:[base.progress?.attemptId,...events.flatMap(event=>[event.attemptId,event.usageId])].filter(Boolean),passIds:events.filter(event=>!event.attemptId&&!event.usageId).map(event=>event.passId).filter(Boolean)},base.reviewing&&base.progress?.passId===base.activePass?.id?base.progress?.attemptId:null);
+      feed=buildLiveFeed({...base,events,...activity,reviews:reviews||[],metadataUnavailable:reviews===null});
       if(lastFeeds.size>=50)lastFeeds.clear();
       lastFeeds.set(key,feed);
     }catch{
@@ -150,7 +158,9 @@ function createBusinessAgentService(options={}) {
   }
   async function transcripts(user){
     const {bound,row,agentId}=await transcriptOwner(user),expired=row.leaseToken&&at(row.leaseExpiresAt)<=now();
-    const attempts=await store.transcripts.attempts(agentId);
+    const saved=await store.transcripts.attempts(agentId);
+    const reviews=await reviewDetails(bound.scope,{attemptIds:saved.map(attempt=>attempt.attemptId)},row.leaseToken&&!expired&&row.status==='reviewing'&&row.reviewProgress?.passId===row.activePass?.id?row.reviewProgress?.attemptId:null),byId=new Map((reviews||[]).map(review=>[review.attemptId,review]));
+    const attempts=saved.map(attempt=>({...attempt,metadata:{review:byId.get(attempt.attemptId)||null,attribution:reviews===null?'unavailable':'review'}}));
     await bound.access.authorize(bound.scope,'operations.read');
     return {scope:bound.scope,revision:row.revision||0,reviewing:Boolean(row.leaseToken&&!expired&&row.activePass&&row.status==='reviewing'),attempts};
   }
@@ -431,7 +441,7 @@ function createBusinessAgentService(options={}) {
         // Every model review counts toward today's ceiling when it starts; a main review also fixes its progress baseline.
         const started=role==='accountant'?{...cadence.beginReview(decision.state,{now:now(),signature:cadence.progressSignature(business,today,owned,obligations),kind:decision.kind}),kind:decision.kind,reason:decision.reason}:cadence.countReview(row.cadence||{},now());
         // Each attempt starts a fresh, bounded step list fenced to this pass and lease.
-        await update({activePass:pass,status:'reviewing',cadence:started,currentWork:role==='accountant'?'Main accountant is reviewing and managing the business':role+' specialist is reviewing its work',reviewProgress:{passId:pass.id,role,startedAt:new Date(now()).toISOString(),steps:[]}});
+        await update({activePass:pass,status:'reviewing',cadence:started,currentWork:role==='accountant'?'Main accountant is reviewing and managing the business':role+' specialist is reviewing its work',reviewProgress:{passId:pass.id,attemptId,role,startedAt:new Date(now()).toISOString(),steps:[]}});
         const progressRow=row,progress=createReviewProgress({now,write:steps=>typeof store.progress==='function'?store.progress(progressRow,token,pass.id,steps):undefined});
         // The live session transcript for this attempt: batched, best-effort and never awaited by the review.
         const transcripts=store.transcripts||null;
@@ -439,7 +449,7 @@ function createBusinessAgentService(options={}) {
         if(transcripts)transcripts.prune(String(row._id)).catch(()=>{});
         business=await store.business(scope);const decisions=await store.decisions(row),events=await store.events(row);
         const calendarClose=cadence.nextClose(business,cadence.localParts(now()).date);
-        const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,managementFor:async()=>({todaysPlan:management.planContext((await managementFor(row))?.plan||null,cadence.localParts(now()).date),...await managementContextFor(scope,row,today,events,decisions)}),persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
+        const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,attemptId,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,managementFor:async()=>({todaysPlan:management.planContext((await managementFor(row))?.plan||null,cadence.localParts(now()).date),...await managementContextFor(scope,row,today,events,decisions)}),persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const executeScoped = async (name, input) => {
           const sync = require('./business-agent-sync');
           requiredEntities = [];

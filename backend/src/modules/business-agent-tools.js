@@ -64,8 +64,10 @@ function todayLimit(today){
   if(!today.target)fail('No same-day activity is planned for '+today.label+', so no batch was prepared. Standing work continues.');
   if(today.ceilingReached)fail('Today’s activity ceiling of '+today.ceiling+' records is reached ('+today.saved+' in QuickBooks, '+today.reserved+' in progress). Same-day activity resumes tomorrow.');
 }
-function createBusinessAgentTools({row,role='accountant',passId,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase,coverageFor=()=>null,usageFor=async()=>({unavailable:true}),todayFor=null,lease=null,requestsFor=null,managementFor=null}={}) {
+function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,scope,store,access,user,guard,persistMemory,signal,now=()=>Date.now(),governanceFor,execution,readTools,clientFor,linkCase,coverageFor=()=>null,usageFor=async()=>({unavailable:true}),todayFor=null,lease=null,requestsFor=null,managementFor=null}={}) {
   const cadence=require('./business-agent-cadence');
+  // Server-issued identities connect decisions to measured review usage; repeated events keep their original link.
+  const event=(target,kind,title,detail,data,...rest)=>store.event(target,kind,title,detail,{...data,passId,...(attemptId?{attemptId}:{})},...rest);
   const native=readTools||require('./ai-tools');
   const forgetToday=()=>{if(typeof store?.forgetToday==='function')store.forgetToday();};
   // Unfinished operations of this grant, whether or not they hold the calendar slot. While one exists
@@ -244,7 +246,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
           await requireRequestBudget();
         }
       }
-      const origin=run.agentAuthority;await store.event(row,'plan-decision','Main accountant approved business activity',input.reason.slice(0,3000),{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,authorityHash:row.grant.authorityHash,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'approve'}),role);
+      const origin=run.agentAuthority;await event(row,'plan-decision','Main accountant approved business activity',input.reason.slice(0,3000),{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,authorityHash:row.grant.authorityHash,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'approve'}),role);
       await guard(true);await governed(origin).approve(user,input.operationId,{planHash:input.planHash,...(scope.environment==='production'?{confirmProduction:true}:{})});
       await guard(true);try{result={success:true,data:await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'execute'})})};}finally{forgetToday();}
     }else if(name==='resumeBusinessOperation'){
@@ -261,29 +263,29 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
       else{
       if(run.status==='stopped'){const reviewed=await governor.reviewResume(user,input.operationId,{planHash:input.planHash});await guard(true);await governor.resume(user,input.operationId,{planHash:input.planHash,reviewHash:reviewed.reviewHash,reason:input.reason.trim()});}
       else if(!['approved','reserved','running','blocked','awaiting-evidence'].includes(run.status))fail('This operation is not awaiting a supported continuation.');
-      await guard(true);await store.event(row,'plan-decision','Main accountant continued retained business work',input.reason,{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'resume',revision:run.executionRevision||0}),role);
+      await guard(true);await event(row,'plan-decision','Main accountant continued retained business work',input.reason,{operationId:input.operationId,planHash:input.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({passId,operationId:input.operationId,phase:'resume',revision:run.executionRevision||0}),role);
       await guard(true);result={success:true,data:{...await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'resume-execute',revision:run.executionRevision||0})}),...(recovery&&recovery.state!=='none'?{recovery}:{})}};
       }
     }else if(name==='recordBusinessDecision'){
       if(input.title.length>160||input.detail.length>5000)fail('Keep the decision title and evidence concise.',400);
       const kind=input.requiresOwner?'decision':role==='accountant'?'management-decision':'specialist-report';
-      result={success:true,data:await store.event(row,kind,input.title,input.detail,{area:input.area,issueKey:input.issueKey,...(role==='accountant'?{}:{reportsTo:'accountant'})},null,hash({grantId:row.grant?.id||null,issueKey:input.issueKey,kind}),role)};
+      result={success:true,data:await event(row,kind,input.title,input.detail,{area:input.area,issueKey:input.issueKey,...(role==='accountant'?{}:{reportsTo:'accountant'})},null,hash({grantId:row.grant?.id||null,issueKey:input.issueKey,kind}),role)};
     }else if(name==='recordDailyPlan'){
       // One plan per Halifax business day; a repeat returns the saved plan unchanged.
       const management=require('./business-management-review'),day=cadence.localParts(now()).date,value=management.dailyPlanEvent(input,day);
       const saved=typeof store.latestDailyPlan==='function'?await store.latestDailyPlan(row):null;
-      result=saved&&saved.day===day?{success:true,data:{alreadyRecorded:true,plan:saved}}:{success:true,data:await store.event(row,'daily-plan',value.title,value.detail,value.data,null,'daily-plan:'+day,role)};
+      result=saved&&saved.day===day?{success:true,data:{alreadyRecorded:true,plan:saved}}:{success:true,data:await event(row,'daily-plan',value.title,value.detail,value.data,null,'daily-plan:'+day,role)};
     }else if(name==='requestCapability'){
       // Deduplicated by key: the same gap stays one build-list entry.
       const value=require('./business-management-review').capabilityRequestEvent(input);
       const prior=typeof store.capabilityRequests==='function'?(await store.capabilityRequests(row)).find(item=>item.key===value.data.key):null;
-      result=prior?{success:true,data:{duplicate:true,request:prior}}:{success:true,data:await store.event(row,'capability-request',value.title,value.detail,value.data,null,'capability:'+value.data.key,role)};
+      result=prior?{success:true,data:{duplicate:true,request:prior}}:{success:true,data:await event(row,'capability-request',value.title,value.detail,value.data,null,'capability:'+value.data.key,role)};
     }else if(name==='rememberBusinessContext'){
       if(input.memory.length>4000)fail('Keep the operating handoff within 4000 characters.',400);await persistMemory(input.memory);result={success:true,data:{saved:true}};
     }else if(name==='linkReproductionCase'){
       const session=linkCase?await linkCase(input.sessionId):await require('../models/AISession').findOne({_id:input.sessionId,userId:row.ownerId,realmId:scope.realmId,mode:'reproduce'}).select('_id').maxTimeMS(3000).lean();
       if(!session||!ID.test(String(session._id)))fail('This troubleshooting case does not belong to the selected company.');
-      result={success:true,data:await store.event(row,'case-linked','Troubleshooting case linked',input.reason.slice(0,3000),{sessionId:input.sessionId,href:'/cases/'+input.sessionId},null,hash({passId,sessionId:input.sessionId}),role)};
+      result={success:true,data:await event(row,'case-linked','Troubleshooting case linked',input.reason.slice(0,3000),{sessionId:input.sessionId,href:'/cases/'+input.sessionId},null,hash({passId,sessionId:input.sessionId}),role)};
     }
     await guard();if(name==='runReport')await access.authorize(scope,'reports.observe',{signal});const bytes=Buffer.byteLength(JSON.stringify(result));if(bytes>100000)return {success:false,error:'This result is too large for one review. Use smaller record/report pages; no complete observation is claimed.',truncated:true};return result;
   }

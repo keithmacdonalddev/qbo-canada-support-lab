@@ -68,7 +68,7 @@ test('the feed never carries prompts, tool inputs, raw errors or record payloads
   const feed = buildLiveFeed({ now: NOW, settings, reviewing: true, activePass: pass, progress, cadence: { reason: 'business hours' }, events, runs: [{ ...batchRun, status: 'blocked' }], steps, records });
   const json = JSON.stringify(feed);
   for (const leak of ['tool input', 'raw upstream fault text', 'payload', 'raw fault', '"line"', 'planHash', 'grant', 'requestHash', 'toolCalls', '\\n']) assert.ok(!json.includes(leak), leak + ' must not reach the feed');
-  for (const item of feed.items) for (const key of Object.keys(item)) assert.ok(['id', 'at', 'kind', 'status', 'text', 'detail', 'outcome', 'record', 'operationId', 'by'].includes(key), key);
+  for (const item of feed.items) for (const key of Object.keys(item)) assert.ok(['id', 'at', 'kind', 'status', 'text', 'detail', 'outcome', 'record', 'operationId', 'by', 'metadata'].includes(key), key);
   assert.match(feed.items.find(item => item.id === 'run:' + runId + ':status').text, /^Stopped part-way after 7 of 15 records/);
 });
 
