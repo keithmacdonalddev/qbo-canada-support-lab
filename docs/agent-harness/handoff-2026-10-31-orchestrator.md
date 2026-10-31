@@ -60,14 +60,14 @@ Supersedes nothing in `AGENTS.md`, `CLAUDE.md` or `AGENT_WORKFLOW.md`, which sti
 ## 2. What the app is for (the owner's intent)
 
 The owner's three jobs for the app:
-1. **Ensure complete data in QuickBooks for every potential situation**, so the owner can reproduce any customer issue that may arise (in QuickBooks, not in this app). Owner correction 2026-10-31: this is the purpose; volume serves it.
+1. **Ensure complete data in QuickBooks for every potential situation**, so the owner can reproduce any customer issue that may arise (in QuickBooks, not in this app). This is the purpose (prd.md); volume serves it.
 2. **Manage the QuickBooks company like a real, running business, 24/7, through the API.**
-3. **Make sure every QuickBooks feature gets used**, more than naturally: deliberately cover every feature, setting, edge case and record state, and measure the gaps (owner correction 2026-10-31).
+3. **Make sure every QuickBooks feature gets used**, more than naturally: deliberately cover every feature, setting, edge case and record state, and measure the gaps.
 
 Formal requirements R01–R16 are in `docs/plans/continuous-business-operator-completion-2026-10-24.md` §2 (product contract: `prd.md`). In short:
 - **R01:** a believable test business for Intuit troubleshooting, teaching and learning. Support usefulness beats record count.
 - **R02:** medium-sized and very active, all the time.
-- **R03–R05:** an in-app AI accountant orchestrates everything. It is the head accountant, manager, consultant and decision-maker, with every tool and skill it might ever need, not only what current work needs (owner correction 2026-10-31).
+- **R03–R05:** an in-app AI accountant orchestrates everything. It is the head accountant, manager, consultant and decision-maker, with every tool and skill it might ever need, not only what current work needs.
 - **R06:** the owner is also a decision-maker; their instructions persist.
 - **R07:** complete UI so the owner can manage the same things.
 - **R08–R09:** autonomous for days or weeks, with no end date.
