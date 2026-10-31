@@ -132,3 +132,72 @@ test('execution compilation carries historical Item and TaxCode witnesses when c
  h.f.referenceEvidence.find(o=>o.entity==='Item').record.IncomeAccountRef.value='999';
  await assert.rejects(h.read(),/approved definition/);
 });
+
+
+// A current cache record is not necessarily the exact shape hashed by a v1 approval.
+function legacyWitnessHarness(entity) {
+  const { referenceDefinition } = require('../src/modules/business-reference');
+  const h = harness('Estimate'), selected = h.f.referenceEvidence.find(o => o.entity === entity);
+  if (entity === 'Item') selected.record.IncomeAccountRef.name = 'Approved income display';
+  else selected.record.SalesTaxRateList = { TaxRateDetail: [{ TaxRateRef: { value: '950', name: 'Approved tax display' } }] };
+  const retained = clone(selected); retained.recordHash = hash(retained.record);
+  retained.observedAt = new Date(now - 8 * 86400000).toISOString();
+  retained.source = { version: 1, kind: 'qbo-retained-mirror', scope, entity, id: retained.record.Id, recordHash: retained.recordHash, generation: 'approved-sync', retainedAt: retained.observedAt };
+  if (entity === 'Item') delete selected.record.IncomeAccountRef.name;
+  else delete selected.record.SalesTaxRateList.TaxRateDetail[0].TaxRateRef.name;
+  const binding = h.intent.step.references.find(b => b.entity === entity && b.id === selected.record.Id);
+  binding.definition = referenceDefinition(scope, entity, retained.record, 1);
+  h.reapprove = () => { h.intent.fingerprint = hash(h.intent.step); h.intent.policy.stepHash = h.intent.fingerprint; };
+  h.reapprove();
+  h.definitionCalls = 0;
+  h.deps.observations = {
+    read: async (_scope, type, id) => {
+      if (type !== entity || id !== selected.record.Id) return null;
+      const cached = clone(selected); cached.recordHash = hash(cached.record);
+      cached.source = { version: 1, kind: 'qbo-current-mirror', scope, entity, id, recordHash: cached.recordHash, generation: 'current-sync', completedAt: new Date(now - 1000).toISOString(), freshUntil: new Date(now + 60000).toISOString() };
+      return cached;
+    },
+    definition: async (_scope, type, id) => { if (type !== entity || id !== selected.record.Id) return null; h.definitionCalls++; return clone(h.retained); },
+  };
+  return Object.assign(h, { selected, retained, binding });
+}
+for (const entity of ['Item', 'TaxCode']) test('compilation recovers exact legacy ' + entity + ' evidence after a cached shape mismatch', async () => {
+  const h = legacyWitnessHarness(entity), before = clone(h.intent), result = await h.read();
+  const observed = result.referenceEvidence.find(o => o.entity === entity);
+  assert.equal(observed.definitionObservation.source.kind, 'qbo-retained-mirror');
+  assert.equal(h.definitionCalls, 1);
+  assert.deepEqual(h.intent, before);
+  assert.deepEqual(observed.record, h.selected.record);
+  assert.equal(compileBusinessTransaction({ scope, step: h.intent.step, policy: h.intent.policy, ...result, now }).entity, 'Estimate');
+});
+test('legacy witness recovery still rejects missing, tampered, foreign and changed definitions', async () => {
+  for (const change of [
+    h => { h.retained = null; },
+    h => { h.retained.record.UnitPrice = (h.retained.record.UnitPrice || 0) + 1; h.retained.recordHash = hash(h.retained.record); h.retained.source.recordHash = h.retained.recordHash; },
+    h => { h.retained.scope.realmId = '999'; },
+    h => { h.retained.source.generation = ''; },
+    h => { h.selected.record.UnitPrice = (h.selected.record.UnitPrice || 0) + 1; },
+    h => { h.selected.record.IncomeAccountRef.value = '999'; },
+    h => { h.selected.record.Type = 'NonInventory'; },
+    h => { h.selected.record.FutureDefinitionField = true; },
+    h => { h.binding.syncToken = '2'; h.selected.record.SyncToken = '1'; h.reapprove(); },
+  ]) {
+    const h = legacyWitnessHarness('Item'); change(h); await assert.rejects(h.read(), /definition|version|evidence/);
+  }
+});
+
+test('an unavailable optional witness does not block an owner-reviewed TaxCode definition', async () => {
+  const { referenceDefinition } = require('../src/modules/business-reference');
+  const h = legacyWitnessHarness('TaxCode');
+  h.intent.policy.taxReferenceDefinitions = h.intent.step.references.filter(b => b.entity === 'TaxCode').map(b => ({ key: b.key, id: b.id, originalDefinitionHash: b.definition.hash, definition: referenceDefinition(scope, 'TaxCode', h.f.referenceEvidence.find(o => o.entity === 'TaxCode' && o.record.Id === b.id).record, 2) }));
+  h.deps.observations.definition = async () => { throw new Error('Historical store unavailable'); };
+  assert.equal((await h.read()).referenceEvidence.length, h.f.referenceEvidence.length);
+});
+test('shared physical references recover a legacy witness even when the last binding uses v2', async () => {
+  const { referenceDefinition } = require('../src/modules/business-reference');
+  const h = legacyWitnessHarness('Item');
+  h.intent.step.references.push({ ...clone(h.binding), key: 'same-item-alias', definition: referenceDefinition(scope, 'Item', h.selected.record, 2) });
+  h.reapprove();
+  const result = await h.read();
+  assert.equal(result.referenceEvidence.find(o => o.entity === 'Item').definitionObservation.source.kind, 'qbo-retained-mirror');
+});

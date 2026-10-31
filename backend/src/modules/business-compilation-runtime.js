@@ -2,7 +2,8 @@
 const { runWithCaller } = require('./qbo-request-meter');
 const { hash, canonical } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
-const { createBusinessReferenceReader } = require('./business-reference');
+const { createBusinessReferenceReader, matchesReferenceDefinition } = require('./business-reference');
+const { createBusinessObservationStore } = require('./business-observation-store');
 const { compileBusinessTransaction } = require('./business-transaction-compiler');
 const { taxExpectation } = require('./business-verification-runtime');
 const { verifyBusinessTaxSources } = require('./business-tax-policy');
@@ -54,6 +55,9 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || [access?.authorize, access?.resolveClient, plans?.loadIntent, steps?.verifyGraph, steps?.evidence, verification?.readRecord, verification?.readFence, assertReady, now].some(value => typeof value !== 'function')) throw new TypeError('Compilation needs an exact operation and concrete observation adapters');
   const { authorize, resolveClient } = access, { loadIntent } = plans;
   const references = createBusinessReferenceReader({ authorize, resolveClient, now, observationStore: observations });
+  // Historical approval evidence must not depend on a current-cache hit or on an
+  // optional reader adapter carrying it through. This store never supplies live stock.
+  const definitions = typeof observations?.definition === 'function' ? observations : createBusinessObservationStore({ now });
   return async function loadCompilationEvidence(input) {
     if (!input || !sameScope(input.scope, scope) || input.operationId !== operationId || !HASH.test(input.logicalKey || '')) fail('Compilation cannot switch the bound operation or company.');
     const supplied = structuredClone(input.intent), logicalKey = input.logicalKey, signal = input.signal;
@@ -99,7 +103,21 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       for (const binding of unique.values()) jobs.push(async () => {
         // Item quantity is consumed by stock availability checks, and a prior Bill or
         // sale in this operation can change it without invalidating a definition copy.
-        const observed = await call(() => references(scope, binding.entity, binding.id, { signal: controller.signal, live: binding.entity === 'Item' })); check();
+        let observed = await call(() => references(scope, binding.entity, binding.id, { signal: controller.signal, live: binding.entity === 'Item' })); check();
+        const legacyBindings = intent.step.references.filter(choice => choice.entity === binding.entity && choice.id === binding.id && choice.definition.version === 1 && ['Item', 'TaxCode'].includes(choice.entity));
+        const needsDefinition = legacyBindings.some(choice => {
+          try { return !matchesReferenceDefinition(scope, choice.entity, observed.record, choice.definition, observed.definitionObservation, now()); }
+          catch { return true; /* Try exact retained approval evidence below. */ }
+        });
+        if (needsDefinition) {
+          let witness;
+          try { witness = await call(() => definitions.definition(scope, binding.entity, binding.id, { signal: controller.signal })); }
+          catch { check(); /* The compiler still decides against the effective approved definition. */ }
+          check();
+          // Authenticate the approved v1 hash in the compiler, then compare canonical
+          // definitions. Never substitute this old record for the current observation.
+          if (witness) observed = { ...observed, definitionObservation: witness };
+        }
         referenceEvidence.push({ ...observed, ...tag });
       });
       for (const dependency of intent.dependencies) jobs.push(async () => {
