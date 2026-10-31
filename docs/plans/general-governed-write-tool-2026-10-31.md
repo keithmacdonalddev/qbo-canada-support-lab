@@ -406,26 +406,39 @@ Kept, and counted above:
 
 ## Implementation status (2026-10-31)
 
-Built and tested on the simulated company and in-memory storage. Dispatch stays off
-(`GENERAL_WRITE_DISPATCH_ENABLED`) until the lead's implementation review:
+Verified with isolated fixtures and in-memory storage. Runtime configuration was checked
+with dispatch disabled (`GENERAL_WRITE_DISPATCH_ENABLED=false`). No live company or
+database verification is part of the implementation-review fixes.
 
-- Tools: `manageQboRecord` (core) and `getQboEntitySchema` (deferred), plans saved as
+- Tools: `manageQboRecord` and `getQboEntitySchema`; plans are saved as
   `GeneralWriteRun` (`general-write-service.js`).
-- Live transport: `general-write-transport.js` with a dedicated `generalTransport` in
-  `qbo-write-gate.js` (receipt and writer barrier before sending, per-item period proof,
-  per-item classification and settlement, same-requestid replay as a new attempt).
-  Void through batch is refused until confirmed against the batch reference.
-- Stale saved responses: a record this write created and a later item changed is read
-  fresh (one targeted GET) before the next batch; links to records created earlier in the
-  plan are shared scheduler resources.
-- Day close: `general-write-close-gate.js` gates scheduled-period preparation
-  (`business-governance-service.js`). Every general record dated in the period must pass
-  `closeGeneralDay` (one General Ledger read with explicit debit and credit columns per
-  range; tax rows are compared on the published tax accounts as one tax key), and every
-  history marker inside verified history is re-verified over its range through the
-  cursor. Results are retained as `GeneralDayClose` rows; a failure blocks the calendar
-  with its reasons. Same-day general writes are inside the period's opening trial
-  balance, so the existing movement proof is unchanged; the gate is their proof.
-- Not yet: exact-replay read-back resolution of unresolved items, re-verification of
-  fixed-workflow records inside a dirty range (only general records are re-checked), and
-  a Company-page view of `GeneralDayClose` results.
+- Transport: the company gate retains the exact request identity, receipt, original
+  period proof and item outcomes. The service reloads gate revisions before saving its
+  results and ingests retained responses after a crash. Mismatched or ambiguous items
+  remain unresolved and cannot become new creates. Lost responses replay only the
+  admitted identity across midnight, including updates and deletions, with current
+  protected-period controls and fresh closing preferences. Void remains disabled.
+- Admission: every unadmitted saved batch reruns full guards inside the admission
+  transaction, including balances, caps, inventory accounts and daily creation counts.
+  General creates and unresolved reservations share the native daily ceiling without
+  double-counting a retry. General parent evidence also invalidates the shared reader.
+- Close: all runs are enumerated with keyset paging. Reuse requires the same run, record
+  and posting-reference snapshot; changes during the ledger read refuse the proof.
+  Requested account/item/tax details must match the response and current record. Tax
+  account identities stay distinct; ambiguous attribution blocks close. Successful
+  authorized deletions use their exact dispatched version and before-image and require
+  no remaining ledger rows. Results are retained as `GeneralDayClose`.
+- Historical edits are held before dispatch. Existing dirty-history markers block later
+  closes even if an older record-only verification passed. Full invalidation and reproof
+  of fixed completions, downstream report movements and the opening baseline are not
+  implemented; markers cannot be cleared by the general-record check. The history
+  invalidation section above describes the required future contract.
+- Still unavailable: attribution of unresolved items by read-back, full historical
+  reproof, multiple-tax-account attribution without a rate-to-account proof, and a
+  Company-page view of close results. Dispatch remains off.
+
+Implementation-review regressions: all 135 tests in the requested general-write, shared
+write-gate, observation, agent store/tools and unknown-recovery suites passed. All 289
+backend JavaScript files passed syntax checks. Distinct implementation and safety
+reviewers re-reviewed the final fixes without remaining concrete findings. These checks
+prove isolated behavior and source boundaries, not live accounting outcomes.

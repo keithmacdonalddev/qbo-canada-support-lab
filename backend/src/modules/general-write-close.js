@@ -23,7 +23,7 @@ function explainedByOwnSettlements(proven, current, ownSettlements) {
   const before = new Set(headerLinks(proven)), added = headerLinks(current).filter(key => !before.has(key));
   const lineLinks = record => (record?.Line || []).flatMap(line => (line?.LinkedTxn || []).map(link => link.TxnType + ':' + link.TxnId));
   if (canonical(lineLinks(proven)) !== canonical(lineLinks(current))) return false;
-  return headerLinks(proven).every(key => headerLinks(current).includes(key)) && added.every(key => ownSettlements.has(key));
+  return added.length > 0 && headerLinks(proven).every(key => headerLinks(current).includes(key)) && added.every(key => ownSettlements.has(key));
 }
 // evidence: { accountant: { versionHash, record } | null, fixed: { observedHash, record } |
 // null, adopted: { proofHash, record } | null }. Returns { kind, reason }.
@@ -31,7 +31,8 @@ function classifyRecord({ entity, current, deleted = false, evidence = {}, ownSe
   const now = deleted ? null : versionHash(current);
   for (const [kind, proof, field] of [['accountant', evidence.accountant, 'versionHash'], ['fixed-workflow', evidence.fixed, 'observedHash'], ['adopted', evidence.adopted, 'proofHash']]) {
     if (!proof) continue;
-    if (deleted) return { kind: 'external-change', reason: entity + ' was deleted outside the accountant’s own work.' };
+    if (deleted && kind === 'accountant' && proof.deleted === true && proof.operation === 'delete' && !current) return { kind: 'accountant', reason: 'Deletion is proved by the accountant’s successful delete outcome.' };
+    if (deleted || proof.deleted) return { kind: 'external-change', reason: entity + ' was deleted outside the accountant’s own work.' };
     if (proof[field] === now) return { kind, reason: 'Current version is the proved version.' };
     if (explainedByOwnSettlements(proof.record, current, ownSettlements)) return { kind, reason: 'Changed only by the accountant’s own verified settlements.' };
     return { kind: 'external-change', reason: entity + ' changed after it was proved (not by the accountant’s own settlements).' };
@@ -63,8 +64,10 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx }) {
     const key = row.entity + ':' + row.id, classified = classifyRecord({ entity: row.entity, current: row.current, deleted: row.deleted, evidence: row.evidence, ownSettlements });
     const result = { key, kind: classified.kind, reason: classified.reason };
     if (classified.kind === 'external-change') failures.push({ key, reason: classified.reason });
+    if (row.unavailable) failures.push({ key, reason: 'Its current version is unavailable; a retained response cannot substitute for current evidence.' });
     if (classified.kind === 'accountant') {
       try {
+        if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, row.current)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const comparison = compareLedger(postingsOf(row.entity, row.deleted ? null : row.current, ctx), ledger[key] || []);
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });

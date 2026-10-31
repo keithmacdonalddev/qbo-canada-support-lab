@@ -9,7 +9,7 @@ function loadModels() { return {
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
   Plans:require('../models/OperationPlan'), Receipts:require('../models/QboWriteReceipt'), Steps:require('../models/OperationStep'),
-  Transcripts:require('../models/BusinessAgentTranscript'),
+  Transcripts:require('../models/BusinessAgentTranscript'), GeneralWriteRuns:require('../models/GeneralWriteRun'),
 }; }
 const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000,TODAY_TTL_MS=10000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});
@@ -116,18 +116,34 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   // Today's accountant-owned same-day batches and their saved native create receipts
   // (saved records only, no QuickBooks calls). Counted by business-agent-cadence.summarizeToday.
   // fresh:true bypasses the short display cache: write admission always reads current counts.
-  async function todayActivity(scope,agentId,day,{fresh=false}={}){
+  async function todayActivity(scope,agentId,day,{fresh=false,session=null}={}){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(day||'')||!agentId)throw new Error('Choose a business day.');
     const key=hash({scope,agentId,day}),cached=todayCache.get(key);
-    if(!fresh&&cached&&now()-cached.at<TODAY_TTL_MS)return cached.value;
+    if(!fresh&&!session&&cached&&now()-cached.at<TODAY_TTL_MS)return cached.value;
+    const inSession=query=>session?query.session(session):query;
     const since=new Date(Date.parse(day+'T00:00:00Z')-2*86400000);
-    const rows=await models.Runs.find({environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,createdAt:{$gte:since},'activityBatch.day':day,'agentAuthority.agentId':agentId}).select('_id status planId createdAt recordCount activityBatch.decisionKey').sort({createdAt:-1}).limit(200).maxTimeMS(3000).lean();
+    const rows=await inSession(models.Runs.find({environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,createdAt:{$gte:since},'activityBatch.day':day,'agentAuthority.agentId':agentId})).select('_id status planId createdAt recordCount activityBatch.decisionKey').sort({createdAt:-1}).limit(200).maxTimeMS(3000).lean();
     const open=rows.filter(row=>!['verified','retired'].includes(row.status)),plans=new Map();
-    if(open.length)for(const plan of await models.Plans.find({_id:{$in:open.map(row=>row.planId)},environment:scope.environment,realmId:scope.realmId}).select('_id manifest.createCount').limit(200).maxTimeMS(3000).lean())plans.set(String(plan._id),plan.manifest?.createCount);
-    const receipts=rows.length?await models.Receipts.find({environment:scope.environment,realmId:scope.realmId,kind:'business',operation:'create',state:'saved',operationId:{$in:rows.map(row=>row._id)}}).select('operationId entity logicalKey').limit(5000).maxTimeMS(3000).lean():[];
+    if(open.length)for(const plan of await inSession(models.Plans.find({_id:{$in:open.map(row=>row.planId)},environment:scope.environment,realmId:scope.realmId})).select('_id manifest.createCount').limit(200).maxTimeMS(3000).lean())plans.set(String(plan._id),plan.manifest?.createCount);
+    const receipts=rows.length?await inSession(models.Receipts.find({environment:scope.environment,realmId:scope.realmId,kind:'business',operation:'create',state:'saved',operationId:{$in:rows.map(row=>row._id)}})).select('operationId entity logicalKey').limit(5000).maxTimeMS(3000).lean():[];
     const value={runs:rows.map(row=>({id:String(row._id),status:row.status,decisionKey:row.activityBatch?.decisionKey||null,createdAt:new Date(row.createdAt).getTime(),recordCount:row.recordCount,createCount:plans.get(String(row.planId))})),receipts:receipts.map(row=>({operationId:String(row.operationId),entity:row.entity,logicalKey:row.logicalKey}))};
-    if(todayCache.size>=50)todayCache.clear();
-    todayCache.set(key,{at:now(),value});
+    // Count unique general creates by run/ref, including known saved mismatches.
+    // Unanswered work reserves the rest once; a repeated decision never doubles it.
+    if(models.GeneralWriteRuns){
+      const general=await inSession(models.GeneralWriteRuns.find({...scope,contract:'general-write-v1',day,'agentAuthority.agentId':agentId})).select('_id status decisionKey createdAt plan items batches').sort({_id:1}).limit(5001).maxTimeMS(3000).lean();
+      if(general.length>5000||rows.length>=200||receipts.length>=5000)throw new Error('Today’s record count exceeds its enumeration budget.');
+      for(const run of general){
+        const id=String(run._id),answered=new Map(),creates=(run.plan?.operations||[]).filter(op=>op.op==='create'),createRefs=new Set(creates.map(op=>op.ref));
+        for(const batch of run.batches||[])for(const item of batch.transport?.items||[])if(item.outcome==='saved'||item.mismatch){const sent=batch.items.find(row=>row.bId===item.bId);if(sent&&createRefs.has(sent.ref))answered.set(sent.ref,sent.entity);}
+        for(const [ref,item]of Object.entries(run.items||{}))if(createRefs.has(ref)&&['saved','mismatch'].includes(item.outcome))answered.set(ref,item.entity);
+        for(const [ref,entity]of answered)value.receipts.push({operationId:id,entity,logicalKey:ref});
+        const unsent=!(run.batches||[]).length,terminal=run.status==='complete'||run.status==='needs-correction';
+        const count=terminal?answered.size:creates.length;
+        value.runs.push({id,status:terminal?'retired':unsent?'previewed':'blocked',decisionKey:run.decisionKey,createdAt:new Date(run.createdAt).getTime(),recordCount:count,createCount:count});
+      }
+    }
+    if(!session&&todayCache.size>=50)todayCache.clear();
+    if(!session)todayCache.set(key,{at:now(),value});
     return value;
   }
   // Drop cached counts after a same-day batch is prepared or queued, so the page and the next check see it.

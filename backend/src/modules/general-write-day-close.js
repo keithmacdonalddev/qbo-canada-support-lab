@@ -26,8 +26,7 @@ function money(cell) {
   return Math.round(Number(value) * 100);
 }
 // { 'Entity:id': [{ accountId, cents }] } (debit positive) from a GeneralLedger report of a
-// day or period. accountKey maps an account id to the key postings use (tax accounts
-// share one 'tax' key, since QuickBooks chooses the agency account).
+// day or period. Account identities stay distinct, including tax agency accounts.
 function parseLedger(report, day, through = day, accountKey = id => id) {
   const header = report?.Header, columns = report?.Columns?.Column;
   if (header?.ReportName !== 'GeneralLedger' || header.ReportBasis !== 'Accrual' || header.StartPeriod !== day || header.EndPeriod !== through || !Array.isArray(columns)) fail('The General Ledger report is not the accrual report for ' + (day === through ? day : day + ' to ' + through) + '.');
@@ -51,33 +50,65 @@ function parseLedger(report, day, through = day, accountKey = id => id) {
 }
 // The day's general records: every saved or deleted item of general runs whose record is
 // dated on the day, plus the current copy version (or deletion) of each.
+// Keyset paging covers every run; a broken/repeated page fails visibly.
+async function readGeneralRuns(Runs, scope) {
+  const out = [], size = 500;
+  let after = null;
+  for (;;) {
+    const rows = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day').sort({ _id: 1 }).limit(size).maxTimeMS(3000).lean();
+    if (!Array.isArray(rows) || after && rows.some(row => String(row._id) <= after)) fail('General-write enumeration did not advance; close is incomplete.');
+    out.push(...rows);
+    if (rows.length < size) return out;
+    after = String(rows.at(-1)._id);
+  }
+}
 async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
-  const runs = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', status: { $in: ['complete', 'needs-correction', 'unknown', 'sending'] } }).select('items plan dirty').sort({ _id: 1 }).limit(500).maxTimeMS(3000).lean();
-  const records = [], seen = new Set(), dirty = [];
+  const runs = await readGeneralRuns(Runs, scope), candidates = new Map(), dirty = [];
+  const inside = date => typeof date === 'string' && date >= day && date <= through;
   for (const run of runs) {
     dirty.push(...(run.dirty || []).map(row => ({ earliestDate: row.date, reason: row.reason, runId: run._id })));
+    for (const batch of run.batches || []) if (batch.state !== 'answered' && batch.items.some(item => inside(item.payload?.TxnDate || run.day) || inside(item.before?.TxnDate))) fail('General write ' + run._id + ' has an unsettled batch; recover its original response before close.');
     for (const [ref, item] of Object.entries(run.items || {})) {
-      if (!['saved', 'deleted'].includes(item.outcome) || !['create', 'update', 'void', 'delete'].includes(item.op)) continue;
-      const op = run.plan.operations.find(row => row.ref === ref), id = item.qboId || op?.id, before = op?.before || null;
-      const inside = date => typeof date === 'string' && date >= day && date <= through;
-      if (!id || !(inside(item.record?.TxnDate) || inside(before?.TxnDate)) || seen.has(item.entity + ':' + id)) continue;
-      seen.add(item.entity + ':' + id);
-      const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
-      records.push({ entity: item.entity, id, current: current || item.record || null, deleted: item.outcome === 'deleted', before: item.op === 'create' ? null : before, evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null } } });
+      const op = run.plan.operations.find(row => row.ref === ref), id = item.qboId || op?.id;
+      const dispatched = [...(run.batches || [])].reverse().find(batch => (!item.attempt || batch.attempt === item.attempt) && batch.items.some(row => row.ref === ref))?.items.find(row => row.ref === ref);
+      const before = item.before || dispatched?.before || op?.before || null;
+      if (!['saved', 'deleted'].includes(item.outcome)) {
+        if (inside(item.record?.TxnDate || run.day) || inside(before?.TxnDate)) fail('General write ' + run._id + ' has an unresolved item; close is incomplete.');
+        continue;
+      }
+      if (!id || !['create', 'update', 'void', 'delete'].includes(item.op)) continue;
+      const key = item.entity + ':' + id, previous = candidates.get(key);
+      const dates = [...(previous?.dates || []), item.record?.TxnDate, before?.TxnDate].filter(Boolean);
+      const request = item.request || dispatched?.payload || op?.payload || {};
+      const version = BigInt((item.op === 'delete' ? request.SyncToken : item.record?.SyncToken) ?? op?.targetVersion ?? before?.SyncToken ?? -1);
+      // Newest proved version wins regardless of run-id ordering; a successful delete
+      // follows the version it consumed and must not be hidden by an earlier create.
+      if (!previous || version > previous.version || version === previous.version && item.outcome === 'deleted') candidates.set(key, { item, op, before, id, version, dates, request });
+      else previous.dates = dates;
     }
   }
-  return { records, dirty };
+  const records = [];
+  for (const { item, op, before, id, dates, request } of candidates.values()) {
+    // An exact successful delete is its tombstone; do not turn its expected
+    // not-found GET into a close failure. Remaining GL rows still fail proof.
+    const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
+    if (![...dates, current?.TxnDate].some(inside)) continue;
+    const deleted = item.outcome === 'deleted';
+    records.push({ entity: item.entity, id, current: current || null, deleted, unavailable: !deleted && !current, before: item.op === 'create' ? null : before,
+      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request } } });
+  }
+  return { records, dirty, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
 }
 // The day close for general records: classification, current postings against the
 // ledger, movements for the period assertion, and dirty ranges through the cursor.
 // Ledger rows of transactions that are not general records belong to the fixed
 // workflows' own period proof and are returned for it, never silently accepted.
-async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = new Set(), verifiedThrough, openingDate }) {
-  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), { records, dirty } = await generalRecordsFor({ Runs, scope, day, through, copy });
+async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = new Set(), verifiedThrough, openingDate, gathered = null }) {
+  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), { records, dirty } = gathered || await generalRecordsFor({ Runs, scope, day, through, copy });
   const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements, ctx });
   const general = new Set(records.map(row => row.entity + ':' + row.id));
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();
   if (ledger.unknown.length) evaluation.failures.push({ key: null, reason: ledger.unknown.length + ' General Ledger rows name a transaction type the close cannot attribute.', rows: ledger.unknown });
   return { ok: evaluation.failures.length === 0, day, through, records: evaluation.results, movements: evaluation.movements, failures: evaluation.failures, fixedWorkflowKeys: others, reverify: dirtyRange({ markers: dirty, verifiedThrough, openingDate }) };
 }
-module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, closeGeneralDay, LABELS };
+module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS };

@@ -68,6 +68,10 @@ function grossCents(entity, record, context, { saved = false } = {}) {
 // journal lines on the inventory asset account (general-write-v1 gates all of these off).
 function inventoryTouch(entity, record, local) {
   if (!record) return null;
+  for (const key of ['FromAccountRef', 'ToAccountRef', 'AccountRef', 'DepositToAccountRef', 'AssetAccountRef']) {
+    const accountId = record[key]?.value;
+    if (accountId != null && local.get('Account', String(accountId))?.AccountSubType === 'Inventory') return 'the inventory asset account';
+  }
   if (entity === 'Item' && (record.Type === 'Inventory' || record.TrackQtyOnHand === true || record.QtyOnHand !== undefined)) return 'an inventory item';
   for (const line of Array.isArray(record.Line) ? record.Line : []) {
     const detail = line?.[line?.DetailType], itemId = detail?.ItemRef?.value, accountId = detail?.AccountRef?.value;
@@ -90,7 +94,10 @@ function checkGeneralWrite({ proposal, local, context }) {
   const protectDate = (ref, date, what, dirty = true) => {
     if (!DAY.test(date || '')) return;
     if (context.protectedThrough && date <= context.protectedThrough) say(ref, what + ' dated ' + date + ' is inside the closed or reconciled period through ' + context.protectedThrough + '; it cannot be changed.');
-    else if (dirty && context.verifiedThrough && date <= context.verifiedThrough) reverify.add(date);
+    else if (dirty && context.verifiedThrough && date <= context.verifiedThrough) {
+      reverify.add(date);
+      say(ref, what + ' changes verified history. General history edits are held until downstream periods and the opening baseline can be re-proved.');
+    }
   };
   ops.forEach((op, order) => {
     const ref = op?.ref;

@@ -18,7 +18,7 @@ const schema = new mongoose.Schema({
   status: { type: String, required: true, enum: ['prepared', 'sending', 'needs-correction', 'unknown', 'complete', 'held'] },
   // [{ index, attempt, requestId, items: [{ bId, ref }], state: 'sending'|'answered'|'lost', sentAt, answeredAt }]
   batches: { type: [mongoose.Schema.Types.Mixed], default: [] },
-  // ref -> { outcome, qboId?, entity, record?, fault?, next?, attempt }
+  // ref -> { outcome, qboId?, entity, record?, request (exact resolved payload), fault?, next?, attempt }
   items: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Records this run created or changed: [{ key: 'Entity:id', ref, op }] (ownership).
   owned: { type: [mongoose.Schema.Types.Mixed], default: [] },
@@ -26,7 +26,7 @@ const schema = new mongoose.Schema({
   dirty: { type: [mongoose.Schema.Types.Mixed], default: [] },
   revision: { type: Number, required: true, default: 0 },
   lastError: { type: String, default: null },
-}, { timestamps: true, minimize: false });
+}, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, status: 1, updatedAt: -1 });
 schema.index({ environment: 1, realmId: 1, 'owned.key': 1 });

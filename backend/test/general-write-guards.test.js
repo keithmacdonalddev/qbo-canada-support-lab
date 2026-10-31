@@ -72,15 +72,16 @@ test('every generic guard refuses with a plain, per-operation reason', () => {
   refuse([{ ref: 'prefs', op: 'update', entity: 'Preferences', id: '1', payload: { CurrencyPrefs: { MultiCurrencyEnabled: true } } }], /not a supported Preferences field|cannot be changed|not in the synced/);
 });
 
-test('placeholders build dependency layers, and history edits inside verified periods are flagged for re-verification', () => {
+test('placeholders build dependency layers while history edits are held for full reproof', () => {
   const result = check([
     sale(),
     { ref: 'pay1', op: 'create', entity: 'Payment', payload: { TxnDate: DAY, CustomerRef: { value: '1' }, TotalAmt: 100, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: { $ref: 'inv1' }, TxnType: 'Invoice' }] }] } },
-    { ref: 'up1', op: 'update', entity: 'Invoice', id: '100', payload: { DueDate: '2026-12-20' } },
   ]);
   assert.equal(result.ok, true, messages(result));
-  assert.deepEqual(result.plan.layers, [['inv1', 'up1'], ['pay1']]);
-  assert.deepEqual(result.plan.reverifyDates, ['2026-11-20']);
+  assert.deepEqual(result.plan.layers, [['inv1'], ['pay1']]);
+  assert.deepEqual(result.plan.reverifyDates, []);
+  const held = check([{ ref: 'up1', op: 'update', entity: 'Invoice', id: '100', payload: { DueDate: '2026-12-20' } }]);
+  assert.equal(held.ok, false); assert.match(messages(held), /changes verified history/);
   assert.deepEqual(result.plan.externalEdits, []);
 });
 
@@ -117,4 +118,13 @@ test('batches respect shared resources, not only references: stock items, open b
   // A deposit may carry a free line (for example bank interest) besides linked receipts.
   const deposit = check([{ ref: 'dep1', op: 'create', entity: 'Deposit', payload: { TxnDate: DAY, DepositToAccountRef: { value: '50' }, Line: [{ Amount: 40, LinkedTxn: [{ TxnId: '200', TxnType: 'Payment', TxnLineId: '0' }] }, { Amount: 1.25, DetailType: 'DepositLineDetail', DepositLineDetail: { AccountRef: { value: '53' } } }] } }]);
   assert.equal(deposit.ok, true, messages(deposit));
+});
+
+test('Transfers to or from inventory asset accounts are refused', () => {
+  for(const direction of ['FromAccountRef','ToAccountRef']){
+    const local=companyCopy([['Account',{Id:'60',AccountType:'Other Current Asset',AccountSubType:'Inventory',Active:true}]]);
+    const payload={TxnDate:DAY,Amount:10,FromAccountRef:{value:'50'},ToAccountRef:{value:'50'},[direction]:{value:'60'}};
+    const result=checkGeneralWrite({proposal:{operations:[{ref:'stock',op:'create',entity:'Transfer',payload}]},local,context});
+    assert.equal(result.ok,false);assert.match(messages(result),/inventory asset account/);
+  }
 });

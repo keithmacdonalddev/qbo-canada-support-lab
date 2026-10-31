@@ -11,9 +11,10 @@
 //   settle      inside the gate's result transaction: item outcomes saved on the run.
 // QuickBooks dedupes a batch by requestid, so a replay after a lost response reuses the
 // same requestid and bIds under a new transport attempt (a new receipt and dispatch key).
-const { hash, canonical } = require('./business-calendar');
+const { matchesRequest } = require('./general-write-recovery');
+const { hash, canonical, date } = require('./business-calendar');
 const { denied, freezeWriteRequest, classifyWriteResponse, responsePayload } = require('./qbo-write-contract');
-const { readWritePeriodEvidence, assertWritePeriod } = require('./qbo-write-period');
+const { readWritePeriodEvidence, assertWritePeriod, assertPeriodControl, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE } = require('./qbo-write-period');
 const MAX_BATCH = 30, ID = /^[a-f0-9]{24}$/i, REQUEST = /^[a-f0-9]{32}$/;
 // The single-record request an item is equivalent to (period contract and classification).
 function itemRequest(scope, item) {
@@ -39,12 +40,14 @@ function classifyGeneralResponse(scope, batch, response, intuitTid = '') {
     const group = groups.get(item.bId) || [];
     if (group.length !== 1) return { bId: item.bId, ref: item.ref, outcome: 'unknown' };
     const { bId, ...body } = group[0], status = body.Fault?.type === 'ValidationFault' ? 400 : response.status;
-    return { bId, ref: item.ref, ...classifyWriteResponse(itemRequest(scope, item), { status, json: body }, intuitTid) };
+    const observed = classifyWriteResponse(itemRequest(scope, item), { status, json: body }, intuitTid);
+    if (observed.outcome === 'saved' && item.op !== 'delete' && !matchesRequest(item.payload, body[item.entity])) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
+    return { bId, ref: item.ref, ...observed };
   });
   return { ...base, outcome: items.every(item => ['saved', 'rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };
 }
 // models: { GeneralWriteRuns, Agents }. runId / batchIndex name the saved batch.
-function createGeneralGateTransport({ models, scope, runId, batchIndex, now = () => Date.now() }) {
+function createGeneralGateTransport({ models, scope, runId, batchIndex, admissionGuard, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
   async function saved(session) {
@@ -53,7 +56,14 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, now = ()
     return { run, batch };
   }
   // The batch read at preflight; the gate asserts its period proof synchronously.
-  let preflighted = null;
+  let preflighted = null, lastResponse = null, recovery = null;
+  const sameReplay = (writer, batch, request) => writer?.unresolved?.kind === 'general-write' && writer.unresolved.runId === runId && writer.unresolved.batchIndex === batchIndex && writer.unresolved.requestId === batch.requestId && writer.unresolved.requestHash === request.requestHash;
+  async function recoveryReceipt(writer, batch, request, session) {
+    const receiptId = writer?.unresolved?.transportConsumed?.receiptId;
+    const receipt = models.Receipts && receiptId ? await read(models.Receipts, { _id: receiptId, ...scope }, session) : null;
+    if (!receipt || !['possibly-sent', 'unknown'].includes(receipt.state) || receipt.kind !== 'general-write' || receipt.requestHash !== request.requestHash || receipt.dispatchKey !== writer.unresolved.key || receipt.general?.runId !== runId || receipt.general.batchIndex !== batchIndex || receipt.general.requestId !== batch.requestId || receipt.periodProof?.kind !== 'general-period-proof' || receipt.periodProof.runId !== runId || receipt.periodProof.batchIndex !== batchIndex) throw denied('Exact admitted general-write receipt is required for replay.');
+    return receipt;
+  }
   return {
     async receiptEvidence({ request, session }) {
       const { run, batch } = await saved(session);
@@ -63,6 +73,25 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, now = ()
     async preflight({ request, client, coordination }) {
       const { batch } = await saved();
       if (buildGeneralBatch(scope, batch).requestHash !== request.requestHash) throw denied('The general batch request differs from its saved identity.');
+      recovery = null; preflighted = batch;
+      // Reuse the original admission evidence: a saved update advances its target
+      // token and a saved delete removes it. Only preferences and controls are fresh.
+      const writer = models.Writers ? await read(models.Writers, scope) : null;
+      if (sameReplay(writer, batch, request)) {
+        const receipt = await recoveryReceipt(writer, batch, request), startedAt = new Date(now()).toISOString();
+        const proofs = receipt.periodProof.proofs;
+        if (!Array.isArray(proofs) || proofs.length !== batch.items.length) throw denied('Original general replay proofs are incomplete.');
+        let preferences = null;
+        if (proofs.some(proof => proof.affectedDates?.length)) {
+          const response = await client.query('SELECT * FROM Preferences MAXRESULTS 1'), rows = response?.QueryResponse?.Preferences;
+          if (!Array.isArray(rows) || rows.length !== 1 || !rows[0]?.AccountingInfoPrefs || typeof rows[0].AccountingInfoPrefs !== 'object') throw denied('QuickBooks closing preferences could not be verified for replay.');
+          preferences = rows[0];
+        }
+        recovery = { receiptId: receipt._id, proofHash: hash(receipt.periodProof) };
+        const evidence = { version: 1, kind: 'general-period-replay-evidence', coordination, scope, requestHash: request.requestHash, runId, batchIndex, ...recovery, originalProof: receipt.periodProof, startedAt, observedAt: new Date(now()).toISOString(), preferences };
+        recovery.evidence = JSON.parse(JSON.stringify(evidence));
+        return evidence;
+      }
       // Linked records shared by several items are read once.
       const memo = new Map(), memoClient = { read: (entity, id) => { const key = entity + ':' + id; if (!memo.has(key)) memo.set(key, client.read(entity, id)); return memo.get(key); }, query: text => { if (!memo.has(text)) memo.set(text, client.query(text)); return memo.get(text); } };
       preflighted = batch;
@@ -72,31 +101,57 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, now = ()
     },
     assertPeriod({ request, evidence, controls, ownerId, clock }) {
       const batch = preflighted;
+      if (recovery) {
+        if (!batch || canonical(evidence) !== canonical(recovery.evidence) || hash(evidence.originalProof) !== recovery.proofHash || clock < Date.parse(evidence.observedAt) || clock - Date.parse(evidence.startedAt) > 300000) throw denied('Exact replay observations are stale or changed.');
+        assertPeriodControl(controls, scope, ownerId);
+        const proofs = evidence.originalProof.proofs.map((proof, n) => assertWritePeriod(itemRequest(scope, batch.items[n]), proof.evidence, proof.controls, Date.parse(proof.evidence.observedAt), ownerId));
+        const raw = evidence.preferences?.AccountingInfoPrefs?.BookCloseDate;
+        const qboClosedThrough = raw === undefined || raw === null || raw === '' ? null : (date(raw), raw);
+        const cutoff = [controls.closedThrough, controls.reconciledThrough, qboClosedThrough].filter(Boolean).sort().at(-1) || null;
+        if (proofs.some(proof => proof.evidence.version === 2) && evidence.preferences?.SalesFormsPrefs?.AutoApplyCredit !== false) throw Object.assign(denied(AUTOMATIC_CREDITS_MESSAGE), { code: AUTOMATIC_CREDITS_CODE });
+        if (cutoff && proofs.some(proof => proof.affectedDates.some(day => day <= cutoff))) throw denied('The exact replay affects a closed or reconciled period through ' + cutoff + '.');
+        return { version: 1, kind: 'general-period-proof', runId, batchIndex, proofs, replay: { receiptId: recovery.receiptId, proofHash: recovery.proofHash }, protectedThrough: cutoff, preferencesHash: evidence.preferences ? hash(evidence.preferences) : null, evidenceHash: hash(evidence) };
+      }
       if (!batch || evidence?.kind !== 'general-period-evidence' || evidence.runId !== runId || evidence.batchIndex !== batchIndex || evidence.requestHash !== request.requestHash || !Array.isArray(evidence.proofs) || evidence.proofs.length !== batch.items.length) throw denied('General protected-period evidence is incomplete.');
       const proofs = evidence.proofs.map((proof, n) => assertWritePeriod(itemRequest(scope, batch.items[n]), proof, controls, clock, ownerId));
       return { version: 1, kind: 'general-period-proof', runId, batchIndex, proofs, protectedThrough: proofs.map(row => row.protectedThrough).filter(Boolean).sort().at(-1) || null, evidenceHash: hash({ requestHash: request.requestHash, proofs }) };
     },
     async savedBatch(session) { return (await saved(session)).batch; },
-    async admit({ request, receiptId, dispatchKey, writer, ownerId, actorId, session }) {
+    async admit({ request, receiptId, dispatchKey, writer, ownerId, actorId, session, periodProof }) {
       const { run, batch } = await saved(session);
       if (!['sending', 'unknown'].includes(run.status) || run.contract !== 'general-write-v1' || String(run.ownerId) !== String(ownerId) || String(run.actorId) !== String(actorId) || buildGeneralBatch(scope, batch).requestHash !== request.requestHash || batch.state === 'answered') throw denied('The exact saved general batch is not ready to send.');
-      if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw denied('The business day changed since this general write was prepared. Nothing was sent.');
       // The standing grant still covers this agent, owner and published business.
       if (run.agentAuthority) await require('./business-agent-authority').fenceAgentAuthority({ authority: run.agentAuthority, scope, ownerId: String(ownerId), actorId: String(actorId), Agents: models.Agents, session });
       // The company writer: free, or held unresolved by this same batch (a lost response).
-      const replay = writer.unresolved?.kind === 'general-write' && writer.unresolved.runId === runId && writer.unresolved.batchIndex === batchIndex && writer.unresolved.requestId === batch.requestId;
+      const replay = sameReplay(writer, batch, request);
+      if (replay) {
+        const receipt = await recoveryReceipt(writer, batch, request, session);
+        if (!recovery || receipt._id !== recovery.receiptId || hash(receipt.periodProof) !== recovery.proofHash || periodProof?.replay?.receiptId !== recovery.receiptId || periodProof.replay.proofHash !== recovery.proofHash) throw denied('General replay lost its exact admitted receipt proof.');
+      } else if (recovery || periodProof?.replay) throw denied('A recovered proof cannot admit new general work.');
       if (writer.operationId !== null || writer.planHash !== null || (writer.unresolved !== null && !replay)) throw denied('Another operation or unresolved request owns this company. Nothing was sent.');
+      // Exact already-admitted identity recovery is allowed across midnight. It cannot
+      // authorize new work; replay may return a record that already consumed its balance.
+      if (!replay) {
+        if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw denied('The business day changed since this general write was prepared. Nothing was sent.');
+        if (typeof admissionGuard !== 'function') throw denied('Full general-write admission guards are required.');
+        try { await admissionGuard({ scope, run, batch, session, periodProof }); }
+        catch (error) { if (error?.qboStage === 'write_admission') throw error; throw denied(error?.code === 'GENERAL_WRITE_REFUSED' ? error.message : 'Full general-write guards could not be verified. Nothing was sent.'); }
+      }
+      const fenced = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $inc: { revision: 1 } }, { new: true, session }).lean();
+      if (!fenced) throw denied('The general write changed before admission. Nothing was sent.');
       return { version: 1, kind: 'general-write', key: dispatchKey, runId, batchIndex, requestId: batch.requestId, requestHash: request.requestHash, actorId, transportConsumed: { receiptId, consumedAt: new Date(now()).toISOString() } };
     },
     async classify({ request, response, intuitTid }) {
       const { batch } = await saved();
       if (buildGeneralBatch(scope, batch).requestHash !== request.requestHash) throw denied('The general batch response needs recovery.', true);
+      const payload = responsePayload(response);
+      lastResponse = Array.isArray(payload?.BatchItemResponse) && Buffer.byteLength(JSON.stringify(payload)) <= 8000000 ? JSON.parse(JSON.stringify(payload.BatchItemResponse)) : null;
       return classifyGeneralResponse(scope, batch, response, intuitTid);
     },
     async settle({ stored, observed, observedAt, session }) {
       const { run, batch } = await saved(session);
       if (stored.general?.runId !== runId || stored.general.batchIndex !== batchIndex || stored.general.requestId !== batch.requestId) throw denied('The general batch response differs from its admitted batch.', true);
-      const updated = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $set: { batches: run.batches.map(row => row.index === batchIndex ? { ...row, transport: { receiptId: stored._id, outcome: observed.outcome, items: (observed.items || []).map(item => ({ bId: item.bId, outcome: item.outcome, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.faultCodes ? { faultCodes: item.faultCodes } : {}) })), observedAt: observedAt.toISOString() } } : row) }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const updated = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $set: { batches: run.batches.map(row => row.index === batchIndex ? { ...row, transport: { receiptId: stored._id, outcome: observed.outcome, ...(lastResponse ? { response: lastResponse } : {}), items: (observed.items || []).map(item => ({ bId: item.bId, ref: item.ref, outcome: item.outcome, ...(item.mismatch ? { mismatch: true } : {}), ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.faultCodes ? { faultCodes: item.faultCodes } : {}) })), observedAt: observedAt.toISOString() } } : row) }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!updated) throw denied('The general write changed while its response was saved.', true);
     },
   };
@@ -120,12 +175,12 @@ async function sendGeneralBatch({ client, gate, scope, runId, batch }) {
 }
 // The live transport for general-write-service: the company's scoped QuickBooks client and a
 // coordinated gate with this batch's runtime. Installed only when dispatch is enabled.
-function createGeneralLiveTransport({ access, models = {}, now = () => Date.now() }) {
+function createGeneralLiveTransport({ access, models = {}, admissionGuard, now = () => Date.now() }) {
   return {
     async sendBatch(scope, { runId, batch }) {
       const client = await access.resolveClient(scope), { QBOClient } = require('./qbo-client');
       if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall) throw denied('General writes require the original scoped QuickBooks transport.');
-      const gate = require('./qbo-write-gate').createCoordinatedGate({ generalTransport: createGeneralGateTransport({ models, scope, runId, batchIndex: batch.index, now }), now });
+      const gate = require('./qbo-write-gate').createCoordinatedGate({ generalTransport: createGeneralGateTransport({ models, scope, runId, batchIndex: batch.index, admissionGuard, now }), now });
       return sendGeneralBatch({ client, gate, scope, runId, batch });
     },
   };

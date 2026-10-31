@@ -37,7 +37,7 @@ function company() {
       records.set(item.entity + ':' + record.Id, record); return { [item.entity]: structuredClone(record) };
     }
     const current = records.get(item.entity + ':' + body.Id);
-    if (current.SyncToken !== body.SyncToken) return { Fault: { Error: [{ code: '5010', Message: 'Stale Object Error' }] } };
+    if (current.SyncToken !== body.SyncToken) return { Fault: { type: 'ValidationFault', Error: [{ code: '5010', Message: 'Stale Object Error' }] } };
     const { sparse, ...fields } = body, next = { ...current, ...fields, SyncToken: String(Number(current.SyncToken) + 1) };
     records.set(item.entity + ':' + body.Id, next); return { [item.entity]: structuredClone(next) };
   };
@@ -46,7 +46,7 @@ function company() {
   const transport = { failNext: null, lose: 0, sendBatch: async (s, { batch }) => {
     sent.push(structuredClone(batch));
     if (answered.has(batch.requestId)) return structuredClone(answered.get(batch.requestId));
-    const response = batch.items.map(item => transport.failNext?.ref === item.bId ? (transport.failNext = null, { bId: item.bId, Fault: { Error: [{ code: '6140', Message: 'Duplicate Document Number Error' }] } }) : { bId: item.bId, ...apply(item) });
+    const response = batch.items.map(item => transport.failNext?.ref === item.bId ? (transport.failNext = null, { bId: item.bId, Fault: { type: 'ValidationFault', Error: [{ code: '6140', Message: 'Duplicate Document Number Error' }] } }) : { bId: item.bId, ...apply(item) });
     answered.set(batch.requestId, structuredClone(response));
     if (transport.lose > 0) { transport.lose--; throw Object.assign(new Error('socket hang up'), { lost: true }); }
     return response;
@@ -93,16 +93,17 @@ test('execution sends batches in resource order, resolves $ref ids, and replays 
   assert.equal([...h.records.keys()].filter(key => key.startsWith('Invoice:')).length, 2, 'the replay created nothing twice');
 });
 
-test('a faulted item stops for correction while saved siblings stay saved; history edits mark dirty periods before sending', async () => {
+test('a faulted item stops for correction while saved siblings stay saved on the open day', async () => {
   const h = company(), s = service(h);
+  h.records.get('Invoice:100').TxnDate = DAY;
   const edit = { ref: 'terms', op: 'update', entity: 'Invoice', id: '100', payload: { DueDate: '2027-01-15' }, reason: 'The customer asked for a later due date on this imported invoice.' };
   const prepared = await s.api.prepare(bound, input('mixed-day-with-edit1', [invoiceOp, edit, { ...invoiceOp, ref: 'inv2', payload: { ...invoiceOp.payload, DocNumber: 'TDL-7' } }]));
-  assert.deepEqual(prepared.plan.reverifyDates, ['2026-11-20']);
+  assert.deepEqual(prepared.plan.reverifyDates, []);
   h.transport.failNext = { ref: '3' };
   const result = await s.api.execute(bound, prepared.runId);
   assert.equal(result.status, 'needs-correction');
   assert.equal(result.items.inv1.outcome, 'saved'); assert.equal(result.items.terms.outcome, 'saved'); assert.equal(result.items.inv2.outcome, 'fault'); assert.equal(result.items.inv2.fault[0].code, '6140');
-  assert.equal(s.dirty.length, 1); assert.equal(s.dirty[0].date, '2026-11-20');
+  assert.equal(s.dirty.length, 0);
   assert.equal(h.sent[0].items.find(item => item.payload.Id === '100').payload.SyncToken, '2', 'the update carries the copy’s current SyncToken');
   assert.equal(h.records.get('Invoice:100').DueDate, '2027-01-15');
 });
@@ -123,4 +124,33 @@ test('a saved response is stale once a later item changes the same record: the n
   assert.equal(done.status, 'complete', JSON.stringify(done));
   assert.deepEqual(k.fetched, ['Invoice:' + done.items.inv1.qboId], 'one targeted fresh read of the changed invoice');
   assert.equal(k.records.get('Invoice:' + done.items.inv1.qboId).Balance, 0);
+});
+
+test('a saved mismatch cannot be retried as a new create identity', async () => {
+  const h=company(),s=service(h),original=h.transport.sendBatch;
+  h.transport.sendBatch=async (...args)=>{const response=await original(...args);response[0].Invoice.DueDate='2028-01-01';return response;};
+  const prepared=await s.api.prepare(bound,input('mismatch-never-recreate',[invoiceOp]));
+  assert.equal((await s.api.execute(bound,prepared.runId)).items.inv1.outcome,'mismatch');
+  const retried=await s.api.execute(bound,prepared.runId);
+  assert.equal(retried.status,'unknown');assert.equal(h.sent.length,1);assert.equal(s.Runs.rows.get(prepared.runId).batches.length,1);
+});
+
+test('a durable gate response is ingested after a crash without another transport send', async () => {
+  const h=company(),s=service(h);const prepared=await s.api.prepare(bound,input('settled-response-crash',[invoiceOp]));
+  const original=h.transport.sendBatch;
+  h.transport.sendBatch=async(scope,{batch})=>{const response=await original(scope,{batch});const row=s.Runs.rows.get(prepared.runId);row.batches[0].transport={response,items:batch.items.map(item=>({bId:item.bId,outcome:'saved'}))};row.revision++;throw Object.assign(new Error('service lost acknowledgement'),{lost:true});};
+  await s.api.execute(bound,prepared.runId);
+  const result=await s.api.execute(bound,prepared.runId);
+  assert.equal(result.status,'complete');assert.equal(h.sent.length,1);
+});
+
+test('unresolved pre-opening dirty markers refuse new general work against an old verified baseline', async () => {
+  const { createGeneralWriteContext } = require('../src/modules/general-write-service');
+  const session = {}, chain = value => ({ select() { return this; }, session(actual) { assert.equal(actual, session); return this; }, maxTimeMS() { return this; }, lean: async () => value });
+  const context = createGeneralWriteContext({ now: () => Date.parse('2026-12-02T15:00:00Z'), models: {
+    Calendars: { findOne: () => chain({ verifiedThrough: '2026-12-01', openingDate: '2026-11-01', baseline: { status: 'verified' } }) },
+    Policies: { findOne: () => chain({ periodControl: {} }) },
+    GeneralWriteRuns: { findOne: filter => { assert.equal(filter.dirty.$elemMatch.date.$lte, '2026-12-01'); return chain({ _id: 'old-dirty-run' }); } },
+  } });
+  await assert.rejects(context(scope, { get: () => null }, { session }), /General history invalidation is unresolved/);
 });

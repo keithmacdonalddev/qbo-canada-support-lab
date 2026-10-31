@@ -79,8 +79,9 @@ test('history edits dirty every close from the earliest affected date through th
   const copy = new Map([['Invoice:100', { Id: '100', SyncToken: '3', TxnDate: '2026-11-20', Balance: 50, TotalAmt: 50, CustomerRef: { value: '1' }, Line: [] }], ['Payment:300', { Id: '300', SyncToken: '0', TxnDate: '2026-11-25', TotalAmt: 50, CustomerRef: { value: '1' }, Line: [{ Amount: 50, LinkedTxn: [{ TxnId: '100', TxnType: 'Invoice' }] }] }]]);
   const local = { get: (entity, id) => copy.get(entity + ':' + id) || null, owned: () => true };
   const result = checkGeneralWrite({ proposal: { operations: [{ ref: 'undo', op: 'delete', entity: 'Payment', id: '300' }] }, local, context: { day: '2026-12-02', verifiedThrough: '2026-12-01', protectedThrough: '2026-10-31', taxCodes: { sales: ['7'], purchases: ['8'] } } });
-  assert.equal(result.ok, true, JSON.stringify(result.problems));
-  assert.deepEqual(result.plan.reverifyDates, ['2026-11-25']); assert.equal(result.plan.operations[0].targetVersion, '0'); assert.equal(result.plan.operations[0].before.TotalAmt, 50);
+  assert.equal(result.ok, false);
+  assert.match(result.problems.map(row => row.message).join(' '), /changes verified history/);
+  assert.equal(result.plan, null, 'history cannot dispatch before cascade reproof exists');
 });
 
 test('partial batch failure and lost responses keep exact transport identity; unknown items hold a barrier (R1-6)', () => {
@@ -95,8 +96,8 @@ test('partial batch failure and lost responses keep exact transport identity; un
   assert.equal(lost.lost, true); assert.deepEqual(lost.next, { action: 'replay', requestId: batch.requestId, bIds: ['1', '2', '3', '4', '5'] });
   const result = itemOutcomes(batch, [
     { bId: '1', Customer: { Id: '61', SyncToken: '0', DisplayName: 'Harbour Clinic' } },
-    { bId: '2', Fault: { Error: [{ code: '6140', Message: 'Duplicate Document Number Error' }] } },
-    { bId: '3', Fault: { Error: [{ code: '5010', Message: 'Stale Object Error' }] } },
+    { bId: '2', Fault: { type: 'ValidationFault', Error: [{ code: '6140', Message: 'Duplicate Document Number Error' }] } },
+    { bId: '3', Fault: { type: 'ValidationFault', Error: [{ code: '5010', Message: 'Stale Object Error' }] } },
   ]);
   const by = Object.fromEntries(result.items.map(row => [row.ref, row]));
   assert.equal(by.cust.outcome, 'saved'); assert.equal(by.inv.next.action, 'correct'); assert.equal(by.edit.next.action, 'refresh-and-new-attempt');
@@ -173,4 +174,100 @@ test('the day close reads one debit/credit General Ledger and verifies the dayâ€
   const edited = await closeGeneralDay({ Runs, scope, day: '2026-12-02', copy: { read: async () => ({ ...saved, SyncToken: '2', DueDate: '2027-03-01' }) }, ledgerReport: report(), ctx, verifiedThrough: '2026-12-01' });
   assert.equal(edited.ok, false); assert.equal(edited.records[0].kind, 'external-change');
   assert.throws(() => parseLedger({ ...report(), Header: { ...report().Header, StartPeriod: '2026-12-01' } }, '2026-12-02'), /not the accrual report/);
+});
+
+test('close enumeration includes the 501st run and never silently truncates history',async()=>{
+  const {generalRecordsFor}=require('../src/modules/general-write-day-close');
+  const runs=Array.from({length:501},(_,n)=>({_id:String(n).padStart(24,'0'),items:{},dirty:[],plan:{operations:[]}}));
+  runs[500].items.inv={outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:invoice(100)};
+  runs[500].plan.operations=[{ref:'inv',op:'create',entity:'Invoice'}];
+  let queries=0;
+  const Runs={find(filter){queries++;let limit;return{select(){return this;},sort(){return this;},limit(n){limit=n;return this;},maxTimeMS(){return this;},lean:async()=>runs.filter(row=>!filter._id||row._id>filter._id.$gt).slice(0,limit)};}};
+  const result=await generalRecordsFor({Runs,scope:{environment:'sandbox',realmId:'123',connectionId:'a'.repeat(24)},day:'2026-12-02',copy:{read:async()=>invoice(100)}});
+  assert.equal(queries,2);assert.equal(result.records.length,1);assert.equal(result.records[0].id,'700');
+});
+
+test('authorized general deletion closes with no ledger rows; external deletion still fails',()=>{
+  const {evaluateDay}=require('../src/modules/general-write-close');
+  const before=invoice(100),evidence={accountant:{versionHash:versionHash(before),record:before,deleted:true,operation:'delete'}};
+  const row={entity:'Invoice',id:'700',current:null,deleted:true,before,evidence};
+  const result=evaluateDay({records:[row],ledger:{},ctx});
+  assert.equal(result.ok,true);assert.equal(result.results[0].kind,'accountant');assert.equal(result.movements.find(row=>row.accountId==='120').cents,-11500);
+  assert.equal(evaluateDay({records:[{...row,evidence:{accountant:{versionHash:versionHash(before),record:before}}}],ledger:{},ctx}).ok,false);
+  assert.equal(evaluateDay({records:[row],ledger:{'Invoice:700':[{accountId:'120',cents:1}]},ctx}).ok,false);
+});
+
+test('request proof compares nested line account, item, tax, quantity and settlement detail',()=>{
+  const {matchesRequest}=require('../src/modules/general-write-recovery');
+  const sent={TxnDate:'2026-12-02',Line:[{Amount:100,DetailType:'AccountBasedExpenseLineDetail',AccountBasedExpenseLineDetail:{AccountRef:{value:'610'},TaxCodeRef:{value:'7'},ClassRef:{value:'10'}}}]};
+  for(const field of ['AccountRef','TaxCodeRef','ClassRef']){
+    const got=structuredClone(sent);got.Line[0].AccountBasedExpenseLineDetail[field].value='999';
+    assert.equal(matchesRequest(sent,got),false,field);
+  }
+  const sale=invoice(100),wrong=structuredClone(sale);wrong.Line[0].SalesItemLineDetail.ItemRef.value='42';
+  assert.equal(matchesRequest(sale,wrong),false);wrong.Line[0].SalesItemLineDetail.ItemRef.value='40';wrong.Line[0].SalesItemLineDetail.Qty=2;
+  assert.equal(matchesRequest(sale,wrong),false);
+  const {evaluateDay}=require('../src/modules/general-write-close');
+  const wrongBill={...sent,Id:'701',Line:structuredClone(sent.Line)};wrongBill.Line[0].AccountBasedExpenseLineDetail.AccountRef.value='999';
+  assert.equal(evaluateDay({records:[{entity:'Bill',id:'701',current:wrongBill,evidence:{accountant:{versionHash:versionHash(wrongBill),record:wrongBill,request:sent}}}],ledger:{'Bill:701':[{accountId:'999',cents:10000},{accountId:'200',cents:-10000}]},ctx}).ok,false);
+});
+
+test('malformed delete and duplicate responses never prove a saved outcome',()=>{
+  const batch={requestId:'a'.repeat(32),items:[{bId:'1',ref:'gone',op:'delete',entity:'Payment',id:'300',payload:{Id:'300',SyncToken:'0'}}]};
+  for(const response of [[{bId:'1',Invoice:{Id:'300',status:'Deleted'}}],[{bId:'1',Payment:{Id:'301',status:'Deleted'}}],[{bId:'1',Payment:{Id:'300'}}],[{bId:'1',Payment:{Id:'300',status:'Deleted'}},{bId:'1',Payment:{Id:'300',status:'Deleted'}}]])assert.equal(itemOutcomes(batch,response).items[0].outcome,'unknown');
+  assert.equal(itemOutcomes(batch,[{bId:'1',Payment:{Id:'300',status:'Deleted'}}]).items[0].outcome,'deleted');
+});
+
+test('an authorized deletion uses its exact tombstone instead of a failing not-found GET',async()=>{
+  const {generalRecordsFor,closeGeneralDay}=require('../src/modules/general-write-day-close');
+  const scope={environment:'sandbox',realmId:'123',connectionId:'a'.repeat(24)},before=invoice(100);
+  const run={_id:'delete',plan:{operations:[{ref:'gone',op:'delete',entity:'Invoice',id:'700',before}]},items:{gone:{outcome:'deleted',op:'delete',entity:'Invoice'}},dirty:[]};
+  const Runs={find:()=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>[run]})};
+  const copy={read:async()=>{throw Object.assign(new Error('Object not found'),{status:400});}};
+  const records=await generalRecordsFor({Runs,scope,day:'2026-12-02',copy});
+  assert.equal(records.records[0].deleted,true);assert.equal(require('../src/modules/general-write-close').evaluateDay({records:records.records,ledger:{},ctx}).ok,true);
+  run.items.gone={outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:before};
+  await assert.rejects(generalRecordsFor({Runs,scope,day:'2026-12-02',copy}),/Object not found/);
+});
+
+test('older run records recover the resolved request from the saved batch for dependent creates',async()=>{
+  const {generalRecordsFor}=require('../src/modules/general-write-day-close');
+  const original={TxnDate:'2026-12-02',CustomerRef:{value:'1'},TotalAmt:60,Line:[{Amount:60,LinkedTxn:[{TxnId:{$ref:'inv1'},TxnType:'Invoice'}]}]};
+  const sent=structuredClone(original);sent.Line[0].LinkedTxn[0].TxnId='700';
+  const payment={...sent,Id:'900',SyncToken:'0'};
+  const run={_id:'resolved',dirty:[],plan:{operations:[{ref:'pay',op:'create',entity:'Payment',payload:original}]},batches:[{attempt:1,state:'answered',items:[{ref:'pay',payload:sent}]}],items:{pay:{outcome:'saved',op:'create',entity:'Payment',qboId:'900',record:payment,attempt:1}}};
+  const Runs={find:()=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>[run]})};
+  const {records}=await generalRecordsFor({Runs,scope:{},day:'2026-12-02',copy:{read:async()=>payment}});
+  const result=require('../src/modules/general-write-close').evaluateDay({records,ledger:{'Payment:900':[{accountId:'120',cents:-6000},{accountId:'125',cents:6000}]},ctx});
+  assert.equal(result.ok,true,JSON.stringify(result.failures));
+});
+
+test('the exact dispatched delete version supersedes older proved versions regardless of run order',async()=>{
+  const {generalRecordsFor}=require('../src/modules/general-write-day-close');
+  const prepared=invoice(100),latest={...invoice(150),SyncToken:'7'};
+  const removal={_id:'001',dirty:[],plan:{operations:[{ref:'gone',op:'delete',entity:'Invoice',id:'700',targetVersion:'0',before:prepared}]},batches:[{attempt:1,state:'answered',items:[{ref:'gone',before:latest,payload:{Id:'700',SyncToken:'7'}}]}],items:{gone:{outcome:'deleted',op:'delete',entity:'Invoice',attempt:1}}};
+  const updated={_id:'002',dirty:[],plan:{operations:[{ref:'edit',op:'update',entity:'Invoice',id:'700',before:prepared}]},items:{edit:{outcome:'saved',op:'update',entity:'Invoice',qboId:'700',record:latest}}};
+  for(const rows of [[removal,updated],[updated,removal]]){
+    const Runs={find:()=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>rows})};
+    const result=await generalRecordsFor({Runs,scope:{},day:'2026-12-02',copy:{read:async()=>{throw new Error('deleted IDs must not be read');}}});
+    assert.equal(result.records[0].deleted,true);assert.equal(result.records[0].before.SyncToken,'7');
+  }
+});
+
+test('registering general models cannot create collections or indexes at backend startup',()=>{
+  for(const model of [require('../src/models/GeneralWriteRun'),require('../src/models/GeneralDayClose')]){
+    assert.equal(model.schema.options.autoCreate,false);assert.equal(model.schema.options.autoIndex,false);
+  }
+});
+
+test('a delete refreshed after preparation wins over the version it actually consumed',async()=>{
+  const {generalRecordsFor}=require('../src/modules/general-write-day-close');
+  const prepared={...invoice(100),SyncToken:'1'},executed={...invoice(150),SyncToken:'2'};
+  const update={_id:'a-update',dirty:[],plan:{operations:[{ref:'edit',op:'update',id:'700',before:prepared}]},items:{edit:{outcome:'saved',op:'update',entity:'Invoice',qboId:'700',record:executed}}};
+  const deletion={_id:'z-delete',dirty:[],plan:{operations:[{ref:'gone',op:'delete',id:'700',before:prepared,targetVersion:'1'}]},batches:[{state:'answered',attempt:1,items:[{ref:'gone',before:executed,payload:{Id:'700',SyncToken:'2'}}]}],items:{gone:{outcome:'deleted',op:'delete',entity:'Invoice',attempt:1,request:{Id:'700',SyncToken:'2'}}}};
+  const Runs={find:()=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>[update,deletion]})};
+  const {records}=await generalRecordsFor({Runs,scope:{},day:'2026-12-02',copy:{read:async()=>{throw Error('deleted target must not be fetched');}}});
+  assert.equal(records.length,1);assert.equal(records[0].deleted,true);assert.deepEqual(records[0].before,executed);
+  const result=require('../src/modules/general-write-close').evaluateDay({records,ledger:{},ctx});
+  assert.equal(result.ok,true,JSON.stringify(result.failures));assert.equal(result.movements.find(row=>row.accountId==='120').cents,-17250);
 });

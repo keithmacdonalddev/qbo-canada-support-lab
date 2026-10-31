@@ -6,8 +6,8 @@ const { scoped } = require('./qbo-write-contract');
 const QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 const stamp = value => value == null ? NaN : new Date(value).getTime();
 const sameScope = (a,b) => ['environment','realmId','connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
-const query = (Model, filter) => Model.findOne(filter).maxTimeMS(3000).lean();
-function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Audits, now = () => Date.now() } = {}) {
+function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Audits, session = null, now = () => Date.now() } = {}) {
+  const query = (Model, filter) => { const read = Model.findOne(filter); return (session ? read.session(session) : read).maxTimeMS(3000).lean(); };
   function models() {
     // Importing this helper in an isolated test must not buffer database work.
     if (!Records && require('mongoose').connection.readyState !== 1) return null;
@@ -33,7 +33,8 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     return query(db.Receipts,{...scope,sentAt:{$gte:new Date(after)},$or:[
       {entity:entity.toLowerCase(),'observed.qboId':id},
       {entity:entity.toLowerCase(),'state':{$in:['possibly-sent','unknown']}},
-      {'periodProof.evidence.records':{$elemMatch:{entity,id}}}
+      {'periodProof.evidence.records':{$elemMatch:{entity,id}}},
+      {'periodProof.proofs.evidence.records':{$elemMatch:{entity,id}}}
     ]});
   }
   async function read(scope, entity, id, { transactions=false, signal }={}) {
@@ -68,7 +69,7 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
       const audit=await query(db.Audits,{_id:auditId,realmId:scope.realmId});
       if(!audit || String(audit.userId)!==String(receipt.ownerId) || String(audit.actorUserId||audit.userId)!==String(receipt.actorId) || audit.action!==action || audit.actionType!=='manual' || audit.outcome!==outcome || canonical(audit.inputParams)!==canonical(params) || canonical(audit.afterState)!==canonical(afterState))return null;
     }
-    const conflict=await query(db.Receipts,{...scope,_id:{$ne:receiptId},sentAt:{$gte:new Date(receipt.sentAt)},$or:[{entity:entity.toLowerCase(),'observed.qboId':id},{entity:entity.toLowerCase(),state:{$in:['possibly-sent','unknown']}},{'periodProof.evidence.records':{$elemMatch:{entity,id}}}]});
+    const conflict=await query(db.Receipts,{...scope,_id:{$ne:receiptId},sentAt:{$gte:new Date(receipt.sentAt)},$or:[{entity:entity.toLowerCase(),'observed.qboId':id},{entity:entity.toLowerCase(),state:{$in:['possibly-sent','unknown']}},{'periodProof.evidence.records':{$elemMatch:{entity,id}}},{'periodProof.proofs.evidence.records':{$elemMatch:{entity,id}}}]});
     if (conflict) return null; signal?.throwIfAborted();
     return observation(scope,entity,payload[entity],new Date(time).toISOString(),{kind:'qbo-write-response',receiptId,requestHash:receipt.requestHash,responseHash:receipt.observed.responseHash});
   }
