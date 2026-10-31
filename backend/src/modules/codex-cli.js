@@ -22,7 +22,7 @@ const { providerTimeout } = require('./ai-provider-timeout');
 
 const WORK_DIR = path.join(os.tmpdir(), 'test-data-lab-codex');
 const STATUS_CACHE_MS = 60 * 1000;
-const LOGIN_COMMAND = `codex --ignore-user-config -c 'cli_auth_credentials_store="file"' login --device-auth`;
+const LOGIN_COMMAND = `codex -c 'cli_auth_credentials_store="file"' login --device-auth`;
 
 // Codex silently ignores unknown -c keys; re-check these after Codex upgrades.
 const SELF_TEXT_ARGS = Object.freeze([
@@ -129,7 +129,7 @@ function getCodexVersion(executable = resolveExecutable()) {
   if (versionCache?.key === key) return Promise.resolve(versionCache.version);
   return new Promise((resolve) => {
     try {
-      execFile(executable, ['--version'], { windowsHide: true, timeout: 5000, env: childEnv() }, (err, stdout) => {
+      execFile(executable, ['--version'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout) => {
         const version = err ? null : (/(\d+\.\d+\.\d+\S*)/.exec(String(stdout || ''))?.[1] || null);
         if (version) versionCache = { key, version };
         resolve(version);
@@ -159,7 +159,7 @@ function getStatus({ refresh = false } = {}) {
   }
   const login = new Promise((resolve) => {
     try {
-      execFile(executable, ['--ignore-user-config', ...AUTH_ARGS, 'login', 'status'], { windowsHide: true, timeout: 5000, env: childEnv() }, (err, stdout, stderr) => {
+      execFile(executable, [...AUTH_ARGS, 'login', 'status'], { windowsHide: true, timeout: 15000, env: childEnv() }, (err, stdout, stderr) => {
         const text = `${stdout || ''}\n${stderr || ''}`;
         const loggedIn = !err && /logged in/i.test(text) && !/not logged in/i.test(text);
         const method = /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api-key' : null;
@@ -305,7 +305,7 @@ function modelCatalogFile(executable) {
       }
     };
     try {
-      execFile(executable, ['--ignore-user-config', ...SUBSCRIPTION_ARGS, 'debug', 'models'], { windowsHide: true, timeout: 20000, maxBuffer: 32 * 1024 * 1024, env: childEnv() }, onResult);
+      execFile(executable, [...SUBSCRIPTION_ARGS, 'debug', 'models'], { windowsHide: true, timeout: 20000, maxBuffer: 32 * 1024 * 1024, env: childEnv() }, onResult);
     } catch (err) {
       onResult(err);
     }
