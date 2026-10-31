@@ -23,6 +23,8 @@ function createBusinessGovernanceRouter(dependencies = {}) {
   }));
   router.use((req, res, next) => Object.keys(req.query).length ? res.status(400).json({ error: 'Business decisions do not accept query overrides.' }) : next());
   router.get('/', action(req => service().status(req.user)));
+  router.get('/close-checklist/:period', action(req => service().getCloseChecklist(req.user, { period: req.params.period })));
+  router.post('/close-checklist/evidence', action(req => service().recordCloseChecklistEvidence(req.user, req.body, { manualAttestation: true })));
   router.post('/publication/review', action(req => service().reviewPublication(req.user, req.body)));
   router.post('/publication', action((req, signal) => service().publish(req.user, req.body, { signal })));
   router.post('/history-adoption/review', action((req, signal) => service().reviewHistoryAdoption(req.user, { signal })));

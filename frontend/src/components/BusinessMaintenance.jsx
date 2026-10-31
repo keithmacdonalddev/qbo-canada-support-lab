@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import BusinessRecoveryReviews from './BusinessRecoveryReviews'
 import BusinessActivityTerms from './BusinessActivityTerms'
 import BusinessContinuity from './BusinessContinuity'
+import BusinessCloseChecklist from './BusinessCloseChecklist'
 
 const money = cents => cents == null ? '—' : new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(cents / 100)
 export default function BusinessMaintenance(props) {
@@ -64,7 +65,7 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
   const publicationReview = review?.review.blueprintHash === draft?.contentHash ? review : null
   const draftSchedulePending = environment === 'production' && draft?.business.activityTemplateVersion === 3, publishedSchedulePending = environment === 'production' && view?.published?.activityTemplateVersion === 3
   if (!enabled) return null
-  return <section id="business-maintenance" tabIndex={-1} aria-label="Business publication and calendar" className="mt-5 scroll-mt-20 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">
+  return <>{view && <BusinessCloseChecklist realmId={realmId} environment={environment} connectionId={view.connectionId} api={api} />}<section id="business-maintenance" tabIndex={-1} aria-label="Business publication and calendar" className="mt-5 scroll-mt-20 rounded-[10px] border border-[var(--line)] bg-[var(--surface)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus)]">
     <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3"><h2 className="text-[13px] font-semibold">Business publication and calendar</h2><Button variant="ghost" size="sm" disabled={busy} onClick={() => act(load)}>Refresh business state</Button></header>
     <div className="space-y-4 px-5 py-4 text-[13px]">
       {view && <p className="text-[var(--ink-2)]">{view.companyName} · {view.environment} · {view.realmId}</p>}
@@ -131,5 +132,5 @@ export function MaintenancePanel({ enabled, realmId, environment, onChanged, onS
         {view?.owner && plan.status === 'previewed' && <><label className="flex items-start gap-2"><input type="checkbox" checked={acceptPlan} onChange={event => setAcceptPlan(event.target.checked)} />I reviewed this plan’s dates, amounts, links and expected tax for the displayed company.{environment === 'production' && ' I explicitly approve these writes to the REAL Production company.'}</label><Button disabled={busy || !acceptPlan} onClick={() => act(async () => { await api.post('/company/business-governance/operations/' + plan.operationId + '/approve', { planHash: plan.planHash, ...(environment === 'production' ? { confirmProduction: true } : {}) }, { timeout: 190000 }); setPlan(null); setNotice('Plan approved. Use Run saved operation below to execute it.'); onChanged?.() })}>Approve saved business operation</Button></>}
       </div>}
     </div>
-  </section>
+  </section></>
 }
