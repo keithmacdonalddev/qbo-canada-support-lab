@@ -109,7 +109,7 @@ function createBusinessAgentTools({row,role='accountant',passId,scope,store,acce
     }catch{return {unavailable:true};}
   }
   async function execute(name,input={}){
-    if(++calls>24)fail('This decision pass reached its tool allowance. Saved work continues in the next pass.');
+    if(++calls>60)fail('This decision pass reached its tool allowance. Saved work continues in the next pass.');
     await guard();const definition=byName.get(name);if(!definition)fail('This role cannot use that business tool.',400);validateArguments(input,definition.input_schema);
     if(role!=='accountant'&&SPECIALIST_TYPES[role]){
       const type=input.type||input.entityType;if(type&&!SPECIALIST_TYPES[role].includes(type))fail('This record type belongs to another specialist responsibility.',403);
