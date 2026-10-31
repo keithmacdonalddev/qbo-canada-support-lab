@@ -58,7 +58,14 @@ function matchesReferenceDefinition(scope, entity, record, definition, definitio
   if (referenceDefinition(scope, entity, record, definition.version).hash === definition.hash) return true;
   if (definition.version !== 1 || !['Item', 'TaxCode'].includes(entity) || !definitionObservation) return false;
   // Authenticate the old full record before comparing canonical definitions.
-  const retained = observedRecord(scope, entity, definitionObservation, now);
+  // Historical evidence authenticates only the approved baseline. It must never
+  // be used as a fresh observation for preparation, stock or execution.
+  let retained;
+  if (definitionObservation.source?.kind === 'qbo-retained-mirror') {
+    const witness = definitionObservation, source = witness.source;
+    if (!sameScope(witness.scope, scope) || witness.entity !== entity || !witness.record || witness.recordHash !== hash(witness.record) || !sameScope(source.scope, scope) || source.version !== 1 || source.entity !== entity || source.id !== witness.record.Id || source.recordHash !== witness.recordHash || typeof source.generation !== 'string' || !source.generation || typeof witness.observedAt !== 'string' || !Number.isFinite(Date.parse(witness.observedAt)) || new Date(Date.parse(witness.observedAt)).toISOString() !== witness.observedAt || Date.parse(witness.observedAt) > now || source.retainedAt !== witness.observedAt) fail('The approved definition requires exact retained company evidence.');
+    retained = witness.record;
+  } else retained = observedRecord(scope, entity, definitionObservation, now);
   return retained.Id === record.Id && referenceDefinition(scope, entity, retained, 1).hash === definition.hash && referenceDefinition(scope, entity, retained, 2).hash === referenceDefinition(scope, entity, record, 2).hash;
 }
 function verifyBusinessReference({ scope, binding, observed, now = Date.now() }) {
@@ -110,9 +117,16 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
         }
       }
       let definitionObservation;
-      if (!transactions && live && observationStore && ['Item', 'TaxCode'].includes(entity)) {
+      if (!transactions && observationStore && ['Item', 'TaxCode'].includes(entity)) {
         try { definitionObservation = await call(() => observationStore.read(scope, entity, id, { signal: controller.signal })); }
-        catch { check(); /* Without a retained witness, legacy definitions still fail closed. */ }
+        catch { check(); /* The current mirror may be unavailable. */ }
+        // A stale sync does not invalidate a historical approval witness. This
+        // separate read supplies no current authority; matchesReferenceDefinition
+        // must authenticate its exact v1 hash before comparing canonical fields.
+        if (!definitionObservation && typeof observationStore.definition === 'function') {
+          try { definitionObservation = await call(() => observationStore.definition(scope, entity, id, { signal: controller.signal })); }
+          catch { check(); /* Missing evidence still fails closed for v1 approvals. */ }
+        }
       }
       const client = await call(() => resolveClient(scope, { signal: controller.signal })); check();
       const expectedBase = 'https://' + (scope.environment === 'production' ? 'quickbooks.api.intuit.com' : 'sandbox-quickbooks.api.intuit.com') + '/v3/company/' + scope.realmId;

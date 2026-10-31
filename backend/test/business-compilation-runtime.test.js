@@ -109,3 +109,26 @@ test('stock compilation reads Item quantity after a prior receipt instead of its
   item.record.QtyOnHand = 0;
   await assert.rejects(h.read(), /stock availability/);
 });
+
+test('execution compilation carries historical Item and TaxCode witnesses when current mirror is unavailable',async()=>{
+ const {referenceDefinition}=require('../src/modules/business-reference');
+ const h=harness('Estimate'),witnesses=new Map();
+ for(const entity of ['Item','TaxCode']) {
+  const selected=h.f.referenceEvidence.find(o=>o.entity===entity);
+  const retained=clone(selected);
+  if(entity==='Item')retained.record.IncomeAccountRef.name='fixture income';
+  else retained.record.SalesTaxRateList={TaxRateDetail:[{TaxRateRef:{value:'950',name:'fixture tax'}}]};
+  retained.recordHash=hash(retained.record);retained.observedAt=new Date(now-8*86400000).toISOString();
+  retained.source={version:1,kind:'qbo-retained-mirror',scope,entity,id:retained.record.Id,recordHash:retained.recordHash,generation:'previous-sync',retainedAt:retained.observedAt};
+  witnesses.set(entity+':'+retained.record.Id,retained);
+  const binding=h.intent.step.references.find(b=>b.entity===entity&&b.id===retained.record.Id);binding.definition=referenceDefinition(scope,entity,retained.record,1);
+  if(entity==='TaxCode'){selected.record.SalesTaxRateList=clone(retained.record.SalesTaxRateList);delete selected.record.SalesTaxRateList.TaxRateDetail[0].TaxRateRef.name;}
+ }
+ h.intent.fingerprint=hash(h.intent.step);h.intent.policy.stepHash=h.intent.fingerprint;
+ h.deps.observations={read:async()=>null,definition:async(_s,entity,id)=>clone(witnesses.get(entity+':'+id)||null)};
+ const result=await h.read();
+ assert.equal(result.referenceEvidence.filter(o=>o.definitionObservation).length,2);
+ assert.equal(compileBusinessTransaction({scope,step:h.intent.step,policy:h.intent.policy,...result,now}).entity,'Estimate');
+ h.f.referenceEvidence.find(o=>o.entity==='Item').record.IncomeAccountRef.value='999';
+ await assert.rejects(h.read(),/approved definition/);
+});

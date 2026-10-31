@@ -52,7 +52,7 @@ function createBusinessVerificationRuntime({ scope, operationId, planHash, Steps
     for (const record of records.values()) preparedRecords.add(record);
     return records;
   };
-  const references = createBusinessReferenceReader({ authorize: authority, resolveClient, now });
+  const references = createBusinessReferenceReader({ authorize: authority, resolveClient, now, observationStore: observations });
   const readFence = async (value, { signal } = {}) => {
     checkScope(value); checkSignal(signal); await assertReady();
     const actor = await authority(scope, 'operations.read', { signal });

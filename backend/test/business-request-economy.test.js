@@ -143,3 +143,46 @@ test('approval cache ignores stale nonposting monitoring sources and saves five 
  const second=await read();assert.equal(second.evaluation.status,'checks-passed');assert.ok(second.reuse);assert.equal(h.calls.length,7,'unchanged repeat uses exactly one live ledger probe, saving five metered requests');
  h.records[0].record.Name='Relevant changed company identity';assert.equal(await h.cache.load(scope,period,await h.cache.snapshot(scope),{requiredReports,readLedger:async()=>raw.GeneralLedger}),null);
 });
+
+// Sanitized Item 44 shape: only reference labels differ between mirror and GET.
+function item44() { return { Id:'44',SyncToken:'0',Active:true,Name:'fixture care plan',FullyQualifiedName:'fixture care plan',Taxable:true,SalesTaxIncluded:false,UnitPrice:149,Type:'Service',IncomeAccountRef:{value:'126',name:'fixture income'},PurchaseTaxIncluded:false,PurchaseCost:0,TrackQtyOnHand:false,SalesTaxCodeRef:{value:'16',name:'fixture tax'},domain:'QBO',sparse:false,MetaData:{CreateTime:'2026-10-01T00:00:00Z',LastUpdatedTime:'2026-10-01T00:00:00Z'} }; }
+function liveItem44(record) { const live=copy(record); delete live.IncomeAccountRef.name; delete live.SalesTaxCodeRef.name; return live; }
+test('legacy Item 44 approval uses an old exact-hash mirror witness with a fresh live GET when sync is stale',async()=>{
+ const {referenceDefinition}=require('../src/modules/business-reference');
+ for(const live of [false,true]) {
+  const h=harness(),row=h.add('Item',item44(),{lastObservedAt:new Date(clock-8*86400000)});
+  h.agents[0].sync.sources.Item.lastSuccessAt=iso(clock-3600000);
+  const binding={key:'care-plan-1',entity:'Item',id:'44',syncToken:'0',status:'resolved',definition:referenceDefinition(scope,'Item',row.record,1)};
+  const actual=liveItem44(row.record); h.response=async()=>({Item:actual});
+  assert.notEqual(referenceDefinition(scope,'Item',actual,1).hash,binding.definition.hash);
+  assert.equal(referenceDefinition(scope,'Item',actual,2).hash,referenceDefinition(scope,'Item',row.record,2).hash);
+  assert.equal(await h.store.read(scope,'Item','44'),null);
+  const observed=await createBusinessReferenceReader({...h.access,now:()=>h.now,observationStore:h.store})(scope,'Item','44',{live});
+  assert.equal(h.calls.length,1);assert.equal(observed.source.kind,'qbo-full-entity-get');
+  assert.equal(observed.definitionObservation.source.kind,'qbo-retained-mirror');
+  assert.equal(observed.definitionObservation.observedAt,iso(clock-8*86400000));
+  const original=copy(binding);assert.equal(verifyBusinessReference({scope,binding,observed,now:clock}).Id,'44');assert.deepEqual(binding,original);
+  assert.throws(()=>bindBusinessReference({scope,key:'item',entity:'Item',observed:observed.definitionObservation,now:clock}));
+  const historicalNow=copy(observed.definitionObservation);historicalNow.observedAt=iso(clock);historicalNow.source.retainedAt=iso(clock);
+  assert.throws(()=>bindBusinessReference({scope,key:'item',entity:'Item',observed:historicalNow,now:clock}),/provenance/);
+  assert.throws(()=>verifyBusinessReference({scope,binding,observed:historicalNow,now:clock}),/provenance/);
+  for(const mutate of [r=>r.UnitPrice++,r=>r.IncomeAccountRef.value='999',r=>r.SalesTaxCodeRef.value='999',r=>r.Type='NonInventory',r=>r.Active=false,r=>r.FutureSetting=true,r=>delete r.IncomeAccountRef]) {
+   const changed=copy(observed);mutate(changed.record);changed.recordHash=hash(changed.record);changed.source.recordHash=changed.recordHash;
+   assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:clock}));
+  }
+  const older=copy(binding);older.syncToken='1';assert.throws(()=>verifyBusinessReference({scope,binding:older,observed,now:clock}));
+  const stale=copy(observed);stale.observedAt=iso(clock-300001);assert.throws(()=>verifyBusinessReference({scope,binding,observed:stale,now:clock}));
+  for(const mutate of [o=>o.scope.realmId='999',o=>o.scope.connectionId='d'.repeat(24),o=>o.scope.environment='production',o=>o.entity='TaxCode',o=>o.record.Id='45',o=>o.recordHash=hash('wrong'),o=>o.source.generation='',o=>o.source.retainedAt=iso(clock),o=>{o.record.UnitPrice++;o.recordHash=hash(o.record);o.source.recordHash=o.recordHash;}]) {
+   const changed=copy(observed);mutate(changed.definitionObservation);assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:clock}));
+  }
+ }
+});
+test('retained definition lookup is scoped, read-only, bounded to supported masters and refuses deleted or partial records',async()=>{
+ const h=harness(),row=h.add('Item',item44());
+ assert.equal(await h.store.definition({...scope,realmId:'999'},'Item','44'),null);
+ assert.equal(await h.store.definition(scope,'Account','44'),null);
+ for(const mutate of [r=>r.deleted=true,r=>r.record.sparse=true,r=>r.record.Id='45',r=>r.generation='',r=>r.lastObservedAt=new Date(clock+1)]) {
+  const original=copy(row);mutate(row);assert.equal(await h.store.definition(scope,'Item','44'),null);Object.assign(row,original);
+ }
+ const controller=new AbortController();controller.abort();await assert.rejects(h.store.definition(scope,'Item','44',{signal:controller.signal}));
+});

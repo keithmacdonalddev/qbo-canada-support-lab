@@ -54,6 +54,19 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     if (!after || canonical(after.row)!==canonical(row)) return null;
     return result;
   }
+  // Historical master evidence only. Never a current record/cache hit: an exact
+  // approved v1 hash must authenticate it in the reference verifier. Sync status,
+  // age and later writes do not change that historical definition.
+  async function definition(scope, entity, id, { signal }={}) {
+    scope=scoped(scope); signal?.throwIfAborted();
+    if (!['Item','TaxCode'].includes(entity) || !QID.test(id||'')) return null;
+    const db=models(); if (!db) return null;
+    const stored=await query(db.Records,{...scope,entity,qboId:id,deleted:false}); signal?.throwIfAborted();
+    const time=stamp(stored?.lastObservedAt);
+    if (!stored || !sameScope(stored,scope) || stored.entity!==entity || stored.qboId!==id || stored.deleted || stored.record?.Id!==id || typeof stored.generation!=='string' || !stored.generation || !Number.isFinite(time) || time>now()) return null;
+    const retainedAt=new Date(time).toISOString();
+    return observation(scope,entity,stored.record,retainedAt,{kind:'qbo-retained-mirror',generation:stored.generation,retainedAt});
+  }
   async function saved(scope, entity, id, { signal }={}) {
     scope=scoped(scope); const db=models(); if (!db) return null; signal?.throwIfAborted();
     const receipt=await db.Receipts.findOne({...scope,entity:entity.toLowerCase(),operation:{$in:['create','update']},state:'saved','observed.qboId':id}).select('+savedResponse').sort({observedAt:-1}).maxTimeMS(3000).lean();
@@ -82,7 +95,7 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     await db.Records.updateOne(filter,{$set:{record:JSON.parse(canonical(record)),generation:row.generation,deleted:false,lastReadStartedAt:new Date(at),lastObservedAt:new Date(at),changedAt:Number.isFinite(stamp(record.MetaData?.LastUpdatedTime))?new Date(record.MetaData.LastUpdatedTime):null,summary:require('./business-agent-sync').recordSummary(entity,record,'CAD')},$setOnInsert:{version:1,...scope,entity,qboId:record.Id}}, {upsert:!existing,maxTimeMS:3000});
     return true;
   }
-  return {read,saved,retain};
+  return {read,definition,saved,retain};
 }
 async function readBusinessTaxRecord(client,entity,id) {
  const {QBOClient}=require('./qbo-client');
