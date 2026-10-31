@@ -6,6 +6,8 @@
 
 This file is for Claude Code sessions in `C:\Projects\qbo`.
 
+The owner's complete product intent is the "Owner intent" section of `AGENTS.md` (imported above). It is the single source: do not restate or summarize it in memory, handoffs or prompts; link to it.
+
 OpenAI Codex sessions use `AGENTS.md` as the primary project guidance. Claude Code imports that shared guidance above, then uses the Claude-specific architecture below.
 
 ## Claude-Specific Architecture
