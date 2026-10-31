@@ -7,6 +7,16 @@ description: QuickBooks API record rules: required fields, LinkedTxn links, term
 
 This company is QuickBooks Online Advanced **Canada**, home currency CAD, multicurrency off, tax calculated by QuickBooks from tax codes (`GlobalTaxCalculation: "TaxExcluded"`). The app's governed tools build and verify most payloads for you; use this skill to choose inputs, read results, explain faults, and use a general record tool correctly.
 
+## The general record tool
+
+`manageQboRecord` (always loaded) creates, updates and deletes any non-inventory record the QuickBooks API allows, in one plan of up to many operations: invoices on terms, partial and full payments, bills and bill payments, estimates, purchase orders, sales receipts, deposits grouping undeposited payments, transfers, journal entries, credit memos, refunds, supplier credits, expenses, time entries, and list records (customers, suppliers, non-inventory items, accounts, terms, payment methods, classes, locations, employees). Use `getQboEntitySchema` (find it with `searchTools`) for an entity's fields and link rules before writing an unfamiliar payload.
+
+- Date every record today. Edits to records in verified history are refused for now.
+- Refer to records created earlier in the same plan with `$ref`; the tool orders batches for you.
+- A refused operation comes back with its reason: correct that operation and call again with the same `decisionKey`.
+- Stock (inventory) items, inventory sales and voids are not available in this version; use the fixed workflows for purchase orders and receiving.
+- Prefer it over `prepareBusinessActivity` when the business needs something the fixed workflows cannot shape.
+
 ## Rules that apply to every record
 
 1. **References, never names.** Every party, item, account, term, class, location and tax code is a `{ "value": "<Id>" }` ref (an optional `name` is ignored on write). Read ids from `getBusinessActivityChoices`, `queryCompanyData` or `searchEntities`; never invent one.
