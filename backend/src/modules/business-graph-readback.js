@@ -170,7 +170,7 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
         const manifest = { version: 1, scope, roots, records, writerFence: fence };
         return { ...manifest, kind: 'business-graph-preparation', recordCount: records.length, evidenceHash: hash(manifest), prepared: true };
       }
-      const prepared = prepareRecords && !forceLive ? await read(() => prepareRecords(scope, rows, { signal: controller.signal })) : null; check();
+      const prepared = prepareRecords && !forceLive ? await read(() => prepareRecords(scope, rows, { signal: controller.signal, writerFence: fence })) : null; check();
       const entries = new Array(rows.length); let next = 0, firstError = null, retainedBytes = 0;
       const worker = async () => {
         while (!firstError && next < rows.length) {

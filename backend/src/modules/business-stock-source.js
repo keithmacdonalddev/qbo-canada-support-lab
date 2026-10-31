@@ -29,10 +29,10 @@ function validateStockSource(value, scope, items, billIds) {
   return value;
 }
 function stockBillIds(state) { return [...new Set(state.items.flatMap(item => item.lots.map(lot => (lot.source.entity && lot.source.entity !== 'Bill' ? lot.source.entity + ':' : '') + lot.source.qboId)))].sort(); }
-// Keep independent live quantities and original purchase lots: stock close proof
-// must follow the final graph observations, which an older mirror cannot prove.
-// Fixed exact-ID GETs through the original client, with per-attempt authority.
-function createBusinessStockReader({ access, now = () => Date.now(), purpose = 'operations.verify' }) {
+// Keep exact current quantities and original purchase lots. CDC-covered records
+// may supply them only after their last change and all affecting sends; otherwise
+// use exact-ID GETs. Fiscal settings stay live, with per-attempt authority.
+function createBusinessStockReader({ access, now = () => Date.now(), purpose = 'operations.verify', observations = require('./business-observation-store').createBusinessObservationStore({ now }) }) {
   if (!['operations.preview','operations.verify'].includes(purpose) || [access?.authorize,access?.resolveClient,now].some(fn => typeof fn !== 'function')) throw new TypeError('Stock reads need current scoped business access');
   return async function read(scope, state, { signal } = {}) {
     scope = scoped(scope); require('./business-stock-cost').validateStockState(state,scope);
@@ -60,7 +60,9 @@ function createBusinessStockReader({ access, now = () => Date.now(), purpose = '
       const control = { signal:controller.signal,onFailure:stop,beforeAttempt:async () => { await authorize(); if (attempts++ >= MAX_CALLS) fail('Stock observation exceeded its request budget.'); } };
       const items = [], bills = [], purchases = [];
       for (const [entity,id] of jobs) {
-        await authorize(); const body = await runWithCaller('business-stock',()=>client.apiCall('GET',entity.toLowerCase() + '/' + id,undefined,0,0,control)); await authorize();
+        await authorize();
+        const mirrored = await require('./business-observation-store').readBusinessGuardRecord(client,entity,id,{signal:controller.signal,store:observations});
+        const body = mirrored ? { [entity]:mirrored.record } : await runWithCaller('business-stock',()=>client.apiCall('GET',entity.toLowerCase() + '/' + id,undefined,0,0,control)); await authorize();
         if (!plain(body) || Object.keys(body).some(key => ![entity,'time'].includes(key)) || body[entity]?.Id !== id) fail('The exact stock record response is incomplete.');
         if (entity === 'Item') items.push(projectStockRecord(entity,body[entity])); else if (entity === 'Bill') bills.push(projectStockRecord(entity,body[entity])); else purchases.push({entity,record:projectStockRecord(entity,body[entity])});
         if (Buffer.byteLength(canonical({items,bills,purchases})) > MAX_SOURCE_BYTES - 4096) fail('Stock source content exceeds its evidence budget.');

@@ -6,12 +6,12 @@ const { scoped } = require('./qbo-write-contract');
 const QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 const stamp = value => value == null ? NaN : new Date(value).getTime();
 const sameScope = (a,b) => ['environment','realmId','connectionId'].every(key => String(a?.[key]) === String(b?.[key]));
-function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Audits, session = null, now = () => Date.now() } = {}) {
+function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Audits, Steps, Authorities, session = null, now = () => Date.now() } = {}) {
   const query = (Model, filter) => { const read = Model.findOne(filter); return (session ? read.session(session) : read).maxTimeMS(3000).lean(); };
   function models() {
     // Importing this helper in an isolated test must not buffer database work.
     if (!Records && require('mongoose').connection.readyState !== 1) return null;
-    return { Records: Records || require('../models/CompanySyncRecord'), Agents: Agents || require('../models/BusinessAgent'), Receipts: Receipts || require('../models/QboWriteReceipt'), Writers: Writers || require('../models/CompanyWriter'), Audits: Audits || require('../models/AuditLog') };
+    return { Records: Records || require('../models/CompanySyncRecord'), Agents: Agents || require('../models/BusinessAgent'), Receipts: Receipts || require('../models/QboWriteReceipt'), Writers: Writers || require('../models/CompanyWriter'), Audits: Audits || require('../models/AuditLog'), Steps: Steps || require('../models/OperationStep'), Authorities: Authorities || require('../models/BusinessAuthority') };
   }
   async function source(scope, entity) {
     const db = models(); if (!db) return null;
@@ -32,12 +32,12 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     // their old balances/backlinks even when their own SyncToken did not change.
     return query(db.Receipts,{...scope,sentAt:{$gte:new Date(after)},$or:[
       {entity:entity.toLowerCase(),'observed.qboId':id},
-      {entity:entity.toLowerCase(),'state':{$in:['possibly-sent','unknown']}},
+      {entity:{$in:[entity.toLowerCase(),'batch']},'state':{$in:['possibly-sent','unknown']}},
       {'periodProof.evidence.records':{$elemMatch:{entity,id}}},
       {'periodProof.proofs.evidence.records':{$elemMatch:{entity,id}}}
     ]});
   }
-  async function read(scope, entity, id, { transactions=false, signal }={}) {
+  async function read(scope, entity, id, { transactions=false, guard=false, signal }={}) {
     scope=scoped(scope); signal?.throwIfAborted();
     if (!QID.test(id||'')) return null;
     const current=await source(scope,entity); if (!current) return null;
@@ -46,7 +46,18 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     // since is a conservative CDC coverage boundary (request start minus overlap),
     // not completion time. Snapshot sources need their actual read start instead.
     const coverage = row.mode==='cdc' ? stamp(row.since) : stamp(row.startedAt);
-    if (!Number.isFinite(coverage)) return null;
+    if (!Number.isFinite(coverage) || guard && (coverage > stamp(row.lastSuccessAt) || coverage > now())) return null;
+    if (guard) {
+      if (row.mode !== 'cdc') return null;
+      const changed = stamp(stored.record.MetaData?.LastUpdatedTime ?? stored.changedAt);
+      if (!Number.isFinite(changed) || changed >= coverage) return null;
+      // Batch receipts do not retain per-item targets here. Any recent batch is
+      // conservatively a miss; stock quantities can change through a sale/bill
+      // without the Item appearing in the protected-period link graph.
+      const affectedEntities = entity === 'Item' ? ['batch','item','invoice','salesreceipt','creditmemo','refundreceipt','bill','purchase','vendorcredit','inventoryadjustment'] : [entity.toLowerCase(),'batch'];
+      if (await query(db.Receipts, { ...scope, entity: { $in: affectedEntities }, $or: [{ state: { $in: ['possibly-sent','unknown'] } }, { sentAt: { $gte: new Date(coverage) } }, { observedAt: { $gte: new Date(coverage) } }] })) return null;
+    }
+    if (guard && await query(db.Receipts, { ...scope, $or: [{ 'periodProof.evidence.records': { $elemMatch: { entity, id } } }, { 'periodProof.proofs.evidence.records': { $elemMatch: { entity, id } } }], $and: [{ $or: [{ state: { $in: ['possibly-sent','unknown'] } }, { sentAt: { $gte: new Date(coverage) } }, { observedAt: { $gte: new Date(coverage) } }] }] })) return null;
     if (transactions ? await affectingWrite(db,scope,entity,id,coverage) : await query(db.Receipts,{...scope,entity:entity.toLowerCase(),sentAt:{$gte:new Date(coverage)},$or:[{'observed.qboId':id},{state:{$in:['possibly-sent','unknown']}}]})) return null;
     const observedAt=new Date(now()).toISOString();
     const result=observation(scope,entity,stored.record,observedAt,{kind:'qbo-current-mirror',generation:row.generation,completedAt:new Date(row.lastSuccessAt).toISOString(),freshUntil:new Date(stamp(row.lastSuccessAt)+Math.max(120000,(Number.isSafeInteger(row.everyMs)?row.everyMs:60000)*2)).toISOString(),coverageAt:Number.isFinite(coverage)?new Date(coverage).toISOString():null});
@@ -95,7 +106,57 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     await db.Records.updateOne(filter,{$set:{record:JSON.parse(canonical(record)),generation:row.generation,deleted:false,lastReadStartedAt:new Date(at),lastObservedAt:new Date(at),changedAt:Number.isFinite(stamp(record.MetaData?.LastUpdatedTime))?new Date(record.MetaData.LastUpdatedTime):null,summary:require('./business-agent-sync').recordSummary(entity,record,'CAD')},$setOnInsert:{version:1,...scope,entity,qboId:record.Id}}, {upsert:!existing,maxTimeMS:3000});
     return true;
   }
-  return {read,definition,saved,retain};
+  // Complete Deposit set for the absence-of-link guard. Unlike advisory choices,
+  // this requires the exact generation/count and a CDC boundary after both the
+  // payment observation and every included record's last provider change.
+  async function deposits(scope, after, { signal } = {}) {
+    scope = scoped(scope); signal?.throwIfAborted();
+    const current = await source(scope, 'Deposit'); if (!current) return null;
+    const { db, row } = current, coverage = stamp(row.since), boundary = stamp(after);
+    if (row.mode !== 'cdc' || !Number.isFinite(coverage) || !Number.isFinite(boundary) || coverage <= boundary || coverage > stamp(row.lastSuccessAt) || coverage > now() || !Number.isSafeInteger(row.count) || row.count < 0 || row.count > 10000) return null;
+    const pending = () => query(db.Receipts, { ...scope, entity: { $in: ['deposit','batch'] }, $or: [{ state: { $in: ['possibly-sent','unknown'] } }, { sentAt: { $gte: new Date(coverage) } }, { observedAt: { $gte: new Date(coverage) } }] });
+    if (await pending()) return null;
+    const rows = await db.Records.find({ ...scope, entity: 'Deposit', deleted: false }).sort({ qboId: 1 }).limit(10001).maxTimeMS(5000).lean();
+    if (rows.length !== row.count) return null;
+    const records = [], ids = new Set(); let bytes = 0;
+    for (const stored of rows) {
+      const changed = stamp(stored.record?.MetaData?.LastUpdatedTime ?? stored.changedAt);
+      if (!sameScope(stored, scope) || stored.entity !== 'Deposit' || stored.deleted || stored.generation !== row.generation || stored.qboId !== stored.record?.Id || ids.has(stored.qboId) || !Number.isFinite(changed) || changed >= coverage) return null;
+      const observed = observation(scope, 'Deposit', stored.record, new Date(now()).toISOString(), {});
+      if (!observed || (bytes += Buffer.byteLength(canonical(observed.record))) > 32000000) return null;
+      records.push(observed.record); ids.add(stored.qboId);
+    }
+    const final = await source(scope, 'Deposit'); signal?.throwIfAborted();
+    if (!final || canonical(final.row) !== canonical(row) || await pending()) return null;
+    return records;
+  }
+  // Read observations may survive verification bookkeeping, never transport or
+  // newly synchronized evidence. Unfinished sends are unsafe regardless of age.
+  async function unchanged(scope, after, { signal } = {}) {
+    scope = scoped(scope); signal?.throwIfAborted();
+    const db = models(), at = stamp(after);
+    if (!db || !Number.isFinite(at) || at > now() || now() - at > 60000) return false;
+    const receipt = await query(db.Receipts, { ...scope, $or: [{ sentAt: { $gte: new Date(at) } }, { observedAt: { $gte: new Date(at) } }] });
+    if (receipt) return false;
+    const unresolved = await db.Receipts.find({ ...scope, state: { $in: ['possibly-sent','unknown'] } }).limit(101).maxTimeMS(3000).lean();
+    if (unresolved.length > 100) return false;
+    for (const row of unresolved) {
+      // An old lost reply remains state=unknown after audited owner attribution.
+      // Authenticate that existing terminal settlement contract, never the mere
+      // presence of its pointer, before treating it as finished transport.
+      if (row.state !== 'unknown' || !row.ownerRecovery || !db.Steps || !db.Authorities) return false;
+      const step = await query(db.Steps, { ...scope, operationId: row.operationId, logicalKey: row.logicalKey });
+      if (!step || step.receipt?.source !== 'owner-attributed-readback' || step.dispatch?.key !== row.dispatchKey) return false;
+      try {
+        const attribution = await require('./business-owner-attribution').assertOwnerAttribution(db, scope, step, session);
+        if (attribution?.payload?.receiptId !== row._id || canonical(row.ownerRecovery) !== canonical({ version: 1, authorityHash: attribution.authority.contentHash, auditId: String(attribution.authority.auditId), qboId: attribution.payload.qboId, reviewHash: attribution.payload.reviewHash })) return false;
+      }
+      catch { signal?.throwIfAborted(); return false; }
+    }
+    const changed = await query(db.Records, { ...scope, lastObservedAt: { $gte: new Date(at) } });
+    signal?.throwIfAborted(); return !receipt && !changed;
+  }
+  return {read,definition,saved,retain,deposits,unchanged};
 }
 async function readBusinessTaxRecord(client,entity,id) {
  const {QBOClient}=require('./qbo-client');
@@ -107,4 +168,13 @@ async function readBusinessTaxRecord(client,entity,id) {
  }
  return require('./qbo-request-meter').runWithCaller('business-tax-policy',()=>client.read(entity.toLowerCase(),id));
 }
-module.exports={createBusinessObservationStore,readBusinessTaxRecord};
+async function readBusinessGuardRecord(client, entity, id, { signal, store = createBusinessObservationStore() } = {}) {
+ const {QBOClient}=require('./qbo-client');
+ if (!(client instanceof QBOClient) || client.read !== QBOClient.prototype.read || client.apiCall !== QBOClient.prototype.apiCall || client.connection?.status !== 'active') return null;
+ const environment=client.apiBase==='https://quickbooks.api.intuit.com/v3/company/'+client.realmId?'production':client.apiBase==='https://sandbox-quickbooks.api.intuit.com/v3/company/'+client.realmId?'sandbox':null;
+ if (!environment || String(client.connection?.realmId) !== String(client.realmId)) return null;
+ const scope=scoped({environment,realmId:String(client.realmId),connectionId:String(client.connection?._id)});
+ try { return await store.read(scope,entity,id,{transactions:true,guard:true,signal}); }
+ catch { signal?.throwIfAborted(); return null; }
+}
+module.exports={createBusinessObservationStore,readBusinessTaxRecord,readBusinessGuardRecord};

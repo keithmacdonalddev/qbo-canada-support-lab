@@ -13,11 +13,11 @@ const sameScope = (a, b) => ['environment', 'realmId', 'connectionId'].every(key
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_COMPILATION_UNAVAILABLE' }); }
 // A complete, repeated deposit-link observation is required. No filtered name,
 // date or amount search can prove a saved payment is still undeposited.
-async function depositSet(client, paymentId, call, check) {
+async function depositSet(client, paymentId, call, check, mirrored = null) {
   const rows = new Map(); let bytes = 0, declaredTotal = null;
   for (let start = 1; start <= 10001; start += 1000) {
     const query = 'SELECT * FROM Deposit ORDERBY Id ASC STARTPOSITION ' + start + ' MAXRESULTS 1000';
-    const body = await call(() => runWithCaller('business-deposit-guard',()=>client.query(query))); check();
+    const body = mirrored ? { QueryResponse: { Deposit: mirrored.slice(start - 1, start + 999), startPosition: start, maxResults: Math.min(1000, Math.max(0, mirrored.length - start + 1)) } } : await call(() => runWithCaller('business-deposit-guard',()=>client.query(query))); check();
     if (!body || Object.keys(body).some(key => !['QueryResponse', 'time'].includes(key)) || !body.QueryResponse || Object.getPrototypeOf(body.QueryResponse) !== Object.prototype) fail('Deposit links could not be read completely.');
     const page = body.QueryResponse;
     if (Object.keys(page).some(key => !['Deposit', 'startPosition', 'maxResults', 'totalCount'].includes(key)) || (page.Deposit !== undefined && !Array.isArray(page.Deposit))) fail('Deposit query returned incomplete or unsupported evidence.');
@@ -123,7 +123,7 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
       for (const dependency of intent.dependencies) jobs.push(async () => {
         const saved = await call(() => steps.evidence(scope, operationId, dependency.logicalKey)); check();
         if (saved?.state !== 'verified' || saved.fresh !== true || saved.fingerprint !== dependency.fingerprint || typeof saved.qboId !== 'string' || !QBO_ID.test(saved.qboId)) fail('An originating activity lacks current persisted proof.');
-        const observed = await call(() => verification.readRecord(scope, dependency.entity, saved.qboId, { signal: controller.signal })); check();
+        const observed = await call(() => verification.readRecord(scope, dependency.entity, saved.qboId, { signal: controller.signal, reuseGraph: true })); check();
         const proof = saved.verification;
         if (!proof || proof.kind !== 'business-readback' || proof.observedHash !== observed.recordHash || proof.syncToken !== observed.record?.SyncToken || typeof proof.observedAt !== 'string' || !Number.isFinite(Date.parse(proof.observedAt)) || now() - Date.parse(proof.observedAt) > 300000 || Date.parse(proof.observedAt) > now()) fail('An originating record changed after graph verification.');
         let original = {};
@@ -157,8 +157,12 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         const clientScope = () => { if (!(client instanceof QBOClient) || client.query !== QBOClient.prototype.query || client.apiCall !== QBOClient.prototype.apiCall || client.apiBase !== expectedBase || client.realmId !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.userId) !== actor.ownerId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active') fail('Deposit observation client changed company.'); };
         clientScope(); const stamp = new Date(now()).toISOString();
         const query = factory => call(() => { clientScope(); return factory(); });
-        const first = await depositSet(client, payment.qboId, query, check); clientScope();
-        const second = await depositSet(client, payment.qboId, query, check); clientScope();
+        const mirror = async () => {
+          try { return await definitions.deposits?.(scope, payment.record.MetaData?.LastUpdatedTime, { signal: controller.signal }) || null; }
+          catch { check(); return null; }
+        };
+        const first = await depositSet(client, payment.qboId, query, check, await mirror()); clientScope();
+        const second = await depositSet(client, payment.qboId, query, check, await mirror()); clientScope();
         if (first !== second) fail('Deposit records changed during availability verification.');
         const current = await call(() => verification.readRecord(scope, 'Payment', payment.qboId, { signal: controller.signal })); check();
         if (current.recordHash !== payment.recordHash) fail('The payment changed during deposit verification.');

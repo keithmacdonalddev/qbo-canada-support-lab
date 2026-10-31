@@ -68,7 +68,7 @@ function settlementSources(request, payload) {
 function postingDates(request, payload, records, directDates) {
   return [...new Set([...directDates, ...(settlementSources(request, payload) ? [] : records.flatMap(row => row.dates))])].sort();
 }
-async function readWritePeriodEvidence(request, client, now = () => Date.now(), coordination = null) {
+async function readWritePeriodEvidence(request, client, now = () => Date.now(), coordination = null, observations = require('./business-observation-store').createBusinessObservationStore({ now })) {
   const scope = scoped(request.scope), payload = JSON.parse(request.body), financial = TRANSACTIONS.has(request.entity), creditControl = needsCreditControl(request, payload);
   if (!financial && !LISTS.has(request.entity)) throw denied('This write type has no reviewed protected-period contract.');
   if (!financial && ['Balance', 'OpeningBalance', 'OpenBalanceDate', 'CurrentBalance'].some(key => payload[key] !== undefined)) throw denied('Opening balances require a separately reviewed dated transaction.');
@@ -82,7 +82,8 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
     const next = pending.shift(), key = next.entity + ':' + next.id;
     if (records.has(key)) continue;
     if (records.size >= 50 || now() - started > 180000) throw denied('Linked period evidence exceeds its read budget. Nothing was sent.');
-    const body = await runWithCaller('business-period-guard', () => client.read(next.entity.toLowerCase(), next.id)), record = body?.[next.entity];
+    const mirrored = !next.target && await require('./business-observation-store').readBusinessGuardRecord(client, next.entity, next.id, { store: observations });
+    const body = mirrored ? { [next.entity]: mirrored.record } : await runWithCaller('business-period-guard', () => client.read(next.entity.toLowerCase(), next.id)), record = body?.[next.entity];
     if (!record || record.Id !== next.id || typeof record.SyncToken !== 'string' || !/^\d+$/.test(record.SyncToken)) throw denied('An original or linked record could not be read completely before writing.');
     if (next.target && (typeof payload.SyncToken !== 'string' || payload.SyncToken !== record.SyncToken)) throw denied('The original record changed before protected-period verification.');
     const entity = next.entity.toLowerCase(), dates = datesIn(entity, record, TRANSACTIONS.has(entity)), links = linksIn(record);

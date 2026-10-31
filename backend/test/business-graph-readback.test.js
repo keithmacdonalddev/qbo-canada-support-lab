@@ -198,6 +198,8 @@ test('same-operation invoice parent stays current before and after Payment after
   Object.assign(client,{realmId:scope.realmId,connection:{_id:scope.connectionId,realmId:scope.realmId,userId:ownerId,status:'active'},_requestLog:[],_retryAfterUntil:0,_windowMs:60000,ensureFreshToken:async()=>{},requestMeter:{record(){}},oauthClient:{makeApiCall:async options=>{
     assert.equal(options.method,'GET'); calls.push(options); h.clock+=200;
     if(options.url.includes('/reports/'))return {status:200,json:clone(report)};
+    const query = new URL(options.url).searchParams.get('query');
+    if (query) { const entity = /FROM (\w+)/.exec(query)?.[1], ids = /WHERE Id IN \(([^)]+)\)/.exec(query)?.[1]?.split(',').map(id=>id.trim().replaceAll("'",'')); assert.ok(entity && ids, query); const rows = value.entries.filter(e=>e.step.entity===entity && ids.includes(e.step.qboId)).map(e=>clone(e.observed.record)); return {status:200,json:{QueryResponse:{[entity]:rows,startPosition:1,maxResults:rows.length}}}; }
     const reference=f.referenceEvidence.find(e=>options.url.endsWith('/'+e.entity.toLowerCase()+'/'+e.record.Id));
     if(reference)return {status:200,json:{[reference.entity]:clone(reference.record)}};
     const e=value.entries.find(e=>options.url.endsWith('/'+e.step.entity.toLowerCase()+'/'+e.step.qboId)); assert.ok(e,options.url);
@@ -223,14 +225,12 @@ test('same-operation invoice parent stays current before and after Payment after
   // Apply the simulated Payment: old create response remains retained, but its
   // parent must now be obtained live and graph-verified with the exact new links.
   const payment=entry(saved('Payment','5004',p=>bindParent(p,0,{compiled:invoice.step.compilation,observed:invoice.observed})));
-  value.entries.push(payment); originals.set('Payment:5004',clone(payment.observed));applied=true;
+  value.entries.push(payment); originals.set('Payment:5004',clone(payment.observed));applied=true;h.writer.revision++;
   invoice.observed.record.Balance=0;invoice.observed.record.LinkedTxn.push({TxnType:'Payment',TxnId:'5004'});invoice.observed.recordHash=hash(invoice.observed.record);
   // The batch query is also an independent full record observation.
-  const originalCall=client.oauthClient.makeApiCall;
-  client.oauthClient.makeApiCall=async options=>options.url.includes('/query?')?{status:200,json:{QueryResponse:{Invoice:[clone(invoice.observed.record)],startPosition:1,maxResults:1}}}:originalCall(options);
   await persist([payment.step.logicalKey]);
   invoice.observed.record.Balance=1;invoice.observed.recordHash=hash(invoice.observed.record);
-  const changed=await runtime.loadGraphReadback({scope,roots:[payment.step.logicalKey]});assert.equal(changed.complete,false,'incorrect parent balances still fail verification');
+  const changed=await runtime.loadGraphReadback({scope,roots:[payment.step.logicalKey],forceLive:true});assert.equal(changed.complete,false,'incorrect parent balances still fail verification');
 });
 
 test('a pre-dispatch verification refusal retains its claim and an early retry cannot dispatch',async()=>{
