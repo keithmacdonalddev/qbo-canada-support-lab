@@ -16,10 +16,16 @@ async function acquireOperatorLease(directory=path.join(os.tmpdir(),'qbo-banking
   await fs.writeFile(path.join(directory,'owner.json'),JSON.stringify({pid:process.pid,at:new Date().toISOString()}));
   return async()=>{await fs.unlink(path.join(directory,'owner.json'));await fs.rmdir(directory);};
 }
-function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/banking'),bashPath='C:/Program Files/Git/bin/bash.exe',timeoutMs=1250000,cleanupGraceMs=16000,spawnProcess=spawn,exec=execFile}={}) {
+function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/banking'),bashPath='C:/Program Files/Git/bin/bash.exe',timeoutMs=1250000,cleanupGraceMs=16000,spawnProcess=spawn,exec=execFile,coordinator=null}={}) {
   check(Number.isSafeInteger(cleanupGraceMs) && cleanupGraceMs>=1 && cleanupGraceMs<=16000,'Bounded cleanup grace required');
   check(Number.isSafeInteger(timeoutMs) && timeoutMs>=1000 && timeoutMs<=1250000,'Bounded Terra timeout required');
   const artifacts=path.join(root,'artifacts/terra-live');
+  let activeSession=null;
+  const sessions=()=>coordinator || (coordinator=require('./qbo-browser-session').createSessionCoordinator({root}));
+  async function withSession(context,work){
+    if(activeSession)throw require('./qbo-browser-login').failure('QBO_SESSION_BUSY');
+    return sessions().withSession(context,async lease=>{activeSession=lease;try{return await work();}finally{activeSession=null;}});
+  }
   async function retainInput(file,bytes) {
     check(digest(bytes)===file.sha256,'Input artifact hash changed');
     await createArtifactReader(bankingRoot)({path:file.path,sha256:file.sha256});
@@ -38,6 +44,7 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
   }
   async function run({task,runId,mode='flow'}) {
     check(/^bf7-[a-f0-9-]{36}$/.test(runId) && ['flow','desktop'].includes(mode),'Invalid Terra invocation');
+    if(spawnProcess===spawn && !activeSession)throw require('./qbo-browser-login').failure('QBO_SIGNIN_REQUIRED');
     const taskDirectory=path.join(bankingRoot,'operator-tasks',runId); await fs.mkdir(taskDirectory,{recursive:true});
     const taskFile=path.join(taskDirectory,'task.txt'); await fs.writeFile(taskFile,task.prompt,{flag:'wx'});
     const startedMs=Date.now();
@@ -47,14 +54,16 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
       let child,stdout='',stderr='',timedOut=false,cleanupError=null,overflow=false,closing=false,timer,cleanupTimer;
       const done=(code,signal)=>{if(closing)return;closing=true;clearTimeout(timer);clearTimeout(cleanupTimer);resolve({code,signal,stdout,stderr,timedOut,cleanupError,overflow});};
       const terminate=()=>{if(timedOut)return;timedOut=true;cleanupTimer=setTimeout(()=>done(null,'cleanup-unconfirmed'),cleanupGraceMs); if(process.platform==='win32') exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:15000},e=>{cleanupError=e?e.message:null;}); else child.kill('SIGTERM');};
-      child=spawnProcess(bashPath,[path.join(root,SCRIPT),'--'+mode,runId,taskFile,'medium'],{cwd:root,windowsHide:true,shell:false,stdio:['ignore','pipe','pipe']});
+      child=spawnProcess(bashPath,[path.join(root,SCRIPT),'--'+mode,runId,taskFile,'medium'],{cwd:root,windowsHide:true,shell:false,env:{...process.env,...(activeSession?.environment || {})},stdio:['ignore','pipe','pipe']});
       timer=setTimeout(terminate,timeoutMs);
       child.once('error',e=>{clearTimeout(timer);reject(e);});
       child.stdout.on('data',b=>{stdout+=b.toString();if(stdout.length>2000000){overflow=true;stdout=stdout.slice(-2000000);terminate();}});
       child.stderr.on('data',b=>{stderr=(stderr+b.toString()).slice(-10000);});
       child.once('close',done);
-    });
+      try{activeSession?.trackChild(child.pid);}catch{activeSession?.retain();terminate();}
+    }).catch(()=>{activeSession?.retain();throw require('./qbo-browser-login').failure('QBO_SESSION_UNCERTAIN');});
     const cleanupConfirmed=!result.timedOut && !result.overflow && /this run's processes: none left/.test(result.stdout) && !/cleanup NOT confirmed|could not check|processes still alive/.test(result.stdout);
+    if(!cleanupConfirmed)activeSession?.retain();
     const outputs=[...result.stdout.matchAll(/files in (artifacts\/terra-live\/[A-Za-z0-9._-]+)/g)];
     check(outputs.length===1,'Terra output directory unconfirmed; retain execution lock');
     const outputDirectory=await fs.realpath(path.join(root,outputs[0][1])), base=await fs.realpath(artifacts);
@@ -68,7 +77,7 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     const model=result.stdout.includes('--- effective settings (thread ') && /"model":"gpt-6\.1-terra"/.test(settings)?'gpt-6.1-terra':null;
     return {exitCode:result.code,cleanupConfirmed,model,reply,replyPath,commandsPath,commandAudit,outputDirectory,startedMs};
   }
-  return {run,retainInput,retainEvidence};
+  return {run,retainInput,retainEvidence,withSession};
 }
 // Importing starts nothing; caller injects authorized BF4 and sync/report readers.
 function createDefaultBankingOperator({root=ROOT,workspace,getAccount,readVerification,authorize,resolveRows,...options}) {

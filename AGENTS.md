@@ -131,6 +131,10 @@ Read only the files needed for the task. Use this routing before broad scanning.
 - Agent architecture: `CLAUDE.md`, `.codex/memory/PROJECT_MEMORY.md`, `.codex/memory/AGENT_HANDOFF.md`, `.agents/rules/`, `.agents/skills/`, `.claude/rules/`, `.claude/agents/`, `.claude/skills/`.
 - Harness architecture and memory boundaries: `AGENT_HARNESS.md`.
 
+## Shared native QuickBooks access
+
+Use [the shared browser access workflow](docs/architecture/qbo-browser-access.md) for app, accountant, Claude Code and Codex native tasks. The API OAuth connection is separate. Never retrieve or type saved passwords through a model; use the deterministic helper and retain its shared lease through actual work. A successful sign-in grants no new company mutation authority.
+
 ## Provider Architecture
 
 This repo uses both OpenAI Codex and Claude Code.

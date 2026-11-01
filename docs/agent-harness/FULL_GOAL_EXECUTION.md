@@ -1,6 +1,9 @@
 # Whole-goal execution and current handoff
 
-## Current task tracking — 2026-11-01
+## Current task tracking
+
+2026-11-01T20:30UTC: shared dedicated-account sign-in is installed and live verified through the common CLI. Current native identity and exact company passed; actual historical banking task completion remains open. A01/A02 now have direct missing-estimate-link and unsent-deposit diagnoses. See the maintained list and [recovery evidence](../plans/saved-invoice-recovery-2026-11-01.md). No new accounting writes or service-control commands in this milestone. Work-value next milestone: repair posting recovery while preserving accepted records; do not repeat saved payments.
+ — 2026-11-01
 
 Start with [the maintained app completion task list](../plans/app-completion-task-list-2026-11-01.md). It records the fresh session/source/app/native-QBO review, active dedicated sign-in integration, remaining outcomes, dependencies and direct proof. Update it after every verified milestone and continue the next independent authorized task. The dated evidence below remains historical; no older snapshot resets current company progress or grants new live authority.
 

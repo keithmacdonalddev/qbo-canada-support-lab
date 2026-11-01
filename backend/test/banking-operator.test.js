@@ -284,3 +284,55 @@ test('BL2 owner resolution is audited, invalid/unauthorized resolutions preserve
  await assert.rejects(resume({reason:''}),/resolution reason/);h.deps.authorizeOwner=async()=>{throw new Error('owner required');};h.operator=createBankingOperator(h.deps);await assert.rejects(resume({reason:'Fixed visible-rule contract'}),/owner required/);assert.ok(await store.read());
  h.deps.authorizeOwner=async()=>{};h.operator=createBankingOperator(h.deps);assert.equal((await resume({reason:'Fixed visible-rule contract'})).resolved,true);assert.equal(h.journals[0].resolutions[0].mode,'owner');assert.equal(h.journals[0].resolutions[0].reason,'Fixed visible-rule contract');assert.equal(h.calls,0);
 });
+
+
+test('private sign-in failure precedes every banking journal and import admission',async()=>{
+ const h=await harness();h.runner.withSession=async(_context,_work)=>{throw Object.assign(new Error('Intuit needs verification'),{code:'QBO_VERIFICATION_REQUIRED'});};
+ await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/Intuit needs verification/);
+ assert.equal(h.calls,0);assert.equal(h.journals.length,0);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports.length,0);assert.equal(h.leaseHeld,false);
+});
+test('banking authorization precedes private credential/session access',async()=>{
+ const h=await harness();let signins=0;h.runner.withSession=async(_context,work)=>{signins++;return work();};h.deny();
+ await assert.rejects(h.exec('preflight'),/Write denied/);assert.equal(signins,0);assert.equal(h.journals.length,0);assert.equal(h.leaseHeld,false);
+});
+test('one shared browser lease covers fresh Rules preflight and exact upload together',async()=>{
+ const h=await harness();let sessions=0,held=false;const run=h.runner.run;
+ h.runner.withSession=async(context,work)=>{sessions++;assert.equal(context.actor,'app');assert.deepEqual(context.scope,h.scope);held=true;try{return await work();}finally{held=false;}};
+ h.runner.run=async args=>{assert.equal(held,true);return run(args);};
+ await h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId});
+ assert.equal(sessions,1);assert.equal(h.calls,2);assert.equal(held,false);assert.equal(h.leaseHeld,false);
+});
+
+
+test('login-only block survives restart and corrected sign-in resumes without a native pause',async()=>{
+ const h=await harness(),L=require(path.join(modules,'banking-operator-loop'));let broken=true,signins=0,pause=null,state=null,proof=null;
+ h.runner.withSession=async(_context,work)=>{signins++;if(broken)throw Object.assign(Error('private raw message is not retained'),{code:'QBO_VERIFICATION_REQUIRED'});return work();};
+ const deps={workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=v},stateStore:{read:async()=>state,write:async v=>state=clone(v)},readSignInStatus:async()=>proof,now:h.now};
+ assert.equal((await L.createBankingOperatorLoop(deps).tick()).requiresSignIn,true);assert.equal(pause,null);assert.equal(h.journals.length,0);assert.equal(h.calls,0);assert.equal(signins,1);assert.ok(!JSON.stringify(state).includes('private raw'));
+ const restarted=L.createBankingOperatorLoop(deps);await restarted.tick();assert.equal(signins,1);
+ broken=false;h.advance(1000);proof={status:'ready',identityVerified:true,companyVerified:true,at:h.now()};
+ assert.equal((await restarted.tick()).status,'progress');assert.equal(h.calls,2);assert.equal(pause,null);assert.equal(signins,2);
+});
+test('login-only retry cap and ordinary browser contention never create a native pause',async()=>{
+ const h=await harness(),L=require(path.join(modules,'banking-operator-loop'));let pause=null,state=null,signins=0;
+ h.runner.withSession=async()=>{signins++;throw Object.assign(Error('login'),{code:'QBO_SIGNIN_REQUIRED'});};
+ const deps={workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=v},stateStore:{read:async()=>state,write:async v=>state=clone(v)},readSignInStatus:async()=>null,now:h.now};
+ for(let i=0;i<4;i++){await L.createBankingOperatorLoop(deps).tick();h.advance(16*60000);}assert.equal(signins,3);assert.equal(pause,null);assert.equal(h.calls,0);
+ const x=await harness();x.runner.withSession=async()=>{throw Object.assign(Error('busy'),{code:'QBO_SESSION_BUSY'});};
+ const result=await L.createBankingOperatorLoop({...deps,workspace:x.workspace,operator:x.operator,stateStore:null}).tick();assert.equal(result.status,'waiting');assert.equal(pause,null);assert.equal(x.journals.length,0);
+});
+
+test('pending heartbeat and restart retain authentication retry history',async()=>{
+ const h=await harness(),L=require(path.join(modules,'banking-operator-loop'));let state=null,pause=null,signins=0,release;
+ h.runner.withSession=async()=>{signins++;throw Object.assign(Error('login'),{code:'QBO_SIGNIN_REQUIRED'});};
+ const deps={workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=v},stateStore:{read:async()=>state,write:async v=>state=clone(v)},readSignInStatus:async()=>null,now:h.now};
+ await L.createBankingOperatorLoop(deps).tick();h.advance(16*60000);const retry=clone(state.signInRetry);
+ let entered;const admitted=new Promise(r=>entered=r),blocked=new Promise(r=>release=r);
+ h.runner.withSession=async()=>{signins++;entered();await blocked;throw Object.assign(Error('login'),{code:'QBO_SIGNIN_REQUIRED'});};
+ const loop=L.createBankingOperatorLoop(deps),pending=loop.tick();await admitted;const heartbeat=loop.tick();
+ await new Promise(r=>setImmediate(r));assert.deepEqual(state.signInRetry,retry);assert.equal(state.status,'running');
+ // A restarted process must load the retry count saved while the first tick was pending.
+ const snapshot=clone(state);release();await pending;await heartbeat;assert.equal(state.signInRetry.attempts,2);
+ state=snapshot;h.runner.withSession=async()=>{throw Object.assign(Error('login'),{code:'QBO_SIGNIN_REQUIRED'});};
+ await L.createBankingOperatorLoop(deps).tick();assert.equal(state.signInRetry.attempts,2);assert.equal(pause,null);
+});

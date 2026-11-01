@@ -14,17 +14,17 @@ function nextStep(pkg,status){
 }
 // Explicit lifecycle, no import-time timers. One tick executes one step of the
 // oldest account-month; the next tick re-reads current controls and durable state.
-function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>false,isTerraBusy,pauseStore,stateStore=null,now=()=>new Date().toISOString(),intervalMs=60000,setTimer=setInterval,clearTimer=clearInterval}){
+function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>false,isTerraBusy,pauseStore,stateStore=null,readSignInStatus=()=>require('./qbo-browser-session').createSessionStore().read(),now=()=>new Date().toISOString(),intervalMs=60000,setTimer=setInterval,clearTimer=clearInterval}){
   if(!workspace || !operator || typeof listUsers!=='function' || !isTerraBusy || !pauseStore)throw new TypeError('Banking loop needs scoped adapters, global lock inspection and durable pause storage');
   let timer=null,pending=null,closed=false,last={status:'disabled'},localPause=null;
-  let heartbeat={lastTickAt:null,lastRunAt:null,lastOutcome:null};
-  async function publish(value){last=value;heartbeat.lastOutcome=value;await stateStore?.write({...heartbeat,...value});return value;}
+  let heartbeat={lastTickAt:null,lastRunAt:null,lastOutcome:null},signInRetry=null,stateLoaded=false;
+  async function publish(value){last=value;heartbeat.lastOutcome=value;await stateStore?.write({...heartbeat,...value,signInRetry});return value;}
   async function tick(){
     heartbeat.lastTickAt=now();
-    if(pending){try{await stateStore?.write({...heartbeat,...last});}catch{/* The owning tick persists its final outcome. */}return pending;}
+    if(pending){try{await stateStore?.write({...heartbeat,...last,signInRetry});}catch{/* The owning tick persists its final outcome. */}return pending;}
     pending=(async()=>{
-      if(stateStore && !heartbeat.lastRunAt){const previous=await stateStore.read();heartbeat.lastRunAt=previous?.lastRunAt || null;}
-      await stateStore?.write({...heartbeat,status:'checking'});
+      if(!stateLoaded){const previous=await stateStore?.read();heartbeat.lastRunAt=previous?.lastRunAt || null;signInRetry=previous?.signInRetry || null;stateLoaded=true;}
+      await stateStore?.write({...heartbeat,status:'checking',signInRetry});
       if(closed || !enabled())return last={status:'disabled'};
       const paused=localPause || await pauseStore.read();
       if(paused){
@@ -40,6 +40,13 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
           }
         }
         return last={status:'blocked',...paused};
+      }
+      // Authentication is not a native banking outcome and must not create an
+      // unresumable package pause. Persist bounded retry state separately.
+      if(signInRetry){
+        let fresh=null;try{fresh=await readSignInStatus();}catch{/* Only a fresh success may reset retry history. */}
+        if(fresh?.status==='ready' && fresh.identityVerified===true && fresh.companyVerified===true && Date.parse(fresh.at)>Date.parse(signInRetry.failedAt))signInRetry=null;
+        else if(signInRetry.attempts>=3 || Date.parse(now())<Date.parse(signInRetry.nextRetryAt))return last={status:'blocked',requiresSignIn:true,reason:signInRetry.reason,code:signInRetry.code,signInRetry};
       }
       let selected=null;
       for(const user of await listUsers()){
@@ -64,7 +71,15 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
       heartbeat.lastRunAt=now();await publish({status:'running',packageId:pkg.id,accountId:pkg.accountId,period:pkg.period,step});
       try {const result=await operator.execute(user,{packageId:pkg.id,step});if(result.status==='stopped' || result.evidence?.result?.status==='stopped')throw new Error('stopped at: '+(result.reason || result.evidence.result.reason));return last={status:'progress',packageId:pkg.id,accountId:pkg.accountId,period:pkg.period,step,runId:result.runId};}
       catch(error){if(error.code==='BANKING_OPERATOR_BUSY')return last={status:'waiting',reason:error.message};throw Object.assign(error,{packageId:pkg.id,accountId:pkg.accountId});}
-    })().then(publish).catch(async error=>{const value={reason:error.message,packageId:error.packageId || null,accountId:error.accountId || null,at:now()};localPause=value;try{await pauseStore.write(value);localPause=null;}catch(persistenceError){localPause={...value,persistenceError:'Durable banking pause could not be saved; no further native work in this process'};}last={status:'blocked',...(localPause || value)};heartbeat.lastOutcome=last;try{await stateStore?.write({...heartbeat,...last});}catch{}return last;}).finally(()=>{pending=null;});
+    })().then(publish).catch(async error=>{
+      if(error.qboSignInBeforeAdmission===true && /^QBO_/.test(error.code || '')){
+        if(error.code==='QBO_SESSION_BUSY')return publish({status:'waiting',reason:'Another operator owns the automation browser'});
+        const attempts=Math.min(3,(signInRetry?.attempts || 0)+1);
+        const code=Object.hasOwn(require('./qbo-browser-login').MESSAGES,error.code)?error.code:'QBO_SIGNIN_REQUIRED';
+        signInRetry={attempts,failedAt:now(),nextRetryAt:new Date(Date.parse(now())+15*60000).toISOString(),code,reason:require('./qbo-browser-login').MESSAGES[code]};
+        return publish({status:'blocked',requiresSignIn:true,reason:signInRetry.reason,code,signInRetry});
+      }
+      const value={reason:error.message,packageId:error.packageId || null,accountId:error.accountId || null,at:now()};localPause=value;try{await pauseStore.write(value);localPause=null;}catch(persistenceError){localPause={...value,persistenceError:'Durable banking pause could not be saved; no further native work in this process'};}last={status:'blocked',...(localPause || value)};heartbeat.lastOutcome=last;try{await stateStore?.write({...heartbeat,...last,signInRetry});}catch{}return last;}).finally(()=>{pending=null;});
     return pending;
   }
   function start(){if(closed || timer)return;timer=setTimer(()=>{void tick();},intervalMs);timer.unref?.();void tick();}
@@ -106,6 +121,6 @@ async function readBankingLoopStatus({packages=[],root=path.resolve(__dirname,'.
       }
     }catch{/* Missing evidence keeps manual inspection required. */}
   }
-  return {automaticRetry,recoveryReason:pause && stateVisible ? state?.lastOutcome?.recoveryReason || null : null,requiresInspection,resumeAvailable:Boolean(visible),status:pause?'blocked':enabled?(state?.status || 'scheduled'):'disabled',lastTickAt:state?.lastTickAt || null,lastRunAt:state?.lastRunAt || null,lastOutcome,paused:Boolean(pause),enabled,reason:pause ? visible ? pause.reason : 'Scheduled banking is paused. Inspect the retained local operator diagnostics.' : null,packageId:visible?pause.packageId:null,accountId:visible?pause.accountId:null,at:pause?.at || null,recovery:pause?'Observe native state, preserve accepted actions and resolve the block before explicitly clearing the pause. Never replay an uncertain upload or Add.':null};
+  return {requiresSignIn:state?.requiresSignIn===true,signInRetry:state?.signInRetry || null,automaticRetry,recoveryReason:pause && stateVisible ? state?.lastOutcome?.recoveryReason || null : null,requiresInspection,resumeAvailable:Boolean(visible),status:pause?'blocked':enabled?(state?.status || 'scheduled'):'disabled',lastTickAt:state?.lastTickAt || null,lastRunAt:state?.lastRunAt || null,lastOutcome,paused:Boolean(pause),enabled,reason:pause ? visible ? pause.reason : 'Scheduled banking is paused. Inspect the retained local operator diagnostics.' : state?.requiresSignIn ? state.reason : null,packageId:visible?pause.packageId:null,accountId:visible?pause.accountId:null,at:pause?.at || null,recovery:pause?'Observe native state, preserve accepted actions and resolve the block before explicitly clearing the pause. Never replay an uncertain upload or Add.':null};
 }
 module.exports={readBankingLoopStatus,createBankingOperatorLoop,currentPackages,nextStep,filePauseStore,fileStateStore,terraBusy};

@@ -110,8 +110,18 @@ function createBankingOperator(deps) {
   async function execute(user,request) {
     const release=await deps.lease(); let cleanupConfirmed=true;
     try {
-      if(request.step?.type==='upload') await perform(user,{...request,step:{type:'preflight'},pendingUploadFileId:request.step.fileId},value=>{cleanupConfirmed=value;});
-      return await perform(user,request,value=>{cleanupConfirmed=value;});
+      const work=async()=>{
+        if(request.step?.type==='upload') await perform(user,{...request,step:{type:'preflight'},pendingUploadFileId:request.step.fileId},value=>{cleanupConfirmed=value;});
+        return perform(user,request,value=>{cleanupConfirmed=value;});
+      };
+      if(deps.runner.withSession){
+        const pkg=await deps.workspace.detail(user,request.packageId);
+        await deps.authorize({user,scope:pkg.snapshot.scope,action:'periods.manage'});
+        let admitted=false;
+        try{return await deps.runner.withSession({actor:'app',scope:pkg.snapshot.scope},async()=>{admitted=true;return work();});}
+        catch(error){if(!admitted && /^QBO_/.test(error.code || ''))error.qboSignInBeforeAdmission=true;throw error;}
+      }
+      return await work();
     } finally { if(cleanupConfirmed) await release(); }
   }
   async function perform(user,{packageId,step,resolutions=[],rules=[],desktopFallback=null,pendingUploadFileId=null},setCleanup) {

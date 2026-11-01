@@ -48,7 +48,9 @@ Copy this checklist into the task and tick items as they finish:
 
 ## Terra visual and live checks
 
-For optional screenshot review or an explicitly authorized live UI flow, read [references/terra.md](references/terra.md), then use `bash .claude/skills/qbo-team-delivery/scripts/terra-live.sh [--flow|--desktop|--chrome] <run-name> <prompt-file> [low|medium|high|xhigh]` (default: look only, medium effort). Test Data Lab uses port 5173, backend 4000; there is no test-data header. The task must name every data change, and QuickBooks is limited to realm `9130357222392856` (“Harbour & Pine”, verified on screen) with the reference's stop list. This full-access runner does not replace Sol review or the test runner and grants no additional live-write authority.
+For optional screenshot review or an explicitly authorized live UI flow, read [references/terra.md](references/terra.md), then use `bash .claude/skills/qbo-team-delivery/scripts/terra-live.sh [--flow|--desktop|--chrome] <run-name> <prompt-file> [low|medium|high|xhigh]` (default: look only, medium effort). Test Data Lab uses port 5173, backend 3001; there is no test-data header. The task must name every data change, and QuickBooks is limited to realm `9130357222392856` (“Harbour & Pine”, verified on screen) with the reference's stop list. This full-access runner does not replace Sol review or the test runner and grants no additional live-write authority.
+
+Persistent QuickBooks BF7 work uses the common `qbo-session.cjs run` entry described in [the Terra reference](references/terra.md), so private sign-in and the whole task share one lock. Models must not retrieve or type passwords.
 
 ## Fallbacks
 

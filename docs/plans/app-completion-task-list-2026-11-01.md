@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-01T20:09:22.881Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-01T20:30:00Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -12,7 +12,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 ## Active next steps
 
-1. Finish S01/S02: private dedicated-account sign-in, shared browser ownership, recovery, integrated tests, independent reviews and commit/push. Initial native login and exact current-user/company proof succeeded in the candidate; serving source is not yet installed.
+1. S01 sign-in is installed and live verified. S02 shared coordination is implemented and tested; observe its first governed native banking task without weakening existing paused/uncertain-outcome barriers.
 2. Refresh A01/A02 against current blockers and saved receipts; resolve the saved-invoice relationship/verification problem without duplicating or casually changing accepted records.
 3. Repair C01/C02: truthful verification counts and executable capability descriptions, independently of banking completion.
 4. Continue the highest-value independent items below. Keep ordinary business operation and deliberate situational coverage advancing together.
@@ -35,8 +35,8 @@ These are dated observations, not permanent present-state claims. The reviewed C
 
 | ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
 |---|---|---|---|
-| A01 | P0 — OPEN | Resolve the two saved-invoice mismatches using original requests, receipts, fresh native records, relationships and accounting evidence. Accepted creates and IDs remain preserved; no replacement creates. | Inspect current exact runs and fields first. Reuse valid historical repair evidence only for its original scope. |
-| A02 | P0 — OPEN | Retire, replan or correctly display obsolete unsent/refused work; already-paid Invoice11020 must not receive another payment. Blocker/build-list state agrees with current obligations. | Refresh scope, balances and saved outcome history; verify the old entry no longer drives duplicate work. |
+| A01 | P0 — IN PROGRESS | Resolve the two saved-invoice mismatches using original requests, receipts, fresh native records, relationships and accounting evidence. Accepted creates and IDs remain preserved; no replacement creates. | Fresh native reads confirm Invoices11331/11332 lack their intended Estimate11217/11218 links; the mismatch is real. Preserve both CAD285 invoices. [Recovery evidence and plan](saved-invoice-recovery-2026-11-01.md). |
+| A02 | P0 — IN PROGRESS | Retire, replan or correctly display obsolete unsent/refused work; already-paid Invoice11020 must not receive another payment. Blocker/build-list state agrees with current obligations. | Original batches show saved Payments11255/11256/11330 followed by two unsent Deposit batches (sends:0, no receipt). Continue only actual unsent work; repair fresh dependency availability at admission. |
 | A03 | P0 — IMPLEMENTED / PROOF OPEN | Recovery works after restarts, lost replies and held records; one record's problem does not unnecessarily stop other business or close. Complete semantic migration 3A/3B safely. | Withheld candidates in artifacts/stage3 are leads, not approved code. Mixed saved/held close, unsent opening rebasing and local unknown holds remain unresolved. |
 | A04 | P1 — OPEN | Independent posting batches operate concurrently with correct per-record/account evidence; conflicting resources and close/history remain exclusive. | Current lists/quotes overlap; fixed posting workflows still serialize. Replace the whole-account proof dependency before enabling overlap. |
 | A05 | P0 — OPEN | Demonstrate useful continuous operation at the weighted 220/day target, automatic nightly closes and recovery over sustained days/weeks, not just heartbeats/review summaries. | Run alongside other authorized work. Record actual stalled minutes, due obligations, saved records and closes; do not pad counts with unnecessary lists. |
@@ -47,8 +47,8 @@ These are dated observations, not permanent present-state claims. The reviewed C
 
 | ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
 |---|---|---|---|
-| S01 | P0 — IN PROGRESS | Deterministic helper retrieves the fixed Windows credential privately; signs in as the dedicated user; verifies native current User ID and exact company ID; handles extra verification without exposing secrets. | Candidate native login/user/company proof succeeded. Finish source installation, coordinator CLI proof and tests/reviews. [Scoped record](qbo-automation-signin-2026-11-01.md). |
-| S02 | P0 — IN PROGRESS | App/accountant/Claude/Codex native work shares one browser lease through the entire task. Login failures happen before banking admission, retry boundedly and recover without clearing uncertain banking outcomes. | Candidate common task entry and separate auth retry state are under verification. Actor labels provide audit context, not new permission. Existing API connection stays unchanged. |
+| S01 | P0 — VERIFIED | Deterministic helper retrieves the fixed Windows credential privately; signs in as the dedicated user; verifies the current native account identity and exact company ID; handles extra verification without exposing secrets. | Installed common CLI returned ready at20:29:56UTC with identityVerified/companyVerified true for the exact production realm; it reused the dedicated session. Initial private password submission also succeeded. Security-page step-up was removed from routine identity inspection. [Scoped record](qbo-automation-signin-2026-11-01.md). |
+| S02 | P0 — IMPLEMENTED / PROOF OPEN | App/accountant/Claude/Codex native work shares one browser lease through the entire task. Login failures happen before banking admission, retry boundedly and recover without clearing uncertain banking outcomes. | Installed common task entry, continuous lease and separate durable auth retry state passed focused contracts and both reviews. Actual complete native task handoff remains to be observed; do not confuse successful ensure with a completed banking cycle. Actor labels provide audit context, not new permission. Existing API connection stays unchanged. |
 | D01 | P1 — IMPLEMENTED / PROOF OPEN | Generated CSVs/statements represent real native-currency movements, grouped deposits, clearing timing and explicit bank-only situations; outputs and opening/closing carry agree. | Keep generator replay evidence distinct from native imported/reconciled state. Verify ongoing generation and per-account use. |
 | D02 | P0 — OPEN | Complete ready historical imports/review/reconciliations oldest first, retaining native evidence and accepted actions without replaying uncertain uploads/Add/Match. | Login alone does not authorize a new banking mutation. Reuse existing valid workflow authority; retain preflight rule and duplicate checks. |
 | D03 | P1 — OPEN | Resolve109 carry-forward deferrals and seven drafts from actual predecessor/native evidence, including report-only tax adjustments and pre-existing reconciliation marks. | Generated balance agreement is not proof of counterpart classification or native reconciliation. Do not invent balancing plugs. |
@@ -99,3 +99,6 @@ These are dated observations, not permanent present-state claims. The reviewed C
 ## Update record required at each milestone
 
 Record UTC time, affected task IDs, what changed, direct app/QBO/report proof and its scope, exact checks and limitations, commit/upstream, unresolved owner action, and the next independent authorized task. Supporting tests/reviews/commits remain supporting evidence, not a substitute for the business outcome.
+
+- 2026-11-01T20:30:00Z — S01 installed and common CLI live verified (ready, exact company and dedicated native account identity). Final native identity check reads the strict QBO account popover rather than opening security settings and triggering step-up. Full preceding candidate suite: 3,017 pass /7 skip /0 fail; saved related banking suite:151 pass /1 skip; final identity correction:80 focused pass /0 fail, with both independent reviews clear. Backend syntax335 files plus9 candidate JS checks and shell syntax passed. No accounting writes, OAuth reconnect or service-control commands were used. S02 native task/queue outcome proof remains open.
+- A01/A02 investigation at20:16–20:22UTC established missing estimate links and two genuinely unsent deposit batches after accepted payments. Four fresh QBO GETs retained privately; [exact diagnosis and next repair](saved-invoice-recovery-2026-11-01.md). No replacement records or status-only accounting claims.

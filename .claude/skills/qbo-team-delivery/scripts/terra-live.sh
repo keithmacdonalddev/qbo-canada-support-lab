@@ -24,6 +24,7 @@ run_name=${1:?run name}; session=$run_name; prompt=${2:?prompt file}; effort=${3
 # BF7 owns a unique output/run identity but reuses the signed-in operator browser.
 banking_persistent=0
 if [ "$mode" = flow ] && [[ $run_name = bf7-* ]]; then session=qbo-ops; banking_persistent=1; fi
+if [ "$banking_persistent" -eq 1 ] && [ -z "${TDL_QBO_SESSION_OWNER:-}" ]; then echo "Use scripts/banking/qbo-session.cjs run so dedicated sign-in and the shared lease precede this task" >&2; exit 4; fi
 [[ $run_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "Bad run name: $session" >&2; exit 2; }
 [[ $effort =~ ^(low|medium|high|xhigh)$ ]] || { echo "Effort must be low, medium, high or xhigh" >&2; exit 2; }
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -50,8 +51,18 @@ terra_temp=$(pwsh_run '[IO.Path]::GetTempPath()')
 [ -n "$terra_temp" ] || { echo "Cannot resolve shared Terra lock directory" >&2; exit 4; }
 terra_temp=$(cygpath -u "$terra_temp") || exit 4
 terra_lock="$terra_temp/qbo-terra-live.lock"
-mkdir "$terra_lock" 2>/dev/null || { echo "Another Terra run is active or needs recovery" >&2; exit 4; }
-printf '%s\n' "$marker" > "$terra_lock/owner.txt"
+borrowed_lock=0
+if [ -n "${TDL_QBO_SESSION_OWNER:-}" ]; then
+  [[ "$TDL_QBO_SESSION_OWNER" =~ ^terra-live-qbo-signin-[a-f0-9-]+-([0-9]+)-([0-9]+)$ ]] || { echo "Invalid shared sign-in lease" >&2; exit 4; }
+  session_owner_pid=${BASH_REMATCH[1]}
+  [ "$(cat "$terra_lock/owner.txt" 2>/dev/null)" = "$TDL_QBO_SESSION_OWNER" ] || { echo "Shared sign-in lease changed" >&2; exit 4; }
+  owner_alive=$(pwsh_run "Get-Process -Id $session_owner_pid -ErrorAction Stop | Select-Object -ExpandProperty Id") || { echo "Shared sign-in owner unavailable" >&2; exit 4; }
+  [ "$owner_alive" = "$session_owner_pid" ] || exit 4
+  borrowed_lock=1
+else
+  mkdir "$terra_lock" 2>/dev/null || { echo "Another Terra run is active or needs recovery" >&2; exit 4; }
+  printf '%s\n' "$marker" > "$terra_lock/owner.txt"
+fi
 # Also detect runs started before this lock was introduced.
 existing=$(pwsh_run 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "codex.exe" -and $_.CommandLine -like "*terra_live_run=*" } | ForEach-Object ProcessId') || { echo "Cannot check prior Terra processes; lock retained" >&2; exit 4; }
 [ -z "$existing" ] || { echo "Prior Terra process exists; lock retained for recovery" >&2; exit 4; }
@@ -98,7 +109,9 @@ finish() {
   # Keep the reply, commands and screenshots; drop raw tool output (page text,
   # window lists, account details) once the summary is written.
   rm -f "$out/events.jsonl" "$out/stderr.txt"
-  if [ "$code" -ne 3 ] && [ -z "$left" ]; then
+  if [ "$borrowed_lock" -eq 1 ]; then
+    echo "shared sign-in lease: retained for the coordinating owner"
+  elif [ "$code" -ne 3 ] && [ -z "$left" ]; then
     rm -f "$terra_lock/owner.txt"; rmdir "$terra_lock" || code=3
   else echo "Terra lock retained: observed recovery required"; fi
   echo "kept in $out/: reply.txt, commands.txt, screenshots"

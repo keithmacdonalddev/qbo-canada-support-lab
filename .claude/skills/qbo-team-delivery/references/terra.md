@@ -2,6 +2,10 @@
 
 Use Terra for saved screenshots, rendered wording/layout review, and explicitly scoped live flows. It does not replace Sol code review or the deterministic test runner. The runner fixes the model to `gpt-6.1-terra`, with medium effort by default (low, medium, high and xhigh are accepted).
 
+## Persistent QuickBooks work
+
+For the shared `qbo-ops` production browser, use [the common session command](../../../../docs/architecture/qbo-browser-access.md): `node scripts/banking/qbo-session.cjs run --actor claude-code --task artifacts/terra-live/tasks/<uuid>/task.txt`. Launch it through the hidden Windows route. It authenticates privately before the model runs, verifies the dedicated native identity and exact company, and holds the shared lease until the task ends. `ensure` is a sign-in check only. Raw persistent BF7 launches are refused without this coordinator. Models still must not read or type passwords, and all task authorization and native stop rules below remain in force.
+
 ## Choose a route
 
 - **Saved screenshots:** use the read-only Codex companion with `--model gpt-6.1-terra --effort medium` and screenshot paths in the prompt. This needs no live runner or full-access session.
@@ -14,7 +18,7 @@ Use Terra for saved screenshots, rendered wording/layout review, and explicitly 
 | `--desktop` | Computer Use on named Windows apps; actual mouse and keyboard | Confirm focus before typing; never act in terminals; close only windows opened by the run |
 | `--chrome` | Chrome plugin with the owner's sign-ins | Open and reuse one new tab; leave existing tabs alone unless named; close the run's tab |
 
-Test Data Lab is at **http://localhost:5173/**; backend **http://localhost:4000**. There is **no test-run header or isolated data mode**. Messages, saved directions and UI actions can persist and direct the AI accountant to write through governed tools. A task must explicitly name each intended change, including a message's intended action; “test the flow” alone permits no app-data changes. Do not ask the accountant to perform an action the runner forbids. Use the UI; no direct QBO/backend API shortcuts or MongoDB access.
+Test Data Lab is at **http://localhost:5173/**; backend **http://localhost:3001**. There is **no test-run header or isolated data mode**. Messages, saved directions and UI actions can persist and direct the AI accountant to write through governed tools. A task must explicitly name each intended change, including a message's intended action; “test the flow” alone permits no app-data changes. Do not ask the accountant to perform an action the runner forbids. Use the UI; no direct QBO/backend API shortcuts or MongoDB access.
 
 ## Task file and QuickBooks stop list
 
@@ -22,7 +26,7 @@ The task file should name the app/window, route, exact actions, expected on-scre
 
 These limits apply in all modes, including **`--chrome` and `--desktop`**:
 
-- **Only realm `9130357222392856`, company “Harbour & Pine”.** Before company-scoped actions, verify the realm in the URL or visible company context **and the company name on screen**. If either is missing or different, stop; do not switch companies.
+- **Only realm `9130357222392856`, company “My Business”.** Before company-scoped actions, verify the realm in the URL or visible company context **and the company name on screen**. If either is missing or different, stop; do not switch companies.
 - **Never change company settings, subscriptions, users, billing, payroll, connected apps or bank connections. Never pay, send emails or invoices to customers, or delete records not created by this run**, even if the task asks. Simulated books still persist.
 - **Uploads, matching, adding, excluding, bank rules and reconciliation require the task file to name that exact action, account and period.** Verify all three before acting. “Test banking” or “reconcile” alone is insufficient. This exception permits neither payments nor connection/settings changes; other uploads remain forbidden.
 - No external sends, purchases, trades, money movement, account authorization, saved-password use, passwords/keys, security/privacy/sharing changes, or camera/mic/location consent. Signed-in sites outside the named app/company are read-only. No downloads except screenshots.
@@ -44,4 +48,4 @@ The port retains the source runner's process/Git/session checks:
 
 Most limits above are **instructions to Terra**, not mechanically enforced permissions. Inspect the action ledger, screenshots, command audit and settings/cleanup evidence before accepting a result. The runner may start its own browser/Computer Use helper; it must never start/restart the app stack or stop an owner's service. Agent-browser calls use the persistent Node REPL with hidden `execFile`, a 120-second child timeout and a 150-second tool timeout for first-open startup. Desktop mode lets the Computer Use helper use its own connection for this run only.
 
-This is a port of the sibling runner and Terra role guidance, adapted for Test Data Lab. It has not been live-run or proven against this app; source syntax/static checks do not prove browser access, company verification or cleanup at runtime.
+This is a port of the sibling runner and Terra role guidance, adapted for Test Data Lab. The historical runner and the shared sign-in helper have separate evidence. The 2026-11-01 helper check proved current-user and exact-company browser access; it does not prove completion of the banking queue or every task cleanup path.
