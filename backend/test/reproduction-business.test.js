@@ -142,8 +142,8 @@ function invoiceFixture() {
   for (const [key, record] of [
     ['Customer:1', { Id: '1', DisplayName: 'Isolated case party', Active: true, CurrencyRef: { value: 'CAD' } }],
     ['Item:40', { Id: '40', Name: 'Field hour', Type: 'Service', Active: true }],
-    ['TaxCode:7', { Id: '7', Active: true }],
-    ['TaxRate:8', { Id: '8', RateValue: 15 }],
+    ['TaxCode:7', { Id: '7',SyncToken:'0', Active: true,SalesTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:'8'},TaxTypeApplicable:'TaxOnAmount'}]},PurchaseTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:'8'},TaxTypeApplicable:'TaxOnAmount'}]} }],
+    ['TaxRate:8', { Id: '8',SyncToken:'0',Active:true,RateValue:15,EffectiveTaxRate:[{EffectiveDate:'2020-01-01',RateValue:15}] }],
   ]) f.records.set(key, record);
   f.models.GeneralWriteRuns.find = () => chain([...f.models.GeneralWriteRuns.rows.values()]);
   return f;

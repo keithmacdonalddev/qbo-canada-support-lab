@@ -2,6 +2,8 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {createBusinessAgentStore}=require('../src/modules/business-agent-store');
 const cadence=require('../src/modules/business-agent-cadence');
+// W (2b00a89) requires a server-issued pass and a durable decision event before writes.
+const decisionStore={event:async(_row,kind,_title,_detail,data)=>{assert.equal(kind,'accountant-write-decision');assert.equal(data.passId,'daily-count-test');return {id:'daily-count-decision',...data};}};
 const scope={environment:'sandbox',realmId:'123',connectionId:'a'.repeat(24)},day='2026-12-02',agentId='b'.repeat(24),clock=Date.parse(day+'T15:00:00Z');
 function fixture(general){
   const sessions=[];const chain=rows=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},session(value){sessions.push(value);return this;},lean:async()=>structuredClone(rows)});
@@ -31,7 +33,7 @@ test('new general plans and saved same-key retries cannot bypass the request bud
   let prepared=0,sends=0,authorized=0,read=10000,allowExecute=true;const open=[];
   generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>({runId:'r',status:'prepared',reused:prepared++>0,admitted:false,plan:{operations:1}}),dispatchEnabled:()=>true,execute:async()=>{sends++;return{};}});
   try{
-    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async(scope,permission)=>{if(permission==='operations.execute'){authorized++;if(!allowExecute)throw new Error('execute permission revoked');}}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>({target:100,ceiling:200,saved:0,reserved:1,reservedByRun:{r:1},open}),requestsFor:async()=>({today:{attempts:{read,query:0,report:0,sync:0,write:0}},month:{attempts:{read,query:0,report:0,sync:0,write:0}}})});
+    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({passId:'daily-count-test',row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{...decisionStore,business:async()=>({blockers:[]}),models:{}},access:{authorize:async(scope,permission)=>{if(permission==='operations.execute'){authorized++;if(!allowExecute)throw new Error('execute permission revoked');}}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>({target:100,ceiling:200,saved:0,reserved:1,reservedByRun:{r:1},open}),requestsFor:async()=>({today:{attempts:{read,query:0,report:0,sync:0,write:0}},month:{attempts:{read,query:0,report:0,sync:0,write:0}}})});
     const input={decisionKey:'quota-retry',purpose:'Record a genuine customer addition.',operations:[{ref:'cust',op:'create',entity:'Customer',payload:{DisplayName:'Clinic'}}]};
     await assert.rejects(tools.execute('manageQboRecord',input),/request budget/);
     assert.deepEqual([prepared,authorized,sends],[0,0,0],'a new plan is refused before preparation at the budget');
@@ -49,7 +51,7 @@ test('general tool checks the full proposed record count against remaining daily
   const generalModule=require('../src/modules/general-write-service'),original=generalModule.createDefaultGeneralWrite;let sends=0,prepared=0;const open=[];let today={target:2,ceiling:4,saved:2,reserved:1,reservedByRun:{other:1},open};
   generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return {runId:'r',status:'prepared',admitted:false};},dispatchEnabled:()=>true,execute:async()=>{sends++;}});
   try{
-    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{business:async()=>({blockers:[]}),models:{}},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
+    const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({passId:'daily-count-test',row:{_id:agentId,ownerId:'c'.repeat(24),grant:{id:'grant',authorityHash:'authority'},settings:{}},scope,user:{id:'c'.repeat(24)},guard:async()=>{},store:{...decisionStore,business:async()=>({blockers:[]}),models:{}},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
     await assert.rejects(tools.execute('manageQboRecord',{decisionKey:'quota-room',purpose:'Record two new customer additions.',operations:[{ref:'cust1',op:'create',entity:'Customer',payload:{DisplayName:'One'}},{ref:'cust2',op:'create',entity:'Customer',payload:{DisplayName:'Two'}}]}),/ceiling does not have room/);
     assert.deepEqual([prepared,sends],[0,0],'the full new batch is checked before preparation');
     open.push({operationId:'r',decisionKey:'quota-room',status:'prepared'});

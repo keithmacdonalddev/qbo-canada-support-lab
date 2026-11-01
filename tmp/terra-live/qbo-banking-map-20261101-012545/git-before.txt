@@ -1,0 +1,26 @@
+ M .claude/skills/qbo-team-delivery/SKILL.md
+ M backend/test/business-activity-batch-lists.test.js
+ M backend/test/business-activity-choice-economy.test.js
+ M backend/test/business-compilation-runtime.test.js
+ M backend/test/business-dated-tax.test.js
+ M backend/test/business-definition-defaults.test.js
+ M backend/test/business-dispatch.test.js
+ M backend/test/business-error-detail.test.js
+ M backend/test/business-master-preparation-recovery.test.js
+ M backend/test/business-master-preparation-transport.test.js
+ M backend/test/business-preparation-references.test.js
+ M backend/test/business-reference-runtime-r3.test.js
+ M backend/test/business-request-economy.test.js
+ M backend/test/business-transaction-compiler.test.js
+ M backend/test/general-write-billable-links.test.js
+ M backend/test/general-write-capabilities.test.js
+ M backend/test/general-write-daily-count.test.js
+ M backend/test/general-write-inventory.test.js
+ M backend/test/general-write-lost-reply-replay.test.js
+ M backend/test/general-write-quote-tax-replay.test.js
+ M backend/test/qbo-semantic-compare.test.js
+ M backend/test/reproduction-business.test.js
+?? .claude/skills/qbo-team-delivery/references/terra.md
+?? .claude/skills/qbo-team-delivery/scripts/terra-live.sh
+?? docs/plans/backend-suite-job-fx-2026-11-01.md
+?? tmp/

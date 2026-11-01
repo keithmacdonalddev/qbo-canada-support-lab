@@ -40,12 +40,12 @@ function harness(){
  h.access={authorize:async()=>{if(h.revoked)throw Error('permission revoked');return{actorId,ownerId};},resolveClient:async()=>h.client};
  return h;
 }
-test('current complete mirror supplies references and still enforces every approved definition field',async()=>{
+test('current complete mirror supplies reference meaning without live calls or historical hash changes',async()=>{
  const h=harness(),row=h.add('Account',{Id:'1',SyncToken:'0',Active:true,Name:'Bank',AccountType:'Bank',CurrencyRef:{value:'CAD'}});
  const reader=createBusinessReferenceReader({...h.access,now:()=>h.now,observationStore:h.store});
  const observed=await reader(scope,'Account','1'),binding=bindBusinessReference({scope,key:'bank',entity:'Account',observed,now:h.now});
  assert.equal(h.calls.length,0);assert.equal(observed.source.kind,'qbo-current-mirror');assert.equal(verifyBusinessReference({scope,binding,observed,now:h.now}).Id,'1');
- row.record.AccountType='Expense';row.record.SyncToken='1';const changed=await reader(scope,'Account','1');assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:h.now}),/definition/);
+ const before=copy(binding);row.record.AccountType='Expense';row.record.SyncToken='1';const changed=await reader(scope,'Account','1');assert.equal(verifyBusinessReference({scope,binding,observed:changed,now:h.now}).AccountType,'Expense');assert.deepEqual(binding,before);assert.equal(h.calls.length,0);
 });
 test('snapshot tax definitions use their actual sync cadence with explicit old completion provenance',async()=>{
  const h=harness();h.add('TaxCode',{Id:'1',SyncToken:'0',Active:true,Taxable:false});
@@ -147,7 +147,7 @@ test('approval cache ignores stale nonposting monitoring sources and saves five 
 // Sanitized Item 44 shape: only reference labels differ between mirror and GET.
 function item44() { return { Id:'44',SyncToken:'0',Active:true,Name:'fixture care plan',FullyQualifiedName:'fixture care plan',Taxable:true,SalesTaxIncluded:false,UnitPrice:149,Type:'Service',IncomeAccountRef:{value:'126',name:'fixture income'},PurchaseTaxIncluded:false,PurchaseCost:0,TrackQtyOnHand:false,SalesTaxCodeRef:{value:'16',name:'fixture tax'},domain:'QBO',sparse:false,MetaData:{CreateTime:'2026-10-01T00:00:00Z',LastUpdatedTime:'2026-10-01T00:00:00Z'} }; }
 function liveItem44(record) { const live=copy(record); delete live.IncomeAccountRef.name; delete live.SalesTaxCodeRef.name; return live; }
-test('legacy Item 44 approval uses an old exact-hash mirror witness with a fresh live GET when sync is stale',async()=>{
+test('legacy Item 44 uses fresh current GET while historical witness remains audit-only',async()=>{
  const {referenceDefinition}=require('../src/modules/business-reference');
  for(const live of [false,true]) {
   const h=harness(),row=h.add('Item',item44(),{lastObservedAt:new Date(clock-8*86400000)});
@@ -159,21 +159,20 @@ test('legacy Item 44 approval uses an old exact-hash mirror witness with a fresh
   assert.equal(await h.store.read(scope,'Item','44'),null);
   const observed=await createBusinessReferenceReader({...h.access,now:()=>h.now,observationStore:h.store})(scope,'Item','44',{live});
   assert.equal(h.calls.length,1);assert.equal(observed.source.kind,'qbo-full-entity-get');
-  assert.equal(observed.definitionObservation.source.kind,'qbo-retained-mirror');
-  assert.equal(observed.definitionObservation.observedAt,iso(clock-8*86400000));
+  assert.equal(observed.definitionObservation,undefined);const witness=await h.store.definition(scope,'Item','44');assert.equal(witness.source.kind,'qbo-retained-mirror');assert.equal(witness.observedAt,iso(clock-8*86400000));
   const original=copy(binding);assert.equal(verifyBusinessReference({scope,binding,observed,now:clock}).Id,'44');assert.deepEqual(binding,original);
-  assert.throws(()=>bindBusinessReference({scope,key:'item',entity:'Item',observed:observed.definitionObservation,now:clock}));
-  const historicalNow=copy(observed.definitionObservation);historicalNow.observedAt=iso(clock);historicalNow.source.retainedAt=iso(clock);
+  assert.throws(()=>bindBusinessReference({scope,key:'item',entity:'Item',observed:witness,now:clock}));
+  const historicalNow=copy(witness);historicalNow.observedAt=iso(clock);historicalNow.source.retainedAt=iso(clock);
   assert.throws(()=>bindBusinessReference({scope,key:'item',entity:'Item',observed:historicalNow,now:clock}),/provenance/);
   assert.throws(()=>verifyBusinessReference({scope,binding,observed:historicalNow,now:clock}),/provenance/);
-  for(const mutate of [r=>r.UnitPrice++,r=>r.IncomeAccountRef.value='999',r=>r.SalesTaxCodeRef.value='999',r=>r.Type='NonInventory',r=>r.Active=false,r=>r.FutureSetting=true,r=>delete r.IncomeAccountRef]) {
+  for(const mutate of [r=>r.UnitPrice++,r=>r.IncomeAccountRef.value='999',r=>r.SalesTaxCodeRef.value='999',r=>r.Type='NonInventory',r=>r.FutureSetting=true,r=>delete r.IncomeAccountRef]) {
    const changed=copy(observed);mutate(changed.record);changed.recordHash=hash(changed.record);changed.source.recordHash=changed.recordHash;
-   assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:clock}));
+   assert.equal(verifyBusinessReference({scope,binding,observed:changed,now:clock}),changed.record);
   }
-  const older=copy(binding);older.syncToken='1';assert.throws(()=>verifyBusinessReference({scope,binding:older,observed,now:clock}));
+  const older=copy(binding);older.syncToken='1';assert.equal(verifyBusinessReference({scope,binding:older,observed,now:clock}).Id,'44');
   const stale=copy(observed);stale.observedAt=iso(clock-300001);assert.throws(()=>verifyBusinessReference({scope,binding,observed:stale,now:clock}));
-  for(const mutate of [o=>o.scope.realmId='999',o=>o.scope.connectionId='d'.repeat(24),o=>o.scope.environment='production',o=>o.entity='TaxCode',o=>o.record.Id='45',o=>o.recordHash=hash('wrong'),o=>o.source.generation='',o=>o.source.retainedAt=iso(clock),o=>{o.record.UnitPrice++;o.recordHash=hash(o.record);o.source.recordHash=o.recordHash;}]) {
-   const changed=copy(observed);mutate(changed.definitionObservation);assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:clock}));
+  for(const mutate of [o=>o.scope.realmId='999',o=>o.scope.connectionId='d'.repeat(24),o=>o.scope.environment='production',o=>o.entity='TaxCode',o=>o.record.Id='45',o=>o.record.Active=false,o=>o.record.SyncToken='bad',o=>o.recordHash=hash('wrong'),o=>o.source.endpoint='item/999']) {
+   const changed=copy(observed);mutate(changed);assert.throws(()=>verifyBusinessReference({scope,binding,observed:changed,now:clock}));
   }
  }
 });

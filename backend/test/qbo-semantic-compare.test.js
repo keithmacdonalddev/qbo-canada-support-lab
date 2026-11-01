@@ -31,11 +31,13 @@ test('definition equality sorts only native tax lists, binds IDs/rates/orders/un
  const rate={EffectiveTaxRate:[{RateValue:14,EffectiveDate:'2025-04-01T00:00:00-07:00'}]};assert.equal(sameCanonicalDefinition('TaxRate',rate,{EffectiveTaxRate:[{RateValue:14,EffectiveDate:'2025-04-01'}]}),true);
  assert.equal(sameCanonicalDefinition('TaxRate',rate,{EffectiveTaxRate:[{RateValue:14,EffectiveDate:'2025-04-01T00:00:00+99:99'}]}),false);
 });
-test('dated source verification accepts irrelevant future history but refuses wrong in-period rates, unknown settings, expired/inactive and tampered evidence',async()=>{
+test('dated source verification accepts current provider metadata but refuses wrong dated tax, destinations, expiry and tampered evidence',async()=>{
  const before={Id:'34',SyncToken:'0',Active:true,RateValue:14,EffectiveTaxRate:[{RateValue:14,EffectiveDate:'2025-04-01'}]},current=structuredClone(before);current.SyncToken='1';current.EffectiveTaxRate.push({RateValue:15,EffectiveDate:'2027-01-01'});
  assert.equal(sameDatedTaxDefinition('TaxRate',before,current,'2026-10-31','2026-10-31'),true);
  const policy={fromDate:'2026-10-31',throughDate:'2026-10-31',taxSources:[{entity:'TaxRate',id:'34',record:before,recordHash:hash(before)}]};let live=current;const client={read:async()=>({TaxRate:live})};await verifyBusinessTaxSources(policy,client);
- for(const mutate of [r=>{r.EffectiveTaxRate[0].RateValue=15},r=>{r.EffectiveTaxRate[0].Unknown=true},r=>{r.EffectiveTaxRate[0].EndDate='2026-10-31'},r=>{r.Active=false},r=>{r.SyncToken='-1'}]){live=structuredClone(current);mutate(live);await assert.rejects(verifyBusinessTaxSources(policy,client));}
+ // Stage 1B (cdb7317) ignores provider extensions; effective tax and destinations remain bound.
+ live=structuredClone(current);live.EffectiveTaxRate[0].Unknown=true;await verifyBusinessTaxSources(policy,client);
+ for(const mutate of [r=>{r.EffectiveTaxRate[0].RateValue=15},r=>{r.AgencyRef={value:'999'}},r=>{r.EffectiveTaxRate[0].EndDate='2026-10-31'},r=>{r.Active=false},r=>{r.SyncToken='-1'}]){live=structuredClone(current);mutate(live);await assert.rejects(verifyBusinessTaxSources(policy,client));}
  live=current;policy.taxSources[0].recordHash=hash('tampered');await assert.rejects(verifyBusinessTaxSources(policy,client));
 });
 test('close semantic compatibility authenticates retained proof and monotonic string versions, preserves accounts/tax/unknown settings',()=>{
@@ -44,10 +46,15 @@ test('close semantic compatibility authenticates retained proof and monotonic st
  for(const mutate of [r=>{r.SyncToken='0'},r=>{r.SyncToken=2},r=>{r.Line[0].Amount=126},r=>{r.Unknown=false}]){const r=structuredClone(current);mutate(r);assert.equal(classifyRecord({entity:'Estimate',current:r,evidence}).kind,'external-change');}
  assert.equal(sameProvenRecord('Estimate',before,current,hash('forged')),false);
 });
-test('fixed master readback accepts omitted known false defaults but wrong true/price/account remains refused',()=>{
+test('fixed master readback uses current service price and preserves tax, routing and inventory economics',()=>{
  const {verifyMasterReadback}=require('../src/modules/business-master-preparation-plan');
  const compiled={entity:'Item',payload:{Name:'Service',Active:true,Type:'Service',Taxable:false,UnitPrice:125,IncomeAccountRef:{value:'9'}}};
  const saved={Id:'53',SyncToken:'0',Name:'Service',Active:true,Type:'Service',UnitPrice:125,IncomeAccountRef:{value:'9',name:'Income'}};
  assert.equal(verifyMasterReadback(compiled,saved,'53').qboId,'53');
- for(const extra of [{Taxable:true},{UnitPrice:126},{IncomeAccountRef:{value:'10'}}])assert.throws(()=>verifyMasterReadback(compiled,{...saved,...extra},'53'));
+ // Stage 1C (8e57821) allows service price/name changes. Inventory economics stay exact.
+ assert.equal(verifyMasterReadback(compiled,{...saved,Name:'Current service',UnitPrice:126},'53').qboId,'53');
+ for(const extra of [{Taxable:true},{IncomeAccountRef:{value:'10'}},{Active:false},{Type:'Inventory'}])assert.throws(()=>verifyMasterReadback(compiled,{...saved,...extra},'53'));
+ const inventory={entity:'Item',payload:{...compiled.payload,Type:'Inventory',TrackQtyOnHand:true,QtyOnHand:0,InvStartDate:'2026-10-01',AssetAccountRef:{value:'11'},ExpenseAccountRef:{value:'12'},PurchaseCost:60}};
+ const stock={...inventory.payload,Id:'54',SyncToken:'0'};assert.equal(verifyMasterReadback(inventory,stock,'54').qboId,'54');
+ for(const extra of [{UnitPrice:126},{PurchaseCost:61},{QtyOnHand:1},{AssetAccountRef:{value:'13'}},{ExpenseAccountRef:{value:'13'}}])assert.throws(()=>verifyMasterReadback(inventory,{...stock,...extra},'54'));
 });

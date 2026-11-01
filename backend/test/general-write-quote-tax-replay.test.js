@@ -45,13 +45,21 @@ test('tax-only exception preserves session reads, explicit writes, stale sources
  x.agent.sync.sources.TaxCode.lastSuccessAt='2026-10-29T00:00:00Z';assert.equal(await store.read(scope,'TaxCode','16',{transactions:true}),null);x.agent.sync.sources.TaxCode.lastSuccessAt='2026-10-31T20:59:16.663Z';
  x.agent.sync.amountReconciliation={status:'attention'};assert.equal(await store.read(scope,'TaxCode','16',{transactions:true}),null);
 });
-test('wrong, inactive, incomplete, future and expired taxes remain refused; historical policy uses its transaction date',async t=>{
+test('current dated taxes prepare while inactive, incomplete, future and expired taxes stay refused',async t=>{
  const x=setup(t),rate=x.records.find(r=>r.entity==='TaxRate'&&r.qboId==='34').record,code=x.records.find(r=>r.entity==='TaxCode'&&r.qboId==='16').record;
- for(const edit of [()=>{rate.Active=false},()=>{code.Active=false},()=>{rate.EffectiveTaxRate[0].RateValue=15},()=>{rate.EffectiveTaxRate=[]},()=>{rate.EffectiveTaxRate[0].EffectiveDate='2027-01-01'},()=>{rate.EffectiveTaxRate[0].EndDate='2026-10-31'}]){
-  const a=structuredClone(rate),b=structuredClone(code);edit();await assert.rejects(x.api.prepare(x.bound,f.input));for(const key of Object.keys(rate))delete rate[key];for(const key of Object.keys(code))delete code[key];Object.assign(rate,a);Object.assign(code,b);
+ for(const edit of [()=>{rate.Active=false},()=>{code.Active=false},()=>{rate.EffectiveTaxRate=[]},()=>{rate.EffectiveTaxRate[0].EffectiveDate='2027-01-01'},()=>{rate.EffectiveTaxRate[0].EndDate='2026-10-31'}]){
+  const a=structuredClone(rate),b=structuredClone(code);edit();const count=x.saved.length;assert.equal((await x.api.prepare(x.bound,f.input)).status,'refused',edit.toString());assert.equal(x.saved.length,count,'refused taxes never create a saved plan');for(const key of Object.keys(rate))delete rate[key];for(const key of Object.keys(code))delete code[key];Object.assign(rate,a);Object.assign(code,b);
  }
- const input=structuredClone(f.input);input.operations[0].payload.Line[0].SalesItemLineDetail.TaxCodeRef.value='12';assert.equal((await x.api.prepare(x.bound,input)).status,'refused');
+ const input=structuredClone(f.input);input.operations[0].payload.Line[0].SalesItemLineDetail.TaxCodeRef.value='12';assert.equal((await x.api.prepare(x.bound,input)).status,'prepared','Stage 1B accepts current code12 at its dated 15%, without pinning code IDs');
  const map=new Map(x.records.map(r=>[r.entity+':'+r.qboId,r.record])),local={map,get:(e,id)=>map.get(e+':'+id)};
- const context=await require('../src/modules/general-write-service').createGeneralWriteContext({models:x.models,now:()=>now})(scope,local,{operations:[{entity:'Estimate',payload:{TxnDate:'2025-03-31',Line:[{SalesItemLineDetail:{TaxCodeRef:{value:'12'}}}]}}]});
- assert.deepEqual(context.taxByDate['2025-03-31'].taxCodes.sales,['12']);assert.equal(context.taxByDate['2025-03-31'].taxPercent['12'],15);assert.equal(context.taxPercent['16'],14);
+ const contextFor=require('../src/modules/general-write-service').createGeneralWriteContext({models:x.models,now:()=>now});
+ const context=await contextFor(scope,local,input);
+ assert.equal(context.taxPercent['12'],15);assert.equal(context.taxPercent['16'],14);
+ const historical=structuredClone(input);for(const op of historical.operations){op.payload.TxnDate='2025-03-31';op.payload.Line[0].SalesItemLineDetail.TaxCodeRef.value='12';}
+ const dated=await contextFor(scope,local,historical);
+ assert.deepEqual(dated.taxByDate['2025-03-31'].taxCodes.sales,['12']);assert.equal(dated.taxByDate['2025-03-31'].taxPercent['12'],15);
+ rate.EffectiveTaxRate[0].RateValue=15;
+ assert.equal((await x.api.prepare(x.bound,f.input)).status,'prepared');assert.equal((await contextFor(scope,local,f.input)).taxPercent['16'],15,'Current dated rate replaces the old published percentage');
+ const wrong=structuredClone(f.input);wrong.operations[0].payload.Line[0].Amount=251;
+ const count=x.saved.length;assert.equal((await x.api.prepare(x.bound,wrong)).status,'refused');assert.equal(x.saved.length,count,'a changed rate never waives line arithmetic');
 });

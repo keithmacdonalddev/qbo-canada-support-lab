@@ -102,7 +102,7 @@ test('new accepted progress invalidates an earlier apply or retain confirmation'
 });
 test('confirmation rereads the real accepted ID and refuses remote changes after preview', async t => {
   const h = await fixture(t); h.afterCreate = async () => h.store.stop(String(h.run()._id)); await h.execute(String(h.run()._id)); const review = await h.review([0]), reads = h.exactReads.length;
-  h.remote.Account.find(row => row.Id === '100').Active = false; await assert.rejects(h.store.apply(String(h.run()._id), review, key), /fields do not match/); assert.equal(h.exactReads.length, reads + 1); assert.equal(h.data.Versions.length, 1); assert.equal(h.run().claim, 'open');
+  h.remote.Account.find(row => row.Id === '100').Active = false; await assert.rejects(h.store.apply(String(h.run()._id), review, key), /accounting purpose/); assert.equal(h.exactReads.length, reads + 1); assert.equal(h.data.Versions.length, 1); assert.equal(h.run().claim, 'open');
 });
 test('prepared inventory cannot be applied before its starting date in a revised history', async t => {
   const h = await fixture(t); await h.execute(String(h.run()._id)); const revised = clone(h.data.Versions[0]); revised._id = '000000000000000000000089'; revised.version = 2; revised.definition.calendar.openingDate = '2022-10-01'; revised.contentHash = hash(revised.definition); h.data.Versions.push(revised); h.data.Sequences[0].value = 2;

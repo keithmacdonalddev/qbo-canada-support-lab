@@ -22,7 +22,7 @@ const replay = records => { const basis = { opening: opening(), records, period 
 const pair = (entity, record) => ({ entity, record });
 function context(basis) { return { inventory, get: entity => entity === 'Item' ? item : null, receivables: '12', payables: '13', undepositedFunds: '50', stockCost: (entity, record, index) => stockPostingCost(basis, entity, record, index), taxAccount: () => '14' }; }
 function local(extra = []) {
-  const map = new Map([['Item:101', item], ['Customer:1', { Id: '1', Active: true }], ['Vendor:30', { Id: '30', Active: true }], ['Account:50', { Id: '50', AccountType: 'Bank', Active: true }], ['Account:9', { Id: '9', AccountSubType: 'Inventory', Active: true }], ['TaxCode:7', { Id: '7' }], ['TaxCode:8', { Id: '8' }], ...extra]);
+  const map = new Map([['Item:101', item], ['Customer:1', { Id: '1', Active: true }], ['Vendor:30', { Id: '30', Active: true }], ['Account:50', { Id: '50', AccountType: 'Bank', Active: true }], ['Account:9', { Id: '9', AccountSubType: 'Inventory', Active: true }], ['TaxCode:7', { Id: '7',SyncToken:'0',Active:true,Taxable:false }], ['TaxCode:8', { Id: '8',SyncToken:'0',Active:true,Taxable:false }], ...extra]);
   return { get: (entity, id) => map.get(entity + ':' + id), owned: () => true, map };
 }
 const op = (entity, value, ref = 'stock') => { const { Id, SyncToken, ...payload } = value; return { ref, entity, op: 'create', payload }; };

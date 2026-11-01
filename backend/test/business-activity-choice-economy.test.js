@@ -72,14 +72,14 @@ test('budget reserve admits only exact applications and existing-payment deposit
 });
 
 test('the general tool admits exact obligations at the cap and holds new sales and overpayments',async t=>{
- const general=require('../src/modules/general-write-service'),original=general.createDefaultGeneralWrite;let prepared=0,executed=0;
+ const general=require('../src/modules/general-write-service'),original=general.createDefaultGeneralWrite;let prepared=0,executed=0;const events=[];
  general.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return{runId:'reserve-run',status:'prepared',admitted:false};},dispatchEnabled:()=>true,execute:async()=>{executed++;return{status:'complete'};}});t.after(()=>{general.createDefaultGeneralWrite=original;});
  const ownerId='b'.repeat(24),agentId='c'.repeat(24),grantId='grant-reserve',authorityHash='d'.repeat(64);
  const tools=require('../src/modules/business-agent-tools').createBusinessAgentTools({row:{_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},passId:'reserve-test',scope,user:{id:ownerId},now:()=>Date.parse('2026-10-31T22:00:00Z'),guard:async()=>{},signal:new AbortController().signal,
- store:{models:{},business:async()=>({scope,blockers:[],verifiedThrough:'2026-10-30',currentOperation:null}),unfinishedRuns:async()=>[]},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},
+ store:{event:async(_row,kind,_title,_detail,data)=>{assert.ok(['accountant-write-decision','accountant-write-link','accountant-write-outcome-complete'].includes(kind));if(kind!=='accountant-write-outcome-complete')assert.equal(data.passId,'reserve-test');events.push({kind,data});return {id:'decision-reserve',...data};},models:{Runs:{find:()=>({select(){return this},limit(){return this},maxTimeMS(){return this},lean:async()=>[]})}},business:async()=>({scope,blockers:[],verifiedThrough:'2026-10-30',currentOperation:null}),unfinishedRuns:async()=>[]},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},
  todayFor:async()=>({day:'2026-10-31',target:220,ceiling:440,saved:85,reserved:0,inFlight:0,open:[],hourCap:60,hourUsed:0}),requestsFor:async()=>{const attempts={sync:300,report:1000,query:1000,read:8000,write:89};return{today:{attempts},month:{attempts}};}});
  const input=operations=>({decisionKey:'budget-reserve-test',purpose:'Settle an existing customer obligation.',operations});
- assert.equal((await tools.execute('manageQboRecord',input([payment()]))).success,true);assert.deepEqual([prepared,executed],[1,1]);
+ assert.equal((await tools.execute('manageQboRecord',input([payment()]))).success,true);assert.deepEqual([prepared,executed],[1,1]);assert.deepEqual(events.map(e=>e.kind),['accountant-write-decision','accountant-write-link','accountant-write-outcome-complete']);assert.equal(events[1].data.operationId,'reserve-run');
  await assert.rejects(tools.execute('manageQboRecord',input([{ref:'sale',op:'create',entity:'Invoice',payload:{}}])),/request budget/);
  await assert.rejects(tools.execute('manageQboRecord',input([payment(10000)])),/request budget/);assert.deepEqual([prepared,executed],[1,1]);
 });

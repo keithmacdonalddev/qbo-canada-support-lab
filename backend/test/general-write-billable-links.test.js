@@ -21,7 +21,8 @@ function harness() {
   for (const id of ['19', '52']) records.set('Customer:' + id, { Id: id, Active: true, CurrencyRef: { value: 'CAD' } });
   records.set('Account:50', { Id: '50', Active: true, AccountType: 'Bank' });
   records.set('Account:51', { Id: '51', Active: true, AccountType: 'Expense' });
-  records.set('TaxCode:11', { Id: '11', Active: true });
+  records.set('TaxCode:11', { Id:'11',SyncToken:'0',Active:true,SalesTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:'111'},TaxTypeApplicable:'TaxOnAmount'}]},PurchaseTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:'111'},TaxTypeApplicable:'TaxOnAmount'}]} });
+  records.set('TaxRate:111',{Id:'111',SyncToken:'0',Active:true,EffectiveTaxRate:[{EffectiveDate:'2020-01-01',RateValue:13}]});
   let sends = 0, creates = 0;
   const Runs = { rows, findOne: filter => query(rows.get(filter._id) || null),
     create: async input => { creates++; for (const row of input) rows.set(row._id, structuredClone(row)); },

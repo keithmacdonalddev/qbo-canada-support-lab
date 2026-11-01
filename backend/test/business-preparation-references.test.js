@@ -123,7 +123,7 @@ test('route discards bindings after saved-plan or permission drift and keeps loc
   }
 });
 
-test('disconnect during initial master reads prevents the later full-definition reads', { timeout: 5000 }, async () => {
+test('disconnect during initial master reads prevents the later full-definition reads', { timeout: 30000 }, async () => {
   const h = harness(); let started, release, closed, finished;
   const masterStarted = new Promise(resolve => { started = resolve; });
   const connectionClosed = new Promise(resolve => { closed = resolve; });

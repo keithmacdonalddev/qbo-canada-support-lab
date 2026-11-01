@@ -109,10 +109,11 @@ test('current inventory and balances may advance without rewriting the exact app
   assert.notEqual(after.evidenceHash, before.evidenceHash); assert.deepEqual(f.step, approvedStep); assert.deepEqual(f.policy, approvedPolicy);
   f.referenceEvidence.find(value => value.entity === 'Item' && value.record.Id === '101').record.QtyOnHand = 11; f.refresh(); assert.throws(f.compile, /stock availability/);
 });
-test('same or newer version cannot conceal changed master definitions or a removed approval binding', () => {
-  for (const change of [f => { f.referenceEvidence.find(value => value.entity === 'Item' && value.record.Id === '101').record.IncomeAccountRef.value = '999'; }, f => { f.referenceEvidence.find(value => value.entity === 'Customer').record.IsProject = true; }, f => { delete f.step.references[0].definition; f.approve(); }]) {
-    const f = fixture('SalesReceipt'); change(f); f.refresh(); assert.throws(f.compile, /definition/);
-  }
+test('current accounting purpose and exact reference identity remain required; old definition hash is audit-only',()=>{
+ for(const [change,pattern]of [[f=>{f.referenceEvidence.find(v=>v.entity==='Item'&&v.record.Id==='101').record.IncomeAccountRef.value='999'},/Inventory product accounts changed/],[f=>{f.referenceEvidence.find(v=>v.entity==='Customer').record.IsProject=true},/project/],[f=>{delete f.step.references[0].id;f.approve()},/identity/]]){
+  const f=fixture('SalesReceipt');change(f);f.refresh();assert.throws(f.compile,pattern);
+ }
+ const f=fixture('SalesReceipt');delete f.step.references[0].definition;f.approve();f.refresh();assert.equal(f.compile().entity,'SalesReceipt');
 });
 
 test('fresh verified open unlinked PO accepts omitted zero Received without editing raw source', () => {

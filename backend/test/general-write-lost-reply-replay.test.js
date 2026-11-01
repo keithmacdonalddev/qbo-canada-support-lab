@@ -77,12 +77,8 @@ test('stored PO11216 reply is automatically attributed on the existing wake with
   assert.equal(h.run().batches[0].sends, 1);
   assert.equal(h.data.Receipts[0].dispatchKey, fixture.receipt.dispatchKey);
   const item = h.run().items['winter-access-order'];
-  assert.equal(item.qboId, '11216'); assert.equal(item.outcome, 'mismatch');
-  assert.equal(h.run().status, 'needs-correction');
-  assert.equal(item.next.action, 'check-saved');
-  assert.ok(item.errorDetail.check.file.endsWith('general-write-service.js')); assert.ok(item.errorDetail.check.line > 0);
-  assert.ok(h.run().errorDetail.check.line > 0);
-  assert.ok(item.errorDetail.detail.differences.some(row => row.field === 'DueDate'));
+  assert.equal(item.qboId, '11216'); assert.equal(item.outcome, 'saved');
+  assert.equal(h.run().status, 'complete');assert.equal(item.errorDetail,undefined);
   assert.ok(h.run().owned.some(row => row.key === 'PurchaseOrder:11216'));
   assert.equal(h.run().batches[0].state, 'answered');
   const again = await service.execute({ scope, ownerId, actorId: ownerId, agentAuthority: fixture.run.agentAuthority }, runId);
@@ -103,17 +99,20 @@ for (const kind of ['body', 'request', '500', 'null-status', 'identity', 'duplic
 
 test('wake filters answered, owner and revoked-grant rows before applying its bounded limit', async () => {
   const { h } = storedHarness(), { recheckGeneralWrites } = require('../src/modules/general-write-recovery');
-  let executed = 0;
+  let executed = 0,queries=0;
   h.models.GeneralWriteRuns.find = filter => {
-    assert.deepEqual(filter.batches, { $elemMatch: { state: { $ne: 'answered' } } });
+    queries++;const uncertain=typeof filter.status==='object';
+    if(uncertain){assert.deepEqual(filter.status,{$in:['unknown','sending']});assert.deepEqual(filter.batches,{$elemMatch:{state:{$ne:'answered'}}});}
+    else{assert.equal(filter.status,'needs-correction');assert.deepEqual(filter.batches,{$elemMatch:{state:'answered','transport.outcome':'saved','items.entity':'PurchaseOrder'}});}
+    for(const key of ['realmId','environment','connectionId'])assert.equal(filter[key],scope[key]);assert.equal(filter['agentAuthority.ownerId'],fixture.run.ownerId);
     assert.equal(filter['agentAuthority.grantId'], fixture.run.agentAuthority.grantId);
     assert.equal(filter['agentAuthority.agentId'], fixture.run.agentAuthority.agentId);
     assert.equal(filter['agentAuthority.authorityHash'], fixture.run.agentAuthority.authorityHash);
     assert.equal(filter.ownerId, fixture.run.ownerId);
-    return { sort() { return this; }, limit(n) { assert.equal(n, 3);return this; }, maxTimeMS() { return this; }, lean: async () => [clone(fixture.run)] };
+    return { sort() { return this; }, limit(n) { assert.equal(n, uncertain?3:2);return this; }, maxTimeMS() { return this; }, lean: async () => uncertain?[clone(fixture.run)]:[] };
   };
   await recheckGeneralWrites({ scope, models: h.models, now: () => h.clock, service: { execute: async () => { executed++;return { status: 'complete' }; } } });
-  assert.equal(executed, 1);
+  assert.equal(executed, 1);assert.equal(queries,2);
   h.data.Agents[0].settings.autonomous = false;
   assert.deepEqual(await recheckGeneralWrites({ scope, models: h.models, now: () => h.clock, service: { execute: async () => { throw new Error('revoked'); } } }), []);
 });

@@ -1,0 +1,5 @@
+**Stopped at: connecting to the Codex Chrome plugin.** The plugin reported no available browsers on two attempts, so I could not open the requested tab or verify the company. No banking screens or screenshots were captured.
+
+The Chrome extension connection needs to be available before the mapping can proceed. I did not run the plugin’s process-based diagnostics because this run prohibits starting processes.
+
+**Action ledger:** No clicks or typed entries; no tab or files created; nothing to remove.

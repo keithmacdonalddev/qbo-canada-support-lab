@@ -63,7 +63,7 @@ test('default and financial runtimes cannot accept master correlation without th
   await assert.rejects(h.begin(), /dedicated/); assert.equal(h.data.Receipts.length, 0);
 });
 test('fresh preflight refuses drift in inventory, protection, taxability and Canadian prerequisites', () => {
-  for (const change of [
+  for (const [index,change] of [
     f => { f.setup.observations.inventoryTracking = false; },
     f => { f.setup.observations.closingDateVerified = false; },
     f => { f.setup.observations.closedThrough = '2023-10-01'; },
@@ -71,9 +71,9 @@ test('fresh preflight refuses drift in inventory, protection, taxability and Can
     f => { f.setup.observations.homeCurrency = 'USD'; },
     f => { f.country.country = 'US'; },
     f => { f.setup.completeness.accounts = false; },
-  ]) {
+  ].entries()) {
     const h = harness(), f = h.source; change(f);
-    assert.throws(() => prepareMasterDispatchEvidence({ run: h.run(), ordinal: 0, requestHash: h.request.requestHash, setup: f.setup, country: f.country, controls: f.periodControl, now: h.clock })); assert.equal(h.sent.length, 0);
+    assert.throws(() => prepareMasterDispatchEvidence({ run: h.run(), ordinal: index===3?h.run().plan.entries.find(row=>row.entity==='Item').ordinal:0, requestHash: h.request.requestHash, setup: f.setup, country: f.country, controls: f.periodControl, now: h.clock })); assert.equal(h.sent.length, 0);
   }
 });
 test('aged evidence cannot be refreshed by changing its outer timestamp alone', async () => {

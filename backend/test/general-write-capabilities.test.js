@@ -17,7 +17,8 @@ const rows = new Map([
   ['Account:400', { Id: '400', Active: true, AccountType: 'Income' }],
   ['Item:40', { Id: '40', Active: true, Type: 'Service', IncomeAccountRef: { value: '400' } }],
   ['Item:41', { Id: '41', Active: true, Type: 'Inventory' }],
-  ...['7','8','9'].map(Id => ['TaxCode:' + Id, { Id, Active: true }]),
+  ...['7','8','9'].map(Id => ['TaxCode:' + Id, { Id, SyncToken:'0', Active: true, ...(Id==='9'?{Taxable:false}:{SalesTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:Id==='7'?'17':'18'},TaxTypeApplicable:'TaxOnAmount'}]}}) }]),
+  ...[['17',13],['18',5]].map(([Id,percent])=>['TaxRate:'+Id,{Id,SyncToken:'0',Active:true,EffectiveTaxRate:[{EffectiveDate:'2026-01-01',RateValue:percent}]}]),
   ['Invoice:700', { Id: '700', SyncToken: '0', TxnDate: DAY, CustomerRef: { value: '1' }, Balance: 60, TotalAmt: 60, Line: [] }],
   ['Payment:800', { Id: '800', SyncToken: '0', TxnDate: DAY, CustomerRef: { value: '1' }, DepositToAccountRef: { value: '125' }, TotalAmt: 100, UnappliedAmt: 100, Line: [] }],
 ]);
@@ -164,16 +165,16 @@ test('live context admits explicitly referenced mixed sales codes with complete 
   const models={Calendars:{findOne:()=>q({verifiedThrough:'2026-12-01'})},Policies:{findOne:()=>q({periodControl:{}})},GeneralWriteRuns:{findOne:()=>q(null)}};
   const detail = id=>({TaxRateRef:{value:id},TaxTypeApplicable:'TaxOnAmount'});
   const copy=new Map(rows);
-  copy.set('TaxCode:7',{Id:'7',Active:true,SalesTaxRateList:{TaxRateDetail:[detail('17')]},PurchaseTaxRateList:{TaxRateDetail:[detail('17')]}});
-  copy.set('TaxCode:8',{Id:'8',Active:true,SalesTaxRateList:{TaxRateDetail:[detail('18')]}});
-  copy.set('TaxCode:9',{Id:'9',Active:true,Taxable:false});
+  copy.set('TaxCode:7',{Id:'7',SyncToken:'0',Active:true,SalesTaxRateList:{TaxRateDetail:[detail('17')]},PurchaseTaxRateList:{TaxRateDetail:[detail('17')]}});
+  copy.set('TaxCode:8',{Id:'8',SyncToken:'0',Active:true,SalesTaxRateList:{TaxRateDetail:[detail('18')]}});
+  copy.set('TaxCode:9',{Id:'9',SyncToken:'0',Active:true,Taxable:false});
   copy.set('TaxRate:17',{Id:'17',SyncToken:'0',Active:true,RateValue:13,EffectiveTaxRate:[{EffectiveDate:'2026-01-01',RateValue:13}]});copy.set('TaxRate:18',{Id:'18',SyncToken:'0',Active:true,RateValue:5,EffectiveTaxRate:[{EffectiveDate:'2026-01-01',RateValue:5}]});
   const localCopy={...local,map:copy,get:(e,id)=>copy.get(e+':'+id)};
   const contextFor=require('../src/modules/general-write-service').createGeneralWriteContext({models,now:()=>Date.parse(DAY+'T16:00:00Z')});
-  const mixed=await contextFor(scope,localCopy,{salesTaxCodes:['7','8','9']});
+  const mixed=await contextFor(scope,localCopy,{operations:[sale('Invoice')]});
   assert.deepEqual(mixed.taxCodes.sales,['7','8','9']);assert.deepEqual(mixed.taxPercent,{7:13,8:5,9:0});accept(check(sale('Invoice'),{local:localCopy,context:mixed}));
-  copy.get('TaxCode:8').Active=false;await assert.rejects(contextFor(scope,localCopy,{salesTaxCodes:['8']}),/complete current rates/);
-  copy.get('TaxCode:8').Active=true;copy.get('TaxCode:8').SalesTaxRateList.TaxRateDetail[0].TaxTypeApplicable='TaxOnTax';await assert.rejects(contextFor(scope,localCopy,{salesTaxCodes:['8']}),/ambiguous or compound/);
+  copy.get('TaxCode:8').Active=false;const inactive=await contextFor(scope,localCopy,{operations:[sale('Invoice')]});refuse(sale('Invoice'),/complete active/,{local:localCopy,context:inactive});
+  copy.get('TaxCode:8').Active=true;copy.get('TaxCode:8').SalesTaxRateList.TaxRateDetail[0].TaxTypeApplicable='TaxOnTax';const compound=await contextFor(scope,localCopy,{operations:[sale('Invoice')]});refuse(sale('Invoice'),/Compound|ambiguous/,{local:localCopy,context:compound});
 });
 
 test('service passes proposed invoice line codes into the guarded tax context', async () => {

@@ -67,12 +67,15 @@ test('blockers endpoint delegates through the existing protected router without 
  await route.route.stack[0].handle(req,res);assert.equal(seen,req.user);assert.deepEqual(res.value,{data:{blockers:[]}});
 });
 
-test('definition mismatch identifies differing approved/current fields without changing approval',()=>{
+test('current reference routing is returned without rewriting historical binding; identity errors retain diagnostics',()=>{
  const {bindBusinessReference,verifyBusinessReference}=require('../src/modules/business-reference'),{hash}=require('../src/modules/business-calendar');
  const observation=record=>({scope,entity:'Item',observedAt:new Date(now).toISOString(),record,recordHash:hash(record),source:{version:1,kind:'qbo-full-entity-get',scope,entity:'Item',id:record.Id,endpoint:'item/'+record.Id,recordHash:hash(record)}});
  const original=observation({Id:'9',SyncToken:'1',Active:true,Name:'Care',Type:'Service',IncomeAccountRef:{value:'10'}}),binding=bindBusinessReference({scope,key:'care-plan-1',entity:'Item',observed:original,now}),before=structuredClone(binding);
  const current={...observation({...original.record,SyncToken:'2',IncomeAccountRef:{value:'11'}}),definitionObservation:original};
- assert.throws(()=>verifyBusinessReference({scope,binding,observed:current,now}),e=>{const d=businessErrorDetail(e);assert.equal(d.detail.differences[0].field,'IncomeAccountRef.value');assert.equal(d.detail.differences[0].approved,'10');assert.equal(d.detail.differences[0].current,'11');assert.equal(d.check.function,'verifyBusinessReference');return true;});assert.deepEqual(binding,before);
+ // Stage 1A (71b72f4) resolves current references; the compiler checks accounting purpose.
+ assert.equal(verifyBusinessReference({scope,binding,observed:current,now}).IncomeAccountRef.value,'11');
+ const other=observation({...current.record,Id:'99'});
+ assert.throws(()=>verifyBusinessReference({scope,binding,observed:other,now}),e=>{const d=businessErrorDetail(e);assert.equal(d.detail.entity,'Item');assert.equal(d.detail.recordId,'9');assert.equal(d.detail.bindingKey,'care-plan-1');assert.equal(d.check.function,'verifyBusinessReference');return true;});assert.deepEqual(binding,before);
 });
 test('tax-rate refusal retains the selected rate/date and effective boundary',()=>{
  const {applicableRate}=require('../src/modules/business-tax-policy');
@@ -99,12 +102,16 @@ test('one execution refusal is counted once across release and settlement, and a
  const retry=failureFields({...settled,executionRequest:request2},d,{},now+1000);assert.equal(retry.errorHistory[0].count,2);assert.equal(retry.errorHistory[0].firstAt,released.errorHistory[0].firstAt);
 });
 
-test('mismatch detail never labels an unrelated supplied witness as the approved baseline',()=>{
+test('unrelated historical witness cannot substitute for complete current company provenance',()=>{
  const {bindBusinessReference,verifyBusinessReference}=require('../src/modules/business-reference'),{hash}=require('../src/modules/business-calendar');
  const observation=record=>({scope,entity:'Item',observedAt:new Date(now).toISOString(),record,recordHash:hash(record),source:{version:1,kind:'qbo-full-entity-get',scope,entity:'Item',id:record.Id,endpoint:'item/'+record.Id,recordHash:hash(record)}});
  const approved=observation({Id:'9',SyncToken:'1',Active:true,Name:'Care',Type:'Service',IncomeAccountRef:{value:'10'}}),binding={...bindBusinessReference({scope,key:'care-plan-1',entity:'Item',observed:approved,now}),definition:require('../src/modules/business-reference').referenceDefinition(scope,'Item',approved.record,1)};
  const wrong=observation({...approved.record,IncomeAccountRef:{value:'999'}}),current={...observation({...approved.record,SyncToken:'2',IncomeAccountRef:{value:'11'}}),definitionObservation:wrong};
- assert.throws(()=>verifyBusinessReference({scope,binding,observed:current,now,resolveDefinitionObservation:()=>approved}),e=>{const d=businessErrorDetail(e);assert.equal(d.detail.differences[0].approved,'10');assert.equal(d.detail.differences[0].current,'11');return true;});
+ const before=structuredClone(binding);
+ assert.equal(verifyBusinessReference({scope,binding,observed:current,now,resolveDefinitionObservation:()=>approved}),current.record);
+ const untrusted={...current,source:{...current.source,scope:{...scope,realmId:'999'}}};
+ assert.throws(()=>verifyBusinessReference({scope,binding,observed:untrusted,now,resolveDefinitionObservation:()=>approved}),e=>{const d=businessErrorDetail(e);assert.match(d.message,/provenance/);assert.equal(e.referenceDiagnostic.retainedDefinitionResolved,false);assert.equal(d.detail.differences?.length||0,0);return true;});
+ assert.deepEqual(binding,before);
 });
 
 test('inspectBlocker returns the retained structured run error unchanged alongside its own comparisons',async()=>{

@@ -58,8 +58,9 @@ test('incomplete dependency graphs stop observations and cannot be used as proof
 test('changed originating records fail despite a current stored verified status', async () => {
   const h = harness('Invoice'); h.parentHash = hash('old observed content'); await assert.rejects(h.read(), /changed after graph/);
 });
-test('changed approved master definitions and absent tax expectations prevent compilation', async () => {
-  const h = harness(); h.f.referenceEvidence.find(value => value.entity === 'Customer').record.DisplayName = 'Changed'; await assert.rejects(h.read(), /approved definition/);
+test('current customer presentation compiles while missing tax expectations and incompatible parties refuse', async () => {
+  const h = harness(); h.f.referenceEvidence.find(value => value.entity === 'Customer').record.DisplayName = 'Changed'; assert.ok((await h.read()).referenceEvidence.length);
+  for(const patch of [{CurrencyRef:{value:'USD'}},{IsProject:true},{Active:false}]){const risk=harness();Object.assign(risk.f.referenceEvidence.find(o=>o.entity==='Customer').record,patch);await assert.rejects(risk.read());}
   const tax = harness(); delete tax.intent.policy.readbackTax; await assert.rejects(tax.read(), /tax expectations/);
 });
 test('writer changes, authority loss and observation deadline stop before dispatch', async () => {
@@ -103,14 +104,14 @@ test('stock compilation reads Item quantity after a prior receipt instead of its
   h.deps.observations = { read: async (_scope, entity, id) => { if (entity === 'Item' && id === item.record.Id) { itemCopies++; return stale; } return null; } };
   assert.equal((await h.deps.observations.read(scope, 'Item', item.record.Id)).record.QtyOnHand, 0); itemCopies = 0;
   const values = await h.read();
-  assert.equal(itemCopies, 1, 'the old copy is read only as an authenticated definition witness');
+  assert.equal(itemCopies, 0, 'Stage 1A uses the live inventory GET without a historical definition witness');
   assert.equal(values.referenceEvidence.find(x => x.entity === 'Item' && x.record.Id === item.record.Id).source.kind, 'qbo-full-entity-get');
   assert.equal(values.referenceEvidence.find(x => x.entity === 'Item' && x.record.Id === item.record.Id).record.QtyOnHand, 12);
   item.record.QtyOnHand = 0;
   await assert.rejects(h.read(), /stock availability/);
 });
 
-test('execution compilation carries historical Item and TaxCode witnesses when current mirror is unavailable',async()=>{
+test('execution compilation uses full current Item and TaxCode records without historical witnesses',async()=>{
  const {referenceDefinition}=require('../src/modules/business-reference');
  const h=harness('Estimate'),witnesses=new Map();
  for(const entity of ['Item','TaxCode']) {
@@ -127,10 +128,10 @@ test('execution compilation carries historical Item and TaxCode witnesses when c
  h.intent.fingerprint=hash(h.intent.step);h.intent.policy.stepHash=h.intent.fingerprint;
  h.deps.observations={read:async()=>null,definition:async(_s,entity,id)=>clone(witnesses.get(entity+':'+id)||null)};
  const result=await h.read();
- assert.equal(result.referenceEvidence.filter(o=>o.definitionObservation).length,2);
+ assert.equal(result.referenceEvidence.filter(o=>o.definitionObservation).length,0);
  assert.equal(compileBusinessTransaction({scope,step:h.intent.step,policy:h.intent.policy,...result,now}).entity,'Estimate');
  h.f.referenceEvidence.find(o=>o.entity==='Item').record.IncomeAccountRef.value='999';
- await assert.rejects(h.read(),/approved definition/);
+ await assert.rejects(h.read(),/income account changed/);
 });
 
 
@@ -161,29 +162,32 @@ function legacyWitnessHarness(entity) {
   };
   return Object.assign(h, { selected, retained, binding });
 }
-for (const entity of ['Item', 'TaxCode']) test('compilation recovers exact legacy ' + entity + ' evidence after a cached shape mismatch', async () => {
+for (const entity of ['Item', 'TaxCode']) test('compilation uses current ' + entity + ' evidence despite legacy display-shape drift', async () => {
   const h = legacyWitnessHarness(entity), before = clone(h.intent), result = await h.read();
   const observed = result.referenceEvidence.find(o => o.entity === entity);
-  assert.equal(observed.definitionObservation.source.kind, 'qbo-retained-mirror');
-  assert.equal(h.definitionCalls, 1);
+  assert.equal(observed.definitionObservation, undefined);
+  assert.equal(h.definitionCalls, 0);
   assert.deepEqual(h.intent, before);
   assert.deepEqual(observed.record, h.selected.record);
   assert.equal(compileBusinessTransaction({ scope, step: h.intent.step, policy: h.intent.policy, ...result, now }).entity, 'Estimate');
 });
-test('legacy witness recovery still rejects missing, tampered, foreign and changed definitions', async () => {
+test('historical witness drift is audit-only while incompatible current Item purpose still refuses', async () => {
   for (const change of [
     h => { h.retained = null; },
     h => { h.retained.record.UnitPrice = (h.retained.record.UnitPrice || 0) + 1; h.retained.recordHash = hash(h.retained.record); h.retained.source.recordHash = h.retained.recordHash; },
     h => { h.retained.scope.realmId = '999'; },
     h => { h.retained.source.generation = ''; },
     h => { h.selected.record.UnitPrice = (h.selected.record.UnitPrice || 0) + 1; },
-    h => { h.selected.record.IncomeAccountRef.value = '999'; },
-    h => { h.selected.record.Type = 'NonInventory'; },
     h => { h.selected.record.FutureDefinitionField = true; },
     h => { h.binding.syncToken = '2'; h.selected.record.SyncToken = '1'; h.reapprove(); },
   ]) {
-    const h = legacyWitnessHarness('Item'); change(h); await assert.rejects(h.read(), /definition|version|evidence/);
+    const h = legacyWitnessHarness('Item'); change(h); assert.ok((await h.read()).referenceEvidence.length);assert.equal(h.definitionCalls,0);
   }
+  for(const patch of [{IncomeAccountRef:{value:'999'}},{Type:'NonInventory'},{Active:false},{sparse:true},{Id:'999'}]){
+    const h=legacyWitnessHarness('Item');Object.assign(h.selected.record,patch);await assert.rejects(h.read());
+  }
+  const foreign=legacyWitnessHarness('Item');foreign.client.connection.realmId='999';
+  await assert.rejects(foreign.read());
 });
 
 test('an unavailable optional witness does not block an owner-reviewed TaxCode definition', async () => {
@@ -193,11 +197,12 @@ test('an unavailable optional witness does not block an owner-reviewed TaxCode d
   h.deps.observations.definition = async () => { throw new Error('Historical store unavailable'); };
   assert.equal((await h.read()).referenceEvidence.length, h.f.referenceEvidence.length);
 });
-test('shared physical references recover a legacy witness even when the last binding uses v2', async () => {
+test('shared physical references use one current observation without a legacy witness', async () => {
   const { referenceDefinition } = require('../src/modules/business-reference');
   const h = legacyWitnessHarness('Item');
   h.intent.step.references.push({ ...clone(h.binding), key: 'same-item-alias', definition: referenceDefinition(scope, 'Item', h.selected.record, 2) });
   h.reapprove();
   const result = await h.read();
-  assert.equal(result.referenceEvidence.find(o => o.entity === 'Item').definitionObservation.source.kind, 'qbo-retained-mirror');
+  const items=result.referenceEvidence.filter(o=>o.entity==='Item'&&o.record.Id===h.selected.record.Id);assert.equal(items.length,1);assert.equal(items[0].definitionObservation,undefined);assert.equal(h.definitionCalls,0);
+  assert.equal(compileBusinessTransaction({scope,step:h.intent.step,policy:h.intent.policy,...result,now}).entity,'Estimate');
 });

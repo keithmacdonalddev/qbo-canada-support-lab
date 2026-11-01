@@ -83,23 +83,28 @@ test('added customer, supplier and item are created, verified, then used by a la
   assert.equal(h.data.Calendars[0].verifiedThrough, '2026-12-01');
 });
 
-test('a role created in this batch, or changed in QuickBooks after creation, cannot be used', { timeout: 180000 }, async () => {
+test('only verified owned roles with current usable customer meaning can be reused', { timeout: 180000 }, async () => {
   const h = fixture({ activityTemplateVersion: 2, openingDate: '2026-11-01' }); await h.publish(); await calendar(h, '2026-11-30', 'lists-drift-period-001');
   const created = await batch(h, additions('002')); assert.equal(created.complete, true, JSON.stringify(created));
   const [customer] = (await h.service.activityOptions(h.user)).addedCustomers;
   // Unknown (not yet verified) role keys are refused.
   await assert.rejects(h.service.prepareActivityBatch(h.user, { decisionKey: 'unknown-role-001', purpose: 'Try to use a customer that was never verified.', activities: [{ type: 'settled-service-sale', customerKey: 'added-customer-0123456789ab', itemKey: 'care-plan-1', quantity: 1, unitPriceCents: 1000, purpose: 'Monthly care plan.' }] }), /not a verified accountant-added role/);
   const record = [...h.records.values()].find(row => row.entity === 'Customer' && row.record.DisplayName === customer.name).record;
-  // Any change to its verified definition refuses use, not only the requested fields.
-  const sale = decisionKey => ({ decisionKey, purpose: 'Use the clinic after someone changed it in QuickBooks.', activities: [{ type: 'settled-service-sale', customerKey: customer.key, itemKey: 'care-plan-1', quantity: 1, unitPriceCents: 1000, purpose: 'Monthly care plan.' }] });
+  // Stage 1A (71b72f4) uses current owned identity and party purpose; historical presentation is audit.
+  const sale = decisionKey => ({ decisionKey, purpose: 'Use the clinic with its current company details.', activities: [{ type: 'settled-service-sale', customerKey: customer.key, itemKey: 'care-plan-1', quantity: 1, unitPriceCents: 1000, purpose: 'Monthly care plan.' }] });
   const original = structuredClone(record), parent = [...h.records.values()].find(row => row.entity === 'Customer' && row.record.Id !== record.Id).record;
-  for (const [index, drift] of [{ ParentRef: { value: parent.Id }, Job: true, BillWithParent: true }, { PrimaryEmailAddr: { Address: 'billing@elsewhere.example' } }].entries()) {
+  const reset=()=>{for(const key of Object.keys(record))delete record[key];Object.assign(record,structuredClone(original));};
+  const posts=h.posts;
+  for (const [index, drift] of [{ ParentRef: { value: parent.Id }, Job: true, BillWithParent: true }, { PrimaryEmailAddr: { Address: 'billing@elsewhere.example' } }, {DisplayName:'Renamed Elsewhere'}].entries()) {
     Object.assign(record, structuredClone(drift), { SyncToken: String(Number(record.SyncToken) + 1) });
-    await assert.rejects(h.service.prepareActivityBatch(h.user, sale('drifted-definition-00' + index)), /changed in QuickBooks/);
-    for (const key of Object.keys(record)) delete record[key]; Object.assign(record, structuredClone(original));
+    const prepared=await h.service.prepareActivityBatch(h.user,sale('current-role-00'+index));
+    assert.ok(prepared.operationId);assert.equal(record.Id,original.Id);assert.equal(h.posts,posts,'current-role preparation never dispatches');reset();
   }
-  record.DisplayName = 'Renamed Elsewhere'; record.SyncToken = String(Number(record.SyncToken) + 1);
-  await assert.rejects(h.service.prepareActivityBatch(h.user, { decisionKey: 'drifted-role-001', purpose: 'Use the clinic after someone renamed it in QuickBooks.', activities: [{ type: 'settled-service-sale', customerKey: customer.key, itemKey: 'care-plan-1', quantity: 1, unitPriceCents: 1000, purpose: 'Monthly care plan.' }] }), /changed in QuickBooks/);
+  for(const [index,risk]of [{IsProject:true},{CurrencyRef:{value:'USD'}},{Active:false},{sparse:true},{Id:'999999'}].entries()){
+    Object.assign(record,structuredClone(risk));
+    await assert.rejects(h.service.prepareActivityBatch(h.user,sale('invalid-role-00'+index)));
+    assert.equal(h.posts,posts,'incompatible current roles never dispatch');reset();
+  }
 });
 
 const LIST_ENTITIES = ['Customer', 'Vendor', 'Item'];
