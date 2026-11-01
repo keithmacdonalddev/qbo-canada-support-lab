@@ -725,3 +725,17 @@ test('dependency admission rejects missing/future sources and isolates unrelated
  view.sources[0].lastSuccessAt=new Date(now+1).toISOString();assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,false);
  const deps=operationSourceEntities({entries:[{step:{entity:'Payment',references:[{entity:'Customer',id:'42'}],dependencies:[{entity:'Invoice'}]}}]});assert.ok(deps.includes('Customer'));assert.ok(deps.includes('Invoice'));assert.ok(!deps.includes('Bill'));assert.ok(activitySourceEntities([{type:'invoice-on-terms',itemKey:'field-service-hour'}]).includes('TimeActivity'));
 });
+
+test('stored unverified amount evidence is attention, while proven differences still fence affected sources',()=>{
+ const {sourceFreshness}=require('../src/modules/business-agent-sync'),saved=require('./fixtures/accountant-review-stall-2026-11-01.json'),view=structuredClone(saved.agent.syncView),now=Date.parse('2026-11-01T07:43:00Z');
+ assert.equal(sourceFreshness(view,{now}).ready,true);
+ for(const status of ['unverified','error']){view.amountReconciliation.checks.receivables.status=status;view.status=status==='error'?'attention':'current';assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,true);assert.equal(sourceFreshness(view,{now}).ready,true);}
+ for(const status of ['mismatched','resyncing']){view.amountReconciliation.checks.receivables.status=status;assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,false);assert.equal(sourceFreshness(view,{entities:['Customer'],now}).ready,true);}
+ view.sources.find(s=>s.entity==='Invoice').status='error';view.amountReconciliation.checks.receivables.status='unverified';assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,false);
+});
+
+test('unreadable nightly count evidence cannot stale current CDC, while count mismatch bootstrap still holds',()=>{
+ const {sourceFreshness}=require('../src/modules/business-agent-sync'),now=Date.parse('2026-11-01T07:43:00Z'),view={status:'attention',sources:[{entity:'Invoice',status:'current',mode:'cdc',lastSuccessAt:new Date(now).toISOString(),reconcileError:'The nightly count check could not be read; it retries tomorrow night.'}]};
+ assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,true);assert.equal(sourceFreshness(view,{now}).ready,true);
+ view.sources[0].status='bootstrap';assert.equal(sourceFreshness(view,{entities:['Invoice'],now}).ready,false);
+});

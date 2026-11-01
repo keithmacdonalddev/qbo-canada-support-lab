@@ -505,10 +505,12 @@ function sourceFreshness(view, {entities = null, now = Date.now(), withinMs = 12
  if (!Array.isArray(wanted) || wanted.some(entity => !ENTITIES.includes(entity))) throw new TypeError('Use supported source dependencies.');
  const missing = wanted.filter(entity => {
   const source = view.sources?.find(row => row.entity === entity), completed = stamp(source?.lastSuccessAt);
-  return !source || source.status !== 'current' || source.error || source.reconcileError || completed === null || completed > now || (source.mode !== 'snapshot' && now - completed > withinMs);
+  return !source || source.status !== 'current' || source.error || completed === null || completed > now || (source.mode !== 'snapshot' && now - completed > withinMs);
  });
- const amountProblem = Object.values(view.amountReconciliation?.checks || {}).some(check => wanted.includes(check.entity) && ['mismatched','error','unverified','resyncing'].includes(check.status));
- return {ready: entities === null ? view.status === 'current' && !missing.length && !amountProblem : !missing.length && !amountProblem, entities: wanted, missing};
+ const amountProblem = Object.values(view.amountReconciliation?.checks || {}).some(check => wanted.includes(check.entity) && ['mismatched','resyncing'].includes(check.status));
+ // A failed/incomplete report comparison does not make current CDC stale.
+ // Proven amount differences and an active corrective resync still hold the affected source.
+ return {ready: (entities !== null || ['current','attention'].includes(view.status)) && !missing.length && !amountProblem, entities: wanted, missing};
 }
 module.exports.operationSourceEntities = operationSourceEntities;
 module.exports.activitySourceEntities = activitySourceEntities;

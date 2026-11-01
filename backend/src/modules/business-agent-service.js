@@ -102,7 +102,7 @@ function createBusinessAgentService(options={}) {
     }
     return {beliefChecks:checks,scorecard,capabilityRequests:management.openRequests(requests),recentResolutions:management.recentResolutions(requests)};
   }
-  const leaseMs=240000,scanMs=5000;
+  const leaseMs=120000,scanMs=5000;
   async function bind(user,action='operations.read') {
     const ownerId=String(user?.id||''),actorId=String(user?.actorId||user?.id||'');
     if(!ID.test(ownerId)||!ID.test(actorId))fail('Sign in to the selected company.',403);
@@ -271,6 +271,8 @@ function createBusinessAgentService(options={}) {
   }
   async function worker(id,controller){
     const token=randomUUID();let row=await store.claim(id,token,leaseMs);if(!row)return;
+    // A newly claimed lease cannot still own the previous process's model attempt.
+    if(typeof usage.recoverInterrupted==='function')try{await usage.recoverInterrupted(scopeOf(row),{before:new Date(now()-leaseMs)});}catch{lastScanError='Interrupted review usage could not be reconciled; saved business work is retained.';}
     // Older processes saved a baseline without a pending marker. A retained live
     // review has no recorded completion; recover it without charging a miss.
     const interruptedLegacyReview=row.status==='reviewing'&&row.activePass?.role==='accountant'&&typeof row.cadence?.reviewSignature==='string'&&row.cadence.reviewPending===undefined;
@@ -344,6 +346,7 @@ function createBusinessAgentService(options={}) {
       if(pass?.role==='accountant'&&terminalRecorded){
         try{row=await store.update(row,token,{cadence:cadence.finishReview(row.cadence,{failureKind:final==='failed'?(error?.code||'failed'):'no-progress'})});}catch{/* Lost leases retain the pending baseline; never invent a completed review. */}
       }
+      if(pass){try{row=await store.update(row,token,{activePass:null});}catch{/* A newer lease owns review state. */}}
       if(apply){try{await apply(final);}catch{/* Owner changes and expired leases win; no second terminal outcome is recorded. */}}
       return final;
     };
@@ -486,7 +489,7 @@ function createBusinessAgentService(options={}) {
         await guard('authority');
         if(!business)business=await store.business(scope);
         if(!today)today=await todayFor(scope,row);
-        pass=row.activePass&&row.activePass.role===role?row.activePass:{id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
+        pass={id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
         // Every model review counts toward today's ceiling when it starts; a main review also fixes its progress baseline.
         const started=role==='accountant'?{...cadence.beginReview(decision.state,{now:now(),signature:cadence.progressSignature(business,today,owned,obligations),kind:decision.kind}),kind:decision.kind,reason:decision.reason}:cadence.countReview(row.cadence||{},now());
         // Each attempt starts a fresh, bounded step list fenced to this pass and lease.
@@ -571,7 +574,7 @@ function createBusinessAgentService(options={}) {
     if(closed||jobs.has(id)||jobs.size>=2)return;
     const controller=new AbortController(),promise=Promise.resolve().then(()=>worker(id,controller)).catch(()=>{lastScanError='Business monitoring needs storage recovery. Saved controls and cursors are retained.';}).finally(()=>jobs.delete(id));jobs.set(id,{controller,promise});
   }
-  async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{const rows=await store.due();for(const row of rows)kick(String(row._id));lastScanError=null;})().catch(()=>{lastScanError='Business monitoring storage is unavailable.';}).finally(()=>{scanPromise=null;});return scanPromise;}
+  async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{if(typeof store.recoverReviews==='function')await store.recoverReviews();const rows=await store.due();for(const row of rows)kick(String(row._id));lastScanError=null;})().catch(()=>{lastScanError='Business monitoring storage is unavailable.';}).finally(()=>{scanPromise=null;});return scanPromise;}
   // Opt-in only: source publication does not activate native banking work.
   const bankingLoop=options.bankingLoop || (process.env.BANKING_OPERATOR_ENABLED==='true' ? require('./banking-accountant-tools').createBankingRuntime().loop : null);
   function start(){if(closed||interval)return;bankingLoop?.start();interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}

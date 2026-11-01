@@ -239,6 +239,21 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     return rows.map(r=>({...publicEvent(r),decisionKey:links.find(l=>l.kind==='accountant-write-key'&&l.data.decisionId===String(r._id))?.data.decisionKey||r.data?.decisionKey,operationId:links.find(l=>l.kind==='accountant-write-link'&&l.data.decisionId===String(r._id))?.data.operationId||r.data?.operationId||null}));
   }
   async function latestScorecard(row,day=null){const value=await Events.findOne({agentId:String(row._id),kind:'daily-scorecard',...(day?{'data.day':{$lt:day}}:{})}).sort({at:-1,_id:-1}).maxTimeMS(3000).lean();return value?publicEvent(value):null;}
+  // The lease is the process heartbeat. Its expiry fences every old worker before
+  // recovery; a different live lease (including another backend) is never evicted.
+  async function recoverReviews(limit=20) {
+    const clock=new Date(now()), cutoff=new Date(now()-120000);
+    const stale={$or:[{leaseToken:{$ne:null},leaseExpiresAt:{$lte:clock}},
+      {leaseToken:null,status:'reviewing',$or:[{'reviewProgress.startedAt':{$lte:cutoff.toISOString()}},{'reviewProgress.startedAt':null,'activePass.startedAt':{$lte:cutoff.toISOString()}}]}]};
+    const rows=await Agents.find({'settings.monitoring':true,...stale}).sort({nextWakeAt:1}).limit(limit).maxTimeMS(3000).lean();
+    for(const row of rows){
+      const errorDetail=require('./business-error-detail').businessErrorDetail({code:'BUSINESS_REVIEW_INTERRUPTED',message:'The accountant lost its review process. The expired lease was released and another review is due now.',businessDetail:{attemptId:row.reviewProgress?.attemptId||null,passId:row.activePass?.id||null,recoveredAt:clock.toISOString()}});
+      const saved=await Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:row.leaseToken,leaseExpiresAt:row.leaseExpiresAt,'settings.monitoring':true,...stale},
+        {$set:{leaseToken:null,leaseExpiresAt:null,activePass:null,reviewProgress:null,currentWork:'',status:'attention',errorDetail,lastError:errorDetail.message,
+          nextWakeAt:clock,nextDecisionAt:clock,cadence:{...(row.cadence||{}),reviewPending:true,reviewSignature:null}}},{new:true}).lean();
+      if(saved)await event(saved,'review-interrupted','Interrupted accountant review recovered',errorDetail.message,{attemptId:row.reviewProgress?.attemptId||null,passId:row.activePass?.id||null,errorDetail},null,'interrupted:'+(row.reviewProgress?.attemptId||row.leaseToken||row.updatedAt));
+    }
+  }
   async function due(limit=20){return Agents.find({'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]}).select('_id').sort({nextWakeAt:1,_id:1}).limit(limit).maxTimeMS(3000).lean();}
   async function claim(id,token,leaseMs){return Agents.findOneAndUpdate({_id:id,'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]},{$set:{leaseToken:token,leaseExpiresAt:new Date(now()+leaseMs),currentWork:'Checking the current business state'}},{new:true}).lean();}
   async function current(row,token){const value=await Agents.findOne({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}}).maxTimeMS(3000).lean();if(!value)fail('The business worker was paused, changed or lost its lease.');return value;}
@@ -251,6 +266,6 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function liveActivity(scope,options){liveReader||=require('./business-agent-live').createLiveActivityReader({models,now});return liveReader(scope,options);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.decisionKey activityBatch.activities.type').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
+  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,recoverReviews,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

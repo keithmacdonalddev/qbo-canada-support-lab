@@ -28,7 +28,7 @@ test('partial monitoring permits read-only decisions while catch-up continues',a
 });
 test('restart resumes persisted cursors after expired lease and performs an actual decision pass',async()=>{
  const h=fixture();h.row.nextSyncAt=new Date(h.clock);h.row.leaseToken='old-process';h.row.leaseExpiresAt=new Date(h.clock-1);h.row.activePass={id:'retained-pass',role:'accountant',startedAt:new Date(h.clock-60000).toISOString()};
- await h.service._worker(agentId,new AbortController());assert.equal(h.loadedCursor,'retained');assert.equal(h.engineCalls,1);assert.equal(h.row.sync.cursor,'continued');assert.equal(h.row.activePass,null);assert.equal(h.row.leaseToken,null);assert.match(h.row.summary,/Reviewed/);assert.equal(h.events.at(-1).data.passId,'retained-pass');h.service.close();
+ await h.service._worker(agentId,new AbortController());assert.equal(h.loadedCursor,'retained');assert.equal(h.engineCalls,1);assert.equal(h.row.sync.cursor,'continued');assert.equal(h.row.activePass,null);assert.equal(h.row.leaseToken,null);assert.match(h.row.summary,/Reviewed/);assert.notEqual(h.events.at(-1).data.passId,'retained-pass');h.service.close();
 });
 test('revoked access stops the worker before provider or sync work',async()=>{
  const h=fixture();h.revoked=true;await h.service._worker(agentId,new AbortController());assert.equal(h.engineCalls,0);assert.equal(h.syncCalls,0);assert.equal(h.row.leaseToken,null);h.service.close();
@@ -589,4 +589,27 @@ test('publication drift needs no renewal prompt and resume retains owner control
  const input={command:'resume'},business={scope,authorityHash:'2'.repeat(64)};
  assert.equal(reduceControl(h.row,input,business,h.clock,ownerId).settings.autonomous,true);
  assert.throws(()=>reduceControl({...h.row,grant:{...h.row.grant,ownerId:'9'.repeat(24)}},input,business,h.clock,ownerId));h.service.close();
+});
+
+// JOB AR: replay the stored Nov 1 failure through the live worker/tool/guard path.
+test('stored current CDC plus incomplete nightly amounts admits a governed write after one CDC refresh',async()=>{
+ const saved=require('./fixtures/accountant-review-stall-2026-11-01.json'),h=writeFixture();
+ h.clock=Date.parse(saved.observedAt);h.row.syncView=copy(saved.agent.syncView);h.row.sync=copy(saved.agent.sync);
+ h.row.status=saved.agent.status;h.row.activePass=copy(saved.agent.activePass);h.row.reviewProgress=copy(saved.agent.reviewProgress);h.row.cadence=copy(saved.agent.cadence);
+ h.row.nextDecisionAt=new Date(h.clock);h.row.nextSyncAt=new Date(h.clock+30000);
+ h.onTick=async()=>{for(const source of h.row.syncView.sources)if(source.mode==='cdc'){source.lastSuccessAt=new Date(h.clock).toISOString();source.freshUntil=new Date(h.clock+600000).toISOString();}h.row.syncView.summaryAt=new Date(h.clock).toISOString();};
+ let startedPass;h.onRun=async input=>{startedPass=h.row.activePass.id;assert.equal((await h.write(input)).success,true);};
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.approved,1);assert.equal(h.requested,1);assert.equal(h.syncCalls,1);assert.equal(h.events.at(-1).kind,'review-completed');assert.notEqual(startedPass,saved.agent.activePass.id);
+ assert.equal(h.row.activePass,null);assert.equal(h.row.syncView.amountReconciliation.status,'unverified');
+ h.store.models.Agents={find:()=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>[copy(h.row)]})};
+ const view=await h.service.blockers({id:ownerId});assert.ok(view.blockers.some(b=>b.errorDetail.code==='BUSINESS_AMOUNT_RECONCILIATION_UNVERIFIED'));h.service.close();
+});
+test('yielded and failed reviews never retain an active pass',async()=>{
+ for(const fail of [Object.assign(new Error('refresh'),{code:'BUSINESS_FRESHNESS_YIELD'}),new Error('provider')]){
+  const h=fixture();h.onRun=async()=>{throw fail;};await h.service._worker(agentId,new AbortController());assert.equal(h.row.activePass,null);assert.equal(h.row.leaseToken,null);h.service.close();
+ }
+});
+test('scheduler runs review watchdog before searching for due work',async()=>{
+ const h=fixture(),order=[];h.store.recoverReviews=async()=>order.push('recover');h.store.due=async()=>{order.push('due');return [];};await h.service.scan();assert.deepEqual(order,['recover','due']);h.service.close();
 });

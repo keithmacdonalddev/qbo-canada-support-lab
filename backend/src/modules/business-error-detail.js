@@ -85,12 +85,39 @@ function collectBusinessBlockers({runs=[],steps=[],generalRuns=[],now=Date.now()
   for(const row of generalRuns)add(row,'general');
   return [...groups.values()].sort((a,b)=>Number(b.overdue)-Number(a.overdue)||a.firstAt.localeCompare(b.firstAt));
 }
+// Review health and amount evidence are attention items, not new write authority.
+function agentBlockers(row,now=Date.now()) {
+  if(!row?.settings?.monitoring)return [];
+  const out=[],add=(code,message,since,detail={})=>{
+    const errorDetail=businessErrorDetail({code,message,businessDetail:detail});
+    out.push({key:fingerprint(errorDetail),errorDetail,count:1,firstAt:new Date(since||now).toISOString(),lastAt:new Date(now).toISOString(),overdue:now-(since||now)>STUCK_MS,state:'needs-check',sources:[{kind:'accountant',id:String(row._id)}]});
+  };
+  const start=stamp(row.reviewProgress?.startedAt||row.activePass?.startedAt);
+  const expired=row.leaseToken&&stamp(row.leaseExpiresAt)<=now;
+  if(row.status==='reviewing'&&(expired||!row.leaseToken&&start&&now-start>120000))
+    add('BUSINESS_REVIEW_ORPHANED','The accountant review has no live lease heartbeat. The watchdog will release it and schedule another review.',start,{attemptId:row.reviewProgress?.attemptId||null});
+  else if(row.errorDetail?.code==='BUSINESS_REVIEW_INTERRUPTED')
+    add(row.errorDetail.code,row.errorDetail.message,stamp(row.errorDetail.detail?.recoveredAt),row.errorDetail.detail);
+  for(const source of row.syncView?.sources||[]){
+    if(source.status==='current'&&source.reconcileError)
+      add('BUSINESS_COUNT_RECONCILIATION_UNVERIFIED','The nightly '+source.entity+' count comparison could not be verified. Current source data remains available; the comparison needs follow-up.',stamp(source.lastSuccessAt),{entity:source.entity});
+  }
+  const proof=row.syncView?.amountReconciliation;
+  for(const [key,check] of Object.entries(proof?.checks||{})){
+    if(!['unverified','error','mismatched','resyncing'].includes(check.status))continue;
+    add('BUSINESS_AMOUNT_RECONCILIATION_'+check.status.toUpperCase(),
+      check.status==='unverified'||check.status==='error'?'The nightly '+key+' amount comparison is unverified. Current source data and independent governed writes remain available; this needs a follow-up check.':'The nightly '+key+' amount comparison found a difference. Its affected source remains held while the evidence is checked.',
+      stamp(check.checkedAt||proof.startedAt),{entity:check.entity,status:check.status,day:proof.day,qboCents:check.qboCents??null,knownCents:check.knownCents??null,mirrorCents:check.mirrorCents??null,differenceCents:check.differenceCents??null});
+  }
+  return out;
+}
 async function businessBlockersFor({models,scope,now=Date.now()}) {
   const { scoped }=require('./qbo-write-contract'); scope=scoped(scope);
   async function rows(Model,filter,fields){return Model?.find ? Model.find({...scope,...filter}).select(fields).sort({_id:1}).limit(201).maxTimeMS(3000).lean() : [];}
-  const [runs,generalRuns]=await Promise.all([
+  const [runs,generalRuns,agents]=await Promise.all([
     rows(models?.Runs,{status:{$nin:['verified','retired','stopped','previewed']}},'_id status nextOrdinal errorDetail errorHistory progressAt createdAt updatedAt executionRequest'),
     rows(models?.GeneralWriteRuns,{status:{$nin:['complete','expired-unsent']}},'_id status errorDetail errorHistory progressAt createdAt updatedAt lastError'),
+    rows(models?.Agents,{},'_id settings.monitoring status leaseToken leaseExpiresAt activePass reviewProgress errorDetail syncView.amountReconciliation syncView.sources'),
   ]);
   // Only the newest attempt for each period is current; a later passing proof
   // clears its failure without erasing historical evidence.
@@ -114,7 +141,7 @@ async function businessBlockersFor({models,scope,now=Date.now()}) {
       errorHistory: [{ key, errorDetail, count: same.length, firstAt: new Date(same.at(-1).verifiedAt).toISOString(), lastAt: new Date(latest.verifiedAt).toISOString() }] });
   }
   const steps=await rows(models?.Steps,{$or:[{operationId:{$in:runs.map(row=>row._id)},state:{$ne:'verified'}},{state:{$in:['dispatched','unknown']}}]},'_id operationId logicalKey entity qboId state errorDetail errorHistory progressAt createdAt updatedAt verification dispatch.at');
-  return {blockers:collectBusinessBlockers({runs:[...runs.slice(0,200), ...closeRuns],steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),truncated:[runs,steps,generalRuns,closes].some(rows=>rows.length>200)};
+  return {blockers:[...collectBusinessBlockers({runs:[...runs.slice(0,200), ...closeRuns],steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),...agents.flatMap(row=>agentBlockers(row,now))],truncated:[runs,steps,generalRuns,closes].some(rows=>rows.length>200)};
 }
 function blockerWork(blocker) { return {key:'business-blocker-'+blocker.key,owner:'accountant',state:'blocked',title:blocker.overdue?'Business work has been stuck for over fifteen minutes':'Business work needs attention',detail:blocker.errorDetail.message,next:'Inspect the failed check and continue independent work.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,href:'/company/live'}; }
 function blockerBuild(blocker) {return {key:'business-blocker-'+blocker.key,kind:'capability-request',priority:'high',requirement:'R11',status:'open',title:'Fix blocked business work',missing:blocker.errorDetail.message,feature:'Business execution diagnostics',why:'Saved business work has not progressed for over fifteen minutes.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,at:blocker.lastAt};}
@@ -130,4 +157,4 @@ async function escalateBusinessBlockers({store,row,scope,now=Date.now()}) {
   }
   return view;
 }
-module.exports={businessErrorDetail,attachBusinessError,failureFields,definitionDifferences,fingerprint,collectBusinessBlockers,businessBlockersFor,blockerWork,blockerBuild,escalateBusinessBlockers,MAX_BYTES,STUCK_MS};
+module.exports={businessErrorDetail,attachBusinessError,failureFields,definitionDifferences,fingerprint,collectBusinessBlockers,agentBlockers,businessBlockersFor,blockerWork,blockerBuild,escalateBusinessBlockers,MAX_BYTES,STUCK_MS};

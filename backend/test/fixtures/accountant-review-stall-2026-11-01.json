@@ -1,0 +1,1011 @@
+{
+  "observedAt": "2026-11-01T07:45:33.445Z",
+  "agent": {
+    "_id": "8e9975355edae16ffc71b7c7",
+    "settings": {
+      "monitoring": true,
+      "autonomous": true,
+      "syncIntervalSeconds": 30,
+      "decisionIntervalMinutes": 60,
+      "specialists": [],
+      "monthlyCaps": {
+        "apiUsd": null,
+        "tokens": null
+      }
+    },
+    "status": "reviewing",
+    "summary": "The accountant stopped before a write because company sources could not be brought current in time. Saved work is retained; the next review follows synchronization.",
+    "activePass": {
+      "id": "27d216ca-857b-4587-ae07-20e35206e0c2",
+      "role": "accountant",
+      "startedAt": "2026-11-01T07:00:01.380Z"
+    },
+    "sync": {
+      "version": 1
+    },
+    "syncView": {
+      "status": "current",
+      "lastSuccessAt": "2026-11-01T02:59:50.962Z",
+      "sources": [
+        {
+          "entity": "Preferences",
+          "status": "current",
+          "mode": "snapshot",
+          "refreshing": false,
+          "refreshEverySeconds": 21600,
+          "freshUntil": "2026-11-01T14:59:51.878Z",
+          "count": 1,
+          "observed": 1,
+          "lastSuccessAt": "2026-11-01T02:59:51.878Z",
+          "error": null
+        },
+        {
+          "entity": "CompanyInfo",
+          "status": "current",
+          "mode": "snapshot",
+          "refreshing": false,
+          "refreshEverySeconds": 21600,
+          "freshUntil": "2026-11-01T15:05:32.058Z",
+          "count": 1,
+          "observed": 1,
+          "lastSuccessAt": "2026-11-01T03:05:32.058Z",
+          "error": null
+        },
+        {
+          "entity": "Customer",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 112,
+          "observed": 102,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Vendor",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 39,
+          "observed": 38,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Item",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 44,
+          "observed": 43,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Account",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 130,
+          "observed": 130,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Invoice",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 2198,
+          "observed": 2173,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Bill",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 730,
+          "observed": 729,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Payment",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 2350,
+          "observed": 2296,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "BillPayment",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 686,
+          "observed": 680,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Estimate",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 1179,
+          "observed": 1146,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "PurchaseOrder",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 584,
+          "observed": 579,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "SalesReceipt",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 580,
+          "observed": 576,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "CreditMemo",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 6,
+          "observed": 6,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "VendorCredit",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 2,
+          "observed": 2,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "RefundReceipt",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 3,
+          "observed": 3,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Purchase",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 108,
+          "observed": 108,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Deposit",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 1435,
+          "observed": 1382,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Transfer",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 4,
+          "observed": 4,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "CreditCardPayment",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 1,
+          "observed": 1,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "TaxPayment",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 13,
+          "observed": 13,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "JournalEntry",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 43,
+          "observed": 43,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "TimeActivity",
+          "status": "current",
+          "mode": "snapshot",
+          "refreshing": false,
+          "refreshEverySeconds": 1800,
+          "freshUntil": "2026-11-01T08:31:16.705Z",
+          "count": 1159,
+          "observed": 1159,
+          "lastSuccessAt": "2026-11-01T07:31:16.705Z",
+          "error": null
+        },
+        {
+          "entity": "Employee",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 3,
+          "observed": 3,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Class",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 4,
+          "observed": 4,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Department",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 2,
+          "observed": 2,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "Term",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 5,
+          "observed": 5,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "PaymentMethod",
+          "status": "current",
+          "mode": "cdc",
+          "refreshing": false,
+          "refreshEverySeconds": 300,
+          "freshUntil": "2026-11-01T07:52:56.055Z",
+          "count": 6,
+          "observed": 6,
+          "lastSuccessAt": "2026-11-01T07:42:56.055Z",
+          "error": null
+        },
+        {
+          "entity": "TaxCode",
+          "status": "current",
+          "mode": "snapshot",
+          "refreshing": false,
+          "refreshEverySeconds": 21600,
+          "freshUntil": "2026-11-01T14:59:50.962Z",
+          "count": 33,
+          "observed": 33,
+          "lastSuccessAt": "2026-11-01T02:59:50.962Z",
+          "error": null
+        },
+        {
+          "entity": "TaxRate",
+          "status": "current",
+          "mode": "snapshot",
+          "refreshing": false,
+          "refreshEverySeconds": 21600,
+          "freshUntil": "2026-11-01T14:59:51.506Z",
+          "count": 55,
+          "observed": 55,
+          "lastSuccessAt": "2026-11-01T02:59:51.506Z",
+          "error": null
+        }
+      ],
+      "company": {
+        "counts": {
+          "customers": 107,
+          "vendors": 39,
+          "items": 37,
+          "accounts": 129,
+          "openInvoices": 76,
+          "openBills": 45,
+          "records": 11516
+        },
+        "totals": {
+          "receivables": 93523.24,
+          "payables": 11339.15,
+          "cash": 1377575.43,
+          "currency": "CAD",
+          "incompleteCurrency": false
+        }
+      },
+      "amountReconciliation": {
+        "version": 1,
+        "basisVersion": 2,
+        "day": "2026-11-01",
+        "status": "unverified",
+        "startedAt": "2026-11-01T06:00:24.923Z",
+        "checkedAt": "2026-11-01T06:00:32.374Z",
+        "toleranceCents": 0,
+        "note": "CDC was refreshed before comparison. QuickBooks reads are not atomic: records can change between the change read and report/account read.",
+        "checks": {
+          "receivables": {
+            "entity": "Invoice",
+            "status": "unverified",
+            "attempts": 1,
+            "refreshAfter": "2026-11-01T06:00:24.923Z",
+            "qboCents": 8136286,
+            "qboAt": "2026-11-01T06:00:32.000Z",
+            "currency": "CAD",
+            "mirrorCents": null,
+            "knownCents": 8045829,
+            "components": {
+              "invoices": {
+                "entity": "Invoice",
+                "field": "Balance",
+                "records": 2198,
+                "cents": 9352324,
+                "status": "included",
+                "fieldsUsed": [
+                  "Balance"
+                ]
+              },
+              "unappliedPayments": {
+                "entity": "Payment",
+                "field": "UnappliedAmt",
+                "records": 2350,
+                "cents": -416495,
+                "status": "included",
+                "fieldsUsed": [
+                  "UnappliedAmt"
+                ]
+              },
+              "creditMemos": {
+                "entity": "CreditMemo",
+                "field": "RemainingCredit",
+                "records": 6,
+                "cents": -900000,
+                "status": "included",
+                "fieldsUsed": [
+                  "RemainingCredit"
+                ]
+              },
+              "journalEntries": {
+                "entity": "JournalEntry",
+                "field": "Line",
+                "records": 43,
+                "cents": 10000,
+                "status": "included"
+              },
+              "refundReceipts": {
+                "entity": "RefundReceipt",
+                "field": "Line",
+                "records": 3,
+                "cents": null,
+                "status": "unverified",
+                "reason": "RefundReceipt A/R effects cannot be determined from a cash refund total."
+              },
+              "deposits": {
+                "entity": "Deposit",
+                "field": "Line",
+                "records": 1435,
+                "cents": null,
+                "status": "unverified",
+                "reason": "Deposit line posting accounts cannot be determined from mirrored fields."
+              },
+              "purchases": {
+                "entity": "Purchase",
+                "field": "Line",
+                "records": 108,
+                "cents": null,
+                "status": "unverified",
+                "reason": "Purchase line posting accounts cannot be determined from mirrored fields."
+              }
+            },
+            "limitations": [
+              {
+                "component": "refundReceipts",
+                "entity": "RefundReceipt",
+                "reason": "RefundReceipt A/R effects cannot be determined from a cash refund total."
+              },
+              {
+                "component": "deposits",
+                "entity": "Deposit",
+                "reason": "Deposit line posting accounts cannot be determined from mirrored fields."
+              },
+              {
+                "component": "purchases",
+                "entity": "Purchase",
+                "reason": "Purchase line posting accounts cannot be determined from mirrored fields."
+              }
+            ],
+            "differenceCents": null,
+            "note": "Expected aging totals net mirrored open balances, unapplied payments, remaining credits and customer/vendor journal lines. Missing types, fields or unsupported refund/currency effects are unverified, never assumed zero.",
+            "cdcAt": "2026-11-01T06:00:26.126Z",
+            "checkedAt": "2026-11-01T06:00:31.204Z"
+          },
+          "payables": {
+            "entity": "Bill",
+            "status": "unverified",
+            "attempts": 1,
+            "refreshAfter": "2026-11-01T06:00:24.923Z",
+            "qboCents": 1109846,
+            "qboAt": "2026-11-01T06:00:33.000Z",
+            "currency": "CAD",
+            "mirrorCents": null,
+            "knownCents": 1101881,
+            "components": {
+              "bills": {
+                "entity": "Bill",
+                "field": "Balance",
+                "records": 730,
+                "cents": 1133915,
+                "status": "included",
+                "fieldsUsed": [
+                  "Balance"
+                ]
+              },
+              "unappliedBillPayments": {
+                "entity": "BillPayment",
+                "field": "UnappliedAmt",
+                "records": 686,
+                "cents": null,
+                "status": "unverified",
+                "reason": "BillPayment applications cannot establish an exact unapplied amount."
+              },
+              "vendorCredits": {
+                "entity": "VendorCredit",
+                "field": "Balance",
+                "records": 2,
+                "cents": -32034,
+                "status": "included",
+                "fieldsUsed": [
+                  "Balance"
+                ]
+              },
+              "journalEntries": {
+                "entity": "JournalEntry",
+                "field": "Line",
+                "records": 43,
+                "cents": 0,
+                "status": "included"
+              },
+              "deposits": {
+                "entity": "Deposit",
+                "field": "Line",
+                "records": 1435,
+                "cents": null,
+                "status": "unverified",
+                "reason": "Deposit line posting accounts cannot be determined from mirrored fields."
+              },
+              "purchases": {
+                "entity": "Purchase",
+                "field": "Line",
+                "records": 108,
+                "cents": null,
+                "status": "unverified",
+                "reason": "Purchase line posting accounts cannot be determined from mirrored fields."
+              }
+            },
+            "limitations": [
+              {
+                "component": "unappliedBillPayments",
+                "entity": "BillPayment",
+                "reason": "BillPayment applications cannot establish an exact unapplied amount."
+              },
+              {
+                "component": "deposits",
+                "entity": "Deposit",
+                "reason": "Deposit line posting accounts cannot be determined from mirrored fields."
+              },
+              {
+                "component": "purchases",
+                "entity": "Purchase",
+                "reason": "Purchase line posting accounts cannot be determined from mirrored fields."
+              }
+            ],
+            "differenceCents": null,
+            "note": "Expected aging totals net mirrored open balances, unapplied payments, remaining credits and customer/vendor journal lines. Missing types, fields or unsupported refund/currency effects are unverified, never assumed zero.",
+            "cdcAt": "2026-11-01T06:00:26.126Z",
+            "checkedAt": "2026-11-01T06:00:31.927Z"
+          },
+          "accounts": {
+            "entity": "Account",
+            "status": "matched",
+            "attempts": 1,
+            "refreshAfter": "2026-11-01T06:00:24.923Z",
+            "qboAt": "2026-11-01T06:00:33.566Z",
+            "cdcAt": "2026-11-01T06:00:26.126Z",
+            "checkedAt": "2026-11-01T06:00:32.374Z"
+          }
+        }
+      },
+      "summaryAt": "2026-11-01T07:42:56.184Z",
+      "summaryFreshUntil": "2026-11-01T07:52:56.184Z",
+      "summaryError": null,
+      "nextDueAt": "2026-11-01T07:47:56.055Z"
+    },
+    "nextSyncAt": "2026-11-01T07:47:56.055Z",
+    "nextDecisionAt": "2026-11-01T07:44:16.282Z",
+    "lastDecisionAt": "2026-11-01T04:40:04.159Z",
+    "nextWakeAt": "2026-11-01T07:44:16.282Z",
+    "leaseExpiresAt": "2026-11-01T07:49:16.929Z",
+    "updatedAt": "2026-11-01T07:45:16.929Z",
+    "reviewProgress": {
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2",
+      "attemptId": "6a063245-08c8-4b47-be85-247beb919588",
+      "role": "accountant",
+      "startedAt": "2026-11-01T07:44:17.157Z",
+      "steps": [
+        {
+          "at": "2026-11-01T07:44:24.646Z",
+          "label": "Checking the business state",
+          "status": "done",
+          "finishedAt": "2026-11-01T07:44:24.757Z"
+        },
+        {
+          "at": "2026-11-01T07:44:30.094Z",
+          "label": "Reviewing customers, suppliers and open items it can use",
+          "status": "failed",
+          "finishedAt": "2026-11-01T07:44:31.266Z"
+        },
+        {
+          "at": "2026-11-01T07:44:50.202Z",
+          "label": "Searching the synced company records",
+          "status": "done",
+          "finishedAt": "2026-11-01T07:44:50.216Z"
+        },
+        {
+          "at": "2026-11-01T07:45:05.669Z",
+          "label": "Searching the synced company records",
+          "status": "done",
+          "finishedAt": "2026-11-01T07:45:05.688Z"
+        },
+        {
+          "at": "2026-11-01T07:45:08.176Z",
+          "label": "Searching the synced company records",
+          "status": "done",
+          "finishedAt": "2026-11-01T07:45:08.278Z"
+        },
+        {
+          "at": "2026-11-01T07:45:14.760Z",
+          "label": "Reading the QuickBooks record format",
+          "status": "done",
+          "finishedAt": "2026-11-01T07:45:14.766Z"
+        }
+      ]
+    },
+    "reviewYields": 7,
+    "cadence": {
+      "day": "2026-11-01",
+      "reviews": 24,
+      "rhythm": {
+        "version": 3,
+        "day": "2026-11-01",
+        "level": 1,
+        "target": 220,
+        "ceiling": 440,
+        "open": 0,
+        "close": 1440,
+        "slots": [
+          {
+            "n": 1,
+            "minute": 30,
+            "weight": 1
+          },
+          {
+            "n": 2,
+            "minute": 90,
+            "weight": 1
+          },
+          {
+            "n": 3,
+            "minute": 150,
+            "weight": 1
+          },
+          {
+            "n": 4,
+            "minute": 210,
+            "weight": 1
+          },
+          {
+            "n": 5,
+            "minute": 270,
+            "weight": 1
+          },
+          {
+            "n": 6,
+            "minute": 330,
+            "weight": 1
+          },
+          {
+            "n": 7,
+            "minute": 390,
+            "weight": 2
+          },
+          {
+            "n": 8,
+            "minute": 450,
+            "weight": 2
+          },
+          {
+            "n": 9,
+            "minute": 510,
+            "weight": 4
+          },
+          {
+            "n": 10,
+            "minute": 570,
+            "weight": 4
+          },
+          {
+            "n": 11,
+            "minute": 630,
+            "weight": 4
+          },
+          {
+            "n": 12,
+            "minute": 690,
+            "weight": 4
+          },
+          {
+            "n": 13,
+            "minute": 750,
+            "weight": 4
+          },
+          {
+            "n": 14,
+            "minute": 810,
+            "weight": 4
+          },
+          {
+            "n": 15,
+            "minute": 870,
+            "weight": 4
+          },
+          {
+            "n": 16,
+            "minute": 930,
+            "weight": 4
+          },
+          {
+            "n": 17,
+            "minute": 990,
+            "weight": 4
+          },
+          {
+            "n": 18,
+            "minute": 1050,
+            "weight": 4
+          },
+          {
+            "n": 19,
+            "minute": 1110,
+            "weight": 2
+          },
+          {
+            "n": 20,
+            "minute": 1170,
+            "weight": 2
+          },
+          {
+            "n": 21,
+            "minute": 1230,
+            "weight": 2
+          },
+          {
+            "n": 22,
+            "minute": 1290,
+            "weight": 2
+          },
+          {
+            "n": 23,
+            "minute": 1350,
+            "weight": 1
+          },
+          {
+            "n": 24,
+            "minute": 1410,
+            "weight": 1
+          }
+        ]
+      },
+      "lastSignature": "2026-10-31||5:6||0",
+      "pollSignature": null,
+      "pollSince": null,
+      "kind": "slice",
+      "reason": "today is 7 records behind schedule",
+      "decidedAt": "2026-11-01T06:57:31.015Z",
+      "misses": 0,
+      "reviewSignature": "2026-10-31||5:6||0",
+      "lastReviewAt": "2026-11-01T07:44:17.157Z",
+      "lastKind": "slice",
+      "management": {
+        "day": "2026-10-31",
+        "attempts": 2
+      },
+      "reviewPending": true,
+      "recoveryCheckedAt": "2026-11-01T07:44:17.034Z",
+      "missKind": null,
+      "reviewFailureKind": null,
+      "reviewYieldKind": "slice:freshness"
+    }
+  },
+  "attempts": [
+    {
+      "_id": "071e0b11-2740-44aa-85bf-e583249ace05",
+      "provider": "codex",
+      "startedAt": "2026-11-01T04:33:51.499Z",
+      "finishedAt": "2026-11-01T04:35:08.499Z",
+      "outcome": "completed",
+      "passId": "f5c1b7bc-3a5c-437a-a423-40388ec4218a"
+    },
+    {
+      "_id": "bd0dcc8b-b1e0-4dc6-a065-cc0485923c33",
+      "provider": "codex",
+      "startedAt": "2026-11-01T04:39:04.800Z",
+      "finishedAt": "2026-11-01T04:40:03.908Z",
+      "outcome": "completed",
+      "passId": "07a62c7d-993a-40a2-a02b-5afa23a3cd7b"
+    },
+    {
+      "_id": "f9041f80-f5da-4b85-97db-6a77d8d740f7",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:00:05.661Z",
+      "finishedAt": "2026-11-01T07:01:11.374Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "ed28561f-f532-4f0b-8748-dbc897196c81",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:02:15.274Z",
+      "finishedAt": "2026-11-01T07:03:28.012Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "fd0bcbd5-034e-4030-a08d-44d025c3f3ee",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:05:32.795Z",
+      "finishedAt": null,
+      "outcome": "running",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "6a5a7981-c7b3-4b5e-a046-c55c5a188da1",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:09:55.876Z",
+      "finishedAt": "2026-11-01T07:10:56.196Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "4e1453e8-369f-46b9-bbd1-a9b6efc06846",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:16:07.434Z",
+      "finishedAt": "2026-11-01T07:17:06.648Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "513102eb-b005-4a27-b5c8-a2497202989e",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:22:14.496Z",
+      "finishedAt": "2026-11-01T07:22:55.181Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "76f1141d-b904-442a-be7c-2943ff1a12d0",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:27:59.953Z",
+      "finishedAt": "2026-11-01T07:28:45.391Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "0cc4ec5b-1052-45c2-a76c-44f4a12ffc50",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:33:51.708Z",
+      "finishedAt": null,
+      "outcome": "running",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "bac661ef-0835-4a45-8f7b-44dcf05a286f",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:38:01.382Z",
+      "finishedAt": "2026-11-01T07:39:16.345Z",
+      "outcome": "yielded",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    },
+    {
+      "_id": "6a063245-08c8-4b47-be85-247beb919588",
+      "provider": "codex",
+      "startedAt": "2026-11-01T07:44:21.526Z",
+      "finishedAt": null,
+      "outcome": "running",
+      "passId": "27d216ca-857b-4587-ae07-20e35206e0c2"
+    }
+  ],
+  "terminalEvents": [
+    {
+      "kind": "review-completed",
+      "at": "2026-11-01T04:35:08.456Z",
+      "attemptId": "071e0b11-2740-44aa-85bf-e583249ace05",
+      "refresh": {
+        "requests": 2,
+        "ms": 1614,
+        "ticks": 1
+      }
+    },
+    {
+      "kind": "review-completed",
+      "at": "2026-11-01T04:40:03.820Z",
+      "attemptId": "bd0dcc8b-b1e0-4dc6-a065-cc0485923c33",
+      "refresh": {
+        "requests": 4,
+        "ms": 2985,
+        "ticks": 2
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:01:11.320Z",
+      "attemptId": "f9041f80-f5da-4b85-97db-6a77d8d740f7",
+      "refresh": {
+        "requests": 6,
+        "ms": 5243,
+        "ticks": 3
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:03:27.956Z",
+      "attemptId": "ed28561f-f532-4f0b-8748-dbc897196c81",
+      "refresh": {
+        "requests": 4,
+        "ms": 1505,
+        "ticks": 2
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:10:56.132Z",
+      "attemptId": "6a5a7981-c7b3-4b5e-a046-c55c5a188da1",
+      "refresh": {
+        "requests": 2,
+        "ms": 127,
+        "ticks": 1
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:17:06.596Z",
+      "attemptId": "4e1453e8-369f-46b9-bbd1-a9b6efc06846",
+      "refresh": {
+        "requests": 4,
+        "ms": 1600,
+        "ticks": 2
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:22:55.136Z",
+      "attemptId": "513102eb-b005-4a27-b5c8-a2497202989e",
+      "refresh": {
+        "requests": 2,
+        "ms": 119,
+        "ticks": 1
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:28:45.331Z",
+      "attemptId": "76f1141d-b904-442a-be7c-2943ff1a12d0",
+      "refresh": {
+        "requests": 2,
+        "ms": 136,
+        "ticks": 1
+      }
+    },
+    {
+      "kind": "review-yielded",
+      "at": "2026-11-01T07:39:16.284Z",
+      "attemptId": "bac661ef-0835-4a45-8f7b-44dcf05a286f",
+      "refresh": {
+        "requests": 2,
+        "ms": 189,
+        "ticks": 1
+      }
+    }
+  ]
+}

@@ -104,3 +104,22 @@ test('review outcomes are terminal, shared and stored with the attempt identity'
  const attemptId='0f0e0d0c-0b0a-4908-8706-050403020100';await usage.begin({environment:'production',realmId:'123',connectionId:'d'.repeat(24)},{provider:'codex',model:'m',role:'accountant',billing:'included in plan',attemptId,passId:'pass-1'});
  assert.equal(created._id,attemptId);assert.equal(created.passId,'pass-1');
 });
+
+test('new lease reconciles only old running usage rows in its exact company without altering token totals',async()=>{
+ const {createBusinessAgentUsage}=require('../src/modules/business-agent-usage');let captured;
+ const clock=Date.parse('2026-11-01T07:50:00Z'),scope={environment:'production',realmId:'1',connectionId:'c'.repeat(24)},before=new Date(clock-120000);
+ const usage=createBusinessAgentUsage({now:()=>clock,Usage:{updateMany:(filter,update)=>{captured={filter,update};return {maxTimeMS:async limit=>{assert.equal(limit,3000);return {modifiedCount:2};}};}}});
+ assert.equal((await usage.recoverInterrupted(scope,{before})).modifiedCount,2);
+ assert.deepEqual(captured.filter,{...scope,outcome:{$in:['running','usage-unknown']},finishedAt:null,startedAt:{$lte:before}});assert.deepEqual(captured.update,{$set:{outcome:'cancelled',finishedAt:new Date(clock)}});
+});
+
+test('stored interrupted usage attempts settle while the recent live attempt and completed/yielded evidence remain intact',async()=>{
+ const saved=require('./fixtures/accountant-review-stall-2026-11-01.json'),rows=structuredClone(saved.attempts),now=Date.parse(saved.observedAt);
+ rows.push({_id:'missing-usage',outcome:'usage-unknown',startedAt:'2026-11-01T07:33:00Z',finishedAt:null,totalTokens:10,usageMissing:true});
+ const old=structuredClone(rows),usage=createBusinessAgentUsage({now:()=>now,Usage:{updateMany:(q,u)=>({maxTimeMS:async()=>{for(const r of rows)if(q.outcome.$in.includes(r.outcome)&&r.finishedAt==null&&Date.parse(r.startedAt)<=+q.startedAt.$lte)Object.assign(r,u.$set);}})}});
+ await usage.recoverInterrupted({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},{before:new Date(now-120000)});
+ for(const id of ['fd0bcbd5-034e-4030-a08d-44d025c3f3ee','0cc4ec5b-1052-45c2-a76c-44f4a12ffc50','missing-usage'])assert.equal(rows.find(r=>r._id===id).outcome,'cancelled');
+ assert.equal(rows.find(r=>r._id==='6a063245-08c8-4b47-be85-247beb919588').outcome,'running');
+ for(const row of old.filter(r=>r.finishedAt))assert.deepEqual(rows.find(r=>r._id===row._id),row);
+ assert.equal(rows.at(-1).totalTokens,10);assert.equal(rows.at(-1).usageMissing,true);
+});

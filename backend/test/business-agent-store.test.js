@@ -91,3 +91,21 @@ test('an earlier completed batch receipt does not hide the current unsent sendin
  const store=createBusinessAgentStore({models:{Agents:{},Events:{},Runs:{find:()=>chain([])},GeneralWriteRuns:{find:()=>chain([row])}},connection:{},transaction:async work=>work({})});
  const [run]=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a');assert.equal(run.admitted,false);assert.equal(run.executionPending,false);assert.equal(run.disposition,'prepared');assert.equal(run.createCount,1,'only the remaining create needs admission');assert.equal(run.completedRecords,1);
 });
+
+test('watchdog recovers stored expired review even when next wake is later, preserving all business effects',async()=>{
+ const saved=require('./fixtures/accountant-review-stall-2026-11-01.json'),row={...structuredClone(saved.agent),environment:'production',realmId:'1',connectionId:'c'.repeat(24),ownerId:'o'.repeat(24),revision:4,leaseToken:'dead-process'},clock=Date.parse(saved.observedAt)+5*60000;
+ const events=[],updates=[];let query;
+ const chain=value=>({sort(){return this;},limit(){return this;},maxTimeMS(){return this;},session(){return this;},lean:async()=>value});
+ const Agents={find:filter=>{query=filter;return chain([row]);},findOneAndUpdate:(filter,update)=>{updates.push({filter,update});return chain({...row,...update.$set});}};
+ const Events={findOne:()=>chain(null),create:async docs=>events.push(...docs)};
+ const store=createBusinessAgentStore({models:{Agents,Events},connection:{},transaction:async f=>f({}),now:()=>clock});await store.recoverReviews();
+ assert.equal(query.nextWakeAt,undefined,'a dead lease is found independently of its wake time');assert.equal(updates.length,1);
+ const {filter,update}=updates[0];assert.equal(filter.leaseToken,'dead-process');assert.equal(filter.leaseExpiresAt,row.leaseExpiresAt);assert.equal(filter.revision,4);assert.equal(filter.connectionId,row.connectionId);assert.equal(filter.$or[0].leaseExpiresAt.$lte.getTime(),clock);
+ assert.equal(update.$set.leaseToken,null);assert.equal(update.$set.activePass,null);assert.equal(update.$set.reviewProgress,null);assert.equal(update.$set.nextDecisionAt.getTime(),clock);assert.equal(update.$set.cadence.reviewPending,true);assert.equal(update.$set.cadence.reviewSignature,null);
+ assert.equal(update.$set.sync,undefined);assert.equal(update.$set.grant,undefined);assert.equal(events[0].kind,'review-interrupted');assert.equal(events[0].data.attemptId,row.reviewProgress.attemptId);
+});
+test('watchdog compare-and-swap cannot evict a renewed lease or owner revision',async()=>{
+ const row={_id:'agent',environment:'production',realmId:'1',connectionId:'c'.repeat(24),revision:2,leaseToken:'old',leaseExpiresAt:new Date(0)},chain=v=>({sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>v});let fenced=false;
+ const store=createBusinessAgentStore({models:{Agents:{find:()=>chain([row]),findOneAndUpdate:filter=>{assert.equal(filter.leaseExpiresAt,row.leaseExpiresAt);assert.equal(filter.leaseToken,'old');assert.equal(filter.revision,2);fenced=true;return chain(null);}},Events:{create:()=>{throw Error('must not record recovery');}}},connection:{},transaction:async f=>f({}),now:()=>180000});
+ await store.recoverReviews();assert.equal(fenced,true);
+});

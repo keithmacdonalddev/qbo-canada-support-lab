@@ -116,6 +116,13 @@ function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsag
     const result = await Usage.updateOne({ _id: record._id, environment: record.environment, realmId: record.realmId, connectionId: record.connectionId }, { $set: changes });
     if (result.matchedCount !== 1) throw new Error('Usage evidence could not be retained.');
   }
+  // Called only after obtaining the exclusive accountant lease. Retain totals and mark
+  // old unfinished attempts interrupted; never manufacture completion or new writes.
+  async function recoverInterrupted(scope, { before }) {
+    return Usage.updateMany({ environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId),
+      outcome: { $in: ['running','usage-unknown'] }, finishedAt: null, startedAt: { $lte: before } },
+      { $set: { outcome: 'cancelled', finishedAt: new Date(now()) } }).maxTimeMS(3000);
+  }
   async function summary(scope) {
     const ranges = windows(now()), earliest = new Date(Math.min(+ranges.week, +ranges.month));
     const [result = {}] = await Usage.aggregate([{ $match: { environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId), startedAt: { $gte: earliest } } }, { $facet: {
@@ -140,6 +147,6 @@ function createBusinessAgentUsage({ Usage = require('../models/BusinessAgentUsag
       .sort({ startedAt: -1 }).limit(240).maxTimeMS(2000).lean();
     return rows.map(row => reviewMetadata(row, now()));
   }
-  return { begin, save, summary, details };
+  return { begin, save, summary, details, recoverInterrupted };
 }
 module.exports = { createBusinessAgentUsage, normalizeUsage, estimateCost, apiEquivalent, reviewMetadata, windows, reviewPause, reviewOutcome, REVIEW_OUTCOMES };
