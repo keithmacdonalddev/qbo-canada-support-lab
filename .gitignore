@@ -11,3 +11,4 @@ logs/
 .claude/agent-memory/
 .claude/settings.local.json
 .claude/worktrees/
+tmp/

@@ -1,8 +1,0 @@
-Computer Use was stopped by the user before the company identity could be verified, so the banking and reconciliation screens were not mapped.
-
-1. **Home:** The QuickBooks desktop app was open on its home screen. The company name, subscription tier, and country could not be confirmed from the observed screen. The exact page URL was not exposed. Screenshot: [01-home.png](C:/Projects/qbo/tmp/terra-live/qbo-banking-map-desk-20261101-012637/01-home.png).
-2. **Bank transactions, upload, rules, and reconciliation:** Not inspected.
-
-Automation risks remain unassessed.
-
-**Action ledger:** Activated the already-open, minimized QuickBooks window and saved one screenshot. An attempt to open the company menu was interrupted; its outcome is unknown. No records or other app content were created or removed. The app was left open; its final screen state could not be verified after the interruption.
