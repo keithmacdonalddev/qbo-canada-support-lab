@@ -1,8 +1,10 @@
 # Current implementation session assignment
 
-Updated: 2026-11-01T23:10:29.629Z. Assignment: BANK-1. Status: AUTHENTICATION BLOCKED / DIRECT APPLICATION PROOF OPEN. The fixed BANK-1 scope remains authoritative; BANK-2/BANK-3 remain outside this session.
+Updated: 2026-11-01T23:16:40.963Z. Assignment: BANK-1. Status: EXISTING-CHROME ATTACHMENT BLOCKED / DIRECT APPLICATION PROOF OPEN. The fixed BANK-1 scope remains authoritative; BANK-2/BANK-3 remain outside this session.
 
 ## Current BANK-1 evidence
+
+2026-11-01T23:16:40.963Z: owner authorized the already logged-in Chrome app tab. Supported auto-connect found no reachable Chrome control endpoint; browser-access inventory exposed no browsers/host, and reachable agent-browser inventory contained no Test Data Lab tab. No new login is requested. Exact remaining external dependency: connect/share that existing app tab to this session or provide an already-enabled CDP port. No browser/security setting, service or credential changed; no account journey/download/reload acceptance claimed. [Attachment evidence](bank-1-evidence-2026-11-01.md).
 
 2026-11-01T23:10:29.629Z: resumed direct isolated headless agent-browser with explicit owner authorization. The real app redirects the owned session to `/login`; no active authenticated session or saved auth-vault profile is available. Normal existing app authentication is the precise dependency. No account journey, actual CSV/PDF download click or reload persistence is claimed. Retained six file hashes still match; reviewed implementation is unchanged since dc097f6. See the resumed attempt in [BANK-1 evidence](bank-1-evidence-2026-11-01.md). The old fallback-permission gap is resolved; do not investigate CUA or rebuild browser tooling.
 

@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-01T23:10:29.629Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-01T23:16:40.963Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -91,8 +91,8 @@ Owner clarification: provide an online banking experience like accessing a simul
 
 | ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
 |---|---|---|---|
-| SB01 | P0 — OPEN (BANK-1 source delivered; app authentication blocks proof) | Durable simulated bank/card accounts, native-currency balances and a ledger of pending/posted/reversed settlements independent of QBO edits; retain business-event lineage and evidenced opening balances. | Reuse BankingEvent/BankingPackage and settlement modules; establish the labelled historical baseline without rewriting accepted bank/QBO history. |
-| SB02 | P1 — OPEN (BANK-1 source delivered; app authentication blocks proof) | Working bank-style desktop overview, account balances/history, transaction detail, pending/posted views, statements and CSV/PDF downloads, usable by owner and accountant. | Render a coherent account slice with real retained bank state, as-of times, recovery and links to QBO progress; this is more than an artifact list. |
+| SB01 | P0 — OPEN (BANK-1 source delivered; existing Chrome attachment blocks proof) | Durable simulated bank/card accounts, native-currency balances and a ledger of pending/posted/reversed settlements independent of QBO edits; retain business-event lineage and evidenced opening balances. | Reuse BankingEvent/BankingPackage and settlement modules; establish the labelled historical baseline without rewriting accepted bank/QBO history. |
+| SB02 | P1 — OPEN (BANK-1 source delivered; existing Chrome attachment blocks proof) | Working bank-style desktop overview, account balances/history, transaction detail, pending/posted views, statements and CSV/PDF downloads, usable by owner and accountant. | Render a coherent account slice with real retained bank state, as-of times, recovery and links to QBO progress; this is more than an artifact list. |
 | SB03 | P0 — OPEN | Continuing settlements, bank/card fees, interest, transfers, returns and deliberate bank-feed situations follow the governed calendar and retain separate bank identities/dates. | Existing bank-origin generator accepts explicit scenarios; connect persistent scheduling and financial lifecycle tools, with one economic event per counterpart. |
 | SB04 | P0 — OPEN | Automatically create, retain and register current transaction CSVs and due monthly statements for every eligible account; preserve revisions, carry-forward, quiet months and duplicate-safe export windows. | Production generation scheduling is missing. Existing prepareBankingPackage registers an already generated manifest; source/tests alone do not prove automatic issuance. |
 | SB05 | P0 — OPEN | Actual QBO upload, Match/Add/Exclude, statement attachment where supported, and native reconciliation complete through the latest due cycle with retained evidence. | Reuse S02/D02 safe browser/recovery workflows and valid target authority. Verify unknown uploads before retry; keep generated/imported/reconciled states distinct. |
@@ -139,6 +139,8 @@ D02 remains the P0 historical catch-up task; D03 resolves dependent carry-forwar
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-01T23:16:40.963Z — BANK-1 owner authorized existing signed-in Chrome app tab. Supported attachment failed: no reachable Chrome control endpoint; browser tool has no exposed browser; reachable agent-browser inventory has no Test Data Lab tab. Existing authentication is owner-reported, not invalidated. No further login requested; connect/share existing tab or provide already-enabled CDP port. Zero account journeys/download clicks/reloads completed. Owned failed controller closed; no Chrome/security/service/data changes. [Direct receipt](bank-1-evidence-2026-11-01.md).
 
 - 2026-11-01T23:10:29.629Z — BANK-1 actual verification resumed using the explicitly authorized separate headless agent-browser session. App reached; normal `/login` barrier observed at1440×1000, no active authenticated session or saved auth-vault profile. Account API401 and healthy app identity confirmed. All six original files unchanged; no feature download occurred. Exact remaining step: normal Test Data Lab sign-in or supported app-only saved state. Account journeys/download clicks/reload remain OPEN; no implementation restart, CUA investigation, service/QBO/storage/security action. [Attempt evidence](bank-1-evidence-2026-11-01.md).
 

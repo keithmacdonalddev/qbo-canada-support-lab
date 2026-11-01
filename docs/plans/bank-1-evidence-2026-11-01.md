@@ -1,6 +1,6 @@
 # BANK-1 delivery evidence — 2026-11-01
 
-Updated: 2026-11-01T23:10:29.629Z. Status: **AUTHENTICATION BLOCKED / DIRECT APPLICATION PROOF OPEN**. BANK-1 remains incomplete; no BANK-2/BANK-3 completion is claimed.
+Updated: 2026-11-01T23:16:40.963Z. Status: **EXISTING-CHROME ATTACHMENT BLOCKED / DIRECT APPLICATION PROOF OPEN**. BANK-1 remains incomplete; no BANK-2/BANK-3 completion is claimed.
 
 The canonical checkout is C:\Projects\qbo on main, configured upstream origin/main. Frontend commit 0281720 and backend commits 1d8d24f and 2871cef are pushed. Normal business services were left running; no explicit service control, QBO call, persistent database write, storage preparation, accepted-file change or native banking action was performed by this BANK-1 work.
 
@@ -63,3 +63,13 @@ Private evidence: `artifacts/bank-1/desktop-resume/attempt.json` and `authentica
 Work-value checkpoint: the existing browser-route uncertainty is resolved for this task; stop tool investigation. The sole dependent step is normal existing Test Data Lab authentication in the owned isolated session (an appropriate saved auth profile or app-only supported state). Keep the four downloads and account proof OPEN until that step is supplied.
 
 Owned-browser cleanup: `close` confirmed closed; supported `session info` then returned active:false and pid:null. The session list retained a stale name, so absence from that list is not claimed. Other sessions were untouched.
+
+## Existing authenticated Chrome authorization — 2026-11-01T23:16:40.963Z
+
+The owner reports Test Data Lab is already signed in on Chrome and explicitly authorizes that existing app tab for BANK-1. The earlier isolated-session authentication gap is not a request to sign in again. Current dependency: this session must be able to control that existing tab.
+
+One named owned agent-browser controller attempted supported `--auto-connect --pin-tab tab list`; it returned `No running Chrome instance found. Launch Chrome with --remote-debugging-port or use --cdp.` No Chrome launch, restart, remote-debugging setting, credential access or token transfer was attempted. A direct browser-access inventory exposed no browsers and reported `The browser access host is unavailable`. This was an attachment check, with no host-repair investigation. Read-only existing-session inventory found one reachable default session with no localhost:5173 app tabs; another session metadata read timed out and was not adopted or changed. The failed owned controller was closed; owner/concurrent browsers were preserved.
+
+No account screen, feature download click or authenticated reload was reached. All BANK-1 account-journey/download/reload requirements remain OPEN. Exact next step: expose/share the existing authenticated app tab through a reachable browser connection, or provide an already-enabled CDP port. No further login was requested. Private direct receipt: `artifacts/bank-1/chrome-attach/attempt.json`. Stop attachment investigation at this concrete external dependency; no new framework or security-setting workaround. Existing implementation/checks/reviews remain unchanged.
+
+A final bounded read-only Chrome process-metadata check confirmed running Chrome: one main process has no debugging port/pipe; a separate process has automatic ephemeral debugging port0. The supported inventory still exposed no authenticated Test Data Lab tab. No command lines, profile data or credentials were printed, and no debugging setting or browser process was changed. Attachment discovery stops here; the existing Chrome sign-in is not the requested owner action.
