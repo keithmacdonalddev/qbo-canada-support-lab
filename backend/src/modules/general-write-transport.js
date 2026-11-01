@@ -15,6 +15,8 @@ const { matchesRequest, matchesVoid } = require('./general-write-recovery');
 const { hash, canonical, date } = require('./business-calendar');
 const { denied, freezeWriteRequest, classifyWriteResponse, responsePayload } = require('./qbo-write-contract');
 const { readWritePeriodEvidence, assertWritePeriod, assertPeriodControl, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE } = require('./qbo-write-period');
+const { businessErrorDetail } = require('./business-error-detail');
+const { scrubText } = require('./business-agent-transcript');
 const MAX_BATCH = 30, ID = /^[a-f0-9]{24}$/i, REQUEST = /^[a-f0-9]{32}$/;
 // The single-record request an item is equivalent to (period contract and classification).
 function itemRequest(scope, item) {
@@ -158,7 +160,28 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
         if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw denied('The business day changed since this general write was prepared. Nothing was sent.');
         if (typeof admissionGuard !== 'function') throw denied('Full general-write admission guards are required.');
         try { historyDates = (await admissionGuard({ scope, run, batch, session, periodProof }))?.reverifyDates || []; }
-        catch (error) { if (error?.qboStage === 'write_admission') throw error; throw denied(error?.code === 'GENERAL_WRITE_REFUSED' ? error.message : 'Full general-write guards could not be verified. Nothing was sent.'); }
+        catch (error) {
+          // Keep diagnostics through failureFields/JSON without retaining raw records.
+          // The shared serializer omits arbitrary stack fields; these are scrubbed frames.
+          const safe = (value, bytes) => Buffer.from(scrubText(String(value))).subarray(0, bytes).toString('utf8').replace(/\uFFFD$/, '');
+          const original = businessErrorDetail(error), explicit = error?.qboStage === 'write_admission';
+          const frame = String(error?.stack || '').split('\n').slice(1).map(line => /at (?:(.*?) \()?([^()\n]+\.js):(\d+):\d+\)?$/.exec(line.trim())).find(Boolean);
+          const location = original.check.file ? { file: original.check.file, line: original.check.line } : frame ? { file: safe(frame[2].replace(/\\/g, '/'), 180), line: Number(frame[3]) } : null;
+          const cause = { code: typeof error?.code === 'number' ? error.code : safe(error?.code || error?.name || 'Error', 100), message: safe(error?.message || error || 'Unknown admission error', 300), check: original.check, location,
+            stackTrace: scrubText(String(error?.stack || '')).split('\n').slice(0, 8).map(line => safe(line, 220)) };
+          while (Buffer.byteLength(JSON.stringify(cause)) > 2400 && cause.stackTrace.length) cause.stackTrace.pop();
+          const originalDetail = Buffer.byteLength(JSON.stringify(original.detail)) <= 800 ? original.detail : { originalDetailTruncated: true };
+          const refusal = denied(error?.code === 'GENERAL_WRITE_REFUSED' ? cause.message : 'General-write admission failed (' + cause.code + '): ' + cause.message + ' Nothing was sent.');
+          refusal.cause = error;
+          refusal.businessDetail = { ...originalDetail, ...refusal.businessDetail, cause };
+          // Preserve MongoError identity and labels: withTransaction retries transient
+          // conflicts only for the original driver error, never a replacement Error.
+          const failure = explicit || error instanceof require('mongoose').mongo.MongoError ? error : refusal;
+          failure.qboStage = 'write_admission'; failure.outcomeUnknown = false;
+          failure.businessDetail = refusal.businessDetail;
+          failure.errorDetail = explicit ? businessErrorDetail({ errorDetail: { ...original, detail: failure.businessDetail } }, { operationId: runId }) : businessErrorDetail(refusal, { operationId: runId });
+          throw failure;
+        }
       }
       const dirty = [...(run.dirty || []), ...historyDates.filter(date => !(run.dirty || []).some(marker => marker.date === date)).map(date => ({ date, reason: 'General write ' + run.decisionKey, runId: run._id, at: new Date(now()).toISOString() }))];
       const fenced = await Runs.findOneAndUpdate({ _id: runId, revision: run.revision }, { $set: { dirty }, $inc: { revision: 1 } }, { new: true, session }).lean();

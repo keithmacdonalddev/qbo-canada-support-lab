@@ -88,7 +88,7 @@ function currencyProblems(entity, op, payload, before, after, local, byRef, cont
   return out;
 }
 async function readCurrencyPolicy({ models, scope, session, requests = [], readRate }) {
-  const query = filter => { let q = models.Records.find(filter); if (session) q = q.session(session); return q.select('entity qboId record').limit(501).maxTimeMS(3000).lean(); };
+  const query = filter => { let q = models.Records.find(filter, null, { batchSize: 501 }); if (session) q = q.session(session); return q.select('entity qboId record').limit(501).maxTimeMS(3000).lean(); };
   if (!models.Records) return { enabled: false, homeCurrency: 'CAD', currencies: [], rates: {} };
   const rows = await query({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, deleted: false, $or: [{ entity: 'Preferences' }, { entity: 'Account' }] });
   if (rows.length > 500) fail('Currency/account enumeration exceeds its proof budget.');

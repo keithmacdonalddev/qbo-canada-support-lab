@@ -122,15 +122,15 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     if(!fresh&&!session&&cached&&now()-cached.at<TODAY_TTL_MS)return cached.value;
     const inSession=query=>session?query.session(session):query;
     const since=new Date(Date.parse(day+'T00:00:00Z')-2*86400000);
-    const rows=await inSession(models.Runs.find({environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,createdAt:{$gte:since},'activityBatch.day':day,'agentAuthority.agentId':agentId})).select('_id status planId createdAt recordCount activityBatch.decisionKey').sort({createdAt:-1}).limit(200).maxTimeMS(3000).lean();
+    const rows=await inSession(models.Runs.find({environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,createdAt:{$gte:since},'activityBatch.day':day,'agentAuthority.agentId':agentId},null,{batchSize:200})).select('_id status planId createdAt recordCount activityBatch.decisionKey').sort({createdAt:-1}).limit(200).maxTimeMS(3000).lean();
     const open=rows.filter(row=>!['verified','retired'].includes(row.status)),plans=new Map();
-    if(open.length)for(const plan of await inSession(models.Plans.find({_id:{$in:open.map(row=>row.planId)},environment:scope.environment,realmId:scope.realmId})).select('_id manifest.createCount').limit(200).maxTimeMS(3000).lean())plans.set(String(plan._id),plan.manifest?.createCount);
-    const receipts=rows.length?await inSession(models.Receipts.find({environment:scope.environment,realmId:scope.realmId,kind:'business',operation:'create',state:'saved',operationId:{$in:rows.map(row=>row._id)}})).select('operationId entity logicalKey').limit(5000).maxTimeMS(3000).lean():[];
+    if(open.length)for(const plan of await inSession(models.Plans.find({_id:{$in:open.map(row=>row.planId)},environment:scope.environment,realmId:scope.realmId},null,{batchSize:200})).select('_id manifest.createCount').limit(200).maxTimeMS(3000).lean())plans.set(String(plan._id),plan.manifest?.createCount);
+    const receipts=rows.length?await inSession(models.Receipts.find({environment:scope.environment,realmId:scope.realmId,kind:'business',operation:'create',state:'saved',operationId:{$in:rows.map(row=>row._id)}},null,{batchSize:5000})).select('operationId entity logicalKey').limit(5000).maxTimeMS(3000).lean():[];
     const value={runs:rows.map(row=>({id:String(row._id),status:row.status,decisionKey:row.activityBatch?.decisionKey||null,createdAt:new Date(row.createdAt).getTime(),recordCount:row.recordCount,createCount:plans.get(String(row.planId))})),receipts:receipts.map(row=>({operationId:String(row.operationId),entity:row.entity,logicalKey:row.logicalKey}))};
     // Count unique general creates by run/ref, including known saved mismatches.
     // Unanswered work reserves the rest once; a repeated decision never doubles it.
     if(models.GeneralWriteRuns){
-      const general=await inSession(models.GeneralWriteRuns.find({...scope,contract:'general-write-v1',day,'agentAuthority.agentId':agentId})).select('_id status decisionKey createdAt updatedAt plan items batches').sort({_id:1}).limit(5001).maxTimeMS(3000).lean();
+      const general=await inSession(models.GeneralWriteRuns.find({...scope,contract:'general-write-v1',day,'agentAuthority.agentId':agentId},null,{batchSize:5001})).select('_id status decisionKey createdAt updatedAt plan items batches').sort({_id:1}).limit(5001).maxTimeMS(3000).lean();
       if(general.length>5000||rows.length>=200||receipts.length>=5000)throw new Error('Today’s record count exceeds its enumeration budget.');
       for(const run of general){
         const id=String(run._id),answered=new Map(),creates=(run.plan?.operations||[]).filter(op=>op.op==='create'),createRefs=new Set(creates.map(op=>op.ref));
