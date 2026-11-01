@@ -1,8 +1,10 @@
 # Current implementation session assignment
 
-Updated: 2026-11-01T21:23:48.369Z. Assignment: BANK-1. Status: IMPLEMENTED / DIRECT APPLICATION PROOF OPEN. This is the authoritative next-session boundary; it supersedes the earlier chat prompt that bundled the full first bank release and automatic issuance into one session. It does not supersede the full app/bank outcome or change live authorization.
+Updated: 2026-11-01T23:10:29.629Z. Assignment: BANK-1. Status: AUTHENTICATION BLOCKED / DIRECT APPLICATION PROOF OPEN. The fixed BANK-1 scope remains authoritative; BANK-2/BANK-3 remain outside this session.
 
 ## Current BANK-1 evidence
+
+2026-11-01T23:10:29.629Z: resumed direct isolated headless agent-browser with explicit owner authorization. The real app redirects the owned session to `/login`; no active authenticated session or saved auth-vault profile is available. Normal existing app authentication is the precise dependency. No account journey, actual CSV/PDF download click or reload persistence is claimed. Retained six file hashes still match; reviewed implementation is unchanged since dc097f6. See the resumed attempt in [BANK-1 evidence](bank-1-evidence-2026-11-01.md). The old fallback-permission gap is resolved; do not investigate CUA or rebuild browser tooling.
 
 2026-11-01T21:23:48.369Z: frontend `0281720` and backend `1d8d24f` / `2871cef` are committed/pushed on `main` to `origin/main`. The account workflow is at `/company/bank`. Acceptance is **not complete** while actual desktop/download/reload evidence remains open. See [BANK-1 evidence](bank-1-evidence-2026-11-01.md).
 
