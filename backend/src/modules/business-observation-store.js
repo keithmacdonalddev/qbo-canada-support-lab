@@ -66,11 +66,11 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
     return result;
   }
   // Historical master evidence only. Never a current record/cache hit: an exact
-  // approved v1 hash must authenticate it in the reference verifier. Sync status,
+  // approved versioned hash must authenticate it in the reference verifier. Sync status,
   // age and later writes do not change that historical definition.
   async function definition(scope, entity, id, { signal }={}) {
     scope=scoped(scope); signal?.throwIfAborted();
-    if (!['Item','TaxCode'].includes(entity) || !QID.test(id||'')) return null;
+    if (!['Item','TaxCode','Customer','Vendor'].includes(entity) || !QID.test(id||'')) return null;
     const db=models(); if (!db) return null;
     const stored=await query(db.Records,{...scope,entity,qboId:id,deleted:false}); signal?.throwIfAborted();
     const time=stamp(stored?.lastObservedAt);

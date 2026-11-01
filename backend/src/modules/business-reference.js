@@ -27,14 +27,21 @@ function definitionFields(entity, record) {
   const party = ['Customer', 'Vendor'].includes(entity);
   return copy(Object.fromEntries(Object.entries(record).filter(([key, value]) => !(party && (key === 'V4IDPseudonym' || key === 'ClientEntityId' && value === '0')) && !METADATA.has(key) && !['CreateTime', 'LastUpdatedTime'].includes(key) && !(DYNAMIC[entity] || []).includes(key))));
 }
-// Absent and default-empty values are the same definition: QuickBooks adds new fields
-// (e.g. Item.DeferredRevenue: false) to live reads that older copies never carried.
-function withoutDefaults(value) {
-  if (Array.isArray(value)) return value.map(withoutDefaults);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== false && entry !== null && entry !== '' && !(Array.isArray(entry) && entry.length === 0)).map(([key, entry]) => [key, withoutDefaults(entry)]));
+// Only known optional false-valued flags have an empty/default representation.
+// Never erase arbitrary false/null/empty values: unknown settings, references,
+// prices, tax rates and nested collections must continue to compare exactly.
+const FALSE_DEFAULTS = Object.freeze({
+  Item: ['DeferredRevenue', 'SalesTaxIncluded', 'PurchaseTaxIncluded', 'TrackQtyOnHand', 'SubItem', 'Taxable', 'PrintGroupedItems'],
+  Customer: ['Job', 'BillWithParent', 'IsProject', 'Taxable'],
+  Vendor: ['Vendor1099', 'T4AEligible', 'T5018Eligible'],
+  TaxCode: ['Hidden', 'Taxable', 'TaxGroup'],
+});
+function canonicalDefinitionFields(entity, record) {
+  const fields = definitionFields(entity, record);
+  for (const key of FALSE_DEFAULTS[entity] || []) if (fields[key] === null || fields[key] === false) delete fields[key];
+  return fields;
 }
-function sameCanonicalDefinition(entity, a, b) { return hash(withoutDefaults(definitionFields(entity, a))) === hash(withoutDefaults(definitionFields(entity, b))); }
+function sameCanonicalDefinition(entity, a, b) { return hash(canonicalDefinitionFields(entity, a)) === hash(canonicalDefinitionFields(entity, b)); }
 function referenceDefinition(scope, entity, record, version = ['Item', 'TaxCode'].includes(entity) ? 2 : 1) {
   scope = scoped(scope);
   if (!ENTITIES.has(entity) || !record || Object.getPrototypeOf(record) !== Object.prototype || typeof record.Id !== 'string' || !ID.test(record.Id) || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken) || record.Active !== true || (record.sparse !== undefined && record.sparse !== false)) fail('A complete active company record with an exact version is required.');
@@ -67,7 +74,7 @@ function bindBusinessReference({ scope, key, entity, observed, now = Date.now() 
 // when the complete master definition still matches the approved definition.
 function matchesReferenceDefinition(scope, entity, record, definition, definitionObservation, now = Date.now(), resolveDefinitionObservation) {
   if (referenceDefinition(scope, entity, record, definition.version).hash === definition.hash) return true;
-  if (definition.version !== 1 || !['Item', 'TaxCode'].includes(entity)) return false;
+  if (![1, 2].includes(definition.version) || !['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity)) return false;
   const matches = witnessObservation => {
     if (!witnessObservation) return false;
   // Authenticate the old full record before comparing canonical definitions.
@@ -79,7 +86,7 @@ function matchesReferenceDefinition(scope, entity, record, definition, definitio
     if (!sameScope(witness.scope, scope) || witness.entity !== entity || !witness.record || witness.recordHash !== hash(witness.record) || !sameScope(source.scope, scope) || source.version !== 1 || source.entity !== entity || source.id !== witness.record.Id || source.recordHash !== witness.recordHash || typeof source.generation !== 'string' || !source.generation || typeof witness.observedAt !== 'string' || !Number.isFinite(Date.parse(witness.observedAt)) || new Date(Date.parse(witness.observedAt)).toISOString() !== witness.observedAt || Date.parse(witness.observedAt) > now || source.retainedAt !== witness.observedAt) fail('The approved definition requires exact retained company evidence.');
     retained = witness.record;
   } else retained = observedRecord(scope, entity, witnessObservation, now);
-  return retained.Id === record.Id && referenceDefinition(scope, entity, retained, 1).hash === definition.hash && sameCanonicalDefinition(entity, retained, record);
+  return retained.Id === record.Id && referenceDefinition(scope, entity, retained, definition.version).hash === definition.hash && sameCanonicalDefinition(entity, retained, record);
   };
   let originalError;
   try { if (matches(definitionObservation)) return true; } catch (error) { originalError = error; }
@@ -144,9 +151,9 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
           if (cached.source.kind === 'qbo-write-response') try { await call(() => observationStore.retain(scope, entity, cached.record, cached.observedAt)); } catch { check(); /* The durable receipt survives mirror failure. */ }
           check();
           let definitionObservation;
-          if (['Item', 'TaxCode'].includes(entity) && typeof observationStore.definition === 'function') {
+          if (['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity) && typeof observationStore.definition === 'function') {
             try { definitionObservation = await call(() => observationStore.definition(scope, entity, id, { signal: controller.signal })); }
-            catch { check(); /* Compatibility evidence is optional for current v2 definitions. */ }
+            catch { check(); /* Compatibility evidence is optional when the exact definition matches. */ }
           }
           check();
           const current = await call(() => authorize(scope, action, { signal: controller.signal })); check();
@@ -155,12 +162,12 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
         }
       }
       let definitionObservation;
-      if (!transactions && observationStore && ['Item', 'TaxCode'].includes(entity)) {
+      if (!transactions && observationStore && ['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity)) {
         try { definitionObservation = await call(() => observationStore.read(scope, entity, id, { signal: controller.signal })); }
         catch { check(); /* The current mirror may be unavailable. */ }
         // A stale sync does not invalidate a historical approval witness. This
         // separate read supplies no current authority; matchesReferenceDefinition
-        // must authenticate its exact v1 hash before comparing canonical fields.
+        // must authenticate its exact versioned hash before comparing canonical fields.
         if (!definitionObservation && typeof observationStore.definition === 'function') {
           try { definitionObservation = await call(() => observationStore.definition(scope, entity, id, { signal: controller.signal })); }
           catch { check(); /* Missing evidence still fails closed for v1 approvals. */ }

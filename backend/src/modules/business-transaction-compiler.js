@@ -415,11 +415,11 @@ async function compileBusinessTransactionWithDefinitions(input, { resolveDefinit
         const choices = input.policy.taxReferenceDefinitions.filter(choice => choice.key === binding.key && choice.id === binding.id && choice.originalDefinitionHash === definition?.hash);
         if (choices.length === 1) definition = choices[0].definition;
       }
-      if (definition?.version !== 1 || !['Item', 'TaxCode'].includes(binding.entity)) continue;
+      if (![1, 2].includes(definition?.version) || !['Item', 'TaxCode', 'Customer', 'Vendor'].includes(binding.entity)) continue;
       const observed = input.referenceEvidence?.find(value => value.entity === binding.entity && value.record?.Id === binding.id);
       if (!observed) continue;
-      // Exact v1 shapes need no compatibility evidence. All other shapes require
-      // the retained record's original v1 hash and matching canonical v2 fields.
+      // Exact saved shapes need no compatibility evidence. Default-only drift
+      // requires a retained record authenticated by the original versioned hash.
       let exact = false;
       try { exact = require('./business-reference').matchesReferenceDefinition(input.scope, binding.entity, observed.record, definition, observed.definitionObservation, clock()); } catch { /* The pure verifier records the precise refusal below. */ }
       const identity = key(input.scope, binding.entity, binding.id, definition);

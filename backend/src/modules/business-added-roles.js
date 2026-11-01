@@ -173,7 +173,7 @@ async function resolveBatchRoles({ registry, batch, readRecord, scope, readDefin
     try { definition = referenceDefinition(scope, role.entity, observed).hash; legacyDefinition = referenceDefinition(scope, role.entity, observed, 1).hash; } catch { definition = null; }
     if (definition !== role.definitionHash && legacyDefinition !== role.definitionHash && typeof readDefinitionWitness === 'function') {
       const witness = await readDefinitionWitness(role.entity, role.id);
-      try { if (require('./business-reference').matchesReferenceDefinition(scope, role.entity, observed, { version: 1, hash: role.definitionHash }, witness, now())) legacyDefinition = role.definitionHash; } catch { /* Missing or changed evidence refuses the role below. */ }
+      try { if ([1, 2].some(version => require('./business-reference').matchesReferenceDefinition(scope, role.entity, observed, { version, hash: role.definitionHash }, witness, now()))) { legacyDefinition = role.definitionHash; approved = witness.record; } } catch { /* Missing or changed evidence refuses the role below. */ }
     }
     // Authenticate the old definition before allowing provider-default drift.
     let canonicalMatch = false;
