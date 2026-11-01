@@ -6,6 +6,7 @@ const { createBusinessReportReader } = require('../src/modules/business-report-e
 const { unpackReport } = require('../src/modules/business-report-source');
 const { createIncomeExpectation, checkIncomeExpectation } = require('../src/modules/business-income-evidence');
 const { createFinancialExpectation, compareFinancialMovements } = require('../src/modules/business-financial-movements');
+const { retainHistoricalApproval } = require('./helpers/legacy-approval-reports');
 const { readApprovalReports } = require('../src/modules/business-approval-report-evidence');
 const config = require('../src/config'), previous = config.qbo.environment;
 test.before(() => { config.qbo.environment = 'sandbox'; }); test.after(() => { config.qbo.environment = previous; });
@@ -19,6 +20,7 @@ test('nested original-SDK reports survive capture, publication, new expectations
   assert.equal(plan.manifest.financialExpectation.version, 3); assert.equal(plan.manifest.financialExpectation.source.reportSourceVersion, 3);
   assert.equal(plan.manifest.incomeExpectation.source.report.encoding, 'gzip-canonical-json-v2'); assert.doesNotThrow(() => hash(plan.manifest));
   await h.service.approve(h.user, prepared.operationId, { planHash: prepared.planHash });
+  await retainHistoricalApproval(h,prepared.operationId);
   const run = h.data.Runs.find(row => row._id === prepared.operationId); assert.equal(run.approval.reportEvidence.sourceVersion, 3);
   const result = await h.runtime(prepared.operationId).execute(); assert.equal(result.complete, true, JSON.stringify(result));
   assert.equal(h.data.Calendars[0].verifiedThrough, '2026-10-02');
@@ -26,7 +28,7 @@ test('nested original-SDK reports survive capture, publication, new expectations
   assert.equal(inspected.financialMovements.status, 'passed'); assert.equal(h.reads, beforeReads); assert.equal(h.posts, beforePosts); assert.equal(h.data.Baselines[0].evidenceHash, originalBaselineHash);
   const evidence = h.data.Evidence.find(row => row.operationId === prepared.operationId && row.proof.complete === true); assert.ok(evidence); assert.equal(evidence.sources.version, 3);
   const pointer = structuredClone(run.approval.reportEvidence); run.approval.reportEvidence.sourceVersion = 2;
-  await assert.rejects(readApprovalReports({ models: h.models, run, ownerId }), error => error.code === 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' && error.status === 409); run.approval.reportEvidence = pointer;
+  assert.deepEqual(await readApprovalReports({ models: h.models, run, ownerId }), {status:'unavailable',authorization:false,code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); run.approval.reportEvidence = pointer;
   assert.equal((await readApprovalReports({ models: h.models, run, ownerId })).sourceVersion, 3);
 });
 test('immutable v1 income and financial expectations compare with a fresh nested v3 observation', async () => {

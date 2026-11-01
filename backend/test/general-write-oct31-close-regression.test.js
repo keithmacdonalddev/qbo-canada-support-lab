@@ -37,12 +37,12 @@ test('pre-operation close failures retain their precise record, date difference 
  feed=await businessBlockersFor({models,scope,now:clock});assert.equal(feed.blockers.length,0);
 });
 test('October 31 failed close leaves November 1 sales, collections and bills actionable on their own cadence',()=>{
- const now=Date.parse('2026-11-01T04:22Z'),agent={id:'accountant',grant:{id:'grant',authorityHash:'authority'}},state={day:'2026-11-01',lastKind:'catch-up',misses:3,lastReviewAt:'2026-11-01T04:21:00Z'};
+ const now=Date.parse('2026-11-01T04:22Z'),agent={id:'a'.repeat(24),ownerId:'b'.repeat(24),grant:{id:'c'.repeat(64),authorityHash:'d'.repeat(64)}},state={day:'2026-11-01',lastKind:'catch-up',misses:3,lastReviewAt:'2026-11-01T04:21:00Z'};
  const today=cadence.summarizeToday({rhythm:cadence.dayRhythm('2026-11-01'),runs:[],receipts:[],now});
  const business={published:true,verifiedThrough:'2026-10-30',openingDate:'2023-09-01',blockers:[]};
  const sales=cadence.decide({now,business,agent,state,today});assert.equal(sales.kind,'slice');assert.equal(sales.callModel,true);assert.ok(today.dueSlot.records>=5);
  const duties=cadence.decide({now,business,agent,state,today:{...today,dueSlot:null},obligations:{count:2}});assert.equal(duties.kind,'obligations');assert.equal(duties.callModel,true);
- const close={operationId:'close',status:'blocked',throughDate:day,agentAuthority:{agentId:agent.id,grantId:agent.grant.id,authorityHash:agent.grant.authorityHash}};
+ const close={operationId:'close',status:'blocked',throughDate:day,agentAuthority:{version:1,agentId:agent.id,ownerId:agent.ownerId,grantId:agent.grant.id,authorityHash:agent.grant.authorityHash}};
  assert.equal(cadence.decide({now,business:{...business,currentOperation:close,blockers:[{code:'current-operation'}]},agent,state,today}).kind,'slice');
 });
 

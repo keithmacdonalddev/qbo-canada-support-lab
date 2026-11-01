@@ -4,13 +4,14 @@ const { fixture, scope } = require('./helpers/business-governance-fixture');
 const { hash } = require('../src/modules/business-calendar');
 const { KIND, readApprovalReports } = require('../src/modules/business-approval-report-evidence');
 const { validateOperationCandidate } = require('../src/modules/business-operation-plan-store');
+const { retainHistoricalApproval } = require('./helpers/legacy-approval-reports');
 const { unpackReport, packReport } = require('../src/modules/business-report-source');
 const config = require('../src/config'), previous = config.qbo.environment;
 test.before(() => { config.qbo.environment = 'sandbox'; }); test.after(() => { config.qbo.environment = previous; });
 async function prepared() { const h = fixture(); await h.publish(); h.p = await h.service.prepare(h.user, { requestKey: 'retained-report-proof-0001', throughDate: '2026-10-06' }); return h; }
-async function approve(h) { return h.service.approve(h.user, h.p.operationId, { planHash: h.p.planHash }); }
+async function approve(h) { const result=await h.service.approve(h.user,h.p.operationId,{planHash:h.p.planHash}); if(!result.reused) await retainHistoricalApproval(h,h.p.operationId); return result; }
 const retained = h => h.data.Candidates.filter(row => row.payload.kind === KIND);
-test('actual approval retains full seven-report sources and both exact audit links without financial writes', async () => {
+test('historical approval observations retain seven-report sources and audit links without financial writes', async () => {
   const h = await prepared(); await approve(h); const run = h.data.Runs[0], row = retained(h)[0];
   assert.equal(h.posts, 0); assert.equal(retained(h).length, 1); assert.equal(row.payload.sources.version, 3); assert.ok(Object.values(row.payload.sources.reports).every(report => report.encoding === 'gzip-canonical-json-v2')); assert.equal(Object.keys(row.payload.sources.reports).length, 7);
   assert.equal(hash(row.payload), run.approval.reportEvidence.evidenceHash); assert.throws(() => validateOperationCandidate(row.payload, scope, h.clock));
@@ -20,12 +21,12 @@ test('actual approval retains full seven-report sources and both exact audit lin
   assert.equal(review.approvalReports.sources, undefined); assert.equal(review.approvalReports.reportsData, undefined);
   const original = structuredClone(run.approval); h.clock += 600000; assert.equal((await approve(h)).reused, true); assert.deepEqual(h.data.Runs[0].approval, original); assert.equal(retained(h).length, 1); assert.equal(h.reads, reads);
 });
-test('lost approval acknowledgement reuses its original retained observation without provider reads', async () => {
+test('lost approval acknowledgement reuses its decision without retaining a report snapshot', async () => {
   const h = await prepared(); h.loseReply = true; await assert.rejects(approve(h), /acknowledgement/);
   assert.equal(h.data.Runs[0].status, 'approved'); const reads = h.reads, original = structuredClone(h.data.Runs[0].approval);
-  assert.equal((await approve(h)).reused, true); assert.equal(h.reads, reads); assert.equal(h.posts, 0); assert.deepEqual(h.data.Runs[0].approval, original); assert.equal(retained(h).length, 1);
+  assert.equal((await approve(h)).reused, true); assert.equal(h.reads, reads); assert.equal(h.posts, 0); assert.deepEqual(h.data.Runs[0].approval, original); assert.equal(retained(h).length, 0);
 });
-test('missing or changed retained approval data and either audit cannot be presented or reused', async () => {
+test('damaged historical reports are marked unavailable without revoking current approval', async () => {
   const h = await prepared(); await approve(h); const original = structuredClone(h.data);
   const mutations = [
     h => { delete h.data.Runs[0].approval.reportEvidence; },
@@ -39,7 +40,7 @@ test('missing or changed retained approval data and either audit cannot be prese
     h => { h.data.Audits.find(row => row._id === retained(h)[0].auditId).actorUserId = 'f'.repeat(24); },
     h => { h.data.Audits.find(row => row._id === retained(h)[0].auditId).afterState.observedAt = '2020-01-01T00:00:00.000Z'; },
   ];
-  for (const mutate of mutations) { h.data = structuredClone(original); mutate(h); const reads = h.reads; await assert.rejects(approve(h), {code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); await assert.rejects(h.service.reviewOperation(h.user, h.p.operationId, 0), {code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); assert.equal(h.reads, reads); assert.equal(h.posts, 0); }
+  for (const mutate of mutations) { h.data = structuredClone(original); mutate(h); const reads = h.reads; assert.equal((await approve(h)).reused,true); assert.deepEqual((await h.service.reviewOperation(h.user,h.p.operationId,0)).approvalReports,{status:'unavailable',authorization:false,code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'}); assert.equal(h.reads, reads); assert.equal(h.posts, 0); }
 });
 test('an approval under the owner standing agent grant is read with its ai_plan audit type', async () => {
   const h = await prepared(); await approve(h);
@@ -47,9 +48,9 @@ test('an approval under the owner standing agent grant is read with its ai_plan 
   const authority = { version: 1, agentId: 'e'.repeat(24), ownerId: String(run.createdBy), grantId: hash('grant'), authorityHash: hash('published business') };
   Object.assign(run, { agentAuthority: authority, authorityHash: authority.authorityHash }); Object.assign(run.approval, { agentAuthority: authority, decisionSource: 'agent-standing-authority' });
   const read = () => readApprovalReports({ models: h.models, run, ownerId: String(audit.userId), session: null });
-  await assert.rejects(read(), { code: 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' }, 'the audit must say who decided');
+  assert.equal((await read()).status,'unavailable','historical audit must say who decided');
   audit.inputParams.details.decisionSource = 'agent-standing-authority';
-  await assert.rejects(read(), { code: 'BUSINESS_APPROVAL_REPORT_UNVERIFIED' }, 'an agent decision is not a manual audit');
+  assert.equal((await read()).authorization,false,'a manual audit cannot claim an agent decision');
   audit.actionType = 'ai_plan';
   assert.equal((await read()).reports, 7);
 });
@@ -59,7 +60,7 @@ test('genuine earlier approved events keep their original assurance without a se
   assert.equal(await readApprovalReports({models:h.models,run,ownerId:h.user.id}), null);
   const reads = h.reads; assert.equal((await approve(h)).reused, true); assert.equal(h.reads, reads); assert.equal((await h.service.reviewOperation(h.user,h.p.operationId,0)).approvalReports,null);
 });
-test('approval audit failure rolls back report storage, decision and coordination', async () => {
+test('approval audit failure rolls back decision and coordination; historical retention remains explicit', async () => {
   const h = await prepared(), before = structuredClone(h.data); h.failCreate = 'Audits'; await assert.rejects(approve(h));
   assert.deepEqual(h.data, before); assert.equal(h.posts, 0); h.failCreate = null; await approve(h); assert.equal(retained(h).length, 1);
 });
@@ -82,15 +83,14 @@ test('genuine version2 retained approval sources keep their original seven-repor
   assert.equal(evidence.sourceVersion, 2); assert.equal(evidence.available, 7); assert.equal(hash(row.payload), original); assert.equal(h.reads, reads); assert.equal(h.posts, 0);
 });
 
-test('same-day invoice preparation, approval and first write survive irrelevant report outages with exact retained subset',async()=>{
+test('same-day first write uses current relevant reports without retaining per-plan report approval',async()=>{
  const h=fixture({activityTemplateVersion:3,openingDate:'2026-11-01'});h.clock=Date.parse('2026-11-02T15:00:00Z');await h.publish();
  const history=await h.service.prepare(h.user,{requestKey:'scoped-report-history-0001',throughDate:'2026-11-01'});await h.service.approve(h.user,history.operationId,{planHash:history.planHash});assert.equal((await h.runtime(history.operationId).execute()).complete,true);
  const read=h.reportSources;h.reportSources=period=>{const source=read(period);for(const name of ['AgedPayables','CashFlow'])delete source.reports[name];return source;};
  const input={decisionKey:'scoped-invoice-report-001',purpose:'Invoice a care-plan customer on terms without touching payables or cash.',activities:[{type:'invoice-on-terms',customerKey:'care-client-002',itemKey:'care-plan-1',quantity:1,unitPriceCents:25000,termsDays:30,purpose:'Monthly service delivered on customer credit terms.'}]};
  const p=await h.service.prepareActivityBatch(h.user,input);await h.service.approve(h.user,p.operationId,{planHash:p.planHash});
- const run=h.data.Runs.find(run=>run._id===p.operationId),row=retained(h).find(row=>row.payload.operationId===p.operationId);
- assert.equal(row.payload.version,2);assert.deepEqual(row.payload.requiredReports,['TrialBalance','BalanceSheet','ProfitAndLoss','AgedReceivables','GeneralLedger']);
- assert.equal((await h.service.reviewOperation(h.user,p.operationId)).approvalReports.available,5);
+ const run=h.data.Runs.find(run=>run._id===p.operationId);
+ assert.equal(run.approval.reportEvidence,undefined);assert.equal((await h.service.reviewOperation(h.user,p.operationId)).approvalReports,null);
  const posts=h.posts;const runtime=h.runtime(p.operationId);h.afterPost=async()=>{h.afterPost=null;await runtime.stop();};await runtime.execute();assert.ok(h.posts>posts,'the relevant preflight permits the first POST despite irrelevant report outage');
- const savedRow=retained(h).find(row=>row.payload.operationId===p.operationId),original=savedRow.payload.requiredReports;savedRow.payload.requiredReports=[];await assert.rejects(h.service.reviewOperation(h.user,p.operationId));savedRow.payload.requiredReports=original;
+ assert.equal(retained(h).some(row=>row.payload.operationId===p.operationId),false);assert.equal(h.data.Calendars[0].verifiedThrough,'2026-11-01','an interrupted current-day write cannot advance the close');
 });

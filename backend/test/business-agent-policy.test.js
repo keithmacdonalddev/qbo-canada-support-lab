@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {validateControl,reduceControl,businessBlockers,DEFAULT_SETTINGS}=require('../src/modules/business-agent-policy');
 const ownerId='a'.repeat(24),authorityHash='b'.repeat(64),clock=Date.parse('2026-10-23T15:00:00.000Z');
 const business={scope:{environment:'production'},authorityHash};
-const row={_id:'c'.repeat(24),settings:{...DEFAULT_SETTINGS,monitoring:true},grant:null};
+const row={_id:'c'.repeat(24),ownerId,settings:{...DEFAULT_SETTINGS,monitoring:true},grant:null};
 const command=(name,rest={})=>({command:name,expectedRevision:0,requestKey:'fixture_request_0001',...rest});
 test('control schema refuses company, authority and nested unknown overrides',()=>{
   assert.throws(()=>validateControl(command('pause',{realmId:'foreign'})),/exact/);
@@ -22,9 +22,10 @@ test('pause keeps monitoring, while stopping monitoring also revokes autonomous 
   assert.deepEqual(reduceControl(active,command('pause'),business,clock,ownerId).settings,{...active.settings,autonomous:false});
   const stopped=reduceControl(active,command('stop-monitoring'),business,clock,ownerId);assert.equal(stopped.settings.monitoring,false);assert.equal(stopped.settings.autonomous,false);
 });
-test('resume retains standing grant and rejects changed published business',()=>{
+test('resume retains standing authority across publication changes and rejects a different owner',()=>{
   const granted=reduceControl(row,command('enable-autonomy',{confirmProduction:true}),business,clock,ownerId);
-  assert.throws(()=>reduceControl({...row,grant:granted.grant},command('resume'),{...business,authorityHash:'d'.repeat(64)},clock,ownerId),/renew/);
+  assert.equal(reduceControl({...row,grant:granted.grant},command('resume'),{...business,authorityHash:'d'.repeat(64)},clock,ownerId).settings.autonomous,true);
+  assert.throws(()=>reduceControl({...row,grant:granted.grant},command('resume'),business,clock,'e'.repeat(24)),/standing authority/);
   const resumed=reduceControl({...row,grant:granted.grant},command('resume'),business,clock,ownerId);assert.equal(resumed.settings.autonomous,true);assert.equal(resumed.grant,undefined);
 });
 test('populated history and unresolved original work cannot look like an empty starting company',()=>{

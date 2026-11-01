@@ -10,6 +10,10 @@ const GROUPS = Object.freeze([
   { key: 'notes', label: 'Notes and handoffs' },
 ]);
 const TOOLS = Object.freeze({
+  getBankingWorkspace: { group: 'business-read', summary: 'Reads bank and card statement months, blockers and retained reconciliation evidence.' },
+  getBankingPackage: { group: 'business-read', summary: 'Inspects a saved statement package and its native banking evidence.' },
+  prepareBankingPackage: { group: 'notes', summary: 'Registers an existing generated statement package for the banking workspace; does not send or match bank transactions.' },
+  getBankingCloseSupport: { group: 'business-read', summary: 'Reads retained banking evidence for the month being closed.' },
   reviewCapability: {group:"notes",summary:"Records build-list status changes, resolutions and regressions with evidence."},
   recordCloseChecklistEvidence: {group:"notes",summary:"Records close evidence and exceptions; manual owner attestations stay manual."},
   getCloseChecklist: {group:"business-read",summary:"Reads month-end checks and evidence."},

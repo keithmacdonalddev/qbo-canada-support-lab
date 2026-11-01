@@ -46,6 +46,7 @@ test('separate500-financial-record ceiling stress preserves nested v3 detail thr
     h.records.set('invoice:'+id,{entity:'Invoice',record});
   }
   const prepared = await h.service.prepare(h.user,{requestKey:'synthetic500-report-capacity-0001',throughDate:'2026-10-31'}); await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash}); assert.equal(h.posts,0);
+  await require('./helpers/legacy-approval-reports').retainHistoricalApproval(h,prepared.operationId);
   const retained = h.data.Candidates.find(row=>row.payload.kind==='business-approval-reports'),source = retained.payload.sources,decoded = budgets(source,retained,'synthetic500-financial-record-observation');
   const rows = require('../src/modules/book-evidence').rowsOf(decoded.GeneralLedger).filter(row => row.ColData);
   assert.equal(source.version,3); assert.equal(rows.length,1500); const docIds = new Set(rows.map(row=>row.ColData[1].id)); assert.equal(docIds.size,500);

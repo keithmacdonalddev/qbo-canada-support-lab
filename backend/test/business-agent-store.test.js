@@ -36,7 +36,7 @@ test('unfinished owned operations are found whether or not they hold the calenda
 });
 
 // GPT-6.1 Sol round-2 review (2026-10-30) findings 1 and 3.
-test('unfinished work is filtered by grant in the query and classified from saved effects',async()=>{
+test('unfinished work is scoped by owner and accountant across grant renewals and classified from saved effects',async()=>{
  const chain=rows=>({select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>rows});
  const found=value=>({maxTimeMS:async()=>value});
  const rows=[
@@ -52,8 +52,9 @@ test('unfinished work is filtered by grant in the query and classified from save
   Receipts:{exists:filter=>found(String(filter.operationId)==='4'.repeat(24)?{_id:'r'}:null)},
   Steps:{exists:filter=>found(String(filter.operationId)==='2'.repeat(24)?{_id:'s'}:null)}};
  const store=createBusinessAgentStore({models,connection:{},transaction:async work=>work({})});
- const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a',{id:'g',authorityHash:'h'});
- assert.equal(query['agentAuthority.grantId'],'g');assert.equal(query['agentAuthority.authorityHash'],'h','older grants are excluded before the limit');
+ const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a',{id:'g',authorityHash:'h',ownerId:'owner'});
+ assert.equal(query['agentAuthority.grantId'],undefined);assert.equal(query['agentAuthority.authorityHash'],undefined);
+  assert.equal(query['agentAuthority.agentId'],'a');assert.equal(query['agentAuthority.ownerId'],'owner');assert.equal(query.createdBy,'owner');assert.equal(query.realmId,'1');assert.equal(query.connectionId,'c'.repeat(24));
  assert.deepEqual(runs.map(run=>[run.operationId[0],run.disposition,run.holdsSlot]),[['1','unsent',false],['2','stranded',false],['3','continue',true],['4','stranded',false],['5','active',false]]);
 });
 
@@ -71,8 +72,8 @@ test('durable general plans from earlier days share capacity with specialized op
  const origin={agentId:'agent',grantId:'grant',authorityHash:'hash',ownerId:'owner'};
  const models={Agents:{},Events:{},Runs:{find:()=>chain([])},GeneralWriteRuns:{find:filter=>{query=filter;return chain([{_id:'old-general',status:'held',day:'2026-10-30',decisionKey:'same-identity',agentAuthority:origin,plan:{operations:[{op:'create'}]},items:{},batches:[]}]);}}};
  const store=createBusinessAgentStore({models,connection:{},transaction:async work=>work({}),now:()=>Date.parse('2026-10-31T15:00:00Z')});
- const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'agent',{id:'grant',authorityHash:'hash'});
- assert.equal(query.day,undefined,'previous-day plans still occupy capacity');assert.equal(query['agentAuthority.grantId'],'grant');assert.equal(runs[0].contract,'general-write-v1');assert.equal(runs[0].disposition,'prepared');assert.equal(runs[0].createCount,1);assert.equal(runs[0].admitted,false);
+ const runs=await store.unfinishedRuns({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'agent',{id:'grant',authorityHash:'hash',ownerId:'owner'});
+ assert.equal(query.day,undefined,'previous-day plans still occupy capacity');assert.equal(query['agentAuthority.grantId'],undefined);assert.equal(query['agentAuthority.agentId'],'agent');assert.equal(query['agentAuthority.ownerId'],'owner');assert.equal(query.ownerId,'owner');assert.equal(query.connectionId,'c'.repeat(24));assert.equal(runs[0].contract,'general-write-v1');assert.equal(runs[0].disposition,'prepared');assert.equal(runs[0].createCount,1);assert.equal(runs[0].admitted,false);
 });
 
 test('an old prepared general plan that saves now still uses the current rolling hour',async()=>{

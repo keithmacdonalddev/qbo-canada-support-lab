@@ -61,10 +61,10 @@ test('new revision denies changed historical identity, mappings, dormant binding
     if (mode === 'binding') input = amend(h, input, d => { delete d.masterBindings['field-client-001']; });
     if (mode === 'date') input.effectiveFrom = '2026-10-06';
     if (mode === 'draft-audit') h.data.Audits = h.data.Audits.filter(row => row._id !== h.data.Versions.at(-1).auditId);
-    const count = h.posts; await assert.rejects(h.service.reviewContinuity(mode === 'operator' ? { id: ownerId, actorId } : h.user, input), undefined, mode); assert.equal(h.posts, count); assert.equal(h.data.Authorities.length, 1);
+    const count = h.posts; if(mode==='template'){const plans=JSON.stringify(h.data.Plans),review=await h.service.reviewContinuity(h.user,input);assert.deepEqual(review.review.changes.activityTemplateVersion,{from:2,to:1});assert.equal(JSON.stringify(h.data.Plans),plans);}else await assert.rejects(h.service.reviewContinuity(mode === 'operator' ? { id: ownerId, actorId } : h.user, input), undefined, mode); assert.equal(h.posts, count); assert.equal(h.data.Authorities.length, 1);
   }
 });
-test('unfinished plans, claims, uncertain receipts, legacy workers, protected dates and changed revisions block the owner decision', { timeout: 120000 }, async () => {
+test('unfinished plans, claims, uncertain receipts, legacy workers, protected dates block decisions; audit-only revision and source drift refresh current meaning', { timeout: 120000 }, async () => {
   for (const mode of ['previewed', 'approved', 'claim', 'receipt', 'legacy', 'protected', 'revision', 'completion', 'rehashed-source']) {
     const h = await ready(), input = await selection(h), body = await decision(h, input), oldHead = h.data.Calendars[0].authorityHash;
     if (['previewed', 'approved'].includes(mode)) h.data.Runs.push({ _id: 'e'.repeat(24), ...scope, status: mode });
@@ -75,7 +75,7 @@ test('unfinished plans, claims, uncertain receipts, legacy workers, protected da
     if (mode === 'revision') h.data.Calendars[0].revision++;
     if (mode === 'completion') h.data.Evidence[0].proof.complete = false;
     if (mode === 'rehashed-source') { const row = h.data.Evidence[0], { sourceHash, ...source } = row.sources; source.accounts[0].Name = 'Changed retained account'; row.sources = { ...source, sourceHash: hash(source) }; }
-    const before = h.posts; await assert.rejects(h.service.applyContinuity(h.user, body), undefined, mode); assert.equal(h.posts, before); assert.equal(h.data.Calendars[0].authorityHash, oldHead); assert.equal(h.data.Authorities.length, 1);
+    const before = h.posts; if(['revision','rehashed-source'].includes(mode)){const proof=JSON.stringify(h.data.Evidence[0].proof),cursor=h.data.Calendars[0].verifiedThrough;assert.equal((await h.service.applyContinuity(h.user,body)).applied,true);assert.equal(JSON.stringify(h.data.Evidence[0].proof),proof);assert.equal(h.data.Calendars[0].verifiedThrough,cursor);assert.equal(h.data.Authorities.length,2);}else{await assert.rejects(h.service.applyContinuity(h.user, body), undefined, mode);assert.equal(h.data.Calendars[0].authorityHash,oldHead);assert.equal(h.data.Authorities.length,1);}assert.equal(h.posts,before);
   }
 });
 test('complete lineage and exact current-head execution reject altered parents, original audits and a stale ancestor plan', { timeout: 120000 }, async () => {

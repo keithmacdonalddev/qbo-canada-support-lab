@@ -38,7 +38,16 @@ test('reviewed future-effective2-to3 preserves old day45/46 collections and appl
   const credit = plan.continuity.origins.find(row => row.ruleKey === 'care-subscription-002' && row.stepKey === 'credit'); assert.equal(credit.occurrence, '2026-11-06'); assert.equal(credit.blueprintHash, draft.contentHash);
   assert.equal(JSON.stringify(h.data.Plans.find(row => row.operationId === first.operationId)), originalPlan); assert.equal(JSON.stringify(h.data.Evidence[0]), originalProof);
   const replay = await h.service.applyContinuity(h.user, decision); assert.equal(replay.reused, true);
-  const down = h.saveRevision({ activityTemplateVersion: 2 }); await assert.rejects(h.service.reviewContinuity(h.user, { blueprintId: down._id, blueprintHash: down.contentHash, effectiveFrom: '2026-11-17' }), /original schedule|upgrade/);
+  const before=JSON.stringify(h.data.Plans),posts=h.posts,down=h.saveRevision({activityTemplateVersion:2});
+  const downInput={blueprintId:down._id,blueprintHash:down.contentHash,effectiveFrom:'2026-11-17'},next=await h.service.reviewContinuity(h.user,downInput);assert.deepEqual(next.review.changes.activityTemplateVersion,{from:3,to:2});assert.equal(JSON.stringify(h.data.Plans),before,'future schedule choices never rewrite admitted occurrences');assert.equal(h.posts,posts);
+  const creditStep=h.data.Steps.find(row=>row.logicalKey===credit.logicalKey),creditId=creditStep.qboId,proofs=JSON.stringify(h.data.Evidence);
+  await h.service.applyContinuity(h.user,{...downInput,reviewHash:next.reviewHash,reason:'Change future schedules while carrying every original credit obligation.'});
+  const later=await run(h,'2026-11-20','credit-downgrade-carry-004'),laterPlan=h.data.Plans.find(row=>row.operationId===later.operationId).manifest;
+  const carried=laterPlan.continuity.origins.filter(row=>row.ruleKey==='care-subscription-002'&&row.occurrence==='2026-11-06');
+  assert.deepEqual(carried.map(row=>row.stepKey).sort(),['credit-application','payment'],'both credit application and cash remainder remain due after the schedule change');assert.ok(carried.every(row=>row.blueprintHash===draft.contentHash));
+  assert.equal(h.data.Receipts.filter(row=>row.observed?.qboId===creditId).length,1,'saved credit is never recreated');
+  assert.equal(h.records.get('creditmemo:'+creditId).record.RemainingCredit,0);
+  assert.equal(JSON.stringify(h.data.Plans.slice(0,-1)),before);assert.equal(JSON.stringify(h.data.Evidence.slice(0,-1)),proofs);assert.equal(h.data.Calendars[0].verifiedThrough,'2026-11-20');
 });
 test('Stop after accepted credit preserves it, and explicit reviewed resume applies the same credit once', { timeout: 120000 }, async () => {
   const h = fixture(options); await h.publish(); const saved = await prepared(h, '2026-10-20', 'credit-stop-original-0001'); let stopped = false;

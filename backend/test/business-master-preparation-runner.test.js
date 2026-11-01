@@ -30,10 +30,11 @@ test('a known accepted ID survives lost response acknowledgement and can be veri
   const h = await fixture(t); let once = false; h.afterCreate = async () => { if (!once) { once = true; h.loseCommitReply = h.commits + 1; } }; const result = await h.execute(String(h.run()._id));
   assert.equal(result.complete, true); assert.equal(h.sent.length, 32); assert.equal(h.exactReads.length, 32); assert.equal(h.run().records[0].attempts.length, 1);
 });
-test('a newer draft during setup reading stops before any create', async t => {
+test('a harmless newer draft during setup reading keeps exact planned creates and saved IDs', async t => {
   const h = await fixture(t);
   h.execute = createMasterPreparationRunner({ scope, ownerId, store: h.store, authorize: h.access.authorize, clientFor: async () => h.client, readPolicy: async () => clone(h.data.Policies[0]), now: () => h.clock, readSetup: async (...args) => { const observed = await readDraftSetup(...args); h.data.Versions.push({ ...clone(h.data.Versions[0]), _id: '000000000000000000000099', version: 2 }); h.data.Sequences[0].value = 2; return observed; } });
-  const result = await h.execute(String(h.run()._id)); assert.equal(result.complete, false); assert.equal(h.sent.length, 0); assert.equal(h.run().records[0].attempts.length, 0); assert.equal(h.run().leaseToken, null);
+  const result = await h.execute(String(h.run()._id)); assert.equal(result.complete, true); assert.equal(h.sent.length, 32); assert.equal(h.run().records[0].attempts.length, 1); assert.equal(h.run().leaseToken, null);
+  const ids=h.run().records.map(row=>row.qboId); await h.execute(String(h.run()._id)); assert.equal(h.sent.length,32); assert.deepEqual(h.run().records.map(row=>row.qboId),ids);
 });
 test('the worker refuses a substitute transport before reading or posting accounting data', async t => {
   const h = await fixture(t, { clientFor: async () => ({ apiCall: async () => { throw new Error('Must not be called'); } }) }), result = await h.execute(String(h.run()._id));

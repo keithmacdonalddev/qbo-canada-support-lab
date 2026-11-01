@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const { businessWork, rightNow, oneLine } = require('../src/modules/business-agent-work');
 
 const POLICY = 'a'.repeat(64), AUTH = 'c'.repeat(64);
-const grant = { id: 'g'.repeat(64), authorityHash: AUTH, activityPolicyHash: POLICY };
-const running = { settings: { monitoring: true, autonomous: true }, agent: { id: 'agent', grant }, business: { blockers: [], authorityHash: AUTH }, sync: { status: 'current' }, activityPolicyHash: POLICY };
+const grant = { id: 'b'.repeat(64), authorityHash: AUTH, activityPolicyHash: POLICY };
+const running = { settings: { monitoring: true, autonomous: true }, agent: { id: 'd'.repeat(24), ownerId: 'e'.repeat(24), grant }, business: { blockers: [], authorityHash: AUTH }, sync: { status: 'current' }, activityPolicyHash: POLICY };
 const coverage = { asOf: '2026-10-28', areas: [{ key: 'sales', signals: [
   { key: 'invoices', label: 'Invoices', status: 'ok', fill: 'assistant', entity: 'Invoice' },
   { key: 'estimates', label: 'Estimates', status: 'missing', fill: 'assistant', entity: 'Estimate' },
@@ -17,7 +17,7 @@ const coverage = { asOf: '2026-10-28', areas: [{ key: 'sales', signals: [
 ] }] };
 const byKey = (work, key) => work.items.find(item => item.key === key);
 const ownerKeys = work => work.items.filter(item => item.owner === 'owner' && item.state === 'needs-owner').map(item => item.key);
-const operation = extra => ({ operationId: 'o', status: 'blocked', agentAuthority: { version: 1, agentId: 'agent', grantId: grant.id, authorityHash: AUTH, ownerId: 'x' }, ...extra });
+const operation = extra => ({ operationId: 'o', status: 'blocked', agentAuthority: { version: 1, agentId: running.agent.id, grantId: grant.id, authorityHash: AUTH, ownerId: running.agent.ownerId }, ...extra });
 
 test('a healthy running business needs nothing from the owner and owns only features it can create', () => {
   const work = businessWork({ ...running, coverage });
@@ -35,14 +35,14 @@ test('a healthy running business needs nothing from the owner and owns only feat
   assert.equal(businessWork({ ...running, coverage: creatable }).headline, 'Nothing needs you. The accountant is running the business.');
 });
 
-test('only the one-time grant or a genuine renewal is asked of the owner', () => {
+test('publication changes do not require renewed authority; a pause still requires resume', () => {
   const ungranted = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, agent: { grant: null }, coverage });
   assert.deepEqual(ownerKeys(ungranted), ['grant-authority']);
   assert.equal(byKey(ungranted, 'use-features').state, 'waiting');
-  assert.deepEqual(ownerKeys(businessWork({ ...running, agent: { id: 'agent', grant: { ...grant, activityPolicyHash: 'b'.repeat(64) } }, coverage })), [], 'new accountant workflows do not ask the owner again');
+  assert.deepEqual(ownerKeys(businessWork({ ...running, agent: { ...running.agent, grant: { ...grant, activityPolicyHash: 'b'.repeat(64) } }, coverage })), [], 'new accountant workflows do not ask the owner again');
   const republished = { ...running, business: { blockers: [], authorityHash: 'd'.repeat(64) } };
-  assert.deepEqual(ownerKeys(businessWork({ ...republished, coverage })), ['renew-authority']);
-  assert.deepEqual(ownerKeys(businessWork({ ...republished, settings: { monitoring: true, autonomous: false }, coverage })), ['renew-authority']);
+  assert.deepEqual(ownerKeys(businessWork({ ...republished, coverage })), []);
+  assert.deepEqual(ownerKeys(businessWork({ ...republished, settings: { monitoring: true, autonomous: false }, coverage })), ['resume']);
   assert.equal(byKey(businessWork({ ...running, settings: { monitoring: true, autonomous: false }, coverage }), 'resume').title, 'You paused the accountant');
 });
 
@@ -64,9 +64,10 @@ test('imported history and its blocked operation become one accountant-owned ite
   assert.equal(byKey(running2, 'settle-operations').state, 'blocked');
 });
 
-test('the accountant continues only an operation its current grant can resume', () => {
+test('the accountant continues same-owner operations across grant renewal', () => {
   const resumable = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
   assert.equal(byKey(resumable, 'continue-operation').state, 'working');
+  const renewed=businessWork({...running,agent:{...running.agent,grant:{...grant,id:'a'.repeat(64),authorityHash:'b'.repeat(64)}},business:{blockers:[{code:'current-operation'}],authorityHash:AUTH,currentOperation:operation()},coverage});assert.equal(byKey(renewed,'continue-operation').state,'blocked','same-owner interrupted work remains discoverable after renewal');
   const idle = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'stopped' }) }, coverage });
   assert.equal(byKey(idle, 'continue-operation').state, 'waiting', 'a stopped operation is not being worked on right now');
   assert.match(byKey(idle, 'continue-operation').next, /next review/);
@@ -74,7 +75,7 @@ test('the accountant continues only an operation its current grant can resume', 
   assert.equal(byKey(stuck, 'continue-operation').state, 'blocked', 'a blocked operation is not shown as progressing');
   const paused = businessWork({ ...running, settings: { monitoring: true, autonomous: false }, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: operation({ status: 'running' }) }, coverage });
   assert.equal(byKey(paused, 'continue-operation').state, 'waiting');
-  for (const changed of [operation({ status: 'previewed' }), operation({ agentAuthority: { ...operation().agentAuthority, grantId: 'old' } })]) {
+  for (const changed of [operation({ status: 'previewed' }), operation({ agentAuthority: { ...operation().agentAuthority, ownerId: 'f'.repeat(24) } })]) {
     const work = businessWork({ ...running, business: { blockers: [{ code: 'current-operation' }], authorityHash: AUTH, currentOperation: changed }, coverage });
     assert.equal(byKey(work, 'continue-operation'), undefined);
     assert.equal(byKey(work, 'settle-operations').state, 'blocked');
@@ -111,9 +112,8 @@ test('adopted history keeps its open balances as accountant work', () => {
   assert.equal(item.owner, 'accountant');
   assert.equal(item.state, 'on-duty', 'daily activity settles them under the approved rules; idle until then');
   const renew = businessWork({ ...running, business: { blockers: [], authorityHash: 'e'.repeat(64), adoptedThrough: '2026-10-20' }, coverage: null });
-  assert.equal(byKey(renew, 'inherited-obligations').state, 'waiting');
-  assert.match(byKey(renew, 'inherited-obligations').next, /approve/);
-  assert.ok(ownerKeys(renew).includes('renew-authority'));
+  assert.equal(byKey(renew, 'inherited-obligations').state, 'on-duty');
+  assert.deepEqual(ownerKeys(renew), []);
 });
 
 const DUTIES = ['receive-purchase-orders', 'correct-own-records', 'inherited-obligations'];
@@ -166,8 +166,8 @@ test('each standing duty states what it has done from verified records', () => {
   const cleared = businessWork({ ...running, business: adopted, coverage: null, facts: { ...facts, open: { invoices: { count: 0, cents: 0 }, bills: { count: 0, cents: 0 } } } });
   assert.match(byKey(cleared, 'inherited-obligations').facts, / · Nothing left open$/);
   const renew = businessWork({ ...running, business: { ...adopted, authorityHash: 'e'.repeat(64) }, coverage: null, facts });
-  assert.equal(byKey(renew, 'receive-purchase-orders').state, 'waiting');
-  assert.equal(byKey(renew, 'receive-purchase-orders').facts, 'Received 3 purchase orders · last Oct 29', 'facts stay visible while waiting');
+  assert.equal(byKey(renew, 'receive-purchase-orders').state, 'on-duty');
+  assert.equal(byKey(renew, 'receive-purchase-orders').facts, 'Received 3 purchase orders · last Oct 29', 'facts stay visible after publication changes');
 });
 
 const pass = { id: 'pass-1', role: 'accountant', startedAt: '2026-10-30T18:20:00.000Z' };

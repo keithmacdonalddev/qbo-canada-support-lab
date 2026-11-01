@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const c = require('../src/modules/business-agent-cadence');
 
 const MIN = 60000;
-const agent = { id: 'agent', grant: { id: 'g'.repeat(64), authorityHash: 'h'.repeat(64) } };
-const own = { version: 1, agentId: 'agent', grantId: agent.grant.id, authorityHash: agent.grant.authorityHash, ownerId: 'o' };
+const agent = { id: 'a'.repeat(24), ownerId: 'b'.repeat(24), grant: { id: 'c'.repeat(64), authorityHash: 'd'.repeat(64) } };
+const own = { version: 1, agentId: agent.id, grantId: agent.grant.id, authorityHash: agent.grant.authorityHash, ownerId: agent.ownerId };
 const settings = { decisionIntervalMinutes: 60 };
 // Halifax wall time -> instant, so every test reads in local business terms.
 const at = (day, hhmm) => { const [h, m] = hhmm.split(':').map(Number); return c.zonedTime(day, h * 60 + m); };
@@ -122,7 +122,8 @@ test('cadence precedence: owner, active execution, recovery, held, catch-up, sli
   assert.deepEqual([active.kind, active.callModel, Date.parse(active.nextReviewAt) - now], ['slice', true, 0], 'independent activity is reviewed while execution continues');
   const retained = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }) });
   assert.deepEqual([retained.kind, retained.callModel], ['recovery', true], 'retained own work gets a recovery review before anything else');
-  const foreign = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: { ...own, grantId: 'z' } }, blockers: [{ code: 'current-operation' }] }) });
+  assert.equal(decide({agent:{...agent,grant:{id:'e'.repeat(64),authorityHash:'f'.repeat(64)}},business:current(day,{currentOperation:{operationId:'o',status:'blocked',agentAuthority:own},blockers:[{code:'current-operation'}]})}).kind,'recovery','renewal keeps same-owner work recoverable');
+  const foreign = decide({ business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: { ...own, ownerId: 'f'.repeat(24) } }, blockers: [{ code: 'current-operation' }] }) });
   assert.deepEqual([foreign.kind, foreign.callModel], ['held', false]);
   const blocked = decide({ business: current(day, { blockers: [{ code: 'uncertain-write', title: 'A QuickBooks request needs recovery' }] }) });
   assert.deepEqual([blocked.kind, blocked.callModel], ['held', false]);assert.match(blocked.reason, /a QuickBooks request needs recovery/);
@@ -183,7 +184,7 @@ test('an execution that stops advancing gets a bounded recovery review', () => {
   assert.deepEqual([later.kind, later.callModel], ['recovery', true]);assert.match(later.reason, /has not advanced/);
 });
 
-test('the hard daily review ceiling pauses every automatic review until midnight; the owner can still ask', () => {
+test('the hard daily review ceiling pauses every review until midnight, including owner requests', () => {
   const day = '2026-10-30', now = at(day, '11:35'), state = { day, reviews: 400 };
   const capped = c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-25' }), today: todayAt(now), state });
   assert.deepEqual([capped.kind, capped.callModel, capped.nextReviewAt], ['ceiling', false, new Date(at('2026-10-31', '00:00')).toISOString()]);
@@ -218,8 +219,8 @@ test('approved own work that holds no calendar slot is recovered before any cale
   assert.deepEqual([decision.kind, decision.callModel, decision.reason], ['recovery', true, 'finishing approved work that has not started'], 'midnight catch-up must not close Oct 30 while its approved batch is unfinished');
   const queued = c.decide({ now, settings, agent, business: current('2026-10-30'), today: todayAt(now), owned: [{ ...approved, executionPending: true }], state: {} });
   assert.deepEqual([queued.kind, queued.callModel], ['poll', false], 'queued approved work is polled without a model');
-  const foreign = c.decide({ now, settings, agent, business: current('2026-10-30'), today: todayAt(now), owned: [{ ...approved, agentAuthority: { ...own, grantId: 'other' } }], state: {} });
-  assert.equal(foreign.kind, 'catch-up', 'work under another grant is not this lineage’s recovery');
+  const foreign = c.decide({ now, settings, agent, business: current('2026-10-30'), today: todayAt(now), owned: [{ ...approved, agentAuthority: { ...own, ownerId: 'f'.repeat(24) } }], state: {} });
+  assert.equal(foreign.kind, 'catch-up', 'work under another owner is not this lineage’s recovery');
 });
 test('progress made between reviews, such as queued execution finishing, clears the backoff', () => {
   const day = '2026-10-30', start = at(day, '09:00'), owned = [{ operationId: 'a1', status: 'approved', day, agentAuthority: own, executionPending: true }];

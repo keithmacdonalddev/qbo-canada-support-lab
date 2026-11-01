@@ -1,6 +1,6 @@
 ---
 name: banking-feed-operations
-description: Prepare explicit simulated bank/card advice, exclusive API-or-native creator ownership, feed exceptions, duplicate exclusions and evidenced owner-browser upload/match/reconciliation tasks. Use for fees, interest, NSF returns, merchant settlements, card fees or bank-initiated transfers.
+description: Prepare explicit simulated bank/card advice, exclusive API-or-native creator ownership, feed exceptions, duplicate exclusions and evidenced owner-browser upload/match/reconciliation tasks. Use when handling fees, interest, NSF returns, merchant settlements, card fees or bank-initiated transfers.
 ---
 
 # Bank feeds and simulated advice

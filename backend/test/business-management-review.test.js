@@ -8,7 +8,7 @@ const { createBusinessAgentTools } = require('../src/modules/business-agent-tool
 const at = (day, hhmm) => { const [h, mm] = hhmm.split(':').map(Number); return c.zonedTime(day, h * 60 + mm); };
 const current = (day, extra = {}) => ({ verifiedThrough: require('../src/modules/business-calendar').shift(day, -1), openingDate: '2026-01-01', blockers: [], currentOperation: null, ...extra });
 const settings = { decisionIntervalMinutes: 60 };
-const agent = { id: 'agent', grant: { id: 'g'.repeat(64), authorityHash: 'h'.repeat(64) } };
+const agent = { id: 'a'.repeat(24), ownerId: 'b'.repeat(24), grant: { id: 'c'.repeat(64), authorityHash: 'd'.repeat(64) } };
 const todayAt = now => c.summarizeToday({ rhythm: c.dayRhythm(c.localParts(now).date), runs: [], receipts: [], now });
 const decide = (now, extra = {}) => c.decide({ now, settings, business: current(c.localParts(now).date), agent, today: todayAt(now), ...extra });
 
@@ -103,7 +103,7 @@ test('management attempts are capped per day and never count as a review without
 test('recovery and catch-up come first; the ceiling and the request budget hold; held work still gets its review', () => {
   const sat = '2026-10-31', now = at(sat, '10:05'), management = { lastPlanDay: '2026-10-30' };
   assert.equal(c.decide({ now, settings, business: current(sat, { verifiedThrough: '2026-10-28' }), agent, today: todayAt(now), management }).kind, 'catch-up');
-  const op = { operationId: 'op', status: 'stopped', agentAuthority: { version: 1, agentId: 'agent', grantId: agent.grant.id, authorityHash: agent.grant.authorityHash, ownerId: 'o' } };
+  const op = { operationId: 'op', status: 'stopped', agentAuthority: { version: 1, agentId: agent.id, grantId: agent.grant.id, authorityHash: agent.grant.authorityHash, ownerId: agent.ownerId } };
   assert.equal(c.decide({ now, settings, business: current(sat, { currentOperation: op }), agent, today: todayAt(now), management }).kind, 'recovery');
   assert.equal(decide(now, { management, state: { day: sat, reviews: c.REVIEW_CEILING } }).kind, 'ceiling');
   assert.notEqual(decide(now, { management, requests: { reached: true, scope: 'day', limit: 1, used: 1 } }).kind, 'management');

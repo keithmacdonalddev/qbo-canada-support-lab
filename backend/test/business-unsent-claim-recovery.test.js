@@ -38,7 +38,7 @@ function harness(input=data()){
 }
 test('minimized non-posting approval is verified without changing stored data; tampered evidence still fails',async()=>{
  const k=harness(),before=clone(k.h.data);assert.equal((await k.reports()).reports,0);assert.deepEqual(k.h.data,before);
- for(const mutate of [d=>d.candidate.payload.sources.accounts.push({id:'bad'}),d=>d.candidate.payload.requiredReports.push('TrialBalance'),d=>d.candidate.payload.sources.reports={unexpected:{}},d=>d.audit.inputParams.details.reportSourceHash=hash('wrong'),d=>d.observation.afterState.reports=1,d=>d.operation.approval.reportEvidence.sourceHash=hash('wrong')]){const k=harness();mutate(k.d);await assert.rejects(k.reports(),{code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'});}
+ for(const mutate of [d=>d.candidate.payload.sources.accounts.push({id:'bad'}),d=>d.candidate.payload.requiredReports.push('TrialBalance'),d=>d.candidate.payload.sources.reports={unexpected:{}},d=>d.audit.inputParams.details.reportSourceHash=hash('wrong'),d=>d.observation.afterState.reports=1,d=>d.operation.approval.reportEvidence.sourceHash=hash('wrong')]){const k=harness();mutate(k.d);assert.deepEqual(await k.reports(),{status:'unavailable',authorization:false,code:'BUSINESS_APPROVAL_REPORT_UNVERIFIED'});}
 });
 test('new candidates preserve empty reports through the actual Mongoose serializer',()=>{
  const Candidate=require('../src/models/BusinessCandidate'),d=data();d.candidate.payload.sources.reports={};const doc=new Candidate(d.candidate);const saved=doc.toObject();assert.deepEqual(saved.payload.sources.reports,{});assert.equal(hash(saved.payload),d.candidate.candidateHash);
@@ -72,6 +72,6 @@ test('a slice review explicitly moves past failed recovery to independent work',
 test('exact blocked recovery state schedules independent activity despite eight failed reviews',()=>{
  const d=data(),c=require('../src/modules/business-agent-cadence'),now=Date.parse('2026-10-31T23:47:47.274Z');
  const operationId=String(d.operation._id),current={operationId,status:'blocked',agentAuthority:d.operation.agentAuthority};
- const decision=c.decide({now,agent:{id:d.operation.agentAuthority.agentId,grant:{id:d.operation.agentAuthority.grantId,authorityHash:d.operation.agentAuthority.authorityHash}},business:{verifiedThrough:'2026-10-30',currentOperation:current,blockers:[{code:'current-operation'}]},today:{day:'2026-10-31',saved:85,target:220,behind:122,inFlight:1,open:[current],dueSlot:{records:60}},owned:[current],state:{day:'2026-10-31',lastKind:'recovery',misses:8,lastReviewAt:new Date(now-60000).toISOString()}});
+ const decision=c.decide({now,agent:{id:d.operation.agentAuthority.agentId,ownerId:d.operation.agentAuthority.ownerId,grant:{id:d.operation.agentAuthority.grantId,authorityHash:d.operation.agentAuthority.authorityHash}},business:{verifiedThrough:'2026-10-30',currentOperation:current,blockers:[{code:'current-operation'}]},today:{day:'2026-10-31',saved:85,target:220,behind:122,inFlight:1,open:[current],dueSlot:{records:60}},owned:[current],state:{day:'2026-10-31',lastKind:'recovery',misses:8,lastReviewAt:new Date(now-60000).toISOString()}});
  assert.equal(decision.kind,'slice');assert.equal(decision.callModel,true);assert.match(decision.reason,/independent work/);
 });

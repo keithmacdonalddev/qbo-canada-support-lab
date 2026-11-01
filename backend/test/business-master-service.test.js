@@ -43,9 +43,9 @@ test('strict inputs reject payload, scope, actor, proof and draft overrides befo
  await assert.rejects(h.service.prepare(h.user,{...h.body,baseHash:'f'.repeat(64)}));assert.equal(h.qboReads.length,0);assert.equal(h.sent.length,0);
  await h.proposal();const id=String(h.run()._id);await assert.rejects(h.service.applyReview(h.user,id,{ordinals:[0],proofs:[]}),{status:400});await assert.rejects(h.service.approve(h.user,id,{planHash:h.run().planHash,productionConfirmed:'true'}),{status:400});await assert.rejects(h.service.inspect(h.user,'ABCDEF000000000000000001'));assert.equal(h.sent.length,0);
 });
-test('source change and active company work prevent fresh approval without saving authority',async t=>{
+test('active company work prevents approval; harmless draft revisions retain the same master plan',async t=>{
  const h=fixture(t);await h.proposal();h.busyCollection='operationruns';await assert.rejects(h.approval(),/Earlier company work/);assert.equal(h.run().approval,null);assert.equal(h.sent.length,0);
- h.busyCollection=null;h.data.Versions.push({...clone(h.data.Versions[0]),_id:'a'.repeat(24),version:2});h.data.Sequences[0].value=2;await assert.rejects(h.approval(),/changed|different|newer/);assert.equal(h.run().approval,null);
+ h.busyCollection=null;h.data.Versions.push({...clone(h.data.Versions[0]),_id:'a'.repeat(24),version:2});h.data.Sequences[0].value=2;await h.approval();assert.ok(h.run().approval);assert.equal(h.sent.length,0);
 });
 test('saved IDs await independent readback and retain their mandatory response audits in the public view',async t=>{
  const h=await approved(t),id=String(h.run()._id);h.changeRead=record=>({...record,Active:false});await h.service.execute(h.user,id,executionBody(h));await h.service.idle();const saved=(await h.service.inspect(h.user,id)).run;

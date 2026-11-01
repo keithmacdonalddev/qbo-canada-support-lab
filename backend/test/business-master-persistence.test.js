@@ -27,6 +27,6 @@ test('persisted native master plans retain empty source bindings and pass the or
   h.data.Versions[0] = draft;
   await h.transaction(session => h.master.fenceSource(run, session));
   h.data.Versions[0].definition.publicSafeIdentity.displayName += ' changed';
-  await assert.rejects(h.transaction(session => h.master.fenceSource(run, session)), /newer or changed business draft/);
+  await assert.rejects(h.transaction(session => h.master.fenceSource(run, session)), /current scoped saved business draft/);
   assert.equal(h.sent.length, 0);
 });

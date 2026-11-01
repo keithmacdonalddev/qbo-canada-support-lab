@@ -347,10 +347,19 @@ function agentHarness() {
   h.data.Agents.push({ _id: authority.agentId, ...scope, ownerId, settings: { monitoring: true, autonomous: true }, grant: { id: authority.grantId, authorityHash: authority.authorityHash, ownerId }, dispatchRevision: 0 });
   return h;
 }
-test('agent pause and changed standing grant fence native admission before a receipt or SDK request exists', async () => {
-  for (const mutate of [h => { h.data.Agents[0].settings.autonomous = false; }, h => { h.data.Agents[0].settings.monitoring = false; }, h => { h.data.Agents[0].grant.id = hash('replaced grant'); }, h => { h.data.Agents[0].grant.authorityHash = hash('other policy'); }, h => { h.data.Agents[0].connectionId = 'f'.repeat(24); }]) {
+test('agent pause, owner revocation and changed company fence native admission before a receipt or SDK request exists', async () => {
+  for (const mutate of [h => { h.data.Agents[0].settings.autonomous = false; }, h => { h.data.Agents[0].settings.monitoring = false; }, h => { h.data.Agents[0].grant.ownerId = 'f'.repeat(24); }, h => { h.data.Agents[0].ownerId = 'f'.repeat(24); }, h => { h.data.Agents[0].connectionId = 'f'.repeat(24); }]) {
     const h = agentHarness(); mutate(h); await assert.rejects(h.gate.begin(h.input), /paused|authorization changed/);
     assert.equal(h.data.Receipts.length, 0); assert.equal(h.data.Audits.length, 0); assert.equal(h.data.Agents[0].dispatchRevision, 0);
+  }
+});
+test('renewed grants and missing approval copies retain current scoped admission and exact receipts', async () => {
+  for (const mutate of [h => { h.data.Agents[0].grant.id = hash('renewed'); h.data.Agents[0].grant.authorityHash = hash('new instructions'); }, h => { delete h.data.Runs[0].approval; }, h => { h.data.Runs[0].approval.decisionSource = 'manual'; }]) {
+    const h = agentHarness(); mutate(h); const ticket = await h.gate.begin(h.input);
+    assert.equal(h.data.Agents[0].dispatchRevision, 1); assert.equal(h.data.Receipts.length, 1);
+    assert.equal(h.data.Receipts[0].requestHash, request.requestHash);
+    assert.equal((await h.gate.complete(ticket, request, success)).outcome, 'saved');
+    await assert.rejects(h.gate.begin(h.input)); assert.equal(h.data.Receipts.length, 1);
   }
 });
 test('agent work consumes standing authorization in the same accounting transaction and can settle after Pause', async () => {
@@ -360,8 +369,8 @@ test('agent work consumes standing authorization in the same accounting transact
   assert.equal((await h.gate.complete(ticket, request, success)).outcome, 'saved');
   assert.equal(h.data.Receipts[0].state, 'saved');
 });
-test('agent origin and exact approval provenance cannot be stripped or forged', async () => {
-  for (const mutate of [h => { delete h.data.Runs[0].approval.agentAuthority; }, h => { h.data.Runs[0].approval.decisionSource = 'manual'; }, h => { h.data.Runs[0].createdBy = 'f'.repeat(24); }, h => { h.data.Runs[0].agentAuthority = { ...h.data.Runs[0].agentAuthority, extra: true }; }]) {
+test('agent owner and origin cannot be forged; approval snapshots are audit-only', async () => {
+  for (const mutate of [h => { h.data.Runs[0].createdBy = 'f'.repeat(24); }, h => { h.data.Runs[0].agentAuthority = { ...h.data.Runs[0].agentAuthority, extra: true }; }]) {
     const h = agentHarness(); mutate(h); await assert.rejects(h.gate.begin(h.input)); assert.equal(h.data.Receipts.length, 0);
   }
 });
