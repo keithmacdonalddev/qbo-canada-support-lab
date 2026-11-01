@@ -41,6 +41,8 @@ The owner should never have to re-explain this. Every session, worker and review
 6. **Always synced with QBO and visible live**: what happened, what is unfinished, what's next, honestly, with a UI beyond what the owner expects (desktop).
 7. **Within limits**: safe books, ≤3 metered QBO calls per saved record, low AI cost, specialists only when measurably worth it, no unrelated scope.
 
+Owner clarification, 2026-11-01: the app must also provide a simulated online bank experience, like viewing a business account in RBC online banking, with its own durable account/card balances, pending/posted settlements, fees/interest and downloadable transaction CSVs/monthly statements. Use fictional branding. The owner and accountant use those bank records/files to import, match and reconcile QBO through the latest due statement cycle, then keep feeds and reconciliations current indefinitely. Historical files reconstructed from QBO alone do not satisfy independent ongoing bank operation. Follow [the simulated-bank outcome](docs/plans/simulated-online-bank-and-reconciliation-2026-11-01.md) and SB01–SB07/D01–D04 in the maintained task list; advance independent ready banking and feature work alongside unrelated repairs. This clarification does not expand live-action authority.
+
 Judge progress only by the live company (records today vs target, nightly closes, situations covered, blockers), not by tests, reviews or commits. It is a simulated test company (no real money); routine work needs no owner approval. Ask only for owner-only, irreversible choices such as turning on multicurrency.
 
 ## User Communication

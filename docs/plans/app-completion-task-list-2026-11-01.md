@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-01T20:30:00Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-01T20:47:57.921Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -15,7 +15,8 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 1. S01 sign-in is installed and live verified. S02 shared coordination is implemented and tested; observe its first governed native banking task without weakening existing paused/uncertain-outcome barriers.
 2. Repair A08 activity discovery immediately: the live read-only choices route returns400 BUSINESS_PLAN_UNVERIFIED (Exact connected company scope is required); the accountant remains at125 saved after16 no-progress reviews. A02 admission repair is installed; observe its next actual governed use, then continue A01 relationships.
 3. Repair C01/C02: truthful verification counts and executable capability descriptions, independently of banking completion.
-4. Continue the highest-value independent items below. Keep ordinary business operation and deliberate situational coverage advancing together.
+4. Start the simulated online bank SB01/SB03/SB04 and ready historical D02 work in parallel with independent app outcomes. The bank-style owner workspace SB02 and per-account currentness SB06 are required product work; do not wait for every unrelated invoice repair. Follow the [owner-confirmed banking outcome](simulated-online-bank-and-reconciliation-2026-11-01.md).
+5. Continue the highest-value independent items below. Keep ordinary business operation and deliberate situational coverage advancing together.
 
 ## Verified baseline and evidence limits
 
@@ -50,10 +51,26 @@ These are dated observations, not permanent present-state claims. The reviewed C
 |---|---|---|---|
 | S01 | P0 — VERIFIED | Deterministic helper retrieves the fixed Windows credential privately; signs in as the dedicated user; verifies the current native account identity and exact company ID; handles extra verification without exposing secrets. | Installed common CLI returned ready at20:29:56UTC with identityVerified/companyVerified true for the exact production realm; it reused the dedicated session. Initial private password submission also succeeded. Security-page step-up was removed from routine identity inspection. [Scoped record](qbo-automation-signin-2026-11-01.md). |
 | S02 | P0 — IMPLEMENTED / PROOF OPEN | App/accountant/Claude/Codex native work shares one browser lease through the entire task. Login failures happen before banking admission, retry boundedly and recover without clearing uncertain banking outcomes. | Installed common task entry, continuous lease and separate durable auth retry state passed focused contracts and both reviews. Actual complete native task handoff remains to be observed; do not confuse successful ensure with a completed banking cycle. Actor labels provide audit context, not new permission. Existing API connection stays unchanged. |
-| D01 | P1 — IMPLEMENTED / PROOF OPEN | Generated CSVs/statements represent real native-currency movements, grouped deposits, clearing timing and explicit bank-only situations; outputs and opening/closing carry agree. | Keep generator replay evidence distinct from native imported/reconciled state. Verify ongoing generation and per-account use. |
+| D01 | P1 — IMPLEMENTED / PROOF OPEN | Generated CSVs/statements represent native-currency movements, grouped deposits, clearing timing and explicit bank-only situations; outputs and opening/closing carry agree. | Read-only artifact check found317 package manifests,317 PDFs and75 CSVs across12 accounts; all392 referenced file hashes matched. This is file integrity, not full coverage or bank independence. Ongoing automatic generation is SB04 and remains OPEN. |
 | D02 | P0 — OPEN | Complete ready historical imports/review/reconciliations oldest first, retaining native evidence and accepted actions without replaying uncertain uploads/Add/Match. | Login alone does not authorize a new banking mutation. Reuse existing valid workflow authority; retain preflight rule and duplicate checks. |
 | D03 | P1 — OPEN | Resolve109 carry-forward deferrals and seven drafts from actual predecessor/native evidence, including report-only tax adjustments and pre-existing reconciliation marks. | Generated balance agreement is not proof of counterpart classification or native reconciliation. Do not invent balancing plugs. |
 | D04 | P1 — OPEN | Complete cash-count evidence separately from bank/card reconciliation; retain native vs app-tracked vs manual evidence labels. | Cash periods and foreign balances are distinct from the324 external statement-period generation baseline. |
+
+## Simulated online bank and continuously current banking
+
+Owner clarification: provide an online banking experience like accessing a simulated RBC business account, with its own bank ledger, balances, pending/posted history, settlement behavior and downloadable bank files. Historical QBO reconstruction and file generation alone do not satisfy it. Use a fictional bank identity and existing scoped access. The [full acceptance and execution plan](simulated-online-bank-and-reconciliation-2026-11-01.md) defines dependencies, historical preservation and what current means.
+
+| ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
+|---|---|---|---|
+| SB01 | P0 — OPEN | Durable simulated bank/card accounts, native-currency balances and a ledger of pending/posted/reversed settlements independent of QBO edits; retain business-event lineage and evidenced opening balances. | Reuse BankingEvent/BankingPackage and settlement modules; establish the labelled historical baseline without rewriting accepted bank/QBO history. |
+| SB02 | P1 — OPEN | Working bank-style desktop overview, account balances/history, transaction detail, pending/posted views, statements and CSV/PDF downloads, usable by owner and accountant. | Render a coherent account slice with real retained bank state, as-of times, recovery and links to QBO progress; this is more than an artifact list. |
+| SB03 | P0 — OPEN | Continuing settlements, bank/card fees, interest, transfers, returns and deliberate bank-feed situations follow the governed calendar and retain separate bank identities/dates. | Existing bank-origin generator accepts explicit scenarios; connect persistent scheduling and financial lifecycle tools, with one economic event per counterpart. |
+| SB04 | P0 — OPEN | Automatically create, retain and register current transaction CSVs and due monthly statements for every eligible account; preserve revisions, carry-forward, quiet months and duplicate-safe export windows. | Production generation scheduling is missing. Existing prepareBankingPackage registers an already generated manifest; source/tests alone do not prove automatic issuance. |
+| SB05 | P0 — OPEN | Actual QBO upload, Match/Add/Exclude, statement attachment where supported, and native reconciliation complete through the latest due cycle with retained evidence. | Reuse S02/D02 safe browser/recovery workflows and valid target authority. Verify unknown uploads before retry; keep generated/imported/reconciled states distinct. |
+| SB06 | P0 — OPEN | Per-account bank-posted, feed-generated, QBO-imported, reviewed, statement-available and natively-reconciled cutoffs show lag, blockers and next due work; company status includes missing accounts/periods. | Current feeds include due posted activity; reconciliations cover the latest completed statement cycle, not an unfinished current month. Refresh the full account/period inventory. |
+| SB07 | P1 — OPEN | Historical catch-up transitions into sustained automatic future generation/import/reconciliation with restart/logout/lost-reply recovery and independent-account progress. | Retain direct completed account-period chains and repeated due-cycle evidence. Neither scheduled code, tests, one reconciliation nor a saved report proves unattended company-wide operation. |
+
+D02 remains the P0 historical catch-up task; D03 resolves dependent carry-forward gaps and D04 preserves separate cash-count work. These rows add permanent bank operation to the full app goal; they do not replace ordinary trading or situational coverage. A01/A02 block only truly dependent bank records/balances. Do not turn either repair into a blanket prerequisite for this feature work.
 
 ## Business breadth and accountant responsibility
 
@@ -105,3 +122,5 @@ Record UTC time, affected task IDs, what changed, direct app/QBO/report proof an
 - A01/A02 investigation at20:16–20:22UTC established missing estimate links and two genuinely unsent deposit batches after accepted payments. Four fresh QBO GETs retained privately; [exact diagnosis and next repair](saved-invoice-recovery-2026-11-01.md). No replacement records or status-only accounting claims.
 
 - 2026-11-01T20:46UTC — A02 admission fix installed:337 affected tests and80 saved-source tests pass; both reviews clear. Native deposit outcomes remain unverified. A08 elevated to the next P0 after directly reproducing the activity-choice scope failure. Sign-in unit6117cbc is pushed to main/origin/main.
+
+- 2026-11-01T20:47:57.921Z — Owner confirmed the simulated online-bank experience and continuously current feeds/reconciliations. Added SB01–SB07, distinguished existing files from independently maintained bank state and missing generation scheduling, defined per-account freshness/closed-cycle reconciliation, and linked independent historical catch-up. Documentation milestone only; no native banking completion or live authority newly claimed.
