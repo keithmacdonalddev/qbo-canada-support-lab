@@ -94,19 +94,39 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
   }
   return policies;
 }
-// A source history may acquire future rates without changing this reviewed period.
-// Authenticate the raw evidence first, then bind every rate boundary in the period.
-function sameDatedTaxDefinition(entity, before, current, fromDate, throughDate) {
-  if (entity !== 'TaxRate' || !fromDate || !throughDate) return sameCanonicalDefinition(entity, before, current);
-  date(fromDate); date(throughDate);
-  if (throughDate < fromDate) return false;
-  const withoutHistory = record => Object.fromEntries(Object.entries(record).filter(([key]) => !['RateValue', 'EffectiveTaxRate'].includes(key)));
-  if (!sameCanonicalDefinition(entity, withoutHistory(before), withoutHistory(current))) return false;
-  const boundaries = new Set([fromDate, throughDate]);
+// Reference definitions are current inputs. Historical hashes remain evidence;
+// only dated economics and accounting destinations constrain an unsent request.
+function taxMeaning(code, direction, on, getRate) {
+  taxDefinition('TaxCode', code?.Id, code);
+  if (!['sales', 'purchases'].includes(direction)) fail('A tax direction is required.');
+  const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail ?? (code.Taxable === false ? [] : undefined);
+  if (!Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length) || (code.Taxable === false && details.length)) fail('The current tax code does not support this transaction direction.');
+  const seen = new Set();
+  const lines = details.map(detail => {
+    const id = detail.TaxRateRef?.value;
+    if (typeof id !== 'string' || !/^\d{1,30}$/.test(id) || seen.has(id) || detail.TaxTypeApplicable !== 'TaxOnAmount' || (detail.TaxOnTaxOrder != null && detail.TaxOnTaxOrder !== 0)) fail('Compound or ambiguous tax rules require a supported accounting treatment.');
+    seen.add(id); const rate = getRate(id); taxDefinition('TaxRate', id, rate);
+    return { rateId: id, percent: applicableRate(rate, on) };
+  });
+  return { lines, percent: lines.reduce((sum, row) => sum + row.percent, 0) };
+}
+function sameDatedTaxDefinition(entity, before, current, fromDate, throughDate, directions = ['sales', 'purchases']) {
   try {
+    taxDefinition(entity, before.Id, before); taxDefinition(entity, before.Id, current);
+    const ref = value => value?.value ?? null;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(current)].filter(key => /Ref$/.test(key)))) if (ref(before[key]) !== ref(current[key])) return false;
+    if (entity === 'TaxCode') {
+      const meaning = record => ({ taxable: record.Taxable !== false,
+        ...Object.fromEntries(directions.map(direction => [direction, components(record[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList'])])) });
+      const components = list => list == null ? null : list.TaxRateDetail?.map(row => ({ id: ref(row.TaxRateRef), type: row.TaxTypeApplicable, order: row.TaxOnTaxOrder ?? 0 })).sort((a,b) => String(a.id).localeCompare(String(b.id)));
+      return canonical(meaning(before)) === canonical(meaning(current));
+    }
+    // Tax agency and return destinations affect accounting; names, defaults,
+    // versions and provider extensions do not establish tax permission.
+    date(fromDate); date(throughDate); if (throughDate < fromDate) return false;
+    const boundaries = new Set([fromDate, throughDate]);
     for (const record of [before, current]) for (const row of record.EffectiveTaxRate || []) for (const key of ['EffectiveDate', 'EndDate']) if (row[key] != null) { const on = rateDate(row[key]); if (on >= fromDate && on <= throughDate) boundaries.add(on); }
-    const extra = (record, on) => { const selected = [...record.EffectiveTaxRate].filter(row => rateDate(row.EffectiveDate) <= on).sort((a,b) => rateDate(a.EffectiveDate).localeCompare(rateDate(b.EffectiveDate))).at(-1); return Object.fromEntries(Object.entries(selected).filter(([key]) => !['RateValue', 'EffectiveDate', 'EndDate'].includes(key))); };
-    return [...boundaries].every(on => applicableRate(before, on) === applicableRate(current, on) && require('./qbo-semantic-compare').sameQboValue(extra(before, on), extra(current, on)));
+    return [...boundaries].every(on => applicableRate(before, on) === applicableRate(current, on));
   } catch { return false; }
 }
 async function verifyBusinessTaxSources(policy, client) {
@@ -117,7 +137,7 @@ async function verifyBusinessTaxSources(policy, client) {
     taxDefinition(source.entity, source.id, source.record);
     const current = response?.[source.entity];
     if (current) taxDefinition(source.entity, source.id, current);
-    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || !sameDatedTaxDefinition(source.entity, source.record, current, policy.fromDate, policy.throughDate)) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.', { entity: source.entity, recordId: source.id, expectedVersion: source.record.SyncToken, observedVersion: current?.SyncToken, differences: require('./business-error-detail').definitionDifferences(definitionFields(source.entity, source.record), current ? definitionFields(source.entity, current) : {}) });
+    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || !sameDatedTaxDefinition(source.entity, source.record, current, policy.fromDate, policy.throughDate, ['sales', 'purchases'].filter(direction => policy.tax?.[direction === 'sales' ? 'salesTax' : 'purchaseTax'] === source.id))) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.', { entity: source.entity, recordId: source.id, expectedVersion: source.record.SyncToken, observedVersion: current?.SyncToken, differences: require('./business-error-detail').definitionDifferences(definitionFields(source.entity, source.record), current ? definitionFields(source.entity, current) : {}) });
   }
 }
-module.exports = { sameDatedTaxDefinition, applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };
+module.exports = { taxMeaning, sameDatedTaxDefinition, applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };

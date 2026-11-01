@@ -131,6 +131,31 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     if (!fresh || canonical(JSON.parse(JSON.stringify(withoutTransport(fresh)))) !== canonical(JSON.parse(JSON.stringify(withoutTransport(run)))) || fresh.batches.find(row => row.index === batch.index)?.requestId !== batch.requestId) fail('This write changed concurrently; read it again.');
     return fresh;
   }
+  // Recheck only an already-settled saved PO mismatch, against its immutable
+  // receipt and retained native response. This path cannot admit or send work.
+  async function recheckSavedMismatch(run, scope) {
+    if (run.status !== 'needs-correction' || !models.Receipts || Object.values(run.items).some(item => item.outcome === 'unknown')) return run;
+    const items = { ...run.items };
+    for (const [ref, item] of Object.entries(items)) {
+      if (item.outcome !== 'mismatch' || item.entity !== 'PurchaseOrder') continue;
+      const batch = run.batches.find(row => row.attempt === item.attempt && row.state === 'answered' && row.items.some(sent => sent.ref === ref));
+      if (!batch?.transport?.receiptId || batch.transport.outcome !== 'saved') continue;
+      const request = require('./general-write-transport').buildGeneralBatch(scope, batch);
+      const receipt = await models.Receipts.findOne({ _id: batch.transport.receiptId, ...scope, kind: 'general-write', state: 'saved', requestHash: request.requestHash }).maxTimeMS(3000).lean();
+      const rows = batch.transport.response, proof = receipt?.observed;
+      if (!receipt || receipt.general?.runId !== String(run._id) || receipt.general.batchIndex !== batch.index || receipt.general.requestId !== batch.requestId || proof?.entity !== 'batch' || proof.operation !== 'create' || !Number.isInteger(proof.httpStatus) || proof.httpStatus < 200 || proof.httpStatus >= 300 || !Array.isArray(rows) || rows.length !== batch.items.length || new Set(rows.map(row => row.bId)).size !== rows.length || proof.items?.length !== rows.length) continue;
+      if (!rows.every(row => { const { bId, ...body } = row, original = proof.items.find(p => p.bId === bId); return original?.outcome === 'saved' && original.responseHash === require('node:crypto').createHash('sha256').update(JSON.stringify(body)).digest('hex'); })) continue;
+      const sent = batch.items.find(row => row.ref === ref), native = rows.find(row => row.bId === sent.bId)?.[sent.entity];
+      if (!native || native.Id !== item.qboId || canonical(sent.payload) !== canonical(item.request) || canonical(native) !== canonical(item.record) || !matchesSavedRequest(sent, native)) continue;
+      const expectation = { ...sent.payload }; if (native.DueDate == null) delete expectation.DueDate;
+      if (!isComplete(sent.entity, native, expectation)) continue;
+      const { next, errorDetail, ...saved } = item;
+      items[ref] = { ...saved, outcome: 'saved', complete: true, parents: invalidatedParents(sent.before || null, native) };
+    }
+    if (canonical(items) === canonical(run.items)) return save(run, { items }); // Advance the bounded recheck queue without changing evidence.
+    const complete = run.batches.every(batch => batch.state === 'answered' && batch.transport?.outcome === 'saved') && run.plan.operations.every(op => ['saved','deleted'].includes(items[op.ref]?.outcome));
+    return save(run, { items, ...(complete ? { status: 'complete', lastError: null, errorDetail: null, errorHistory: [] } : {}) });
+  }
   // Execution: one batch at a time, each guarded again on the current copy right before it
   // is sent, its exact identity saved first. Returns progress, faults or the unknown items.
   async function execute(bound, runId) {
@@ -140,6 +165,8 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     if (canonical(run.caseAuthority || null) !== canonical(bound.caseAuthority || null) || run.caseAuthority && !caseWrites) fail('This write belongs to a different case authority.');
     if (run.status === 'complete') return report(run);
     if (!dispatchEnabled() || !transport) { if (run.status !== 'held') run = await save(run, { status: 'held', lastError: 'Dispatch of general writes is not enabled on this server yet; the plan is saved and nothing was sent.' }); return report(run); }
+    run = await recheckSavedMismatch(run, scope);
+    if (run.status === 'complete') return report(run);
     if (run.status === 'needs-correction' || Object.values(run.items).some(item => ['mismatch', 'unknown'].includes(item.outcome))) return report(run);
     for (let guardRounds = 0; guardRounds < 40; guardRounds++) {
       const saved = Object.fromEntries(Object.entries(run.items).filter(([, item]) => item.outcome === 'saved').map(([ref, item]) => [ref, item.qboId]));
@@ -223,7 +250,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       for (const outcome of outcomes) {
         const item = batch.items.find(row => row.ref === outcome.ref), entry = { outcome: outcome.outcome, entity: item.entity, op: item.op, attempt: batch.attempt, request: item.payload, ...(item.postingSources ? { postingSources: item.postingSources } : {}), ...(item.before ? { before: item.before } : {}), ...(outcome.fault ? { fault: outcome.fault } : {}), ...(outcome.next ? { next: outcome.next } : {}) };
         if (outcome.outcome === 'saved') {
-          const record = outcome.record, complete = isComplete(item.entity, record, item.op === 'create' ? item.payload : item.before?.CurrencyRef?.value && item.before.CurrencyRef.value !== 'CAD' ? { CurrencyRef: item.before.CurrencyRef, ...(item.before.ExchangeRate !== undefined ? { ExchangeRate: item.before.ExchangeRate } : {}), ...(item.before.HomeTotalAmt !== undefined ? { HomeTotalAmt: item.before.HomeTotalAmt } : {}) } : null);
+          const record = outcome.record, complete = isComplete(item.entity, record, item.op === 'create' ? (item.entity === 'PurchaseOrder' && record?.DueDate == null ? Object.fromEntries(Object.entries(item.payload).filter(([key]) => key !== 'DueDate')) : item.payload) : item.before?.CurrencyRef?.value && item.before.CurrencyRef.value !== 'CAD' ? { CurrencyRef: item.before.CurrencyRef, ...(item.before.ExchangeRate !== undefined ? { ExchangeRate: item.before.ExchangeRate } : {}), ...(item.before.HomeTotalAmt !== undefined ? { HomeTotalAmt: item.before.HomeTotalAmt } : {}) } : null);
           entry.qboId = String(record?.Id ?? ''); entry.version = record?.SyncToken ?? null; entry.record = record || null;
           if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest(item, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'check-saved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
           owned.push({ key: item.entity + ':' + entry.qboId, ref: item.ref, op: item.op });
@@ -293,42 +320,34 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     const { bindDatedTax, datedTaxChoice } = require('./business-dated-tax');
     const dated = bindDatedTax(published.view.business, mappings);
     const selected = (key, on = day) => dated ? datedTaxChoice(dated, key, on).id : mappings[key];
-    const taxFor = (on, requestedSales) => {
-      const primarySales = String(selected('salesTax', on) || '');
-      // The synced company supplies line-specific Canadian sales codes. Every referenced
-      // code still needs complete active dated rates below; the published default remains bound.
-      const outdatedSales = dated ? String(dated.before.salesTax === primarySales ? dated.after.salesTax : dated.before.salesTax) : null;
-      const salesCodes = requestedSales.filter(id => id !== outdatedSales && (local.get('TaxCode', id)?.SalesTaxRateList || local.get('TaxCode', id)?.Taxable === false));
-      const taxCodes = { sales: [...new Set([primarySales, ...salesCodes].filter(Boolean))], purchases: [selected('purchaseTax', on)].filter(Boolean).map(String) };
-      if (!taxCodes.sales.length || !taxCodes.purchases.length) fail('The published business has no sales and purchase tax codes.');
-      const taxPercent = {};
-      for (const [direction, ids] of Object.entries(taxCodes)) for (const id of ids) {
-        const code = local.get('TaxCode', id);
-        // Only referenced records are loaded; unrelated writes need no tax read.
-        if (!code) continue;
-        const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail ?? (code.Taxable === false ? [] : undefined);
-        if (code.Active !== true || code.sparse === true || !Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length)) fail('The published tax code has no complete current rates.');
-        const ids = new Set();
-        const percent = details.reduce((sum, row) => {
-          const rateId = row.TaxRateRef?.value;
-          if (typeof rateId !== 'string' || ids.has(rateId) || row.TaxTypeApplicable !== 'TaxOnAmount' || (row.TaxOnTaxOrder != null && row.TaxOnTaxOrder !== 0)) fail('The published tax code has ambiguous or compound rates.');
-          ids.add(rateId);
-          const rate = local.get('TaxRate', rateId);
-          if (rate?.sparse === true) fail('The published tax rate is incomplete.');
-          return sum + require('./business-tax-policy').applicableRate(rate, on);
-        }, 0);
-        if (dated && (direction !== 'sales' || id === primarySales) && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', on).percent) fail('The published dated tax rate differs from its approved policy.');
-        taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
+    const taxFor = (on, operationsOnDate) => {
+      const taxCodes = { sales: [], purchases: [] }, taxPercent = {}, taxMeanings = { sales: {}, purchases: {} };
+      for (const direction of ['sales', 'purchases']) {
+        const key = direction === 'sales' ? 'salesTax' : 'purchaseTax';
+        const ids = new Set([...(operations.length === 0 ? [selected(key, on)] : [])].filter(Boolean).map(String));
+        for (const op of operationsOnDate) if (require('./qbo-entity-schema').ENTITIES[op.entity]?.direction === direction) {
+          const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload };
+          for (const line of record.Line || []) { const id = line[line.DetailType]?.TaxCodeRef?.value; if (typeof id === 'string') ids.add(id); }
+        }
+        for (const id of ids) {
+          const code = local.get('TaxCode', id); if (!code) continue;
+          // A published default is advisory. Validate only codes actually used in
+          // this direction; unrelated or obsolete defaults cannot hold a record.
+          const used = operationsOnDate.some(op => require('./qbo-entity-schema').ENTITIES[op.entity]?.direction === direction &&
+            (({ ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }).Line || []).some(line => line[line.DetailType]?.TaxCodeRef?.value === id));
+          if (!used && !code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']) continue;
+          let meaning;
+          try { meaning = require('./business-tax-policy').taxMeaning(code, direction, on, rateId => local.get('TaxRate', rateId)); }
+          catch (error) { if (!operations.length) throw error; continue; } // The per-record guard returns the exact tax problem.
+          taxCodes[direction].push(id); taxMeanings[direction][id] = meaning;
+          taxPercent[id] = Math.max(taxPercent[id] || 0, meaning.percent);
+        }
       }
-      return { taxCodes, taxPercent };
+      return { taxCodes, taxPercent, taxMeanings };
     };
     const taxByDate = {};
     for (const on of [...new Set([day, ...operations.map(op => op.payload?.TxnDate || (op.id ? local.get(op.entity, String(op.id))?.TxnDate : null)).filter(Boolean)])]) {
-      const requestedSales = operations.filter(op => require('./qbo-entity-schema').ENTITIES[op.entity]?.direction === 'sales').flatMap(op => {
-        const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload };
-        return record.TxnDate === on ? (record.Line || []).map(line => line.SalesItemLineDetail?.TaxCodeRef?.value).filter(id => typeof id === 'string') : [];
-      });
-      taxByDate[on] = taxFor(on, [...new Set([...requestedSales, ...(on === day ? salesTaxCodes : [])])]);
+      taxByDate[on] = taxFor(on, operations.filter(op => (op.payload?.TxnDate || (op.id ? local.get(op.entity, String(op.id))?.TxnDate : null)) === on));
     }
     const { taxCodes, taxPercent } = taxByDate[day];
     // Fence Stop and a concurrent close in the same admission transaction. A

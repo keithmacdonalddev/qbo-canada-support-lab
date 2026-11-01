@@ -55,10 +55,25 @@ test('canonical tax comparison still refuses rate, history, accounts, applicabil
     await assert.rejects(verifyBusinessTaxSources(policy, h.client));
   }
   const h = fixture(); h.records.TaxRate.SyncToken = '2'; const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now); h.records.TaxRate.SyncToken = '1';
-  await assert.rejects(verifyBusinessTaxSources(policy, h.client));
+  await verifyBusinessTaxSources(policy, h.client);
 });
 
 test('a changed pre-period start with identical effective tax does not invalidate current policy', async () => {
  const h=fixture(); const [{policy}]=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now);
  h.records.TaxRate.EffectiveTaxRate[0].EffectiveDate='2021-01-01'; await verifyBusinessTaxSources(policy,h.client);
+});
+
+test('current tax meaning ignores provider extensions and version floors while preserving tax destinations', async () => {
+ const h=fixture(); h.records.TaxRate.SyncToken='8'; const [{policy}]=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now);
+ h.records.TaxRate.SyncToken='1'; h.records.TaxRate.NewProviderDefault={enabled:false}; h.records.TaxCode.ProviderMetadata={value:12}; await verifyBusinessTaxSources(policy,h.client);
+ h.records.TaxRate.AgencyRef={value:'999'}; await assert.rejects(verifyBusinessTaxSources(policy,h.client));
+});
+
+test('a purchase does not depend on unused sales components of the same code', async () => {
+ const h=fixture(); const [{policy}]=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now);
+ h.records.TaxCode.SalesTaxRateList={TaxRateDetail:[{TaxRateRef:{value:'999'},TaxTypeApplicable:'TaxOnTax'}]}; await verifyBusinessTaxSources(policy,h.client);
+});
+
+test('malformed tax-order settings do not become ordinary zero-order tax', async () => {
+ for(const order of [false,'']) { const h=fixture(); const [{policy}]=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now); h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxOnTaxOrder=order; await assert.rejects(verifyBusinessTaxSources(policy,h.client)); }
 });

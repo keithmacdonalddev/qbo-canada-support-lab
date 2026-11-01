@@ -7,7 +7,7 @@ const { checkGeneralWrite } = require('../src/modules/general-write-guards');
 const scope = { environment: 'sandbox', realmId: '123', connectionId: 'a'.repeat(24) };
 const DAY = '2026-10-31';
 const query = value => ({ select() { return this; }, sort() { return this; }, maxTimeMS() { return this; }, session() { return this; }, lean: async () => value });
-test('stored three-estimate refusal shape prepares with published code16 and dated14%, never code12', async t => {
+test('stored three-estimate refusal shape prepares with current code16 and dated14%, including current code12 semantics', async t => {
  const view = { mappings: { salesTax: '12', purchaseTax: '12' }, business: { openingDate: '2023-09-01', activityTemplateVersion: 2, datedTax: { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '16', purchaseTax: '16' } } };
  t.mock.method(require('../src/modules/business-authority'), 'readPublishedBusiness', async () => ({ view }));
  const records = new Map([['Account:50', { Id: '50', Active: true, AccountType: 'Bank' }]]);
@@ -37,9 +37,9 @@ test('stored three-estimate refusal shape prepares with published code16 and dat
   assert.equal(check([op]).ok, true, entity + ': ' + JSON.stringify(check([op]).problems));
  }
  const old = structuredClone(operations); for (const op of old) op.payload.Line[0].SalesItemLineDetail.TaxCodeRef.value = '12';
- assert.ok(check(old).problems.some(p => /tax code 12.*policy.*16/.test(p.message)));
+ assert.equal(check(old).ok, true, 'Code IDs do not establish admission; current dated components do.');
  const rate = records.get('TaxRate:34');
- rate.EffectiveTaxRate[0].RateValue = 15; await assert.rejects(contextFor(scope, local), /differs from its approved policy/);
+ rate.EffectiveTaxRate[0].RateValue = 15; assert.equal((await contextFor(scope, local)).taxPercent['16'], 15, 'Current QBO history governs general tax, without rewriting business intent.');
  rate.EffectiveTaxRate = []; await assert.rejects(contextFor(scope, local), /history/);
  rate.EffectiveTaxRate = [{ RateValue: 14, EffectiveDate: '2027-01-01T00:00:00-07:00' }]; await assert.rejects(contextFor(scope, local), /effective tax rate/);
 });

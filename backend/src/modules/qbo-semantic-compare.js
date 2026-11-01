@@ -45,6 +45,9 @@ function matchesQboRequest(expected,actual,{entity,path='',transport=true}={}) {
   return Object.entries(expected).every(([key,v])=>{
    if (transport && !path && ['sparse','SyncToken'].includes(key) || ref && key==='name')return true;
    if ((!path&&(FALSE_DEFAULTS[entity]||[]).includes(key)||['ProcessPayment','ProcessBillPayment'].includes(key))&&(v===false||v===null)&&[undefined,null,false].includes(actual[key]))return true;
+   // Purchase orders do not post. QBO can omit their optional due date; a
+   // returned differing date still matters. Never waive invoice/bill due dates.
+   if (!path && entity==='PurchaseOrder' && key==='DueDate' && actual[key]==null && /^\d{4}-\d{2}-\d{2}$/.test(v) && typeof expected.VendorRef?.value==='string' && typeof expected.TxnDate==='string' && Array.isArray(expected.Line) && expected.Line.length) return true;
    if(key==='LinkedTxn' && ['', 'Line.*'].includes(path))return sameQboValue({LinkedTxn:v},{LinkedTxn:actual[key]||[]});
    if (key==='Line' && !path && Array.isArray(actual.Line)) {
     const subtotals=actual.Line.filter(line=>line.DetailType==='SubTotalLineDetail');

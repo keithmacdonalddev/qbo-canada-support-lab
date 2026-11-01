@@ -16,8 +16,8 @@ function companyCopy(extra = []) {
     ['Account', { Id: '51', Name: 'Undeposited Funds', AccountType: 'Other Current Asset', AccountSubType: 'UndepositedFunds', Active: true }],
     ['Account', { Id: '52', Name: 'Utilities', AccountType: 'Expense', Active: true }],
     ['Account', { Id: '53', Name: 'Service income', AccountType: 'Income', Active: true }],
-    ['TaxCode', { Id: '7', Name: 'HST ON', Active: true }],
-    ['TaxCode', { Id: '8', Name: 'HST purchases', Active: true }],
+    ['TaxCode', { Id: '7', SyncToken: '0', Name: 'HST ON', Active: true, SalesTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '70' }, TaxTypeApplicable: 'TaxOnAmount' }] } }],
+    ['TaxCode', { Id: '8', SyncToken: '0', Name: 'HST purchases', Active: true, PurchaseTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '70' }, TaxTypeApplicable: 'TaxOnAmount' }] } }], ['TaxRate', { Id: '70', SyncToken: '0', Active: true, EffectiveTaxRate: [{ EffectiveDate: '2020-01-01', RateValue: 13 }] }],
     ['Invoice', { Id: '100', TxnDate: '2026-11-20', Balance: 113, TotalAmt: 113, CustomerRef: { value: '1' }, Line: [] }],
     ['Invoice', { Id: '101', TxnDate: '2026-10-15', Balance: 50, TotalAmt: 50, CustomerRef: { value: '1' }, Line: [] }],
     ['Payment', { Id: '200', TxnDate: '2026-12-01', TotalAmt: 40, DepositToAccountRef: { value: '51' }, Line: [{ Amount: 40, LinkedTxn: [{ TxnId: '100', TxnType: 'Invoice' }] }] }],
@@ -52,7 +52,7 @@ test('every generic guard refuses with a plain, per-operation reason', () => {
   refuse([sale({ CustomerRef: { value: '2' } })], /inactive/);
   refuse([sale({ CustomerRef: { value: '999' } })], /not a Customer/);
   refuse([sale({ CustomerRef: { value: '30' } })], /not a Customer/);
-  refuse([sale({ Line: [{ Amount: 250, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '40' }, Qty: 2, UnitPrice: 125, TaxCodeRef: { value: '8' } } }] })], /not in the published sales tax policy/);
+  refuse([sale({ Line: [{ Amount: 250, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '40' }, Qty: 2, UnitPrice: 125, TaxCodeRef: { value: '8' } } }] })], /does not support this transaction direction/);
   refuse([sale({ GlobalTaxCalculation: 'TaxInclusive' })], /TaxExcluded/);
   refuse([sale({ CurrencyRef: { value: 'USD' } })], /Only CAD/);
   refuse([sale({ Line: [{ Amount: 60000, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '40' }, Qty: 1, UnitPrice: 60000, TaxCodeRef: { value: '7' } } }] })], /at most \$50000 including tax/);
@@ -127,4 +127,16 @@ test('Transfers to or from inventory asset accounts are refused', () => {
     const result=checkGeneralWrite({proposal:{operations:[{ref:'stock',op:'create',entity:'Transfer',payload}]},local,context});
     assert.equal(result.ok,false);assert.match(messages(result),/inventory asset account/);
   }
+});
+
+test('current code meaning accepts unpublished tax IDs, rejects wrong direction and inconsistent line economics', () => {
+ const local=companyCopy([['TaxCode',{Id:'99',SyncToken:'0',Active:true,SalesTaxRateList:{TaxRateDetail:[{TaxRateRef:{value:'70'},TaxTypeApplicable:'TaxOnAmount'}]}}]]);
+ const op=sale(); op.payload.Line[0].SalesItemLineDetail.TaxCodeRef.value='99'; assert.equal(check([op],local).ok,true);
+ op.payload.Line[0].Amount=249; assert.match(messages(check([op],local)),/Qty times UnitPrice/);
+});
+
+test('fractional unit-price half cents round as decimal amounts', () => {
+ for (const [qty, price, amount] of [[1,1.005,1.01],[3,0.335,1.01],[2,0.5025,1.01],[1,1e-7,0]]) {
+  const op=sale(); Object.assign(op.payload.Line[0],{Amount:amount}); Object.assign(op.payload.Line[0].SalesItemLineDetail,{Qty:qty,UnitPrice:price}); assert.equal(check([op]).ok,true,JSON.stringify({qty,price,amount}));
+ }
 });

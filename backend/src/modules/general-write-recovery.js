@@ -200,6 +200,12 @@ async function recheckGeneralWrites({ scope, models, access, now = () => Date.no
   const agent = await models.Agents.findOne({ ...scope, 'settings.monitoring': true, 'settings.autonomous': true }).maxTimeMS(3000).lean();
   if (!agent?.grant) return [];
   const runs = await models.GeneralWriteRuns.find({ ...scope, contract: 'general-write-v1', status: { $in: ['unknown', 'sending'] }, updatedAt: { $lte: new Date(now() - RECHECK_MS) }, batches: { $elemMatch: { state: { $ne: 'answered' } } }, 'agentAuthority.agentId': String(agent._id), 'agentAuthority.grantId': agent.grant.id, 'agentAuthority.authorityHash': agent.grant.authorityHash, 'agentAuthority.ownerId': String(agent.ownerId), ownerId: agent.ownerId }).sort({ updatedAt: 1, _id: 1 }).limit(3).maxTimeMS(3000).lean();
+  // Unanswered requests keep priority. Saved PO verification never consumes
+  // their bounded recovery slots, even when a genuine mismatch remains held.
+  if (runs.length < 3) {
+    const held = await models.GeneralWriteRuns.find({ ...scope, contract: 'general-write-v1', status: 'needs-correction', updatedAt: { $lte: new Date(now() - RECHECK_MS) }, batches: { $elemMatch: { state: 'answered', 'transport.outcome': 'saved', 'items.entity': 'PurchaseOrder' } }, 'agentAuthority.agentId': String(agent._id), 'agentAuthority.grantId': agent.grant.id, 'agentAuthority.authorityHash': agent.grant.authorityHash, 'agentAuthority.ownerId': String(agent.ownerId), ownerId: agent.ownerId }).sort({ updatedAt: 1, _id: 1 }).limit(3 - runs.length).maxTimeMS(3000).lean();
+    runs.push(...held);
+  }
   const results = [];
   for (const run of runs) {
     if (signal?.aborted) break;

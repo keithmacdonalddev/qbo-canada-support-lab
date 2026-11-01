@@ -19,6 +19,18 @@ const TAXED_LINES = ['SalesItemLineDetail', 'ItemBasedExpenseLineDetail', 'Accou
 const PARTY = { Payment: 'CustomerRef', BillPayment: 'VendorRef' }, CONTROL = { Payment: 'ARAccountRef', BillPayment: 'APAccountRef' };
 const plain = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 function cents(value) { if (typeof value !== 'number' || !Number.isFinite(value)) return null; const n = Math.round(value * 100); return Number.isSafeInteger(n) && Math.abs(value * 100 - n) < 0.00001 ? n : null; }
+function lineProductCents(qty, price) {
+  const decimal = value => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+    const [mantissa, exponent = '0'] = String(value).split('e'), parts = mantissa.split('.');
+    const digits = BigInt(parts.join('')), scale = (parts[1]?.length || 0) - Number(exponent);
+    return scale < 0 ? { digits: digits * 10n ** BigInt(-scale), scale: 0 } : { digits, scale };
+  };
+  const a = decimal(qty), b = decimal(price); if (!a || !b) return null;
+  const numerator = a.digits * b.digits * 100n, denominator = 10n ** BigInt(a.scale + b.scale);
+  const cents = Number((numerator * 2n + denominator) / (denominator * 2n));
+  return Number.isSafeInteger(cents) ? cents : null;
+}
 const linkType = type => type === 'BillPaymentCheck' ? 'BillPayment' : type;
 const allLinks = record => [...(record?.LinkedTxn || []), ...(Array.isArray(record?.Line) ? record.Line : []).flatMap(line => line?.LinkedTxn || [])].map(link => ({ ...link, TxnType: linkType(link?.TxnType) }));
 const isRefObject = value => plain(value) && value.$ref !== undefined;
@@ -57,15 +69,20 @@ function netCents(entity, record) {
 // Gross including tax. QuickBooks computes the tax; the bound uses the published dated
 // rates (context.taxPercent: code id -> total percent) on each taxed line, or the
 // record's own saved tax when it has one.
-function grossCents(entity, record, context, { saved = false } = {}) {
+function grossCents(entity, record, context, { saved = false, local = null } = {}) {
   if (!record) return 0;
   const net = netCents(entity, record);
   // A saved record's (or unchanged lines') tax is QuickBooks' own.
   if (saved && cents(record.TxnTaxDetail?.TotalTax) !== null) return net + cents(record.TxnTaxDetail.TotalTax);
-  const tax = (Array.isArray(record.Line) ? record.Line : []).filter(line => TAXED_LINES.includes(line?.DetailType)).reduce((sum, line) => {
-    const code = String(line[line.DetailType]?.TaxCodeRef?.value ?? ''), percent = Number((context.taxByDate?.[record.TxnDate] || context).taxPercent?.[code]) || 0;
-    return sum + Math.round((cents(line.Amount) || 0) * percent / 100);
-  }, 0);
+  const bases = new Map();
+  for (const line of (Array.isArray(record.Line) ? record.Line : []).filter(line => TAXED_LINES.includes(line?.DetailType))) {
+    const code = String(line[line.DetailType]?.TaxCodeRef?.value ?? ''), policy = context.taxByDate?.[record.TxnDate] || context;
+    let meaning = policy.taxMeanings?.[ENTITIES[entity]?.direction]?.[code];
+    if (local) { try { meaning = require('./business-tax-policy').taxMeaning(local.get('TaxCode', code), ENTITIES[entity]?.direction, record.TxnDate, id => local.get('TaxRate', id)); } catch { /* The per-record reference guard refuses invalid tax. */ } }
+    const components = meaning?.lines || [{ rateId: code, percent: Number(policy.taxPercent?.[code]) || 0 }];
+    for (const row of components) { const key = row.rateId + ':' + row.percent, group = bases.get(key) || { base: 0, percent: row.percent }; group.base += cents(line.Amount) || 0; bases.set(key, group); }
+  }
+  const tax = [...bases.values()].reduce((sum, row) => sum + require('./business-tax-policy').taxCents(row.base, row.percent), 0);
   return net + tax;
 }
 // Inventory the record moves: inventory item lines, inventory-type items, lines or
@@ -173,7 +190,9 @@ function checkGeneralWrite({ proposal, local, context }) {
         if (!account || account.Active === false || !['Expense', 'Other Expense'].includes(account.AccountType)) say(ref, 'A negative deposit fee needs an active Expense or Other Expense account.');
         if (line.DepositLineDetail?.TaxCodeRef || line.DepositLineDetail?.TaxApplicableOn) say(ref, 'Deposit fees support no tax overrides; record taxable fees separately.');
       }
-      const qty = line?.[type]?.Qty;
+      const qty = line?.[type]?.Qty, unitPrice = line?.[type]?.UnitPrice;
+      if (qty !== undefined && unitPrice !== undefined && lineProductCents(qty, unitPrice) !== amount) say(ref, 'Line Amount must equal Qty times UnitPrice, rounded to cents.');
+
       if (qty !== undefined && (typeof qty !== 'number' || !Number.isFinite(qty) || qty < 0 || qty > caps.quantity)) say(ref, 'Line quantities are from 0 to ' + caps.quantity + '.');
       if (type === 'JournalEntryLineDetail' && amount > caps.journalLine) say(ref, 'Each journal line is at most $' + caps.journalLine / 100 + '.');
       // QuickBooks computes tax from the published codes; no tax overrides.
@@ -217,7 +236,7 @@ function checkGeneralWrite({ proposal, local, context }) {
     }
     // 3. Amounts: gross including tax, per record and as absolute plan exposure.
     const inHome = (record, amount) => currencyOf(record, context.currency?.homeCurrency || 'CAD') !== (context.currency?.homeCurrency || 'CAD') && validRate(record?.ExchangeRate) ? homeCents(amount, record.ExchangeRate) : amount;
-    const beforeGross = inHome(existing, grossCents(op.entity, existing, context, { saved: true })), afterGross = inHome(after, grossCents(op.entity, after, context, { saved: op.op === 'update' && payload.Line === undefined }));
+    const beforeGross = inHome(existing, grossCents(op.entity, existing, context, { saved: true, local })), afterGross = inHome(after, grossCents(op.entity, after, context, { saved: op.op === 'update' && payload.Line === undefined, local }));
     if (Math.max(beforeGross, afterGross) > caps.record) say(ref, 'One record moves at most $' + caps.record / 100 + ' including tax.');
     exposure += op.op === 'create' ? afterGross : op.op === 'update' ? Math.abs(afterGross - beforeGross) : beforeGross;
     if (op.entity === 'JournalEntry' && Array.isArray(after?.Line)) {
@@ -247,12 +266,15 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (['Customer', 'Vendor'].includes(kind) && (path.includes('.') || key === 'EntityRef' || !['Invoice', 'Bill', 'Payment', 'BillPayment'].includes(op.entity)) && currencyOf(record) !== currencyOf(after)) say(ref, path + ' currency must match the transaction currency.');
       if (kind === 'Account' && ACCOUNT_TYPES[key] && !ACCOUNT_TYPES[key].includes(record.AccountType)) say(ref, path + ' ' + target.value + ' is a ' + record.AccountType + ' account; ' + key + ' needs ' + ACCOUNT_TYPES[key].join(' or ') + '.');
       const taxPolicy = context.taxByDate?.[after?.TxnDate] || context;
-      if (kind === 'TaxCode' && spec.direction && !(taxPolicy.taxCodes?.[spec.direction] || []).includes(String(target.value))) say(ref, path + ' tax code ' + target.value + ' is not in the published ' + spec.direction + ' tax policy (' + (taxPolicy.taxCodes?.[spec.direction] || []).join(', ') + ').');
+      if (kind === 'TaxCode' && spec.direction) {
+         try { require('./business-tax-policy').taxMeaning(record, spec.direction, after.TxnDate, id => local.get('TaxRate', id)); }
+         catch (error) { say(ref, path + ' tax code ' + target.value + ': ' + error.message); }
+       }
     }
     // 6. Tax: QuickBooks computes it from published codes on tax-excluded lines.
     if (spec.direction && after && Array.isArray(after.Line) && (op.op === 'create' || payload.Line !== undefined || payload.GlobalTaxCalculation !== undefined)) {
       if (after.GlobalTaxCalculation !== 'TaxExcluded') say(ref, 'Set GlobalTaxCalculation "TaxExcluded".');
-      for (const line of after.Line) if (TAXED_LINES.includes(line?.DetailType) && !line[line.DetailType]?.TaxCodeRef) say(ref, 'Every ' + line.DetailType + ' line needs a TaxCodeRef from the published tax policy.');
+      for (const line of after.Line) if (TAXED_LINES.includes(line?.DetailType) && !line[line.DetailType]?.TaxCodeRef) say(ref, 'Every ' + line.DetailType + ' line needs a TaxCodeRef with current dated rates.');
     }
     // 5. Applications: same party, control account and currency as the target; never
     // more than its open balance (an update first gives back what it applied before).

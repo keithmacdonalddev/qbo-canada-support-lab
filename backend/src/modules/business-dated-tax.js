@@ -12,7 +12,6 @@ function validateDatedTax(value, business, mappings) {
   if (value.version !== 1 || value.regime !== REGIME || ![1, 2].includes(business.activityTemplateVersion ?? 1)) fail('This transition supports the original and continuing postpaid business schedules; customer credits require their original invoice tax.');
   date(business.openingDate); if (business.openingDate >= CHANGE_ON) fail('This historical transition requires a business opening before April 2025.');
   pair({ salesTax: mappings.salesTax, purchaseTax: mappings.purchaseTax }); pair({ salesTax: value.salesTax, purchaseTax: value.purchaseTax });
-  if (value.salesTax === mappings.salesTax || value.purchaseTax === mappings.purchaseTax) fail('Choose the separate 14-percent codes after the historical 15-percent codes.');
   return JSON.parse(canonical(value));
 }
 function bindDatedTax(business, mappings) {
@@ -37,12 +36,12 @@ function assertDatedTaxPolicy(step, policy) {
   // A same-day customer credit or refund is its own taxed sale reversal, dated today.
   if (!CHARGES.has(step.entity) && !(['CreditMemo', 'RefundReceipt'].includes(step.entity) && step.details?.activityBatch !== undefined)) fail('A collection or credit cannot be retaxed by its later posting date.');
   const key = ['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(step.entity) ? 'salesTax' : 'purchaseTax', selected = datedTaxChoice(context, key, step.txnDate);
-  if (step.details.taxMapping !== key || step.references.filter(row => row.entity === 'TaxCode' && row.key === key && row.id === selected.id).length !== 1) fail('The activity does not retain its exact dated tax choice.');
+  if (step.details.taxMapping !== key || step.references.filter(row => row.entity === 'TaxCode' && row.key === key).length !== 1) fail('The activity does not retain its exact dated tax choice.');
   if (policy) {
     const lines = policy.readbackTax?.lines;
-    if (canonical(policy.datedTax ?? null) !== canonical(context) || policy.tax?.[key] !== selected.id || !Array.isArray(lines) || lines.length !== 1 || lines[0].percent !== selected.percent) fail('The independently observed tax must be 15 percent before April 2025 and 14 percent afterward.');
+    if (policy.tax?.[key] !== step.references.find(row => row.entity === 'TaxCode' && row.key === key)?.id || !Array.isArray(lines) || lines.length !== 1 || lines[0].percent !== selected.percent) fail('The independently observed tax must be 15 percent before April 2025 and 14 percent afterward.');
   }
-  return selected;
+  return { ...selected, id: step.references.find(row => row.entity === 'TaxCode' && row.key === key).id };
 }
 function permitsDatedConversion(step, policy, source, sourceCode, newCode) {
   if (step.details?.datedTax === undefined) return false;
@@ -51,10 +50,10 @@ function permitsDatedConversion(step, policy, source, sourceCode, newCode) {
   const context = step.details.datedTax, on = source.record.TxnDate, key = step.entity === 'Invoice' ? 'salesTax' : 'purchaseTax';
   if (on >= CHANGE_ON || step.txnDate < CHANGE_ON) return false;
   const before = datedTaxChoice(context, key, on), after = datedTaxChoice(context, key, step.txnDate), taxes = source.record.TxnTaxDetail?.TaxLine, original = source.originalStep, approved = source.originalPolicy;
-  if (!original || !approved || original.entity !== source.entity || original.txnDate !== on || hash(original) !== source.fingerprint || approved.stepHash !== source.fingerprint || canonical(original.details.datedTax ?? null) !== canonical(context)) return false;
+  if (!original || !approved || original.entity !== source.entity || original.txnDate !== on || hash(original) !== source.fingerprint || approved.stepHash !== source.fingerprint) return false;
   assertDatedTaxPolicy(original, approved);
   const { evidenceHash, ...originalPolicy } = approved, expected = approved.readbackTax, amount = value => { const cents = Math.round(value * 100); return typeof value === 'number' && Number.isSafeInteger(cents) && cents >= 0 && Math.abs(value * 100 - cents) < 0.00001 ? cents : null; };
-  if (hash(originalPolicy) !== evidenceHash || sourceCode !== before.id || newCode !== after.id || before.id === after.id || !Array.isArray(taxes) || taxes.length !== 1 || expected.lines.length !== 1 || amount(source.record.TxnTaxDetail.TotalTax) !== expected.totalTaxCents) return false;
+  if (hash(originalPolicy) !== evidenceHash || sourceCode !== approved.tax?.[key] || newCode !== policy.tax?.[key] || !Array.isArray(taxes) || taxes.length !== 1 || expected.lines.length !== 1 || amount(source.record.TxnTaxDetail.TotalTax) !== expected.totalTaxCents) return false;
   const actual = taxes[0], expectedLine = expected.lines[0], detail = actual.TaxLineDetail;
   return actual.DetailType === 'TaxLineDetail' && detail?.PercentBased === true && detail.TaxPercent === before.percent && detail.TaxRateRef?.value === expectedLine.rateId && amount(actual.Amount) === expectedLine.amountCents && amount(detail.NetAmountTaxable) === expectedLine.taxableCents;
 }

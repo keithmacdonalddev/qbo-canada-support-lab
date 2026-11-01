@@ -41,7 +41,7 @@ test('absent option keeps the original definition hash and policy shape', () => 
 test('the complete fixed transition is preserved in drafts and rejects unsupported or incomplete choices', () => {
   const value = input(); value.business.datedTax = structuredClone(option); const definition = buildDraftDefinition(value), view = draftView({ _id: 'a'.repeat(24), definition, contentHash: hash(definition), version: 1, connectionId: value.connectionId }, value.connectionId); assert.deepEqual(view.business.datedTax, option);
   const context = dated.bindDatedTax(view.business, view.mappings); assert.deepEqual(dated.datedTaxChoice(context, 'salesTax', '2025-03-31'), { id: value.mappings.salesTax, percent: 15 }); assert.deepEqual(dated.datedTaxChoice(context, 'purchaseTax', '2025-04-01'), { id: option.purchaseTax, percent: 14 });
-  for (const change of [v => { v.business.activityTemplateVersion = 3; }, v => { v.business.openingDate = '2025-04-01'; }, v => { v.business.datedTax.salesTax = v.mappings.salesTax; }, v => { v.business.datedTax.purchaseTax = ''; }, v => { v.business.datedTax.changeOn = '2025-05-01'; }]) { const invalid = structuredClone(value); change(invalid); assert.throws(() => buildDraftDefinition(invalid)); }
+  for (const change of [v => { v.business.activityTemplateVersion = 3; }, v => { v.business.openingDate = '2025-04-01'; }, v => { v.business.datedTax.purchaseTax = ''; }, v => { v.business.datedTax.changeOn = '2025-05-01'; }]) { const invalid = structuredClone(value); change(invalid); assert.throws(() => buildDraftDefinition(invalid)); }
   const next = structuredClone(view); next.business.datedTax.salesTax = '999'; assert.throws(() => stableBusiness(view, next), /dated tax/);
 });
 for (const entity of ['Invoice', 'Bill']) test('a March source converts to an April ' + entity + ' only with original fifteen-percent proof and exact new code', () => {
@@ -123,7 +123,7 @@ test('bank-paid expenses and supplier credits take the dated purchase tax; colle
   const datedTax = { version: 1, regime: 'CA-NS-2025-postpaid', openingDate: '2023-09-01', before: { salesTax: '12', purchaseTax: '12' }, after: { salesTax: '16', purchaseTax: '16' } };
   const step = entity => ({ entity, txnDate: '2026-10-29', details: { datedTax, taxMapping: 'purchaseTax' }, references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '16' }] });
   for (const entity of ['Purchase', 'VendorCredit']) assert.doesNotThrow(() => assertDatedTaxPolicy(step(entity), undefined));
-  assert.throws(() => assertDatedTaxPolicy({ ...step('Purchase'), references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '12' }] }, undefined), /exact dated tax choice/);
+  assert.equal(assertDatedTaxPolicy({ ...step('Purchase'), references: [{ entity: 'TaxCode', key: 'purchaseTax', id: '12' }] }, undefined).id, '12');
   assert.throws(() => assertDatedTaxPolicy(step('Payment'), undefined), /cannot be retaxed/);
 });
 test('a same-day customer credit or refund takes the dated sales tax; an unscheduled credit still cannot be retaxed', () => {
@@ -133,5 +133,16 @@ test('a same-day customer credit or refund takes the dated sales tax; an unsched
   const batch = { activityBatch: { key: 'a'.repeat(64), index: 0, stepKey: 'credit', purpose: 'Goodwill credit.' } };
   for (const entity of ['CreditMemo', 'RefundReceipt']) assert.equal(assertDatedTaxPolicy(step(entity, batch), undefined).id, '15');
   assert.throws(() => assertDatedTaxPolicy(step('CreditMemo'), undefined), /cannot be retaxed/);
-  assert.throws(() => assertDatedTaxPolicy({ ...step('RefundReceipt', batch), references: [{ entity: 'TaxCode', key: 'salesTax', id: '11' }] }, undefined), /exact dated tax choice/);
+  assert.equal(assertDatedTaxPolicy({ ...step('RefundReceipt', batch), references: [{ entity: 'TaxCode', key: 'salesTax', id: '11' }] }, undefined).id, '11');
+});
+
+test('dated policy keeps required historical percent but accepts a current equivalent code and copied context drift', () => {
+ const f=crossing('Invoice'); const ref=f.step.references.find(row=>row.entity==='TaxCode'&&row.key==='salesTax'); ref.id='999'; f.policy.tax.salesTax='999'; f.policy.datedTax={...f.policy.datedTax, openingDate:'2025-02-01'};
+ assert.doesNotThrow(()=>dated.assertDatedTaxPolicy(f.step,f.policy)); f.policy.readbackTax.lines[0].percent=15; assert.throws(()=>dated.assertDatedTaxPolicy(f.step,f.policy),/14 percent/);
+});
+
+test('one current code can establish both sides of the historical boundary', async () => {
+ const business={openingDate:'2025-03-01',activityTemplateVersion:2,datedTax:{version:1,regime:dated.REGIME,salesTax:'12',purchaseTax:'12'}}, mappings={salesTax:'12',purchaseTax:'12'};
+ const detail={TaxRateRef:{value:'26'},TaxTypeApplicable:'TaxOnAmount'}, code={Id:'12',SyncToken:'0',Active:true,Taxable:true,SalesTaxRateList:{TaxRateDetail:[detail]},PurchaseTaxRateList:{TaxRateDetail:[detail]}}, rate={Id:'26',SyncToken:'0',Active:true,EffectiveTaxRate:[{EffectiveDate:'2020-01-01',RateValue:15},{EffectiveDate:'2025-04-01',RateValue:14}]};
+ const evidence=await dated.readDatedTaxEvidence(business,mappings,{read:async(entity)=>entity==='taxcode'?{TaxCode:code}:{TaxRate:rate}});assert.equal(evidence.sources.length,2);
 });

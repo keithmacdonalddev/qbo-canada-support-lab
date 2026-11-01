@@ -22,8 +22,8 @@ function company() {
   const records = new Map([
     ['Customer:1', { Id: '1', DisplayName: 'Harbour Clinic', Active: true, CurrencyRef: { value: 'CAD' } }],
     ['Item:40', { Id: '40', Name: 'Field hour', Type: 'Service', Active: true }],
-    ['TaxCode:7', { Id: '7', Active: true, SalesTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '8' } }] } }],
-    ['TaxRate:8', { Id: '8', RateValue: 15 }],
+    ['TaxCode:7', { Id: '7', SyncToken: '0', Active: true, SalesTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '8' }, TaxTypeApplicable: 'TaxOnAmount' }] } }],
+    ['TaxRate:8', { Id: '8', SyncToken: '0', Active: true, RateValue: 15, EffectiveTaxRate: [{ EffectiveDate: '2020-01-01', RateValue: 15 }] }],
     ['Account:50', { Id: '50', AccountType: 'Bank', Active: true }],
     ['Invoice:100', { Id: '100', SyncToken: '2', TxnDate: '2026-11-20', DueDate: '2026-12-20', Balance: 115, TotalAmt: 115, CustomerRef: { value: '1' }, Line: [{ Amount: 100, DetailType: 'SalesItemLineDetail', SalesItemLineDetail: { ItemRef: { value: '40' }, TaxCodeRef: { value: '7' } } }], MetaData: {} }],
   ]);
@@ -203,7 +203,7 @@ test('an invoice created through the general tool but paid externally still fail
   assert.equal(gate.closes[0].ok, false);
 });
 
-test('general quote context uses the published dated code for the open day and rejects the historical code', async t => {
+test('general quote context derives current dated rates and rejects incomplete code definitions', async t => {
   const authority = require('../src/modules/business-authority');
   const view = { mappings: { salesTax: '12', purchaseTax: '12' }, business: { openingDate: '2023-09-01', activityTemplateVersion: 2, datedTax: { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '16', purchaseTax: '16' } } };
   t.mock.method(authority, 'readPublishedBusiness', async () => ({ view }));
@@ -222,19 +222,19 @@ test('general quote context uses the published dated code for the open day and r
   assert.equal(check(quotes).ok, true, JSON.stringify(check(quotes).problems));
   quotes[0].payload.Line[0].SalesItemLineDetail.TaxCodeRef.value = '12'; assert.equal(check(quotes).ok, false);
   h.records.get('TaxRate:34').EffectiveTaxRate[0].RateValue = 15;
-  await assert.rejects(contextFor(scope, local), /differs from its approved policy/);
+  assert.equal((await contextFor(scope, local)).taxPercent['16'], 15);
   h.records.get('TaxRate:34').EffectiveTaxRate = []; await assert.rejects(contextFor(scope, local), /history/);
   h.records.delete('TaxCode:16');
   assert.deepEqual((await contextFor(scope, local)).taxPercent, {}, 'unrelated nontax work need not load tax records');
 });
-test('general context selects historical codes before the transition without permitting both code sets', async t => {
+test('a historical published code without a current record is not tax evidence', async t => {
   const authority = require('../src/modules/business-authority');
   const view = { mappings: { salesTax: '12', purchaseTax: '12' }, business: { openingDate: '2023-09-01', activityTemplateVersion: 2, datedTax: { version: 1, regime: 'CA-NS-2025-postpaid', salesTax: '16', purchaseTax: '16' } } };
   t.mock.method(authority, 'readPublishedBusiness', async () => ({ view }));
   const q = value => ({ session() { return this; }, select() { return this; }, maxTimeMS() { return this; }, lean: async () => value });
   const models = { Calendars: { findOne: () => q({ verifiedThrough: '2025-03-30' }) }, Policies: { findOne: () => q({ periodControl: {} }) }, GeneralWriteRuns: { findOne: () => q(null) } };
   const context = await require('../src/modules/general-write-service').createGeneralWriteContext({ models, now: () => Date.parse('2025-03-31T16:00:00Z') })(scope, { get: () => null, map: new Map() });
-  assert.deepEqual(context.taxCodes, { sales: ['12'], purchases: ['12'] });
+  assert.deepEqual(context.taxCodes, { sales: [], purchases: [] }, 'A published ID alone is not current tax evidence.');
 });
 
 test('failed earlier close permits today general preparation and send, holds backdates and links, then verifies later', async t => {
@@ -297,4 +297,46 @@ for (const retainedStatus of ['prepared', 'held']) test('a retained '+retainedSt
   retained.status=retainedStatus;
   assert.equal((await s.api.execute(bound,prepared.runId)).status,'complete');
   assert.equal(attempts,2);assert.equal(h.sent.length,1);assert.equal(retained.batches.length,1);
+});
+
+
+test('settled PO11216 omitted DueDate rechecks through execute without a send; tampered receipt/request holds', async () => {
+ const fixture = require('./fixtures/job-l-po-lost-reply.json');
+ for (const tamper of [null, 'request', 'response', 'receipt', 'party', 'date', 'line']) {
+  const f = structuredClone(fixture), run = f.run, batch = run.batches[0], sent = batch.items[0], native = batch.transport.response[0].PurchaseOrder;
+  run.status = 'needs-correction'; batch.state = 'answered'; batch.transport.outcome = 'saved';
+  f.receipt.state = 'saved'; for (const item of f.receipt.observed.items) item.outcome = 'saved';
+  run.items = { [sent.ref]: { outcome: 'mismatch', entity: sent.entity, op: sent.op, attempt: batch.attempt, qboId: native.Id, record: structuredClone(native), request: structuredClone(sent.payload) } };
+  run.owned = [{ key: 'PurchaseOrder:11216', ref: sent.ref, op: 'create' }];
+  const before = structuredClone(batch), Runs = fakeRuns(); Runs.rows.set(run._id, run);
+  if (tamper === 'request') sent.payload.DueDate = '2026-11-03';
+  if (tamper === 'response') native.TotalAmt++;
+  if (tamper === 'receipt') f.receipt.observed.items[0].responseHash = '0'.repeat(64);
+  if (tamper === 'party') run.items[sent.ref].record.VendorRef.value = '999';
+  if (tamper === 'date') run.items[sent.ref].record.TxnDate = '2026-10-30';
+  if (tamper === 'line') run.items[sent.ref].record.Line[0].Amount++;
+  let sends = 0;
+  const api = createGeneralWriteService({ models: { GeneralWriteRuns: Runs, Receipts: { findOne: filter => ({ maxTimeMS(){return this;}, lean: async () => f.receipt.requestHash === filter.requestHash ? structuredClone(f.receipt) : null }) } }, copy: { read: async () => { throw Error('No new preparation'); } }, contextFor: async () => { throw Error('No new admission'); }, transport: { sendBatch: async () => { sends++; throw Error('No send'); } }, dispatchEnabled: () => true });
+  const result = await api.execute({ scope: { environment: run.environment, realmId: run.realmId, connectionId: String(run.connectionId) } }, run._id);
+  assert.equal(result.status, tamper ? 'needs-correction' : 'complete', tamper || 'omitted optional date'); assert.equal(sends, 0);
+  if (!tamper) { assert.deepEqual(Runs.rows.get(run._id).batches[0], before); assert.equal(result.items[sent.ref].qboId, '11216'); assert.equal(Runs.rows.get(run._id).items[sent.ref].complete, true); }
+ }
+});
+test('PO optional omission never waives a different returned date, posted due date, party, lines or transaction date', () => {
+ const { matchesRequest } = require('../src/modules/general-write-recovery');
+ const sent = { TxnDate: DAY, DueDate: '2026-12-10', VendorRef: { value: '30' }, Line: [{ Amount: 100, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '52' }, TaxCodeRef: { value: '7' } } }] };
+ const saved = structuredClone(sent); delete saved.DueDate;
+ assert.equal(matchesRequest(sent, saved, 'PurchaseOrder'), true);
+ assert.equal(matchesRequest(sent, { ...saved, DueDate: '2026-12-11' }, 'PurchaseOrder'), false);
+ for (const entity of ['Invoice','Bill']) assert.equal(matchesRequest(sent, saved, entity), false);
+ for (const change of [s=>{delete s.TxnDate;},s=>{s.VendorRef.value='31';},s=>{s.Line[0].Amount++;}]) { const bad=structuredClone(saved); change(bad); assert.equal(matchesRequest(sent,bad,'PurchaseOrder'),false); }
+ assert.equal(matchesRequest({ DueDate: sent.DueDate }, {}, 'PurchaseOrder'),false);
+});
+
+test('three persistent saved-PO mismatches cannot starve an unanswered unknown batch', async () => {
+ const { recheckGeneralWrites }=require('../src/modules/general-write-recovery');
+ const agent={_id:'a',ownerId:'b',grant:{id:'g',authorityHash:'h'}}; const unknown={_id:'unknown',ownerId:'b',actorId:'b',agentAuthority:{},status:'unknown'}, held=[1,2,3].map(i=>({...unknown,_id:'held'+i,status:'needs-correction'})); const selected=[], limits=[];
+ const query=rows=>({sort(){return this;},limit(n){limits.push(n);this.rows=rows.slice(0,n);return this;},maxTimeMS(){return this;},lean:async function(){return this.rows||rows;}});
+ await recheckGeneralWrites({scope,models:{Agents:{findOne:()=>query(agent)},GeneralWriteRuns:{find:filter=>query(filter.status==='needs-correction'?held:[unknown])}},now:()=>Date.now(),service:{execute:async(b,id)=>{selected.push(id);return {status:id==='unknown'?'complete':'needs-correction'};}}});
+ assert.equal(selected[0],'unknown');assert.ok(selected.includes('unknown'));assert.deepEqual(limits,[3,2]);
 });
