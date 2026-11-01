@@ -56,7 +56,7 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
   const ending=new Date(Date.UTC(+s.period.slice(0,4),+s.period.slice(5),0)).toISOString().slice(0,10);
   const data={kind:'banking-operator-task',version:1,runId,packageId:pkg.id,step:clone(step),scope:s.scope,companyName:COMPANY.name,account:{id:s.accountId,name:account.Name,currency:s.accountCurrency,type:account.AccountType},period:s.period,openingMinor:s.openingMinor,closingMinor:s.closingMinor,statementEndingDate:ending,balanceConvention:s.balanceConvention,outstandingItems:s.outstandingItems,files,rows,rules:step.type==='rules'?rules:[]};
   const actions={
-    preflight:'Observe current upload/review/reconciliation state and exact account identity. Do not select a file or save any change. Save a fresh preflight screenshot. Read Banking > Rules, all pages and statuses. Save a distinct rules screenshot and return rulesInspection: {complete:true, observedAt:ISO, scope:task.scope, accountId:task.account.id, screenshot, rules:[{ruleId,name,active:boolean,autoPost:boolean,allAccounts:boolean,accountIds:[exact IDs],conditions:[visible conditions]}]}. If status, Auto-post, account scope or completeness is unknown, stop. This is read-only; never disable or alter rules.',
+    preflight:'Observe current upload/review/reconciliation state and exact account identity. Do not select a file or save any change. Save a fresh preflight screenshot. Read Banking > Rules, all pages and statuses. Save a distinct rules screenshot and return rulesInspection: {complete:true, observedAt:ISO, scope:task.scope, accountId:task.account.id, screenshot, coverage:{filter:"all",includesActive:true,includesDisabled:true,totalRules:count,pages:[{page:1,pageCount:allPageCount,ruleCount:countOnPage,screenshot}]}, rules:[{name:fullVisibleName,active:boolean,autoPost:boolean,allAccounts:boolean,accountIds:[],accountNames:[fullVisibleAppliedToAccountNames],conditions:[fullVisibleConditions]}]}. Use the All rules filter, clear search and visit EVERY page, including Active and Disabled rows. Open rule details read-only to expand clipped names/conditions and Auto-post settings, then cancel without saving. Identify rules by these full visible fields; internal rule IDs are NOT required and must never be invented. Return visible account names; the coordinator computes the SHA-256 hash of the full rules list. If status, Auto-post, account scope or completeness is unknown, stop. This is read-only; never disable or alter rules.',
     upload:'Only proceed after the separate fresh Banking > Rules preflight admitted this exact file. If any rules or account state changed since then, stop. Upload ONLY the named CSV file ONCE through Link account > Upload from file. Never upload a PDF, image or statement there: that route sends statements to a human review team. Confirm exact file SHA-256 from task metadata; preview Date,Description,Amount, dd/mm/yyyy, row count, account currency and signs. Stop on duplicates, unexpected pre-existing rows, ambiguous dates or card signs. Retain confirmation and unique row crosswalk.',
     rules:'Create/adjust ONLY the exact named rules. Auto-post defaults ON: set it deliberately to each specified boolean and capture it. Check the exact before values for adjustments. Stop if a rule would apply beyond the specified account/month or create unlisted bookkeeping. Do not alter other rules.',
     review:'Resolve the SINGLE named row exactly once, then STOP for the coordinator to check the complete synced copy before the next row: Match only the named QBO references; Add only the BF3 category/tax/amount/creator task; Exclude only the designated duplicate with its reason. Never expense returned principal, force a match or create a balancing adjustment. Record resulting QBO IDs and row-specific screenshots. A transfer creates one accounting transfer for both legs, never two expenses. Stop on ambiguity or any already posted item; do not repeat Add.',
@@ -82,9 +82,9 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
 }
 function parseTerraReply(reply,task) {
   check(typeof reply==='string' && reply.length<=1000000, 'Missing/oversized Terra reply');
-  if(/stopped\s+at\s*:/i.test(reply)) return {status:'stopped',reason:reply.match(/stopped\s+at\s*:\s*([^\n]+)/i)?.[1] || 'Terra stopped'};
   let value; try { value=JSON.parse(reply); } catch {
     const candidates=[...reply.matchAll(/\x60\x60\x60(?:json)?\s*([\s\S]*?)\x60\x60\x60/g)].flatMap(m=>{try {return [JSON.parse(m[1])];}catch{return [];}}).filter(v=>v.kind==='banking-operator-result');
+    if(!candidates.length && /stopped\s+at\s*:/i.test(reply))return {status:'stopped',reason:reply.match(/stopped\s+at\s*:\s*(?:\*\*)?\s*([^\n]+)/i)?.[1] || 'Terra stopped'};
     check(candidates.length===1, 'Terra must return one structured action ledger'); value=candidates[0];
   }
   const d=task.data;
@@ -100,7 +100,7 @@ function createFileJournal(directory) {
   return {
     async list(scope,accountId) { await fs.mkdir(directory,{recursive:true}); const out=[]; for(const name of await fs.readdir(directory)) if(name.endsWith('.json')) { const v=JSON.parse(await fs.readFile(path.join(directory,name),'utf8')); if(sameScope(v.scope,scope) && v.accountId===accountId) out.push(v); } return out; },
     async start(value) { await fs.mkdir(directory,{recursive:true}); await fs.writeFile(path.join(directory,value.runId+'.json'),JSON.stringify(value,null,2),{flag:'wx'}); },
-    async finish(value) { const dest=path.join(directory,value.runId+'.json'), tmp=dest+'.tmp'; await fs.writeFile(tmp,JSON.stringify(value,null,2),{flag:'wx'}); await fs.rename(tmp,dest); }
+    async finish(value) { const dest=path.join(directory,value.runId+'.json'), tmp=dest+'.'+crypto.randomUUID()+'.tmp'; await fs.writeFile(tmp,JSON.stringify(value,null,2),{flag:'wx'}); await fs.rename(tmp,dest); }
   };
 }
 function createBankingOperator(deps) {
@@ -124,7 +124,7 @@ function createBankingOperator(deps) {
       const family=await deps.workspace.list(user,{accountId:s.accountId}); check(!family.truncated, 'Complete account history required');
       check(!family.packages.some(p=>p.id!==pkg.id && p.period<=pkg.period && !p.summary.reconciled && !family.packages.some(newer=>newer.period===p.period && newer.revision>p.revision)), 'Earlier account period is unfinished');
       const journal=await deps.journal.list(s.scope,s.accountId);
-      check(!journal.some(j=>j.status!=='completed'), 'Account has a stopped, uncertain or unverified earlier step');
+      check(!journal.some(j=>!['completed','recovered-read-only'].includes(j.status)), 'Account has a stopped, uncertain or unverified earlier step');
       check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)), 'Unfinished native import requires observed recovery');
       const previous=journal.filter(j=>j.packageId===pkg.id).sort((a,b)=>Date.parse(a.finishedAt)-Date.parse(b.finishedAt));
       const preflight=previous.findLast(j=>j.step.type==='preflight');
@@ -159,13 +159,13 @@ function createBankingOperator(deps) {
       setCleanup(false);
       const execution=await deps.runner.run({task,runId,mode:desktopFallback?'desktop':'flow'});
       setCleanup(execution.cleanupConfirmed===true);
-      check(execution.cleanupConfirmed===true && execution.exitCode===0 && execution.model==='gpt-6.1-terra' && execution.commandAudit?.shell===0 && execution.commandAudit?.flagged===0, 'Terra process/model/cleanup is unconfirmed');
       const result=parseTerraReply(execution.reply,task); entry.replyPath=execution.replyPath; entry.commandsPath=execution.commandsPath; entry.actionLedger=result.actionLedger || [];
       entry.result=clone(result);
       if(result.status!=='completed') {
         if(result.screenshot) { try { entry.stopArtifact=await deps.runner.retainEvidence(execution,result.screenshot,{scope:s.scope,accountId:s.accountId,runId}); } catch(e) { entry.evidenceError=e.message; } }
         check(false, 'stopped at: '+result.reason);
       }
+      check(execution.cleanupConfirmed===true && execution.exitCode===0 && execution.model==='gpt-6.1-terra' && execution.commandAudit?.shell===0 && execution.commandAudit?.flagged===0, 'Terra process/model/cleanup is unconfirmed');
       async function screen(name,note='Terra screen '+step.type,strength='screen observed') {
         const artifact=await deps.runner.retainEvidence(execution,name,{scope:s.scope,accountId:s.accountId,runId});
         return {strength,observedAt:now(),note,artifact,...(strength==='screen observed'?{automation:{runId,step:step.type,screenshotPath:artifact.path,outcome:'succeeded'}}:{})};
@@ -173,8 +173,8 @@ function createBankingOperator(deps) {
       entry.screen=await screen(result.screenshot); entry.result=clone(result);
       if(step.type==='preflight') {
         entry.rulesScreen=await screen(result.rulesInspection?.screenshot,'Banking Rules pre-flight');
-        const scenario=deps.ruleScenarioFor ? await deps.ruleScenarioFor({user,pkg,fileId:pendingUploadFileId}) : null;
-        entry.rulesInspection=require('./banking-operator-guards').assertRulesSafe(result.rulesInspection,{scope:s.scope,accountId:s.accountId,packageId:pkg.id,fileId:pendingUploadFileId,now:now(),startedAt:entry.startedAt,scenario});
+        for(const page of result.rulesInspection?.coverage?.pages || [])await screen(page.screenshot,'Banking Rules page '+page.page);
+        entry.rulesInspection=require('./banking-operator-guards').assertRulesSafe(result.rulesInspection,{scope:s.scope,accountId:s.accountId,accountName:account.Name,accountFullName:account.FullyQualifiedName,accounts:deps.getRuleAccounts ? await deps.getRuleAccounts(s.scope) : [],packageId:pkg.id,fileId:pendingUploadFileId,now:now(),startedAt:entry.startedAt});
       }
       const ledger=result.actionLedger;
       const expectedActions={preflight:[],upload:['upload'],rules:rules.map(r=>r.action),review:task.data.rows.map(r=>r.action),reconcile:['reconcile'],attach:['attach']}[step.type];
@@ -231,14 +231,46 @@ function createBankingOperator(deps) {
       throw error;
     }
   }
+  async function recover(user,packageId) {
+    const pkg=await deps.workspace.detail(user,packageId);
+    const initial=await deps.journal.list(pkg.snapshot.scope,pkg.accountId);
+    if(!initial.some(j=>j.status==='started'))return;
+    // The default lease first proves old owners and every Terra process dead.
+    // No age-based stealing, and journal recovery is serialized with execution.
+    const release=await deps.lease();
+    try{
+      for(const entry of await deps.journal.list(pkg.snapshot.scope,pkg.accountId)){
+        if(entry.status!=='started')continue;
+        if(deps.verifyRunStopped)await deps.verifyRunStopped(entry);
+        const retained=deps.readRetainedResult ? await deps.readRetainedResult(entry) : null;
+        let result=null;try{if(retained)result=parseTerraReply(retained.reply,{data:{runId:entry.runId,packageId:entry.packageId,step:entry.step,scope:entry.scope,account:{id:entry.accountId,currency:pkg.accountCurrency},period:entry.period}});}catch{/* Malformed/unscoped output never grants replay. */}
+        entry.recovery={at:now(),source:retained?.source || null,processesVerifiedAbsent:true};
+        entry.finishedAt=now();
+        if(result?.status==='stopped'){
+          entry.status='blocked';entry.reason='stopped at: '+result.reason;entry.result=clone(result);entry.actionLedger=result.actionLedger || [];
+        }else if(entry.step.type==='preflight' && (!result || !result.actionLedger?.length)){
+          entry.status='recovered-read-only';entry.reason='Interrupted read-only preflight retired; a new complete preflight is required';
+        }else{
+          entry.status='blocked';entry.reason='Interrupted '+entry.step.type+' has an unknown native outcome. Read-only inspection of this account’s bank transactions is required before any retry; preserve accepted actions and never repeat an uncertain upload/Add/Match.';
+        }
+        await deps.journal.finish(entry);
+      }
+    }finally{await release();}
+  }
   async function status(user,packageId) {
     const pkg=await deps.workspace.detail(user,packageId);
     const runs=await deps.journal.list(pkg.snapshot.scope,pkg.accountId);
-    const unfinished=runs.filter(r=>r.status!=='completed');
-    return {packageId,accountId:pkg.accountId,period:pkg.period,blocked:unfinished.length>0,
-      reasons:unfinished.map(r=>({runId:r.runId,period:r.period,step:r.step,status:r.status,reason:r.reason || 'Started step has no confirmed outcome'})),
-      steps:runs.filter(r=>r.packageId===packageId)};
+    const unfinished=runs.filter(r=>!['completed','recovered-read-only'].includes(r.status));
+    const reasons=[];
+    for(const r of unfinished){
+      let stopped=null;
+      if(r.status==='started' && deps.readRetainedResult){
+        try{const retained=await deps.readRetainedResult(r);if(retained){const result=parseTerraReply(retained.reply,{data:{runId:r.runId,packageId:r.packageId,step:r.step,scope:r.scope,account:{id:r.accountId,currency:pkg.accountCurrency},period:r.period}});if(result.status==='stopped')stopped=result;}}catch{/* Read-only diagnostics cannot authorize recovery. */}
+      }
+      reasons.push({runId:r.runId,period:r.period,step:r.step,status:r.status,nativeStatus:stopped?'stopped':r.result?.status || null,reason:r.reason || (stopped?'stopped at: '+stopped.reason:'Started step has no confirmed outcome')});
+    }
+    return {packageId,accountId:pkg.accountId,period:pkg.period,blocked:unfinished.length>0,reasons,steps:runs.filter(r=>r.packageId===packageId)};
   }
-  return {execute,status};
+  return {execute,status,recover};
 }
 module.exports={COMPANY,STEPS,assertReady,buildBankingTask,parseTerraReply,createFileJournal,createBankingOperator};

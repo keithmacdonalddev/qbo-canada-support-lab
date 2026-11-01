@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
-const root=path.resolve(process.cwd(),'..'),from=p=>require(path.join(root,'backend/src/modules',p));
+const root=path.resolve(process.cwd(),'..'),from=p=>require(path.join(process.env.BF7_MODULE_ROOT || path.join(root,'backend/src/modules'),p));
 const {createBankingOperatorLoop}=from('banking-operator-loop');
 const {createBankingAccountantTools,createBankingMirrorReader}=from('banking-accountant-tools');
 const {hash,createBankingWorkspaceService}=from('banking-workspace-service');

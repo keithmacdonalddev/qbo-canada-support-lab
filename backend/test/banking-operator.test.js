@@ -44,6 +44,7 @@ async function harness(input=real) {
     if(type==='attach'){const f=d.files.find(f=>f.kind==='statement');value.attachment.fileId=f.fileId;value.attachment.fileHash=f.sha256;Object.assign(value.actionLedger[0],{fileId:f.fileId,fileHash:f.sha256});}
     if(type==='rules'){value.rules=d.rules.map((r,i)=>({...clone(r),ruleId:r.ruleId || 'fake-rule-'+i}));value.actionLedger=value.rules.map(r=>({action:r.action,name:r.name,ruleId:r.ruleId}));}
     if(h.mutateReply)h.mutateReply(value,task);
+    if(type==='preflight' && !value.rulesInspection.coverage)value.rulesInspection.coverage={filter:'all',includesActive:true,includesDisabled:true,totalRules:value.rulesInspection.rules.length,pages:[{page:1,pageCount:1,ruleCount:value.rulesInspection.rules.length,screenshot:'rules.jpg'}]};
     return {exitCode:0,cleanupConfirmed:!h.badCleanup,model:'gpt-6.1-terra',reply:JSON.stringify(value),commandAudit:{shell:0,flagged:0},replyPath:'fake-reply.json'};
   }};
   const readVerification=async ({phase,rows=[]})=>({scope,complete:true,observedAt:now(),syncedThrough:now(),records:clone(records),settlementEvents:[],marks:h.withMarks ? rows.map(r=>{const row=source.envelope.rows.find(b=>b.rowId===r.rowId),e=source.envelope.events.find(e=>e.eventId===row.eventId);return {scope,artifact:{path:hash(scope)+'/'+accountId+'/fake-report.json',sha256:'a'.repeat(64)},rowId:r.rowId,accountId,accountCurrency:source.envelope.accountCurrency,amountMinor:e.amountMinor,date:e.actualPostingDate || e.expectedPostingDate,qboRefs:r.qboRefs,mark:'C',observedAt:phase==='after'?now():'2020-01-01T00:00:00Z'};}) : []});
@@ -183,7 +184,55 @@ test('Rules pre-flight never waits for mirror sync and expired Rules screen cann
  await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/expired while waiting/);assert.equal(h.calls,2);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports.length,0);
 });
 
-test('inactive and other-account Auto-post rules are harmless; deliberate scenario binds exact file and rules',async()=>{
+test('inactive and other-account Auto-post rules are harmless; deliberate scenario cannot bypass active Auto-post',async()=>{
  const h=await harness(savingsPackage),file=h.source.envelope.files.find(f=>f.kind==='csv');h.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')v.rulesInspection.rules=clone(savingsFailure.rules).map((r,i)=>i===0?{...r,active:false}:{...r,allAccounts:false,accountIds:['123']});};await h.exec({type:'upload',fileId:file.fileId});assert.equal(h.pkg.summary.uploaded,true);
- const x=await harness(savingsPackage),rules=clone(savingsFailure.rules);x.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')v.rulesInspection.rules=rules;};x.deps.ruleScenarioFor=async()=>({deliberate:true,packageId:x.pkg.id,accountId:x.account.Id,fileId:file.fileId,rulesHash:hash(rules),ruleIds:rules.map(r=>r.ruleId)});x.operator=createBankingOperator(x.deps);await x.exec({type:'upload',fileId:file.fileId});assert.equal(x.pkg.summary.uploaded,true);assert.equal(x.journals[0].rulesInspection.deliberateScenario,true);
+ const x=await harness(savingsPackage),rules=clone(savingsFailure.rules);x.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')v.rulesInspection.rules=rules;};x.deps.ruleScenarioFor=async()=>({deliberate:true,packageId:x.pkg.id,accountId:x.account.Id,fileId:file.fileId,rulesHash:hash(rules),ruleKeys:rules.map(r=>hash({name:r.name,active:r.active,autoPost:r.autoPost,allAccounts:r.allAccounts,accountIds:r.accountIds,accountNames:r.accountNames || [],conditions:r.conditions}))});x.operator=createBankingOperator(x.deps);await assert.rejects(x.exec({type:'upload',fileId:file.fileId}),/active Auto-post/);assert.equal(x.pkg.summary.uploaded,false);
+});
+
+const blStop=require('./fixtures/banking-bl-real-stop.json');
+const blPackage=require('./fixtures/banking-bl-real-package.json');
+function blInput(){
+ const manifest=clone(blPackage.manifest),keys=['scope','accountId','accountCurrency','period','revision','previousPackageId','sourceSnapshotHash','policyVersion','openingMinor','closingMinor','balanceConvention','events','rows','outstandingItems','blockers'];
+ const envelope=Object.fromEntries(keys.map(k=>[k,manifest[k]])),mf=blPackage.files.at(-1);
+ envelope.files=[...manifest.files,{fileId:hash({packageId:manifest.packageId,kind:'manifest',name:'manifest.json'}),kind:'manifest',path:mf.path,sha256:digest(Buffer.from(mf.base64,'base64')),rowCount:manifest.rows.length}];
+ return {manifest,envelope,artifacts:blPackage.files.map(f=>({path:f.path,bytes:Buffer.from(f.base64,'base64')}))};
+}
+test('BL exact stored Chequing stop replays through production execute and loop into durable pause',async t=>{
+ const h=await harness(blInput());assert.equal(h.pkg.id,blStop.result.packageId);assert.equal(h.pkg.period,'2020-04');
+ h.runner.run=async({task})=>({exitCode:null,cleanupConfirmed:false,reply:blStop.message.replaceAll(blStop.result.runId,task.data.runId),replyPath:blStop.source});
+ const L=require(path.join(modules,'banking-operator-loop'));let pause=null,state=null;
+ const loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=clone(v)},stateStore:{read:async()=>state,write:async v=>state=clone(v)},now:h.now});
+ const result=await loop.tick();assert.equal(result.status,'blocked');assert.equal(pause.reason,'stopped at: '+blStop.result.reason);assert.equal(h.journals[0].result.screenshot,'preflight.png');assert.equal(h.journals[0].status,'blocked');assert.ok(state.lastTickAt);assert.ok(state.lastRunAt);assert.equal(state.lastOutcome.status,'blocked');assert.equal(h.leaseHeld,true);
+ const restarted=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>{throw new Error('must pause before checking locks');},pauseStore:{read:async()=>pause},stateStore:{read:async()=>state,write:async v=>state=clone(v)},now:h.now});assert.equal((await restarted.tick()).status,'blocked');assert.equal(state.lastRunAt,h.now());
+ t.diagnostic('Actual ce9526d1 / account60 / April2020 and real bf7-4cf19462 structured stop; fake native runner only.');
+});
+test('BL restart recovers exact retained stop without reply.txt, never launches Terra',async t=>{
+ const h=await harness(blInput()),dir=await fs.mkdtemp(path.join(os.tmpdir(),'bl-stored-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ const folder=path.join(dir,'artifacts/terra-live',blStop.journal.runId+'-20261101-014409');await fs.mkdir(folder,{recursive:true});await fs.writeFile(path.join(folder,'events.jsonl'),JSON.stringify({type:'item.completed',item:{type:'agent_message',text:blStop.message}})+'\n');
+ h.journals.push(clone(blStop.journal));h.deps.readRetainedResult=entry=>require(path.join(modules,'banking-operator-recovery')).readRetainedTerraResult(dir,entry);h.operator=createBankingOperator(h.deps);
+ await h.operator.recover(user,h.pkg.id);assert.equal(h.calls,0);assert.equal(h.journals[0].status,'blocked');assert.equal(h.journals[0].reason,'stopped at: '+blStop.result.reason);assert.match(h.journals[0].recovery.source,/events.jsonl$/);assert.equal(h.leaseHeld,false);await assert.rejects(h.exec('preflight'),/stopped, uncertain/);
+});
+test('BL killed read-only preflight can be replaced; unknown upload requires bank-transactions inspection',async()=>{
+ for(const type of ['preflight','upload','review','reconcile','attach']){
+  const h=await harness(blInput());h.journals.push({...clone(blStop.journal),step:{type}});await h.operator.recover(user,h.pkg.id);
+  if(type==='preflight'){assert.equal(h.journals[0].status,'recovered-read-only');await h.exec('preflight');assert.equal(h.calls,1);}else{assert.equal(h.journals[0].status,'blocked');assert.match(h.journals[0].reason,/Read-only inspection.*bank transactions/);await assert.rejects(h.exec('preflight'),/stopped, uncertain/);assert.equal(h.calls,0);}
+ }
+});
+test('BL native visible rule identities need no IDs, hash full list, and fail closed on every page/status',async()=>{
+ const {assertRulesSafe}=require(path.join(modules,'banking-operator-guards')),scope=blStop.result.scope;
+ const context={scope,accountId:'60',accountName:'Chequing',packageId:blStop.result.packageId,now:'2026-11-01T07:00:01Z',startedAt:'2026-11-01T07:00:00Z'};
+ const rules=[{name:'Utilities',active:true,autoPost:false,allAccounts:true,accountIds:[],conditions:['Description contains hydro']},{name:'Sort Ad expenses',active:false,autoPost:true,allAccounts:true,accountIds:[],conditions:['Description contains Google']},{name:'taxes',active:false,autoPost:true,allAccounts:true,accountIds:[],conditions:['Amount greater than -1.00']},{name:'add sales',active:false,autoPost:true,allAccounts:true,accountIds:[],conditions:['Amount greater than 1.00']}];
+ const value={scope,accountId:'60',complete:true,observedAt:context.now,rules,coverage:{filter:'all',includesActive:true,includesDisabled:true,totalRules:4,pages:[{page:1,pageCount:2,ruleCount:2,screenshot:'rules-1.png'},{page:2,pageCount:2,ruleCount:2,screenshot:'rules-2.png'}]}};
+ const good=assertRulesSafe(value,context);assert.equal(good.rulesHash,hash(rules));assert.equal(good.ruleKeys.length,4);
+ const changed=clone(value);changed.rules[3].conditions=['Amount greater than 2.00'];assert.notEqual(assertRulesSafe(changed,context).rulesHash,good.rulesHash);
+ for(const bad of [v=>v.coverage.pages.pop(),v=>v.coverage.includesDisabled=false,v=>v.rules[3].active=true,v=>v.rules[0].autoPost=true,v=>{v.rules[0]={...v.rules[0],autoPost:true,allAccounts:false,accountNames:['Chequing']};}]){const v=clone(value);bad(v);assert.throws(()=>assertRulesSafe(v,context));}
+ const other=clone(value);other.rules[0]={...other.rules[0],autoPost:true,allAccounts:false,accountNames:['Savings']};assert.throws(()=>assertRulesSafe(other,context),/Unknown or ambiguous/);assertRulesSafe(other,{...context,accounts:[{Id:'1150040007',Name:'Savings'}]});
+ const qualified=clone(value);qualified.rules[0]={...qualified.rules[0],autoPost:true,allAccounts:false,accountNames:['  PARENT:Chequing  ']};assert.throws(()=>assertRulesSafe(qualified,{...context,accountFullName:'Parent:Chequing'}),/active Auto-post/);
+});
+
+test('BL retained stop is visible and durably pauses even while lock recovery is unavailable',async()=>{
+ const h=await harness(blInput());h.journals.push(clone(blStop.journal));h.deps.readRetainedResult=async()=>({reply:blStop.message,source:blStop.source});h.operator=createBankingOperator(h.deps);
+ const status=await h.operator.status(user,h.pkg.id);assert.equal(status.reasons[0].nativeStatus,'stopped');
+ let pause=null;const L=require(path.join(modules,'banking-operator-loop')),loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>{throw new Error('process enumeration denied; should not mask retained stop');},pauseStore:{read:async()=>pause,write:async v=>pause=clone(v)}});
+ assert.equal((await loop.tick()).status,'blocked');assert.equal(pause.reason,'stopped at: '+blStop.result.reason);assert.equal(h.calls,0);assert.equal(h.journals[0].status,'started');
 });

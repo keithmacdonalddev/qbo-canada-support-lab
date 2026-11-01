@@ -1,0 +1,268 @@
+{
+  "source": "artifacts/goal-realization/job-ob-20261101/packages/8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/manifest.json",
+  "manifest": {
+    "accountCurrency": "CAD",
+    "accountId": "60",
+    "accountName": "60",
+    "balanceCheck": {
+      "bookClosingMinor": -50000,
+      "differenceMinor": 0,
+      "evidenceHash": "98b1a68cd24865c8d9485a4dc320559753ae8e322817c032355dab0a9fe2f8ed",
+      "reconstructedBookClosingMinor": -50000
+    },
+    "balanceConvention": "bank-balance",
+    "blockers": [],
+    "closingMinor": -50000,
+    "contentFingerprint": "be324c81e3e60525f29a6821f3da565c3503a6f137822ccb250ab5040a957161",
+    "crosswalk": [
+      {
+        "amountMinor": -50000,
+        "date": "2020-04-02",
+        "description": "Tax payment",
+        "eventId": "bse1_4826bff2cb3a2ba1aaeb7d6eafba55df1eed491b",
+        "eventRevision": 1,
+        "fileId": "ba0af07652d3d2238d3a058ae1ba86bfd6534e9a71983f8005b003d8c26e68da",
+        "pairedEventId": null,
+        "qboRefs": [
+          {
+            "entity": "TaxPayment",
+            "id": "32"
+          }
+        ],
+        "rowId": "105a87b249ee99e1f4148b1b234f3cd85d3838102edecd6e24b2d8a93c8932e6",
+        "rowNumber": 1,
+        "settlementGroupId": "bsg1_bb0c3bfdd5d6f90f03bacb50d02f149fbaabe09d",
+        "source": {
+          "actualPostingEvidenceRef": null,
+          "depositBreakdown": [],
+          "depositLinks": [],
+          "entity": "TaxPayment",
+          "exchangeRate": null,
+          "foreignTransactionAmountMinor": -50000,
+          "homeAmountMinor": -50000,
+          "homeCurrency": "CAD",
+          "id": "32",
+          "ledgerObservedAt": "2026-11-01T03:55:27.965Z",
+          "ledgerRowIndex": 2,
+          "ledgerSourceId": "banking-research-20261101",
+          "lineIds": [],
+          "nativeAmountBasis": "retained-account-native-ledger",
+          "nativeStatus": "unmarked",
+          "sourceHash": "75ebdb758c34d3193d055dda136b1d3da6af69c622526e59faf58e76b5a6655f",
+          "syncObservedAt": "2026-11-01T04:10:51.884Z",
+          "transactionCurrency": "CAD"
+        }
+      }
+    ],
+    "csvProfile": {
+      "bankSigns": "inflows positive; outflows negative",
+      "cardSigns": "charges negative; payments and credits positive",
+      "columns": [
+        "Date",
+        "Description",
+        "Amount"
+      ],
+      "dateFormat": "dd/mm/yyyy",
+      "encoding": "UTF-8",
+      "id": "ca-three-column-v1",
+      "maxBytes": 340000,
+      "maxRows": 999,
+      "nativePreviewRequired": true,
+      "newline": "CRLF"
+    },
+    "dueDate": null,
+    "events": [
+      {
+        "accountCurrency": "CAD",
+        "accountId": "60",
+        "accountType": "Bank",
+        "actualPostingDate": null,
+        "amountMinor": -50000,
+        "bookAmountMinor": -50000,
+        "bookDate": "2020-04-01",
+        "cardDebtChangeMinor": null,
+        "contractVersion": 1,
+        "direction": "outflow",
+        "eventId": "bse1_4826bff2cb3a2ba1aaeb7d6eafba55df1eed491b",
+        "evidenceType": "bank-or-card-statement",
+        "expectedPostingDate": "2020-04-02",
+        "generatedFileReferences": [],
+        "kind": "tax-payment",
+        "pairedEventId": null,
+        "policyVersion": "bank-settlement-v1",
+        "postingBasis": "simulated-policy",
+        "resolution": {
+          "action": "Match",
+          "designatedCreator": "existing-qbo",
+          "linkedQboIds": [
+            {
+              "entity": "TaxPayment",
+              "id": "32"
+            }
+          ],
+          "nativeActionBlockers": [],
+          "nativeInspectionRequired": false,
+          "nativeMatchVerified": false,
+          "reason": null
+        },
+        "revision": 1,
+        "scope": {
+          "connectionId": "6a18e43d0b392890a1303e03",
+          "environment": "production",
+          "realmId": "9130357222392856"
+        },
+        "settlementGroupId": "bsg1_bb0c3bfdd5d6f90f03bacb50d02f149fbaabe09d",
+        "source": {
+          "actualPostingEvidenceRef": null,
+          "depositBreakdown": [],
+          "depositLinks": [],
+          "entity": "TaxPayment",
+          "exchangeRate": null,
+          "foreignTransactionAmountMinor": -50000,
+          "homeAmountMinor": -50000,
+          "homeCurrency": "CAD",
+          "id": "32",
+          "ledgerObservedAt": "2026-11-01T03:55:27.965Z",
+          "ledgerRowIndex": 2,
+          "ledgerSourceId": "banking-research-20261101",
+          "lineIds": [],
+          "nativeAmountBasis": "retained-account-native-ledger",
+          "nativeStatus": "unmarked",
+          "sourceHash": "75ebdb758c34d3193d055dda136b1d3da6af69c622526e59faf58e76b5a6655f",
+          "syncObservedAt": "2026-11-01T04:10:51.884Z",
+          "transactionCurrency": "CAD"
+        },
+        "statementPeriod": "2020-04",
+        "status": "resolved",
+        "supersededBy": null,
+        "timingPolicy": {
+          "bankingWeekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "cardLagDays": 1,
+          "chequeLagDays": 5,
+          "electronicLagDays": 1,
+          "holidays": [],
+          "version": "bank-settlement-v1"
+        }
+      }
+    ],
+    "evidenceLabel": "generated simulated evidence",
+    "excludedEvents": [],
+    "files": [
+      {
+        "fileId": "ba0af07652d3d2238d3a058ae1ba86bfd6534e9a71983f8005b003d8c26e68da",
+        "kind": "csv",
+        "path": "8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/feed-001.csv",
+        "rowCount": 1,
+        "sha256": "4ba5841dc6563382c9c1122ef0544a469feed4627206ba299a23e30b9db97150"
+      },
+      {
+        "fileId": "e8ea264800afdec0373928d9a1fcf21d7bf5ef45a5f5c7a045527e0b2632870b",
+        "kind": "statement",
+        "path": "8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/statement.pdf",
+        "rowCount": 1,
+        "sha256": "9146d16d92542c778a5b3988c91ea18f4f14cd4d8f551a1c4d5fee320542d717"
+      }
+    ],
+    "kind": "simulated-bank-statement-package",
+    "laterPeriodsRequiringReview": [],
+    "manifestHashRule": "The manifest file hash is external in envelope.files; the manifest lists CSV/PDF hashes only to avoid a self-referential hash.",
+    "nativeStateVerified": false,
+    "openingBasis": "Retained native closing balance minus all retained native book movements; first known pre-activity balance carried through quiet months.",
+    "openingEvidence": {
+      "accountCurrency": "CAD",
+      "accountId": "60",
+      "amountMinor": 0,
+      "basis": "Retained native closing balance minus all retained native book movements; first known pre-activity balance carried through quiet months.",
+      "crossCheck": {
+        "anchorMinor": 6729874,
+        "derivedOpeningMinor": 0,
+        "explicitOpeningPresent": false,
+        "firstLedgerDate": "2020-04-01",
+        "firstLedgerRowsHash": "76614b9f3d3a64814a53a9c482e23ff4bf9cf6874bfe5771f44f14be567f74ef",
+        "mirrorBalanceAgrees": true,
+        "openingJournalIds": [],
+        "retainedMovementMinor": 6729874
+      },
+      "evidenceHash": "a63edc547e263c37d77e63c81907133656b2a426d13369ae4f651daa8f79ac73",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/60",
+      "period": "2020-04",
+      "source": {
+        "accountId": "60",
+        "asOf": "2026-10-31",
+        "currency": "CAD",
+        "evidenceHash": "a63edc547e263c37d77e63c81907133656b2a426d13369ae4f651daa8f79ac73",
+        "ledgerRowsHash": "cce69530c0dfe4722f4e5790a5b2bd97b1a057899bad795e697acddd9c012386",
+        "mirror": {
+          "createdAt": "2023-08-04T09:40:23-07:00",
+          "currency": "CAD",
+          "currentBalance": 67298.74,
+          "id": "60",
+          "observedAt": "2026-10-23T15:56:45.148Z",
+          "openingBalance": null,
+          "openingBalanceDate": null
+        },
+        "mirrorHash": "4d4ae9b693704e8b206b442fc3290ccfbd8123e29c5402d76d217f5928a82b47",
+        "openingJournalIds": [],
+        "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/60",
+        "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+        "storedNativeBookBalanceMinor": 6729874
+      }
+    },
+    "openingMinor": 0,
+    "outstandingItems": [],
+    "packageId": "ce9526d1b285521991956b0fa27e4ae6b47701fd31b726ca45c350a172ff5f11",
+    "period": "2020-04",
+    "policyVersion": "bank-settlement-v1",
+    "previousPackageId": null,
+    "rangeBasis": "earliest retained posting precedes QBO account creation",
+    "readyForNativeWork": true,
+    "revision": 1,
+    "revisionPolicy": "Never overwrite retained or uploaded artifacts. A revision requires native delta review and review of every later period in this account.",
+    "rows": [
+      {
+        "eventId": "bse1_4826bff2cb3a2ba1aaeb7d6eafba55df1eed491b",
+        "eventRevision": 1,
+        "fileId": "ba0af07652d3d2238d3a058ae1ba86bfd6534e9a71983f8005b003d8c26e68da",
+        "rowId": "105a87b249ee99e1f4148b1b234f3cd85d3838102edecd6e24b2d8a93c8932e6",
+        "rowNumber": 1
+      }
+    ],
+    "scope": {
+      "connectionId": "6a18e43d0b392890a1303e03",
+      "environment": "production",
+      "realmId": "9130357222392856"
+    },
+    "sourceSnapshotHash": "554783770dab2f109813707d00243c0555712a14e1692640d1eabe58598f9540",
+    "statementTotals": {
+      "closingMinor": -50000,
+      "negativeMinor": 50000,
+      "openingMinor": 0,
+      "pageCount": 1,
+      "positiveMinor": 0,
+      "rowCount": 1
+    },
+    "unresolvedEvents": [],
+    "uploadRequired": true,
+    "version": 1
+  },
+  "files": [
+    {
+      "path": "8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/feed-001.csv",
+      "base64": "RGF0ZSxEZXNjcmlwdGlvbixBbW91bnQNCjAyLzA0LzIwMjAsVGF4IHBheW1lbnQsLTUwMC4wMA0K"
+    },
+    {
+      "path": "8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/statement.pdf",
+      "base64": "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9Db3VudCAxIC9LaWRzIFs1IDAgUl0gPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iago0IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYS1Cb2xkIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nID4+CmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94IFswIDAgNjEyIDc5Ml0gL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgMyAwIFIgL0YyIDQgMCBSID4+ID4+IC9Db250ZW50cyA2IDAgUiA+PgplbmRvYmoKNiAwIG9iago8PCAvTGVuZ3RoIDE3MzggPj4Kc3RyZWFtCjAuMTIgMC4yMCAwLjI2IHJnCkJUIC9GMiAxOCBUZiAxIDAgMCAxIDQwIDc1NCBUbSAoU2ltdWxhdGVkIHN0YXRlbWVudCAtIFRlc3QgRGF0YSBMYWIpIFRqIEVUCkJUIC9GMSA5IFRmIDEgMCAwIDEgNDAgNzMxIFRtIChSZWNvbnN0cnVjdGVkIHNpbXVsYXRlZCBldmlkZW5jZTsgbm90IGluZGVwZW5kZW50IGJhbmsgY29uZmlybWF0aW9uLikgVGogRVQKQlQgL0YyIDEyIFRmIDEgMCAwIDEgNDAgNzA2IFRtICg2MCB8IEFjY291bnQgNjApIFRqIEVUCkJUIC9GMSAxMSBUZiAxIDAgMCAxIDQwIDY4NiBUbSAoMjAyMC0wNCB8IENBRCB8IEJhbmsgYmFsYW5jZSkgVGogRVQKQlQgL0YyIDkgVGYgMSAwIDAgMSA0MCA2NjUgVG0gKFNJTVVMQVRFRCAtIG5hdGl2ZSBwcmV2aWV3IGFuZCBldmlkZW5jZSBzdGlsbCByZXF1aXJlZC4pIFRqIEVUCkJUIC9GMSAxMCBUZiAxIDAgMCAxIDQwIDY0MiBUbSAoT3BlbmluZyAwLjAwICAgIE91dGZsb3dzIDUwMC4wMCAgICBJbmZsb3dzIDAuMDApIFRqIEVUCkJUIC9GMiAxMiBUZiAxIDAgMCAxIDQwIDYyMiBUbSAoQ2xvc2luZyAtNTAwLjAwIENBRCkgVGogRVQKQlQgL0YxIDkgVGYgMSAwIDAgMSA0MCA2MDMgVG0gKE9wZW5pbmcgYmFzaXM6IFJldGFpbmVkIG5hdGl2ZSBjbG9zaW5nIGJhbGFuY2UgbWludXMgYWxsIHJldGFpbmVkIG5hdGl2ZSBib29rIG1vdmVtZW50czsgZmlyc3Qga25vd24gcHIpIFRqIEVUCjAuOTAgMC45NCAwLjk1IHJnIDQwIDU2OCA1MzIgMjIgcmUgZiAwLjEyIDAuMjAgMC4yNiByZwpCVCAvRjIgOSBUZiAxIDAgMCAxIDQ0IDU3NiBUbSAoUG9zdGluZyBkYXRlKSBUaiBFVApCVCAvRjIgOSBUZiAxIDAgMCAxIDEyMCA1NzYgVG0gKERlc2NyaXB0aW9uIC8gUUJPIHJlZmVyZW5jZSkgVGogRVQKQlQgL0YyIDkgVGYgMSAwIDAgMSAzNjggNTc2IFRtIChPdXRmbG93KSBUaiBFVApCVCAvRjIgOSBUZiAxIDAgMCAxIDQzMiA1NzYgVG0gKEluZmxvdykgVGogRVQKQlQgL0YyIDkgVGYgMSAwIDAgMSA1MTQgNTc2IFRtIChCYWxhbmNlKSBUaiBFVApCVCAvRjEgOSBUZiAxIDAgMCAxIDQ0IDU1MiBUbSAoMDIvMDQvMjAyMCkgVGogRVQKQlQgL0YxIDggVGYgMSAwIDAgMSAxMjAgNTUyIFRtIChUYXggcGF5bWVudCAvIFRheFBheW1lbnQgMzIpIFRqIEVUCkJUIC9GMSA4IFRmIDEgMCAwIDEgMzg1LjIgNTUyIFRtICg1MDAuMDApIFRqIEVUCkJUIC9GMSA4IFRmIDEgMCAwIDEgNDgyIDU1MiBUbSAoKSBUaiBFVApCVCAvRjEgOCBUZiAxIDAgMCAxIDUzNC40IDU1MiBUbSAoLTUwMC4wMCkgVGogRVQKMC43NSAwLjgxIDAuODQgUkcgNDAgOTYgbSA1NzIgOTYgbCBTCkJUIC9GMSA4IFRmIDEgMCAwIDEgNDAgODAgVG0gKE91dHN0YW5kaW5nIGl0ZW1zOiAwLiBGdWxsIGRldGFpbHMgYW5kIHNldHRsZW1lbnQgYWR2aWNlIGFyZSByZXRhaW5lZCBpbiB0aGUgbWFuaWZlc3QuKSBUaiBFVApCVCAvRjEgOCBUZiAxIDAgMCAxIDQwIDY2IFRtIChObyB1cGxvYWQsIG1hdGNoaW5nIG9yIHJlY29uY2lsaWF0aW9uIGlzIHByb3ZlZCBieSB0aGlzIHN0YXRlbWVudC4pIFRqIEVUCkJUIC9GMSA3IFRmIDEgMCAwIDEgNDAgNTEgVG0gKFByb3Zpc2lvbmFsIGhpc3RvcnkuIEN1cnJlbmN5IGFtb3VudHMgYXJlIGV4YWN0IGh1bmRyZWR0aHMuIERhdGVzIGZvbGxvdyBzaW11bGF0ZWQgcG9zdGluZyBwb2xpY3kgdW5sZXNzIGV2aWRlbmNlZC4pIFRqIEVUCkJUIC9GMSA4IFRmIDEgMCAwIDEgNTEwIDM1IFRtIChQYWdlIDEgLyAxKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA3CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDIxMiAwMDAwMCBuIAowMDAwMDAwMzE0IDAwMDAwIG4gCjAwMDAwMDA0NTAgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA3IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgoyMjM5CiUlRU9GCg=="
+    },
+    {
+      "path": "8e9975355edae16ffc71b7c7bbff6fd52aa6bb0622546cbd4a1e70eede0d53bb/60/2020-04/r1-be324c81e3e60525f29a6821/manifest.json",
+      "base64": "eyJhY2NvdW50Q3VycmVuY3kiOiJDQUQiLCJhY2NvdW50SWQiOiI2MCIsImFjY291bnROYW1lIjoiNjAiLCJiYWxhbmNlQ2hlY2siOnsiYm9va0Nsb3NpbmdNaW5vciI6LTUwMDAwLCJkaWZmZXJlbmNlTWlub3IiOjAsImV2aWRlbmNlSGFzaCI6Ijk4YjFhNjhjZDI0ODY1YzhkOTQ4NWE0ZGMzMjA1NTk3NTNhZThlMzIyODE3YzAzMjM1NWRhYjBhOWZlMmY4ZWQiLCJyZWNvbnN0cnVjdGVkQm9va0Nsb3NpbmdNaW5vciI6LTUwMDAwfSwiYmFsYW5jZUNvbnZlbnRpb24iOiJiYW5rLWJhbGFuY2UiLCJibG9ja2VycyI6W10sImNsb3NpbmdNaW5vciI6LTUwMDAwLCJjb250ZW50RmluZ2VycHJpbnQiOiJiZTMyNGM4MWUzZTYwNTI1ZjI5YTY4MjFmM2RhNTY1YzM1MDNhNmYxMzc4MjJjY2IyNTBhYjUwNDBhOTU3MTYxIiwiY3Jvc3N3YWxrIjpbeyJhbW91bnRNaW5vciI6LTUwMDAwLCJkYXRlIjoiMjAyMC0wNC0wMiIsImRlc2NyaXB0aW9uIjoiVGF4IHBheW1lbnQiLCJldmVudElkIjoiYnNlMV80ODI2YmZmMmNiM2EyYmExYWFlYjdkNmVhZmJhNTVkZjFlZWQ0OTFiIiwiZXZlbnRSZXZpc2lvbiI6MSwiZmlsZUlkIjoiYmEwYWYwNzY1MmQzZDIyMzhkM2EwNThhZTFiYTg2YmZkNjUzNGU5YTcxOTgzZjgwMDViMDAzZDhjMjZlNjhkYSIsInBhaXJlZEV2ZW50SWQiOm51bGwsInFib1JlZnMiOlt7ImVudGl0eSI6IlRheFBheW1lbnQiLCJpZCI6IjMyIn1dLCJyb3dJZCI6IjEwNWE4N2IyNDllZTk5ZTFmNDE0OGIxYjIzNGYzY2Q4NWQzODM4MTAyZWRlY2Q2ZTI0YjJkOGE5M2M4OTMyZTYiLCJyb3dOdW1iZXIiOjEsInNldHRsZW1lbnRHcm91cElkIjoiYnNnMV9iYjBjM2JmZGQ1ZDZmOTBmMDNiYWNiNTBkMDJmMTQ5ZmJhYWJlMDlkIiwic291cmNlIjp7ImFjdHVhbFBvc3RpbmdFdmlkZW5jZVJlZiI6bnVsbCwiZGVwb3NpdEJyZWFrZG93biI6W10sImRlcG9zaXRMaW5rcyI6W10sImVudGl0eSI6IlRheFBheW1lbnQiLCJleGNoYW5nZVJhdGUiOm51bGwsImZvcmVpZ25UcmFuc2FjdGlvbkFtb3VudE1pbm9yIjotNTAwMDAsImhvbWVBbW91bnRNaW5vciI6LTUwMDAwLCJob21lQ3VycmVuY3kiOiJDQUQiLCJpZCI6IjMyIiwibGVkZ2VyT2JzZXJ2ZWRBdCI6IjIwMjYtMTEtMDFUMDM6NTU6MjcuOTY1WiIsImxlZGdlclJvd0luZGV4IjoyLCJsZWRnZXJTb3VyY2VJZCI6ImJhbmtpbmctcmVzZWFyY2gtMjAyNjExMDEiLCJsaW5lSWRzIjpbXSwibmF0aXZlQW1vdW50QmFzaXMiOiJyZXRhaW5lZC1hY2NvdW50LW5hdGl2ZS1sZWRnZXIiLCJuYXRpdmVTdGF0dXMiOiJ1bm1hcmtlZCIsInNvdXJjZUhhc2giOiI3NWViZGI3NThjMzRkMzE5M2QwNTVkZGExMzZiMWQzZGE2YWY2OWM2MjI1MjZlNTlmYWY1OGU3NmI1YTY2NTVmIiwic3luY09ic2VydmVkQXQiOiIyMDI2LTExLTAxVDA0OjEwOjUxLjg4NFoiLCJ0cmFuc2FjdGlvbkN1cnJlbmN5IjoiQ0FEIn19XSwiY3N2UHJvZmlsZSI6eyJiYW5rU2lnbnMiOiJpbmZsb3dzIHBvc2l0aXZlOyBvdXRmbG93cyBuZWdhdGl2ZSIsImNhcmRTaWducyI6ImNoYXJnZXMgbmVnYXRpdmU7IHBheW1lbnRzIGFuZCBjcmVkaXRzIHBvc2l0aXZlIiwiY29sdW1ucyI6WyJEYXRlIiwiRGVzY3JpcHRpb24iLCJBbW91bnQiXSwiZGF0ZUZvcm1hdCI6ImRkL21tL3l5eXkiLCJlbmNvZGluZyI6IlVURi04IiwiaWQiOiJjYS10aHJlZS1jb2x1bW4tdjEiLCJtYXhCeXRlcyI6MzQwMDAwLCJtYXhSb3dzIjo5OTksIm5hdGl2ZVByZXZpZXdSZXF1aXJlZCI6dHJ1ZSwibmV3bGluZSI6IkNSTEYifSwiZHVlRGF0ZSI6bnVsbCwiZXZlbnRzIjpbeyJhY2NvdW50Q3VycmVuY3kiOiJDQUQiLCJhY2NvdW50SWQiOiI2MCIsImFjY291bnRUeXBlIjoiQmFuayIsImFjdHVhbFBvc3RpbmdEYXRlIjpudWxsLCJhbW91bnRNaW5vciI6LTUwMDAwLCJib29rQW1vdW50TWlub3IiOi01MDAwMCwiYm9va0RhdGUiOiIyMDIwLTA0LTAxIiwiY2FyZERlYnRDaGFuZ2VNaW5vciI6bnVsbCwiY29udHJhY3RWZXJzaW9uIjoxLCJkaXJlY3Rpb24iOiJvdXRmbG93IiwiZXZlbnRJZCI6ImJzZTFfNDgyNmJmZjJjYjNhMmJhMWFhZWI3ZDZlYWZiYTU1ZGYxZWVkNDkxYiIsImV2aWRlbmNlVHlwZSI6ImJhbmstb3ItY2FyZC1zdGF0ZW1lbnQiLCJleHBlY3RlZFBvc3RpbmdEYXRlIjoiMjAyMC0wNC0wMiIsImdlbmVyYXRlZEZpbGVSZWZlcmVuY2VzIjpbXSwia2luZCI6InRheC1wYXltZW50IiwicGFpcmVkRXZlbnRJZCI6bnVsbCwicG9saWN5VmVyc2lvbiI6ImJhbmstc2V0dGxlbWVudC12MSIsInBvc3RpbmdCYXNpcyI6InNpbXVsYXRlZC1wb2xpY3kiLCJyZXNvbHV0aW9uIjp7ImFjdGlvbiI6Ik1hdGNoIiwiZGVzaWduYXRlZENyZWF0b3IiOiJleGlzdGluZy1xYm8iLCJsaW5rZWRRYm9JZHMiOlt7ImVudGl0eSI6IlRheFBheW1lbnQiLCJpZCI6IjMyIn1dLCJuYXRpdmVBY3Rpb25CbG9ja2VycyI6W10sIm5hdGl2ZUluc3BlY3Rpb25SZXF1aXJlZCI6ZmFsc2UsIm5hdGl2ZU1hdGNoVmVyaWZpZWQiOmZhbHNlLCJyZWFzb24iOm51bGx9LCJyZXZpc2lvbiI6MSwic2NvcGUiOnsiY29ubmVjdGlvbklkIjoiNmExOGU0M2QwYjM5Mjg5MGExMzAzZTAzIiwiZW52aXJvbm1lbnQiOiJwcm9kdWN0aW9uIiwicmVhbG1JZCI6IjkxMzAzNTcyMjIzOTI4NTYifSwic2V0dGxlbWVudEdyb3VwSWQiOiJic2cxX2JiMGMzYmZkZDVkNmY5MGYwM2JhY2I1MGQwMmYxNDlmYmFhYmUwOWQiLCJzb3VyY2UiOnsiYWN0dWFsUG9zdGluZ0V2aWRlbmNlUmVmIjpudWxsLCJkZXBvc2l0QnJlYWtkb3duIjpbXSwiZGVwb3NpdExpbmtzIjpbXSwiZW50aXR5IjoiVGF4UGF5bWVudCIsImV4Y2hhbmdlUmF0ZSI6bnVsbCwiZm9yZWlnblRyYW5zYWN0aW9uQW1vdW50TWlub3IiOi01MDAwMCwiaG9tZUFtb3VudE1pbm9yIjotNTAwMDAsImhvbWVDdXJyZW5jeSI6IkNBRCIsImlkIjoiMzIiLCJsZWRnZXJPYnNlcnZlZEF0IjoiMjAyNi0xMS0wMVQwMzo1NToyNy45NjVaIiwibGVkZ2VyUm93SW5kZXgiOjIsImxlZGdlclNvdXJjZUlkIjoiYmFua2luZy1yZXNlYXJjaC0yMDI2MTEwMSIsImxpbmVJZHMiOltdLCJuYXRpdmVBbW91bnRCYXNpcyI6InJldGFpbmVkLWFjY291bnQtbmF0aXZlLWxlZGdlciIsIm5hdGl2ZVN0YXR1cyI6InVubWFya2VkIiwic291cmNlSGFzaCI6Ijc1ZWJkYjc1OGMzNGQzMTkzZDA1NWRkYTEzNmIxZDNkYTZhZjY5YzYyMjUyNmU1OWZhZjU4ZTc2YjVhNjY1NWYiLCJzeW5jT2JzZXJ2ZWRBdCI6IjIwMjYtMTEtMDFUMDQ6MTA6NTEuODg0WiIsInRyYW5zYWN0aW9uQ3VycmVuY3kiOiJDQUQifSwic3RhdGVtZW50UGVyaW9kIjoiMjAyMC0wNCIsInN0YXR1cyI6InJlc29sdmVkIiwic3VwZXJzZWRlZEJ5IjpudWxsLCJ0aW1pbmdQb2xpY3kiOnsiYmFua2luZ1dlZWtkYXlzIjpbMSwyLDMsNCw1XSwiY2FyZExhZ0RheXMiOjEsImNoZXF1ZUxhZ0RheXMiOjUsImVsZWN0cm9uaWNMYWdEYXlzIjoxLCJob2xpZGF5cyI6W10sInZlcnNpb24iOiJiYW5rLXNldHRsZW1lbnQtdjEifX1dLCJldmlkZW5jZUxhYmVsIjoiZ2VuZXJhdGVkIHNpbXVsYXRlZCBldmlkZW5jZSIsImV4Y2x1ZGVkRXZlbnRzIjpbXSwiZmlsZXMiOlt7ImZpbGVJZCI6ImJhMGFmMDc2NTJkM2QyMjM4ZDNhMDU4YWUxYmE4NmJmZDY1MzRlOWE3MTk4M2Y4MDA1YjAwM2Q4YzI2ZTY4ZGEiLCJraW5kIjoiY3N2IiwicGF0aCI6IjhlOTk3NTM1NWVkYWUxNmZmYzcxYjdjN2JiZmY2ZmQ1MmFhNmJiMDYyMjU0NmNiZDRhMWU3MGVlZGUwZDUzYmIvNjAvMjAyMC0wNC9yMS1iZTMyNGM4MWUzZTYwNTI1ZjI5YTY4MjEvZmVlZC0wMDEuY3N2Iiwicm93Q291bnQiOjEsInNoYTI1NiI6IjRiYTU4NDFkYzY1NjMzODJjOWMxMTIyZWYwNTQ0YTQ2OWZlZWQ0NjI3MjA2YmEyOTlhMjNlMzBiOWRiOTcxNTAifSx7ImZpbGVJZCI6ImU4ZWEyNjQ4MDBhZmRlYzAzNzM5MjhkOWExZmNmMjFkN2JmNWVmNDVhNWY1YzdhMDQ1NTI3ZTBiMjYzMjg3MGIiLCJraW5kIjoic3RhdGVtZW50IiwicGF0aCI6IjhlOTk3NTM1NWVkYWUxNmZmYzcxYjdjN2JiZmY2ZmQ1MmFhNmJiMDYyMjU0NmNiZDRhMWU3MGVlZGUwZDUzYmIvNjAvMjAyMC0wNC9yMS1iZTMyNGM4MWUzZTYwNTI1ZjI5YTY4MjEvc3RhdGVtZW50LnBkZiIsInJvd0NvdW50IjoxLCJzaGEyNTYiOiI5MTQ2ZDE2ZDkyNTQyYzc3OGE1YjM5ODhjOTFlYTE4ZjRmMTRjZDRkOGY1NTFhMWM0ZDVmZWUzMjA1NDJkNzE3In1dLCJraW5kIjoic2ltdWxhdGVkLWJhbmstc3RhdGVtZW50LXBhY2thZ2UiLCJsYXRlclBlcmlvZHNSZXF1aXJpbmdSZXZpZXciOltdLCJtYW5pZmVzdEhhc2hSdWxlIjoiVGhlIG1hbmlmZXN0IGZpbGUgaGFzaCBpcyBleHRlcm5hbCBpbiBlbnZlbG9wZS5maWxlczsgdGhlIG1hbmlmZXN0IGxpc3RzIENTVi9QREYgaGFzaGVzIG9ubHkgdG8gYXZvaWQgYSBzZWxmLXJlZmVyZW50aWFsIGhhc2guIiwibmF0aXZlU3RhdGVWZXJpZmllZCI6ZmFsc2UsIm9wZW5pbmdCYXNpcyI6IlJldGFpbmVkIG5hdGl2ZSBjbG9zaW5nIGJhbGFuY2UgbWludXMgYWxsIHJldGFpbmVkIG5hdGl2ZSBib29rIG1vdmVtZW50czsgZmlyc3Qga25vd24gcHJlLWFjdGl2aXR5IGJhbGFuY2UgY2FycmllZCB0aHJvdWdoIHF1aWV0IG1vbnRocy4iLCJvcGVuaW5nRXZpZGVuY2UiOnsiYWNjb3VudEN1cnJlbmN5IjoiQ0FEIiwiYWNjb3VudElkIjoiNjAiLCJhbW91bnRNaW5vciI6MCwiYmFzaXMiOiJSZXRhaW5lZCBuYXRpdmUgY2xvc2luZyBiYWxhbmNlIG1pbnVzIGFsbCByZXRhaW5lZCBuYXRpdmUgYm9vayBtb3ZlbWVudHM7IGZpcnN0IGtub3duIHByZS1hY3Rpdml0eSBiYWxhbmNlIGNhcnJpZWQgdGhyb3VnaCBxdWlldCBtb250aHMuIiwiY3Jvc3NDaGVjayI6eyJhbmNob3JNaW5vciI6NjcyOTg3NCwiZGVyaXZlZE9wZW5pbmdNaW5vciI6MCwiZXhwbGljaXRPcGVuaW5nUHJlc2VudCI6ZmFsc2UsImZpcnN0TGVkZ2VyRGF0ZSI6IjIwMjAtMDQtMDEiLCJmaXJzdExlZGdlclJvd3NIYXNoIjoiNzY2MTRiOWYzZDNhNjQ4MTRhNTNhOWM0ODJlMjNmZjRiZjljZjY4NzRiZmU1NzcxZjQ0ZjE0YmU1NjdmNzRlZiIsIm1pcnJvckJhbGFuY2VBZ3JlZXMiOnRydWUsIm9wZW5pbmdKb3VybmFsSWRzIjpbXSwicmV0YWluZWRNb3ZlbWVudE1pbm9yIjo2NzI5ODc0fSwiZXZpZGVuY2VIYXNoIjoiYTYzZWRjNTQ3ZTI2M2MzN2Q3N2U2M2M4MTkwNzEzMzY1NmIyYTQyNmQxMzM2OWFlNGY2NTFkYWE4Zjc5YWM3MyIsImV2aWRlbmNlUmVmIjoiYXJ0aWZhY3RzL2dvYWwtcmVhbGl6YXRpb24vYmFua2luZy1yZXNlYXJjaC0yMDI2MTEwMS5qc29uI2FjY291bnRzLzYwIiwicGVyaW9kIjoiMjAyMC0wNCIsInNvdXJjZSI6eyJhY2NvdW50SWQiOiI2MCIsImFzT2YiOiIyMDI2LTEwLTMxIiwiY3VycmVuY3kiOiJDQUQiLCJldmlkZW5jZUhhc2giOiJhNjNlZGM1NDdlMjYzYzM3ZDc3ZTYzYzgxOTA3MTMzNjU2YjJhNDI2ZDEzMzY5YWU0ZjY1MWRhYThmNzlhYzczIiwibGVkZ2VyUm93c0hhc2giOiJjY2U2OTUzMGMwZGZlNDcyMmY0ZTU3OTBhNWIyYmQ5N2IxYTA1Nzg5OWJhZDc5NWU2OTdhY2RkZDljMDEyMzg2IiwibWlycm9yIjp7ImNyZWF0ZWRBdCI6IjIwMjMtMDgtMDRUMDk6NDA6MjMtMDc6MDAiLCJjdXJyZW5jeSI6IkNBRCIsImN1cnJlbnRCYWxhbmNlIjo2NzI5OC43NCwiaWQiOiI2MCIsIm9ic2VydmVkQXQiOiIyMDI2LTEwLTIzVDE1OjU2OjQ1LjE0OFoiLCJvcGVuaW5nQmFsYW5jZSI6bnVsbCwib3BlbmluZ0JhbGFuY2VEYXRlIjpudWxsfSwibWlycm9ySGFzaCI6IjRkNGFlOWI2OTM3MDRlOGIyMDZiNDQyZmMzMjkwY2NmYmQ4MTIzZTI5YzU0MDJkNzZkMjE3ZjU5MjhhODJiNDciLCJvcGVuaW5nSm91cm5hbElkcyI6W10sInNvdXJjZVJlZiI6ImFydGlmYWN0cy9nb2FsLXJlYWxpemF0aW9uL2JhbmtpbmctcmVzZWFyY2gtMjAyNjExMDEuanNvbiNhY2NvdW50cy82MCIsInNvdXJjZVNoYTI1NiI6IjgwZDE0ZmI0YjE2Y2E0MTA3ZTczYWJjY2U0MGE2NzUyMjdkYmZlYjhlYmMwMzI0Mjk2MTM4NjRiZjZkYWVjYzUiLCJzdG9yZWROYXRpdmVCb29rQmFsYW5jZU1pbm9yIjo2NzI5ODc0fX0sIm9wZW5pbmdNaW5vciI6MCwib3V0c3RhbmRpbmdJdGVtcyI6W10sInBhY2thZ2VJZCI6ImNlOTUyNmQxYjI4NTUyMTk5MTk1NmIwZmEyN2U0YWU2YjQ3NzAxZmQzMWI3MjZjYTQ1YzM1MGExNzJmZjVmMTEiLCJwZXJpb2QiOiIyMDIwLTA0IiwicG9saWN5VmVyc2lvbiI6ImJhbmstc2V0dGxlbWVudC12MSIsInByZXZpb3VzUGFja2FnZUlkIjpudWxsLCJyYW5nZUJhc2lzIjoiZWFybGllc3QgcmV0YWluZWQgcG9zdGluZyBwcmVjZWRlcyBRQk8gYWNjb3VudCBjcmVhdGlvbiIsInJlYWR5Rm9yTmF0aXZlV29yayI6dHJ1ZSwicmV2aXNpb24iOjEsInJldmlzaW9uUG9saWN5IjoiTmV2ZXIgb3ZlcndyaXRlIHJldGFpbmVkIG9yIHVwbG9hZGVkIGFydGlmYWN0cy4gQSByZXZpc2lvbiByZXF1aXJlcyBuYXRpdmUgZGVsdGEgcmV2aWV3IGFuZCByZXZpZXcgb2YgZXZlcnkgbGF0ZXIgcGVyaW9kIGluIHRoaXMgYWNjb3VudC4iLCJyb3dzIjpbeyJldmVudElkIjoiYnNlMV80ODI2YmZmMmNiM2EyYmExYWFlYjdkNmVhZmJhNTVkZjFlZWQ0OTFiIiwiZXZlbnRSZXZpc2lvbiI6MSwiZmlsZUlkIjoiYmEwYWYwNzY1MmQzZDIyMzhkM2EwNThhZTFiYTg2YmZkNjUzNGU5YTcxOTgzZjgwMDViMDAzZDhjMjZlNjhkYSIsInJvd0lkIjoiMTA1YTg3YjI0OWVlOTllMWY0MTQ4YjFiMjM0ZjNjZDg1ZDM4MzgxMDJlZGVjZDZlMjRiMmQ4YTkzYzg5MzJlNiIsInJvd051bWJlciI6MX1dLCJzY29wZSI6eyJjb25uZWN0aW9uSWQiOiI2YTE4ZTQzZDBiMzkyODkwYTEzMDNlMDMiLCJlbnZpcm9ubWVudCI6InByb2R1Y3Rpb24iLCJyZWFsbUlkIjoiOTEzMDM1NzIyMjM5Mjg1NiJ9LCJzb3VyY2VTbmFwc2hvdEhhc2giOiI1NTQ3ODM3NzBkYWIyZjEwOTgxMzcwN2QwMDI0M2MwNTU1NzEyYTE0ZTE2OTI2NDBkMWVhYmU1ODU5OGY5NTQwIiwic3RhdGVtZW50VG90YWxzIjp7ImNsb3NpbmdNaW5vciI6LTUwMDAwLCJuZWdhdGl2ZU1pbm9yIjo1MDAwMCwib3BlbmluZ01pbm9yIjowLCJwYWdlQ291bnQiOjEsInBvc2l0aXZlTWlub3IiOjAsInJvd0NvdW50IjoxfSwidW5yZXNvbHZlZEV2ZW50cyI6W10sInVwbG9hZFJlcXVpcmVkIjp0cnVlLCJ2ZXJzaW9uIjoxfQo="
+    }
+  ]
+}

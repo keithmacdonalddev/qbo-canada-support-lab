@@ -11,6 +11,7 @@ const SCRIPT='.claude/skills/qbo-team-delivery/scripts/terra-live.sh';
 const digest=b=>crypto.createHash('sha256').update(b).digest('hex');
 const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
 async function acquireOperatorLease(directory=path.join(os.tmpdir(),'qbo-banking-operator.lock')) {
+  if(directory===path.join(os.tmpdir(),'qbo-banking-operator.lock')) {const recovered=await require('./banking-operator-recovery').recoverBankingLocks();if(recovered.busy)throw Object.assign(new Error('Another banking/Terra process is live'),{code:'BANKING_OPERATOR_BUSY'});}
   try { await fs.mkdir(directory); } catch(e) { if(e.code==='EEXIST') throw Object.assign(new Error('Another banking operator is running or needs recovery'),{code:'BANKING_OPERATOR_BUSY'}); throw e; }
   await fs.writeFile(path.join(directory,'owner.json'),JSON.stringify({pid:process.pid,at:new Date().toISOString()}));
   return async()=>{await fs.unlink(path.join(directory,'owner.json'));await fs.rmdir(directory);};
@@ -58,7 +59,8 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     check(outputs.length===1,'Terra output directory unconfirmed; retain execution lock');
     const outputDirectory=await fs.realpath(path.join(root,outputs[0][1])), base=await fs.realpath(artifacts);
     check(outputDirectory.startsWith(base+path.sep) && path.basename(outputDirectory).startsWith(runId+'-'),'Unexpected Terra output directory');
-    const replyPath=path.join(outputDirectory,'reply.txt'), reply=await fs.readFile(replyPath,'utf8');
+    const replyPath=path.join(outputDirectory,'reply.txt');
+    let reply;try{reply=await fs.readFile(replyPath,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;reply=(await require('./banking-operator-recovery').readRetainedTerraResult(root,{runId}))?.reply || '';}
     const audit=/^--- command audit: shell=(\d+); flagged=(\d+) ---$/m.exec(result.stdout.split('--- Terra reply ---')[0]);
     const commandAudit=audit?{shell:Number(audit[1]),flagged:Number(audit[2])}:null;
     const commandsPath=path.join(outputDirectory,'commands.txt');
@@ -70,6 +72,6 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
 }
 // Importing starts nothing; caller injects authorized BF4 and sync/report readers.
 function createDefaultBankingOperator({root=ROOT,workspace,getAccount,readVerification,authorize,resolveRows,...options}) {
-  return createBankingOperator({workspace,getAccount,readVerification,resolveRows,readReportArtifact:createArtifactReader(path.join(root,'artifacts/banking')),authorize:authorize || (async ({user,scope,action})=>require('./business-runtime-access').createBusinessRuntimeAccess({actorId:String(user.actorId || user.id),ownerId:String(user.id)}).authorize(scope,action)),runner:createTerraRunner({root}),journal:createFileJournal(path.join(root,'artifacts/banking/operator-journal')),lease:()=>acquireOperatorLease(),...options});
+  return createBankingOperator({workspace,getAccount,readVerification,resolveRows,readReportArtifact:createArtifactReader(path.join(root,'artifacts/banking')),authorize:authorize || (async ({user,scope,action})=>require('./business-runtime-access').createBusinessRuntimeAccess({actorId:String(user.actorId || user.id),ownerId:String(user.id)}).authorize(scope,action)),runner:createTerraRunner({root}),journal:createFileJournal(path.join(root,'artifacts/banking/operator-journal')),verifyRunStopped:entry=>require('./banking-operator-recovery').verifyRetainedRunStopped(root,entry),readRetainedResult:entry=>require('./banking-operator-recovery').readRetainedTerraResult(root,entry),lease:()=>acquireOperatorLease(),...options});
 }
 module.exports={acquireOperatorLease,createTerraRunner,createDefaultBankingOperator};

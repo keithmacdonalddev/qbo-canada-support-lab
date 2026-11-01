@@ -53,7 +53,7 @@ function createBankingMirrorReader({Records,Agents,now=()=>Date.now(),wait=ms=>n
 }
 function createBankingRuntime({root=path.resolve(__dirname,'../../..'),workspace=createBankingWorkspaceService(),Records=require('../models/CompanySyncRecord'),Agents=require('../models/BusinessAgent'),Users=require('../models/User'),enabled=()=>process.env.BANKING_OPERATOR_ENABLED==='true'}={}){
  const readVerification=createBankingMirrorReader({Records,Agents});
- const operator=createDefaultBankingOperator({root,workspace,readVerification,getAccount:async(scope,id)=>(await Records.findOne({...scope,entity:'Account',qboId:id,deleted:false}).maxTimeMS(5000).lean())?.record,
+ const operator=createDefaultBankingOperator({root,workspace,readVerification,getRuleAccounts:async scope=>{const rows=await Records.find({...scope,entity:'Account',deleted:false}).limit(10001).maxTimeMS(5000).lean();if(rows.length>10000)throw new Error('Complete rule account catalog required');return rows.map(r=>r.record);},getAccount:async(scope,id)=>(await Records.findOne({...scope,entity:'Account',qboId:id,deleted:false}).maxTimeMS(5000).lean())?.record,
   resolveRows:async({scope,pkg,before})=>{
     const reservations=await require('../models/BankingEvent').find({...scope,kind:'reservation'}).limit(10001).maxTimeMS(5000).lean();
     if(reservations.length>10000)throw new Error('Complete creator reservations required');
@@ -61,7 +61,7 @@ function createBankingRuntime({root=path.resolve(__dirname,'../../..'),workspace
     return pkg.snapshot.events.filter(e=>e.source?.entity==='BankOrigin').map(event=>require('./bank-origin-resolution').prepareBankOriginResolution({event,accounts,reservations:reservations.map(r=>r.payload),mirrorSnapshot:before,asOf:new Date().toISOString()}));
   }});
  const L=require('./banking-operator-loop');
- const loop=L.createBankingOperatorLoop({workspace,operator,enabled,isTerraBusy:L.terraBusy,pauseStore:L.filePauseStore(path.join(root,'artifacts/banking/operator-loop-paused.json')),listUsers:async()=>{
+ const loop=L.createBankingOperatorLoop({workspace,operator,enabled,isTerraBusy:L.terraBusy,pauseStore:L.filePauseStore(path.join(root,'artifacts/banking/operator-loop-paused.json')),stateStore:L.fileStateStore(path.join(root,'artifacts/banking/operator-loop-state.json')),listUsers:async()=>{
    const agents=await Agents.find({'settings.monitoring':true,'settings.autonomous':true,environment:'production',realmId:'9130357222392856','grant.id':{$type:'string'}}).limit(3).maxTimeMS(5000).lean();
    const users=[];for(const a of agents){const u=await Users.findOne({_id:a.ownerId}).select('role').maxTimeMS(5000).lean();if(u)users.push({id:String(u._id),actorId:String(u._id),role:u.role});}return users;
  }});

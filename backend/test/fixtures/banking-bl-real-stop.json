@@ -1,0 +1,52 @@
+{
+  "source": "artifacts/terra-live/bf7-4cf19462-a0a0-4351-be98-0d3c709c227f-20261101-014409/events.jsonl",
+  "journal": {
+    "runId": "bf7-4cf19462-a0a0-4351-be98-0d3c709c227f",
+    "scope": {
+      "connectionId": "6a18e43d0b392890a1303e03",
+      "environment": "production",
+      "realmId": "9130357222392856"
+    },
+    "accountId": "60",
+    "packageId": "ce9526d1b285521991956b0fa27e4ae6b47701fd31b726ca45c350a172ff5f11",
+    "period": "2020-04",
+    "step": {
+      "type": "preflight"
+    },
+    "status": "started",
+    "startedAt": "2026-11-01T05:44:09.088Z",
+    "taskHash": "08c22a7b03b29ed622f33450ad461837b80c5d1e62ec259fe24acea77b4859c4",
+    "verification": {
+      "status": "Terra-reported only"
+    }
+  },
+  "message": "**Stopped at:** The rules interface did not expose the rule ID needed for the requested complete inspection. The upload and review state was not inspected, so preflight is incomplete.\n\nThe company ID and name matched. The specified account appeared in CAD. No changes were saved; the persistent browser session remains open.\n\nAction ledger: No persistent actions. No records were created or removed.\n\n```json\n{\n  \"kind\": \"banking-operator-result\",\n  \"version\": 1,\n  \"runId\": \"bf7-4cf19462-a0a0-4351-be98-0d3c709c227f\",\n  \"packageId\": \"ce9526d1b285521991956b0fa27e4ae6b47701fd31b726ca45c350a172ff5f11\",\n  \"step\": \"preflight\",\n  \"scope\": {\n    \"connectionId\": \"6a18e43d0b392890a1303e03\",\n    \"environment\": \"production\",\n    \"realmId\": \"9130357222392856\"\n  },\n  \"accountId\": \"60\",\n  \"accountCurrency\": \"CAD\",\n  \"period\": \"2020-04\",\n  \"status\": \"stopped\",\n  \"reason\": \"The visible rule details did not expose a rule ID, so the requested complete ID-backed rules inspection could not be established.\",\n  \"companyVerified\": {\n    \"realmId\": \"9130357222392856\",\n    \"name\": \"My Business\"\n  },\n  \"screenshot\": \"preflight.png\",\n  \"actionLedger\": [],\n  \"rulesInspection\": {\n    \"complete\": false,\n    \"screenshot\": \"rules.png\",\n    \"stopScreenshot\": \"stop.png\"\n  }\n}\n```",
+  "result": {
+    "kind": "banking-operator-result",
+    "version": 1,
+    "runId": "bf7-4cf19462-a0a0-4351-be98-0d3c709c227f",
+    "packageId": "ce9526d1b285521991956b0fa27e4ae6b47701fd31b726ca45c350a172ff5f11",
+    "step": "preflight",
+    "scope": {
+      "connectionId": "6a18e43d0b392890a1303e03",
+      "environment": "production",
+      "realmId": "9130357222392856"
+    },
+    "accountId": "60",
+    "accountCurrency": "CAD",
+    "period": "2020-04",
+    "status": "stopped",
+    "reason": "The visible rule details did not expose a rule ID, so the requested complete ID-backed rules inspection could not be established.",
+    "companyVerified": {
+      "realmId": "9130357222392856",
+      "name": "My Business"
+    },
+    "screenshot": "preflight.png",
+    "actionLedger": [],
+    "rulesInspection": {
+      "complete": false,
+      "screenshot": "rules.png",
+      "stopScreenshot": "stop.png"
+    }
+  }
+}
