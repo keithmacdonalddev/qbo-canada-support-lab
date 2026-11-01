@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { hash } = require('./banking-workspace-service');
+const resolution=require('./banking-operator-resolution');
 const COMPANY = Object.freeze({ environment: 'production', realmId: '9130357222392856', name: 'My Business' });
 const STEPS = ['preflight', 'upload', 'rules', 'review', 'reconcile', 'attach'];
 const clone = v => JSON.parse(JSON.stringify(v));
@@ -124,9 +125,9 @@ function createBankingOperator(deps) {
       const family=await deps.workspace.list(user,{accountId:s.accountId}); check(!family.truncated, 'Complete account history required');
       check(!family.packages.some(p=>p.id!==pkg.id && p.period<=pkg.period && !p.summary.reconciled && !family.packages.some(newer=>newer.period===p.period && newer.revision>p.revision)), 'Earlier account period is unfinished');
       const journal=await deps.journal.list(s.scope,s.accountId);
-      check(!journal.some(j=>!['completed','recovered-read-only'].includes(j.status)), 'Account has a stopped, uncertain or unverified earlier step');
+      check(!journal.some(j=>!resolution.settled(j)), 'Account has a stopped, uncertain or unverified earlier step');
       check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)), 'Unfinished native import requires observed recovery');
-      const previous=journal.filter(j=>j.packageId===pkg.id).sort((a,b)=>Date.parse(a.finishedAt)-Date.parse(b.finishedAt));
+      const previous=journal.filter(j=>j.packageId===pkg.id && j.status==='completed').sort((a,b)=>Date.parse(a.finishedAt)-Date.parse(b.finishedAt));
       const preflight=previous.findLast(j=>j.step.type==='preflight');
       if(step.type==='upload') check(preflight && Date.parse(now())-Date.parse(preflight.rulesInspection?.observedAt)<=300000, 'Fresh successful preflight required before upload');
       const reconciled=previous.findLast(j=>j.step.type==='reconcile');
@@ -148,7 +149,7 @@ function createBankingOperator(deps) {
       if(step.type==='review' && !step.rowId) step={...step,rowId:rowTasks(pkg,resolutions)[0]?.rowId};
       const task=buildBankingTask({pkg,manifest,account,step,runId,resolutions,rules,desktopFallback,files});
       check(!task.data.rows.some(r=>r.nativeTask?.action==='Transfer') || deps.supportsNativeTransfer===true, 'Native transfer needs the paired-reservation and BF4 settlement verifier adapter before UI execution');
-      entry={runId,scope:s.scope,accountId:s.accountId,packageId:pkg.id,period:s.period,step:clone(step),status:'started',startedAt:now(),taskHash:hash(task),verification:{status:'Terra-reported only'}};
+      entry={operatorVersion:resolution.OPERATOR_VERSION,runId,scope:s.scope,accountId:s.accountId,packageId:pkg.id,period:s.period,step:clone(step),status:'started',startedAt:now(),taskHash:hash(task),verification:{status:'Terra-reported only'}};
       await deps.journal.start(entry);
       const command=(row,action,more)=>({requestId:runId+'-'+action+'-'+row.stateVersion,expectedVersion:row.stateVersion,action,...more});
       let current=pkg, importFields;
@@ -260,17 +261,63 @@ function createBankingOperator(deps) {
   async function status(user,packageId) {
     const pkg=await deps.workspace.detail(user,packageId);
     const runs=await deps.journal.list(pkg.snapshot.scope,pkg.accountId);
-    const unfinished=runs.filter(r=>!['completed','recovered-read-only'].includes(r.status));
+    const unfinished=runs.filter(r=>!resolution.settled(r));
     const reasons=[];
     for(const r of unfinished){
       let stopped=null;
       if(r.status==='started' && deps.readRetainedResult){
         try{const retained=await deps.readRetainedResult(r);if(retained){const result=parseTerraReply(retained.reply,{data:{runId:r.runId,packageId:r.packageId,step:r.step,scope:r.scope,account:{id:r.accountId,currency:pkg.accountCurrency},period:r.period}});if(result.status==='stopped')stopped=result;}}catch{/* Read-only diagnostics cannot authorize recovery. */}
       }
-      reasons.push({runId:r.runId,period:r.period,step:r.step,status:r.status,nativeStatus:stopped?'stopped':r.result?.status || null,reason:r.reason || (stopped?'stopped at: '+stopped.reason:'Started step has no confirmed outcome')});
+      reasons.push({runId:r.runId,period:r.period,step:r.step,status:r.status,nativeStatus:stopped?'stopped':r.result?.status || null,reason:r.reason || (stopped?'stopped at: '+stopped.reason:'Started step has no confirmed outcome'),automaticRetry:resolution.retryPolicy({...r,result:stopped || r.result},runs,now())});
     }
     return {packageId,accountId:pkg.accountId,period:pkg.period,blocked:unfinished.length>0,reasons,steps:runs.filter(r=>r.packageId===packageId)};
   }
-  return {execute,status,recover};
+
+  async function retainedResult(entry,pkg){
+    if(entry.result?.kind==='banking-operator-result')return parseTerraReply(JSON.stringify(entry.result),{data:{runId:entry.runId,packageId:entry.packageId,step:entry.step,scope:entry.scope,account:{id:entry.accountId,currency:pkg.accountCurrency},period:entry.period}});
+    const retained=await deps.readRetainedResult?.(entry);
+    return retained ? parseTerraReply(retained.reply,{data:{runId:entry.runId,packageId:entry.packageId,step:entry.step,scope:entry.scope,account:{id:entry.accountId,currency:pkg.accountCurrency},period:entry.period}}) : null;
+  }
+  async function canResume(user,packageId){
+    const pkg=await deps.workspace.detail(user,packageId);
+    await deps.authorize({user,scope:pkg.snapshot.scope,action:'periods.manage'});
+    await (deps.authorizeOwner || resolution.assertOwner)({user,scope:pkg.snapshot.scope});
+    return true;
+  }
+  async function resolvePause(user,{packageId,pause,resolution:input,automatic=false,clearPause}){
+    const pkg=await deps.workspace.detail(user,packageId);
+    await deps.authorize({user,scope:pkg.snapshot.scope,action:'periods.manage'});
+    if(!automatic)await (deps.authorizeOwner || resolution.assertOwner)({user,scope:pkg.snapshot.scope});
+    check(pause?.packageId===pkg.id && pause.accountId===pkg.accountId,'Pause does not match this package and account');
+    check(typeof clearPause==='function','Durable pause clearing adapter required');
+    if(!automatic)check(input && typeof input==='object' && !Array.isArray(input) && Object.keys(input).every(k=>['reason','inspection'].includes(k)) && typeof input.reason==='string' && input.reason.trim() && input.reason.length<=2000,'Record a resolution reason before resuming');
+    const release=await deps.lease();
+    try{
+      const runs=await deps.journal.list(pkg.snapshot.scope,pkg.accountId), unfinished=runs.filter(r=>!resolution.settled(r));
+      check(!unfinished.some(r=>r.packageId!==packageId),'Another package on this account requires resolution first');
+      check(unfinished.length || runs.some(r=>r.packageId===packageId && r.resolutions?.some(v=>v.pauseHash===hash(pause))),'No stopped run supports clearing this pause');
+      const plans=[],plannedRuns=clone(runs);
+      for(const entry of unfinished){
+        const result=await retainedResult(entry,pkg), candidate={...entry,result};
+        const policy=resolution.retryPolicy(candidate,plannedRuns,now());
+        if(automatic && !policy.eligible)return {resolved:false,automaticRetry:policy};
+        const proof=await deps.verifyRunStopped?.(entry);
+        check(proof?.processesVerifiedAbsent===true,'Fresh proof that this run and its helpers have exited is required');
+        let inspection=null;
+        if(!resolution.noNativeEffect(candidate,result))inspection=await resolution.validateInspection(input?.inspection,entry,pkg,deps.readReportArtifact,now());
+        check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)),'Recover the interrupted import evidence before resuming; do not repeat an uncertain upload');
+        plans.push({entry,policy,inspection,result});
+        if(automatic)plannedRuns.find(r=>r.runId===entry.runId).resolutions=[...(entry.resolutions || []),{mode:'automatic'}];
+      }
+      // Audit first. A crash before clear can safely repeat only the clear, using pauseHash.
+      for(const {entry,policy,inspection,result} of plans){
+        const audit={mode:automatic?'automatic':'owner',at:now(),actorId:String(user.actorId || user.id),reason:automatic?policy.reason:input.reason.trim(),operatorVersion:resolution.OPERATOR_VERSION,producedVersion:entry.operatorVersion || 'legacy',attempt:automatic?policy.attempts+1:null,processesVerifiedAbsent:true,pauseHash:hash(pause),inspection};
+        entry.resolutions=[...(entry.resolutions || []),audit];entry.status='resolved-stop';entry.result=result || entry.result;entry.resolvedAt=now();await deps.journal.finish(entry);
+      }
+      await clearPause(pause);
+      return {resolved:true,packageId,reason:automatic?'Read-only stop resolved automatically':'Owner resolution recorded',automaticRetry:{attempts:plans.at(-1)?.policy.attempts+(automatic?1:0) || 0,maxAttempts:resolution.MAX_AUTO_RETRIES},resolvedAt:now()};
+    }finally{await release();}
+  }
+  return {execute,status,recover,resolvePause,canResume};
 }
 module.exports={COMPANY,STEPS,assertReady,buildBankingTask,parseTerraReply,createFileJournal,createBankingOperator};

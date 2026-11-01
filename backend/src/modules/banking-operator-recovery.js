@@ -59,12 +59,13 @@ async function recoverBankingLocks({temp=os.tmpdir(),root=path.resolve(__dirname
 // only the final agent message, never tool payloads, credentials or page dumps.
 async function verifyRetainedRunStopped(root,entry,scanProcesses=scanBankingProcesses){
   const base=path.join(root,'artifacts/terra-live'),names=(await fs.readdir(base)).filter(n=>n.startsWith(entry.runId+'-'));
-  if(!names.length)return; // Journal may have been saved before the runner spawned.
+  if(!names.length)throw new Error('Retained run process evidence required; recovery blocked');
   if(names.length!==1)throw new Error('Ambiguous retained Terra run; recovery blocked');
   let pids;try{pids=await fs.readFile(path.join(base,names[0],'pids.txt'),'utf8');}catch{throw new Error('Run process evidence missing; recovery blocked');}
   if(!pids.trim())throw new Error('Run process evidence empty; recovery blocked');
   const ids=new Set(pids.trim().split(/\r?\n/).map(line=>{const m=/^(\d+)\s+\S+$/.exec(line.trim());if(!m)throw new Error('Invalid retained process identity');return Number(m[1]);}));
   for(let i=0;i<2;i++){const rows=await scanProcesses();if(rows.some(p=>p.terra || ids.has(p.pid) || ids.has(p.parent)))throw Object.assign(new Error('A retained Terra process is still live; recovery waits'),{code:'BANKING_OPERATOR_BUSY'});}
+  return {processesVerifiedAbsent:true};
 }
 async function readRetainedTerraResult(root,entry){
   const base=path.join(root,'artifacts/terra-live');let names;

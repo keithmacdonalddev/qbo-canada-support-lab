@@ -236,3 +236,51 @@ test('BL retained stop is visible and durably pauses even while lock recovery is
  let pause=null;const L=require(path.join(modules,'banking-operator-loop')),loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>{throw new Error('process enumeration denied; should not mask retained stop');},pauseStore:{read:async()=>pause,write:async v=>pause=clone(v)}});
  assert.equal((await loop.tick()).status,'blocked');assert.equal(pause.reason,'stopped at: '+blStop.result.reason);assert.equal(h.calls,0);assert.equal(h.journals[0].status,'started');
 });
+
+// BL2 replay: the original stored failure passes through production recovery and execution.
+function bl2Recovery(h){
+ h.deps.verifyRunStopped=async()=>({processesVerifiedAbsent:true});
+ h.deps.authorizeOwner=async()=>{};
+ h.deps.readRetainedResult=async()=>({reply:blStop.message,source:blStop.source});
+ h.operator=createBankingOperator(h.deps);
+ let pause={packageId:h.pkg.id,accountId:h.pkg.accountId,reason:'stopped at: '+blStop.result.reason,at:h.now()};
+ return {read:async()=>pause,write:async v=>{pause=clone(v);},clear:async expected=>{assert.deepEqual(pause,expected);pause=null;}};
+}
+test('BL2 exact real retained stop auto-resolves audited after contract change, then production upload gets a fresh preflight',async()=>{
+ const h=await harness(blInput());h.journals.push(clone(blStop.journal));const store=bl2Recovery(h),L=require(path.join(modules,'banking-operator-loop'));
+ const loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:store,now:h.now});
+ assert.equal((await loop.tick()).status,'resolved');assert.equal(await store.read(),null);assert.equal(h.calls,0);assert.equal(h.journals[0].status,'resolved-stop');assert.equal(h.journals[0].resolutions[0].mode,'automatic');assert.equal(h.journals[0].result.reason,blStop.result.reason);
+ assert.equal((await loop.tick()).status,'progress');assert.equal(h.calls,2);assert.equal(h.journals[1].step.type,'preflight');assert.equal(h.journals[2].step.type,'upload');assert.equal(h.pkg.summary.uploaded,false);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.uploaded,true);
+});
+test('BL2 cooldown and durable three-retry cap survive a restart and version changes',async()=>{
+ const h=await harness(blInput()),R=require(path.join(modules,'banking-operator-resolution'));
+ const store=bl2Recovery(h);h.journals.push({...clone(blStop.journal),operatorVersion:R.OPERATOR_VERSION,finishedAt:h.now(),status:'blocked',result:clone(blStop.result)});
+ const resolve=async()=>h.operator.resolvePause(user,{packageId:h.pkg.id,pause:await store.read(),automatic:true,clearPause:v=>store.clear(v)});
+ assert.equal((await resolve()).resolved,false);h.advance(R.COOLDOWN_MS);assert.equal((await resolve()).resolved,true);
+ for(let n=1;n<=3;n++){
+  const id='bf7-retry-'+n,entry={...clone(blStop.journal),runId:id,operatorVersion:'older-build',status:'blocked',finishedAt:h.now(),result:{...clone(blStop.result),runId:id}};h.journals.push(entry);await store.write({packageId:h.pkg.id,accountId:h.pkg.accountId,reason:entry.result.reason,at:h.now()});h.operator=createBankingOperator(h.deps);
+  const out=await resolve();assert.equal(out.resolved,n<3);assert.equal(out.automaticRetry.attempts,n<3?n+1:3);
+ }
+ assert.equal(h.journals.flatMap(r=>r.resolutions || []).filter(r=>r.mode==='automatic').length,3);assert.ok(await store.read());
+});
+test('BL2 live or unverifiable processes, missing ledger and every writable step stay paused',async()=>{
+ for(const mode of ['live','unknown','ledger','upload','review','reconcile','rules','attach','attempt','nativeAttempted','uploadAttempted','addAttempted','matchAttempted','reconcileAttempted','attemptedActions']){
+  const h=await harness(blInput()),store=bl2Recovery(h),entry={...clone(blStop.journal),status:'blocked',result:clone(blStop.result)};h.journals.push(entry);
+  if(mode==='live')h.deps.verifyRunStopped=async()=>{throw new Error('process still live');};
+  if(mode==='unknown')h.deps.verifyRunStopped=async()=>undefined;
+  if(mode==='ledger')entry.result.actionLedger.push({action:'add'});
+  if(mode==='attempt')entry.result.upload={attempted:true};
+  if(/Attempted$/.test(mode))entry.result[mode]=true;
+  if(mode==='attemptedActions')entry.result.attemptedActions=['upload'];
+  if(['upload','review','reconcile','rules','attach'].includes(mode)){entry.step.type=mode;entry.result.step=mode;}
+  h.operator=createBankingOperator(h.deps);
+  try{const r=await h.operator.resolvePause(user,{packageId:h.pkg.id,pause:await store.read(),automatic:true,clearPause:v=>store.clear(v)});assert.equal(r.resolved,false);}catch(e){assert.match(e.message,/live|Fresh proof/);}
+  assert.ok(await store.read());assert.equal(h.journals[0].status,'blocked');assert.equal(h.calls,0);
+ }
+});
+test('BL2 owner resolution is audited, invalid/unauthorized resolutions preserve pause and native actions',async()=>{
+ const h=await harness(blInput()),store=bl2Recovery(h);h.journals.push({...clone(blStop.journal),status:'blocked',result:clone(blStop.result)});
+ const resume=async resolution=>h.operator.resolvePause(user,{packageId:h.pkg.id,pause:await store.read(),resolution,clearPause:v=>store.clear(v)});
+ await assert.rejects(resume({reason:''}),/resolution reason/);h.deps.authorizeOwner=async()=>{throw new Error('owner required');};h.operator=createBankingOperator(h.deps);await assert.rejects(resume({reason:'Fixed visible-rule contract'}),/owner required/);assert.ok(await store.read());
+ h.deps.authorizeOwner=async()=>{};h.operator=createBankingOperator(h.deps);assert.equal((await resume({reason:'Fixed visible-rule contract'})).resolved,true);assert.equal(h.journals[0].resolutions[0].mode,'owner');assert.equal(h.journals[0].resolutions[0].reason,'Fixed visible-rule contract');assert.equal(h.calls,0);
+});

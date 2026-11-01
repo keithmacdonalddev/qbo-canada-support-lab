@@ -73,3 +73,9 @@
 
 .banking-outstanding { padding-left: 20px; max-height: 280px; overflow: auto; font-size: 12px; }
 .banking-outstanding li { padding: 8px 0; }
+
+.banking-resume { display: grid; gap: 8px; max-width: 740px; margin-top: 12px; }
+.banking-resume label { font-weight: 600; font-size: 12px; }
+.banking-resume textarea { width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.banking-resume button { justify-self: start; text-decoration: none; }
+.banking-resume :focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }

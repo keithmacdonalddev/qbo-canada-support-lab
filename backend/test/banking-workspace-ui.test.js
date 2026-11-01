@@ -22,8 +22,13 @@ test.before(async () => {
     transform: { jsx: { runtime: 'automatic' } },
     plugins: [{ name: 'bf5-offline-entry', resolveId(id) {
       if (id === 'bf5-test-entry') return id;
+      if (process.env.BL2_UI_ROOT && id === './BankingResume') return path.join(front, 'components/banking/BankingResume.jsx');
       if (id.startsWith('@/')) return path.join(front, id.slice(2)) + '.js';
     }, load(id) {
+      if (process.env.BL2_UI_ROOT) {
+        const map = { 'BankingWorkspace.jsx': 'components/banking/BankingWorkspace.jsx', 'BankingResume.jsx': 'components/banking/BankingResume.jsx', 'banking.js': 'api/banking.js' };
+        for (const [name, relative] of Object.entries(map)) if (id === path.join(front, relative)) return require('node:fs').readFileSync(path.join(process.env.BL2_UI_ROOT, name), 'utf8');
+      }
       if (id === 'bf5-test-entry') return 'export * from ' + JSON.stringify(path.join(front, 'api/banking.js')) + '; export {BankingAccountPeriodView} from ' + JSON.stringify(path.join(front, 'components/banking/BankingAccountPeriod.jsx')) + '; export {BankingWorkspaceView} from ' + JSON.stringify(path.join(front, 'components/banking/BankingWorkspace.jsx'));
       if (id.endsWith('.css')) return { code: '', moduleType: 'js' };
     } }],
@@ -158,4 +163,20 @@ test('BF7 journal displays observed versus Terra-reported checks and refuses ano
   const wrong = clone(status); wrong.steps[0].scope.realmId = 'other';
   assert.equal(ui.bankingOperatorStatus(pkg, wrong), null);
   assert.equal(ui.bankingOperatorStatus(pkg, { ...status, packageId: 'other' }), null);
+});
+
+test('BL2 real stop reason, auto retry limit and owner resolution form appear in the workspace',()=>{
+ const fixture=require('./fixtures/banking-bl-real-stop.json');
+ const loop={paused:true,canResume:true,packageId:fixture.result.packageId,at:fixture.journal.startedAt,reason:fixture.result.reason,requiresInspection:false,automaticRetry:{eligible:true,attempts:1,maxAttempts:3,reason:'Operator contract changed; retry after process-exit verification'}};
+ const html=markup(ui.BankingWorkspaceView,{data:{packages:[],operatorLoop:loop},onRefresh(){}});
+ for(const label of ['Scheduled banking is paused','ID-backed rules inspection','Automatic retries: 1 of 3','How was this stop resolved?','Resume banking'])assert.ok(html.includes(label),label);
+ assert.match(html,/<textarea[^>]*required/);assert.match(html,/<button[^>]*disabled[^>]*>Resume banking/);
+ const unsafe=markup(ui.BankingWorkspaceView,{data:{packages:[],operatorLoop:{...loop,requiresInspection:true}},onRefresh(){}});assert.match(unsafe,/Saved inspection reference/);assert.match(unsafe,/Accepted or uncertain actions/);
+ const reader=markup(ui.BankingWorkspaceView,{data:{packages:[],operatorLoop:{...loop,canResume:false}}});assert.ok(!reader.includes('Resume banking'));assert.match(reader,/company owner/);
+});
+test('BL2 API sends only package and recorded resolution to authenticated company route',async t=>{
+ const prior=global.localStorage;global.localStorage={getItem:()=>null};t.after(()=>{if(prior===undefined)delete global.localStorage;else global.localStorage=prior;});
+ httpReply={data:{resolved:true,packageId:'exact-package'}};
+ const resolution={reason:'Visible-rule contract fixed'};assert.deepEqual(await ui.bankingApi.resume('exact-package',resolution),{resolved:true,packageId:'exact-package'});assert.equal(httpRequest.method,'post');assert.equal(httpRequest.url,'/company/banking-workspace/operator/resume');assert.deepEqual(JSON.parse(httpRequest.data),{packageId:'exact-package',resolution});
+ httpReply='<html>fallback</html>';await assert.rejects(ui.bankingApi.resume('exact-package',resolution),/did not confirm/);
 });

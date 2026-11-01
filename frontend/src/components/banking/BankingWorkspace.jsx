@@ -3,6 +3,7 @@ import { RefreshCw, Landmark, ArrowRight } from 'lucide-react'
 import { Button } from '../ui/button'
 import { bankingApi, bankingError, bankingPeriodState, currentBankingPackages } from '../../api/banking'
 import BankingAccountPeriod from './BankingAccountPeriod'
+import BankingResume from './BankingResume'
 import './banking.css'
 
 export function BankingWorkspaceView({ data, loading = false, error = '', loadedAt, onRefresh, api = bankingApi, accounts = [], scopeKey = 'connected-company', operatorStatusByPackage = {}, refreshKey = 0 }) {
@@ -25,7 +26,7 @@ export function BankingWorkspaceView({ data, loading = false, error = '', loaded
     {error && <div className="banking-notice banking-notice--error" role="alert"><strong>{data ? 'Saved view may be out of date. ' : ''}</strong>{error} <button type="button" onClick={() => onRefresh()}>Try again</button></div>}
     {!data && !error && <p className="banking-notice" role="status">Loading account-month packages and saved evidence…</p>}
     {data && <>
-      {data.operatorLoop?.paused && <div className="banking-notice banking-notice--error" role="alert"><strong>Scheduled banking is paused. </strong>{data.operatorLoop.reason} {data.operatorLoop.recovery}</div>}
+      {data.operatorLoop?.paused && <BankingResume key={scopeKey + ":" + data.operatorLoop.packageId + ":" + data.operatorLoop.at} loop={data.operatorLoop} api={api} onRefresh={onRefresh} stale={Boolean(error || loading)} />}
       <div className="banking-toolbar">
         <label htmlFor={accountFilterId}>Account<select id={accountFilterId} value={accountFilter} onChange={filter(setAccountFilter)}><option value="">All accounts</option>{[...new Set(packages.map(pkg => pkg.accountId))].map(id => <option value={id} key={id}>{accountName(id)}</option>)}</select></label>
         <label htmlFor={monthFilterId}>Month<select id={monthFilterId} value={monthFilter} onChange={filter(setMonthFilter)}><option value="">All months</option>{[...new Set(packages.map(pkg => pkg.period))].sort().map(month => <option key={month}>{month}</option>)}</select></label>

@@ -26,7 +26,21 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
       if(stateStore && !heartbeat.lastRunAt){const previous=await stateStore.read();heartbeat.lastRunAt=previous?.lastRunAt || null;}
       await stateStore?.write({...heartbeat,status:'checking'});
       if(closed || !enabled())return last={status:'disabled'};
-      const paused=localPause || await pauseStore.read();if(paused)return last={status:'blocked',...paused};
+      const paused=localPause || await pauseStore.read();
+      if(paused){
+        if(operator.resolvePause && pauseStore.clear){
+          for(const user of await listUsers()){
+            const list=await workspace.list(user);
+            if(!list.packages.some(p=>p.id===paused.packageId))continue;
+            try{
+              const recovery=await operator.resolvePause(user,{packageId:paused.packageId,pause:paused,automatic:true,clearPause:value=>pauseStore.clear(value)});
+              if(recovery.resolved){localPause=null;return last={status:'resolved',...recovery};}
+              return last={status:'blocked',...paused,automaticRetry:recovery.automaticRetry};
+            }catch(error){return last={status:'blocked',...paused,recoveryReason:error.message};}
+          }
+        }
+        return last={status:'blocked',...paused};
+      }
       let selected=null;
       for(const user of await listUsers()){
         const list=await workspace.list(user);if(list.truncated)throw new Error('Complete banking package inventory required');
@@ -50,14 +64,14 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
       heartbeat.lastRunAt=now();await publish({status:'running',packageId:pkg.id,accountId:pkg.accountId,period:pkg.period,step});
       try {const result=await operator.execute(user,{packageId:pkg.id,step});if(result.status==='stopped' || result.evidence?.result?.status==='stopped')throw new Error('stopped at: '+(result.reason || result.evidence.result.reason));return last={status:'progress',packageId:pkg.id,accountId:pkg.accountId,period:pkg.period,step,runId:result.runId};}
       catch(error){if(error.code==='BANKING_OPERATOR_BUSY')return last={status:'waiting',reason:error.message};throw Object.assign(error,{packageId:pkg.id,accountId:pkg.accountId});}
-    })().then(publish).catch(async error=>{const value={reason:error.message,packageId:error.packageId || null,accountId:error.accountId || null,at:now()};localPause=value;try{await pauseStore.write(value);}catch(persistenceError){localPause={...value,persistenceError:'Durable banking pause could not be saved; no further native work in this process'};}last={status:'blocked',...localPause};heartbeat.lastOutcome=last;try{await stateStore?.write({...heartbeat,...last});}catch{}return last;}).finally(()=>{pending=null;});
+    })().then(publish).catch(async error=>{const value={reason:error.message,packageId:error.packageId || null,accountId:error.accountId || null,at:now()};localPause=value;try{await pauseStore.write(value);localPause=null;}catch(persistenceError){localPause={...value,persistenceError:'Durable banking pause could not be saved; no further native work in this process'};}last={status:'blocked',...(localPause || value)};heartbeat.lastOutcome=last;try{await stateStore?.write({...heartbeat,...last});}catch{}return last;}).finally(()=>{pending=null;});
     return pending;
   }
   function start(){if(closed || timer)return;timer=setTimer(()=>{void tick();},intervalMs);timer.unref?.();void tick();}
   function close(){closed=true;if(timer)clearTimer(timer);timer=null;}
   return {tick,start,close,drain:async()=>{if(pending)await pending;},status:()=>({...last,...heartbeat})};
 }
-function filePauseStore(file){return {read:async()=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}},write:async v=>{await fs.mkdir(path.dirname(file),{recursive:true});try{await fs.writeFile(file,JSON.stringify(v,null,2),{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}}};}
+function filePauseStore(file){return {clear:async expected=>{const current=JSON.parse(await fs.readFile(file,'utf8'));if(require('./banking-workspace-service').hash(current)!==require('./banking-workspace-service').hash(expected))throw Object.assign(new Error('Banking pause changed; inspect the current stop'),{code:'BANKING_RESUME_BLOCKED',status:409});await fs.unlink(file);},read:async()=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}},write:async v=>{await fs.mkdir(path.dirname(file),{recursive:true});try{await fs.writeFile(file,JSON.stringify(v,null,2),{flag:'wx'});}catch(e){if(e.code!=='EEXIST')throw e;}}};}
 function fileStateStore(file){
   let pending=Promise.resolve();
   return {read:filePauseStore(file).read,write:value=>{
@@ -80,6 +94,18 @@ async function readBankingLoopStatus({packages=[],root=path.resolve(__dirname,'.
   const stateVisible=state && packages.some(p=>p.id===state.packageId);
   const lastOutcome=state?.lastOutcome ? stateVisible || !state.lastOutcome.packageId ? state.lastOutcome : {status:state.lastOutcome.status,reason:'Inspect the retained local operator diagnostics.'} : null;
   const visible=pause && packages.some(p=>p.id===pause.packageId);
-  return {status:pause?'blocked':enabled?(state?.status || 'scheduled'):'disabled',lastTickAt:state?.lastTickAt || null,lastRunAt:state?.lastRunAt || null,lastOutcome,paused:Boolean(pause),enabled,reason:pause ? visible ? pause.reason : 'Scheduled banking is paused. Inspect the retained local operator diagnostics.' : null,packageId:visible?pause.packageId:null,accountId:visible?pause.accountId:null,at:pause?.at || null,recovery:pause?'Observe native state, preserve accepted actions and resolve the block before explicitly clearing the pause. Never replay an uncertain upload or Add.':null};
+  let automaticRetry=null,requiresInspection=true;
+  const pkg=visible && packages.find(p=>p.id===pause.packageId);
+  if(pkg?.snapshot?.scope){
+    try{
+      const O=require('./banking-operator'),R=require('./banking-operator-resolution');
+      const runs=await O.createFileJournal(path.join(root,'artifacts/banking/operator-journal')).list(pkg.snapshot.scope,pkg.accountId);
+      const entry=runs.find(r=>r.packageId===pkg.id && !R.settled(r));
+      if(entry){let result=entry.result;if(!result){const retained=await require('./banking-operator-recovery').readRetainedTerraResult(root,entry);if(retained)result=O.parseTerraReply(retained.reply,{data:{...entry,account:{id:entry.accountId,currency:pkg.accountCurrency}}});}
+        automaticRetry=R.retryPolicy({...entry,result},runs,new Date().toISOString());requiresInspection=!R.noNativeEffect(entry,result);
+      }
+    }catch{/* Missing evidence keeps manual inspection required. */}
+  }
+  return {automaticRetry,recoveryReason:pause && stateVisible ? state?.lastOutcome?.recoveryReason || null : null,requiresInspection,resumeAvailable:Boolean(visible),status:pause?'blocked':enabled?(state?.status || 'scheduled'):'disabled',lastTickAt:state?.lastTickAt || null,lastRunAt:state?.lastRunAt || null,lastOutcome,paused:Boolean(pause),enabled,reason:pause ? visible ? pause.reason : 'Scheduled banking is paused. Inspect the retained local operator diagnostics.' : null,packageId:visible?pause.packageId:null,accountId:visible?pause.accountId:null,at:pause?.at || null,recovery:pause?'Observe native state, preserve accepted actions and resolve the block before explicitly clearing the pause. Never replay an uncertain upload or Add.':null};
 }
 module.exports={readBankingLoopStatus,createBankingOperatorLoop,currentPackages,nextStep,filePauseStore,fileStateStore,terraBusy};

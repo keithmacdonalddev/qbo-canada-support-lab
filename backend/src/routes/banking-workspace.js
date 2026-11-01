@@ -22,15 +22,25 @@ function createBankingWorkspaceRouter(dependencies = {}) {
       res.status(status).json({ error: status === 500 ? 'Banking evidence could not be confirmed. Retain the exact request and retry.' : error.message, code: status === 500 ? 'BANKING_FAILED' : error.code });
     }
   };
+  const operator = () => dependencies.operator || require('../modules/banking-accountant-tools').createBankingRuntime({workspace:service()}).operator;
   router.get('/', action(async req => {
     const list=await service().list(req.user,req.query);
-    return {...list,operatorLoop:await (dependencies.readLoopStatus || require('../modules/banking-operator-loop').readBankingLoopStatus)({packages:list.packages})};
+    const operatorLoop=await (dependencies.readLoopStatus || require('../modules/banking-operator-loop').readBankingLoopStatus)({packages:list.packages});
+    let canResume=false;
+    if(operatorLoop.resumeAvailable && operatorLoop.packageId){try{canResume=await operator().canResume(req.user,operatorLoop.packageId);}catch(error){if(!['BANKING_RESUME_FORBIDDEN','BUSINESS_ACCESS_DENIED'].includes(error.code))throw error;}}
+    return {...list,operatorLoop:{...operatorLoop,canResume}};
   }, ['accountId','period']));
+  router.post('/operator/resume', action(async req => {
+    const body=req.body;
+    if(!body || Object.keys(body).some(k=>!['packageId','resolution'].includes(k)) || !/^[a-f0-9]{64}$/.test(body.packageId || ''))throw Object.assign(new Error('Exact packageId and resolution required'),{code:'BANKING_INVALID',status:400});
+    const L=require('../modules/banking-operator-loop');
+    const store=dependencies.pauseStore || L.filePauseStore(require('node:path').resolve(__dirname,'../../../artifacts/banking/operator-loop-paused.json'));
+    return operator().resolvePause(req.user,{packageId:body.packageId,resolution:body.resolution,pause:await store.read(),clearPause:value=>store.clear(value)});
+  }));
   router.post('/packages', action(req => service().register(req.user, req.body)));
   router.get('/packages/:id', action(async req => {
     const pkg=await service().detail(req.user,req.params.id);
-    const operator=dependencies.operator || require('../modules/banking-accountant-tools').createBankingRuntime({workspace:service()}).operator;
-    return {...pkg,operatorStatus:await operator.status(req.user,pkg.id)};
+    return {...pkg,operatorStatus:await operator().status(req.user,pkg.id)};
   }));
   router.get('/packages/:id/files/:fileId', action(async (req, res) => {
     const file = await service().download(req.user, req.params.id, req.params.fileId);

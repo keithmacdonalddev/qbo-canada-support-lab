@@ -4,6 +4,11 @@ import client from './client'
 const base = '/company/banking-workspace'
 const segment = value => encodeURIComponent(String(value))
 export const bankingApi = {
+  async resume(packageId, resolution) {
+    const data = (await client.post(base + '/operator/resume', { packageId, resolution })).data?.data
+    if (data?.resolved !== true || data.packageId !== packageId) throw new Error('The server did not confirm this banking resolution. Refresh and inspect the current pause before retrying.')
+    return data
+  },
   async list({ signal } = {}) {
     const data = (await client.get(base, { signal })).data?.data
     if (!Array.isArray(data?.packages)) throw new Error('The server did not return a banking workspace. Refresh after integration is complete.')
