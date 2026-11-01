@@ -22,6 +22,12 @@ const CATEGORIES = Object.freeze({
 // Search metadata for the known tools. A tool missing here still registers (category from
 // its catalog group when known, otherwise other) so a newly added tool is never lost.
 const INFO = Object.freeze({
+  reviewCapability: {category:"notes",keywords:["records","build","list","status","changes","resolutions","and","regressions","with","evidence"]},
+  recordCloseChecklistEvidence: {category:"notes",keywords:["records","close","evidence","and","exceptions","manual","owner","attestations","stay","manual"]},
+  getCloseChecklist: {category:"business-read",keywords:["reads","month","end","checks","and","evidence"]},
+  getWeeklyCoverage: {category:"business-read",keywords:["measures","seven","day","feature","class","and","location","breadth"]},
+  getCoverageSituations: {category:"business-read",keywords:["measures","present","and","missing","situations","from","the","synchronized","copy"]},
+  findBusinessOperation: {category:"business-read",keywords:["decisionKey","lookup","original","retained","operation"]},
   lookupCustomer: { category: 'quickbooks-read', keywords: ['customer', 'balance', 'client', 'find', 'contact'] },
   lookupInvoice: { category: 'quickbooks-read', keywords: ['invoice', 'number', 'receivable', 'open', 'find'] },
   searchEntities: { category: 'quickbooks-read', keywords: ['search', 'query', 'records', 'entity', 'bill', 'item', 'vendor', 'supplier', 'account', 'journal', 'tax', 'preferences', 'list'] },

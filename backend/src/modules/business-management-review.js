@@ -8,14 +8,7 @@ const { hash, shift } = require('./business-calendar');
 const cadence = require('./business-agent-cadence');
 
 // One short block, in every review's instructions.
-const JOB_DESCRIPTION = Object.freeze([
-  'R01 Support usefulness first: this company exists for Intuit troubleshooting, teaching and learning. Prefer realistic support scenarios over volume (partial and overdue payments, credits and refunds, stock-outs, partial purchase-order receipts, mixed-tax sales, corrections, month-end). Use every QuickBooks feature regularly as natural business activity; gaps are measured from records (context.management.coverage), never claimed.',
-  'R02 A medium-sized, very active business: meet today’s rhythm (context.today) and grow customers, suppliers and items as volume rises.',
-  'R04 Head accountant, manager, consultant and decision maker: watch cash, margins, collections, overdue payables, stock, pricing and seasonality; decide and advise.',
-  'R05 Tools: context.management.responsibilities maps each responsibility to its tools. For a gap no tool can close, file requestCapability (once per gap, reuse its key); never ask the owner.',
-  'R06 Apply the owner’s instructions and answers.',
-  'R11 Explain what happened, what is unfinished and what is next.',
-]);
+const jobDescription = () => [require('./business-owner-intent').readOwnerIntent(), 'Every review expires historical blocked beliefs. Recheck context.beliefChecks, current build status and eligible choices. When work is due, attempt one real governed preparation for independent eligible work before concluding a retained validation note blocks sales. Keep the original decision key for retries; never replace saved or unknown writes. A resolved capability means available code unless evidence separately establishes a business outcome. Reopened failures require a specific fresh action check.'];
 const REQUIREMENTS = Object.freeze(['R01', 'R02', 'R04', 'R05', 'R06', 'R11']);
 const FINDING_STATUS = Object.freeze(['on-track', 'attention', 'gap']);
 const CHANGE_AREAS = Object.freeze(['customers', 'suppliers', 'items', 'sales-mix', 'scenario', 'collections', 'payables', 'stock', 'close', 'other']);
@@ -24,17 +17,13 @@ const PRIORITIES = Object.freeze(['high', 'medium', 'low']);
 // Responsibility -> tools that exist, and the known gaps from the tool catalog
 // (business-agent-catalog.js). The accountant files requests for gaps it confirms.
 const RESPONSIBILITIES = Object.freeze([
-  { key: 'sales', responsibility: 'Service sales', tools: ['settled-service-sale (today)', 'prepareBusinessPeriod (scheduled periods)'], missing: ['new sales left open on credit terms and collected later (today every new sale is settled at once)', 'sales receipts today (scheduled periods only)'] },
-  { key: 'receivables', responsibility: 'Receivables and collections', tools: ['getObligations', 'collect-adopted-invoice', 'customer-credit', 'customer-refund'], missing: ['partial customer payments', 'collecting invoices entered outside the app'] },
-  { key: 'payables', responsibility: 'Purchases and payables', tools: ['getObligations', 'pay-adopted-bill', 'paid-operating-expense', 'paid-cash-expense', 'supplier-credit'], missing: ['partial bill payments', 'paying bills entered outside the app', 'cheques and credit-card charges'] },
-  { key: 'inventory', responsibility: 'Inventory', tools: ['receive-purchase-order (whole orders)'], missing: ['partial purchase-order receipts', 'new purchase orders today', 'inventory quantity adjustments', 'new stocked items'] },
-  { key: 'banking', responsibility: 'Cash and banking', tools: ['bank-transfer (needs two published bank accounts)', 'journal-entry'], missing: ['a second published bank account for transfers', 'bank reconciliation (manual in QuickBooks)'] },
-  { key: 'master-data', responsibility: 'Customers, suppliers and items', tools: ['add-customer', 'add-supplier', 'add-item (service items)'], missing: ['employees, classes, locations, payment terms and accounts'] },
-  { key: 'corrections', responsibility: 'Corrections', tools: ['correct-own-record'], missing: ['correcting legacy or manual records entered outside the app'] },
-  { key: 'close', responsibility: 'Period close and reports', tools: ['prepareBusinessPeriod', 'executeBusinessPeriod', 'runReport'], missing: ['a month-end close checklist with reconciliation evidence'] },
-  { key: 'consulting', responsibility: 'Analysis and advice', tools: ['runReport', 'getObligations', 'context.management measures', 'recordBusinessDecision'], missing: [] },
-  { key: 'troubleshooting', responsibility: 'Troubleshooting and learning', tools: ['linkReproductionCase'], missing: [] },
-  { key: 'planning', responsibility: 'Daily plan and build list', tools: ['recordDailyPlan', 'requestCapability', 'rememberBusinessContext'], missing: [] },
+ {key:'sales',responsibility:'Sales and collections',tools:['manageQboRecord','prepareBusinessActivity','getObligations'],missing:[]},
+ {key:'payables',responsibility:'Purchases and payables',tools:['manageQboRecord','getObligations'],missing:[]},
+ {key:'inventory',responsibility:'Stock',tools:['getBusinessActivityChoices','getQboEntitySchema','manageQboRecord (inventory gate applies)'],missing:['Inventory adjustments and returns require supported tools and enabled gates']},
+ {key:'banking',responsibility:'Banking',tools:['manageQboRecord','getCloseChecklist','recordCloseChecklistEvidence'],missing:['Native bank reconciliation requires manual evidence; never infer completion']},
+ {key:'master-data',responsibility:'Lists, classes and locations',tools:['manageQboRecord','getQboEntitySchema'],missing:[]},
+ {key:'close',responsibility:'Close and evidence',tools:['prepareBusinessPeriod','executeBusinessPeriod','getCloseChecklist','recordCloseChecklistEvidence'],missing:[]},
+ {key:'planning',responsibility:'Planning, breadth and build list',tools:['getManagementReview','recordDailyPlan','requestCapability','reviewCapability','getCoverageSituations','getWeeklyCoverage','findBusinessOperation'],missing:[]}
 ]);
 
 // Management review time and attempts live with the cadence (business-agent-cadence.js).
@@ -82,15 +71,9 @@ function planContext(plan, day) {
 }
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 function openRequests(events = []) {
-  const seen = new Set(), out = [];
-  for (const row of events) {
-    if (row?.kind !== 'capability-request' || !row.key || seen.has(row.key)) continue;
-    seen.add(row.key);
-    if (row.status === 'open' || !row.status) out.push({ id: row.id, key: row.key, title: row.title, requirement: row.requirement, priority: row.priority, missing: row.missing, feature: row.feature, why: row.why, at: row.at, ...(row.errorDetail ? { errorDetail: row.errorDetail, count: row.count, firstAt: row.firstAt, lastAt: row.lastAt } : {}) });
-  }
-  return out.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3) || String(b.at).localeCompare(String(a.at)));
+ return require('./business-capability-review').fold(events).filter(r=>r.status!=='resolved').sort((a,b)=>(PRIORITY_ORDER[a.priority]??3)-(PRIORITY_ORDER[b.priority]??3));
 }
-
+function recentResolutions(events=[]) {return require('./business-capability-review').fold(events).filter(r=>r.status==='resolved').sort((a,b)=>String(b.at).localeCompare(String(a.at))).slice(0,20);}
 // ---------------------------------------------------------------------------
 // Measures from local mirrored records (pure)
 // ---------------------------------------------------------------------------
@@ -214,6 +197,8 @@ function managementContext({ snapshot = null, today = null, events = [], decisio
     measures: snapshot?.measures || null,
     today: today && !today.unavailable ? { label: today.label, target: today.target, saved: today.saved, verified: today.verified, reserved: today.reserved, byEntity: today.byEntity, slotCount: today.slotCount } : null,
     coverage: compactCoverage(snapshot?.coverage || null),
+    situations: snapshot?.situations ? {...snapshot.situations,rows:snapshot.situations.rows.slice(0,12)} : null, weekly: snapshot?.weekly ? {...snapshot.weekly,rows:snapshot.weekly.rows.filter(r=>r.status!=='covered').slice(0,15)} : null,
+    recentResolutions: recentResolutions(requests),
     problems: problemsOf(events, nowMs),
     ownerAnswers: ownerAnswersOf(decisions),
     responsibilities: RESPONSIBILITIES,
@@ -227,24 +212,28 @@ function managementContext({ snapshot = null, today = null, events = [], decisio
 const ROW_LIMIT = 40000, LOOKBACK_DAYS = 365;
 const snapshots = new Map(), inflight = new Map();
 const scopeKey = scope => hash({ environment: scope.environment, realmId: String(scope.realmId), connectionId: String(scope.connectionId) });
-async function readSnapshot(scope, Records, day) {
-  const since = shift(day, -LOOKBACK_DAYS), lists = [...LISTS];
-  const rows = await Records.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, deleted: false, $or: [{ entity: { $in: lists } }, { entity: { $nin: lists }, 'summary.txnDate': { $gte: since } }] })
-    .select('entity record summary').limit(ROW_LIMIT).maxTimeMS(20000).lean();
-  const coverage = { ...coverageFromRecords(rows, day), source: 'local-mirror', checkedAt: new Date().toISOString(), lookbackDays: LOOKBACK_DAYS };
-  return { asOf: new Date().toISOString(), day, truncated: rows.length >= ROW_LIMIT, records: rows.length, measures: measuresFromRecords(rows, day), coverage };
+async function readSnapshot(scope, Records, day, sources={}, nowMs=Date.now()) {
+
+  const rows = await Records.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId })
+    .select('entity qboId deleted record summary').limit(ROW_LIMIT).maxTimeMS(20000).lean();
+  const liveRows=rows.filter(r=>r.deleted!==true&&r.record?.status!=='Deleted');
+  const coverage = { ...coverageFromRecords(liveRows, day), source: 'local-mirror', checkedAt: new Date().toISOString(), lookbackDays: LOOKBACK_DAYS };
+  const breadth=require('./coverage'), input={records:rows,sources,truncated:rows.length>=ROW_LIMIT}, opts={today:day,now:new Date(nowMs)};
+  const situations=breadth.situations(input,opts),weekly=breadth.weekly(input,{...opts,situations});
+  const collections=liveRows.filter(r=>r.entity==='Payment'&&fieldsOf(r).txnDate===day);
+  return { collections:{count:collections.length,cents:collections.reduce((sum,r)=>sum+fieldsOf(r).amount,0)}, situations, weekly, asOf: new Date(nowMs).toISOString(), day, truncated: rows.length >= ROW_LIMIT, records: rows.length, measures: measuresFromRecords(liveRows, day), coverage };
 }
-async function snapshotFor(scope, { Records, nowMs = Date.now(), refresh = false } = {}) {
+async function snapshotFor(scope, { Records, nowMs = Date.now(), refresh = false, sources = {} } = {}) {
   if (!Records) throw new Error('The local company copy is unavailable.');
-  const key = scopeKey(scope), day = cadence.localParts(nowMs).date, hit = snapshots.get(key);
-  if (!refresh && hit && hit.day === day) return hit;
+  const key = scopeKey(scope)+':'+hash(sources), day = cadence.localParts(nowMs).date, hit = snapshots.get(key);
+  if (!refresh && hit && hit.day === day && nowMs-Date.parse(hit.asOf)<60000) return hit;
   if (inflight.has(key)) return inflight.get(key);
-  const run = readSnapshot(scope, Records, day).then(value => { if (snapshots.size >= 20) snapshots.clear(); snapshots.set(key, value); return value; }).finally(() => inflight.delete(key));
+  const run = readSnapshot(scope, Records, day, sources, nowMs).then(value => { if (snapshots.size >= 20) snapshots.clear(); snapshots.set(key, value); return value; }).finally(() => inflight.delete(key));
   inflight.set(key, run);
   return run;
 }
 // The work list's feature check when no QuickBooks coverage check ran since the server started.
-function cachedCoverage(scope) { const hit = snapshots.get(scopeKey(scope)); return hit ? hit.coverage : null; }
+function cachedCoverage(scope) {const prefix=scopeKey(scope)+':',hits=[...snapshots].filter(([key])=>key.startsWith(prefix)).map(([,hit])=>hit).sort((a,b)=>String(b.asOf).localeCompare(String(a.asOf)));return hits[0]?.coverage||null;}
 // Build today's snapshot in the background (once per day; failures are retried on the next call).
 const warmed = new Map();
 function warm(scope, Records, nowMs = Date.now()) {
@@ -256,6 +245,6 @@ function warm(scope, Records, nowMs = Date.now()) {
   snapshotFor(scope, { Records, nowMs }).catch(() => {});
 }
 
-module.exports = { JOB_DESCRIPTION, REQUIREMENTS, FINDING_STATUS, CHANGE_AREAS, PRIORITIES, RESPONSIBILITIES, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt,
+module.exports = { get JOB_DESCRIPTION(){return jobDescription();}, recentResolutions, REQUIREMENTS, FINDING_STATUS, CHANGE_AREAS, PRIORITIES, RESPONSIBILITIES, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt,
   dailyPlanEvent, capabilityRequestEvent, planContext, openRequests, coverageFromRecords, measuresFromRecords, compactCoverage, problemsOf, ownerAnswersOf, managementContext,
   snapshotFor, cachedCoverage, warm, _internal: { snapshots, warmed, agingOf, priorPeriod, volumeOn, scenariosOf } };

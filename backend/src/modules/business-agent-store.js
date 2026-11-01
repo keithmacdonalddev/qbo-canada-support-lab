@@ -164,7 +164,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     // Current-day prepared plans are returned too: they occupy one of the three operation slots.
     const today=require('./business-activity-preview').businessDate(new Date(now()));
     const query={environment:scope.environment,realmId:scope.realmId,connectionId:scope.connectionId,'agentAuthority.agentId':agentId,$or:[{status:{$in:UNFINISHED}},{status:'previewed','activityBatch.day':{$lte:today}}],...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{})};
-    const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day agentAuthority executionRequest.pending executionRequest.requestedAt nextOrdinal deferredSteps').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
+    const rows=await models.Runs.find(query).select('_id status planHash fromDate throughDate activityBatch.day activityBatch.decisionKey agentAuthority executionRequest.pending executionRequest.requestedAt nextOrdinal deferredSteps').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
 
     const calendar=models.Calendars?await models.Calendars.findOne(scope).select('currentOperationId').maxTimeMS(3000).lean():null;
     const writer=models.Writers?await models.Writers.findOne({environment:scope.environment,realmId:scope.realmId}).select('operationId').maxTimeMS(3000).lean():null;
@@ -179,7 +179,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         const effect=receipt||!models.Steps?true:await models.Steps.exists({environment:scope.environment,realmId:scope.realmId,operationId:row._id,$or:[{state:{$ne:'claimed'}},{dispatch:{$ne:null}},{receipt:{$ne:null}},{qboId:{$ne:null}}]}).maxTimeMS(3000);
         disposition=effect?'stranded':'unsent';
       }
-      out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,agentAuthority:row.agentAuthority||null,executionPending:pending,...((row.deferredSteps?.length||row.status==='awaiting-evidence')?{recheckAvailable:true,executionRequestedAt:row.executionRequest?.requestedAt||null}:{}),completedRecords:Math.max(0,(row.nextOrdinal||0)-(row.deferredSteps||[]).length),holdsSlot:holds,disposition});
+      out.push({operationId:id,status:row.status,planHash:row.planHash||null,fromDate:row.fromDate||null,throughDate:row.throughDate||null,day:row.activityBatch?.day||row.throughDate||null,...(row.activityBatch?.decisionKey?{decisionKey:row.activityBatch.decisionKey}:{}),agentAuthority:row.agentAuthority||null,executionPending:pending,...((row.deferredSteps?.length||row.status==='awaiting-evidence')?{recheckAvailable:true,executionRequestedAt:row.executionRequest?.requestedAt||null}:{}),completedRecords:Math.max(0,(row.nextOrdinal||0)-(row.deferredSteps||[]).length),holdsSlot:holds,disposition});
     }
     if(models.GeneralWriteRuns){
       const general=await models.GeneralWriteRuns.find({...scope,contract:'general-write-v1','agentAuthority.agentId':agentId,...(grant?{'agentAuthority.grantId':grant.id,'agentAuthority.authorityHash':grant.authorityHash}:{}),status:{$in:['prepared','sending','held','unknown']}}).select('_id status day decisionKey agentAuthority items plan.operations.op plan.operations.ref batches.state batches.transport.receiptId').sort({_id:1}).limit(100).maxTimeMS(3000).lean();
@@ -226,7 +226,19 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   }
   // The daily management review's records (business-management-review.js): the latest daily plan and the build list.
   async function latestDailyPlan(row){const value=await Events.findOne({agentId:String(row._id),kind:'daily-plan'}).sort({at:-1,_id:-1}).maxTimeMS(3000).lean();return value?publicEvent(value):null;}
-  async function capabilityRequests(row){const rows=await Events.find({agentId:String(row._id),kind:'capability-request'}).sort({at:-1,_id:-1}).limit(60).maxTimeMS(3000).lean();return rows.map(publicEvent);}
+  async function capabilityRequests(row){const rows=await Events.find({agentId:String(row._id),kind:{$in:['capability-request','capability-review']}}).sort({at:-1,_id:-1}).limit(2000).maxTimeMS(3000).lean();if(rows.length>=2000)throw new Error('Build-list history exceeds the bounded read; no requests were cleared.');return rows.map(publicEvent);}
+
+  async function writeDecisions(row){
+    const agentId=String(row._id),rows=await Events.aggregate([
+      {$match:{agentId,kind:'accountant-write-decision'}},
+      {$lookup:{from:Events.collection.name,let:{decisionId:'$_id'},pipeline:[{$match:{agentId,kind:'accountant-write-outcome-complete',$expr:{$eq:['$data.decisionId','$$decisionId']}}},{$sort:{at:-1,_id:-1}},{$limit:1}],as:'lastOutcome'}},
+      {$match:{'lastOutcome.data.status':{$nin:['verified','retired','complete','needs-correction','no-retained-operation']}}},
+      {$addFields:{lastChecked:{$ifNull:[{$arrayElemAt:['$lastOutcome.at',0]},'$at']}}},{$sort:{lastChecked:1,_id:1}},{$limit:20}
+    ]).option({maxTimeMS:3000});
+    const links=await Events.find({agentId,kind:{$in:['accountant-write-link','accountant-write-key']},'data.decisionId':{$in:rows.map(r=>String(r._id))}}).sort({at:-1}).limit(100).maxTimeMS(3000).lean();
+    return rows.map(r=>({...publicEvent(r),decisionKey:links.find(l=>l.kind==='accountant-write-key'&&l.data.decisionId===String(r._id))?.data.decisionKey||r.data?.decisionKey,operationId:links.find(l=>l.kind==='accountant-write-link'&&l.data.decisionId===String(r._id))?.data.operationId||r.data?.operationId||null}));
+  }
+  async function latestScorecard(row,day=null){const value=await Events.findOne({agentId:String(row._id),kind:'daily-scorecard',...(day?{'data.day':{$lt:day}}:{})}).sort({at:-1,_id:-1}).maxTimeMS(3000).lean();return value?publicEvent(value):null;}
   async function due(limit=20){return Agents.find({'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]}).select('_id').sort({nextWakeAt:1,_id:1}).limit(limit).maxTimeMS(3000).lean();}
   async function claim(id,token,leaseMs){return Agents.findOneAndUpdate({_id:id,'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]},{$set:{leaseToken:token,leaseExpiresAt:new Date(now()+leaseMs),currentWork:'Checking the current business state'}},{new:true}).lean();}
   async function current(row,token){const value=await Agents.findOne({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}}).maxTimeMS(3000).lean();if(!value)fail('The business worker was paused, changed or lost its lease.');return value;}
@@ -238,7 +250,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   let liveReader=null;
   async function liveActivity(scope,options){liveReader||=require('./business-agent-live').createLiveActivityReader({models,now});return liveReader(scope,options);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
-  async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.activities.type').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
+  async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.decisionKey activityBatch.activities.type').maxTimeMS(3000).lean();}
+  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

@@ -78,9 +78,28 @@ function createBusinessAgentService(options={}) {
   // The management review's measures, from the local company copy (no QuickBooks calls); a failure is stated, never fatal.
   async function managementContextFor(scope,row,today,events,decisions){
     const requestsList=await capabilityRequestsFor(row);
+    const currentEvidence=await reviewEvidence(row,await store.business(scope),today).catch(()=>({evidenceUnavailable:true}));
     const supportScenarios=await require('./reproduction-business').recentCaseTypes({...scope,ownerId:String(row.ownerId)},{now:now()}).catch(()=>({unavailable:true}));
-    try{const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now()});return {...management.managementContext({snapshot,today,events,decisions,requests:requestsList,nowMs:now()}),supportScenarios};}
+    try{const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now(),sources:row.sync?.sources||{}});return {...management.managementContext({snapshot,today,events,decisions,requests:requestsList,nowMs:now()}),supportScenarios,...currentEvidence};}
     catch{return {...management.managementContext({snapshot:null,today,events,decisions,requests:requestsList,nowMs:now(),error:'The local company measures could not be read this time; use the read tools.'}),supportScenarios};}
+  }
+
+  async function reviewEvidence(row,business,today,{persist=false}={}){
+    const scope=scopeOf(row),beliefs=require('./business-agent-beliefs'),capability=require('./business-capability-review'),accountability=require('./business-agent-accountability');
+    const checks=await beliefs.checkBeliefs({models:store.models,scope,ownerId:String(row.ownerId),business,sync:publicSync(row,now()),now});
+    let requests=typeof store.capabilityRequests==='function'?await store.capabilityRequests(row):[];
+    if(persist&&typeof store.event==='function'&&typeof store.capabilityRequests==='function'){
+      await capability.reconcile({requests,checks,models:store.models,scope,toolNames:require('./business-agent-tools').EXTRA_TOOLS.map(t=>t.name),event:value=>store.event(row,'capability-review',value.title,value.detail,value.data,null,value.key)});
+      requests=await store.capabilityRequests(row);
+    }
+    const snapshot=await management.snapshotFor(scope,{Records:store.models?.Records,nowMs:now(),sources:row.sync?.sources||{}}).catch(()=>null);
+    const prior=typeof store.latestScorecard==='function'?await store.latestScorecard(row,cadence.localParts(now()).date):null;
+    const scorecard=accountability.scorecard({day:cadence.localParts(now()).date,today,snapshot,prior:prior?.scorecard?.situations,business,blockers:{blockers:checks.blockers,unavailable:!checks.blockersKnown}});
+    if(persist){
+      if(typeof store.writeDecisions==='function')for(const decision of await store.writeDecisions(row)){try{await accountability.retainOutcome({store,row,scope,decision});}catch{/* Keep this intent pending for a later bounded reconciliation; independent work continues. */}}
+      await store.event(row,'daily-scorecard','Daily owner-intent scorecard','Saved records, coverage, collections, closes and current blockers.',{day:scorecard.day,scorecard},null,'scorecard:'+hash(scorecard));
+    }
+    return {beliefChecks:checks,scorecard,capabilityRequests:management.openRequests(requests),recentResolutions:management.recentResolutions(requests)};
   }
   const leaseMs=240000,scanMs=5000;
   async function bind(user,action='operations.read') {
@@ -109,9 +128,11 @@ function createBusinessAgentService(options={}) {
     const daily=row?await managementFor(row):null,buildList=row?management.openRequests(await capabilityRequestsFor(row)):[];
     if(!options.coverageFor&&business.published&&store.models?.Records)management.warm(bound.scope,store.models.Records,now());
     const today=row&&business.published?await todayFor(bound.scope,row):null,calendarClose=business.published?cadence.nextClose(business,cadence.localParts(now()).date):null,owned=row&&business.published?await ownedFor(bound.scope,row):[];
+    const lastScore=row&&typeof store.latestScorecard==='function'?await store.latestScorecard(row).catch(()=>null):null;
+    const reviewState={scorecard:lastScore?.scorecard?.day===cadence.localParts(now()).date?lastScore.scorecard:null,recentResolutions:row?management.recentResolutions(await capabilityRequestsFor(row)):[]};
     return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
       agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':row.status||'ready',summary:reconcileRetained(row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),business),memory:reconcileRetained(row?.memory,business),currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:row?.lastError||lastScanError,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
-      management:managementView(daily,buildList,today),sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business:{...business,currentStateUpdates:currentStateUpdates(business)},events,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),capabilities:businessAgentCapabilities(),
+      management:{...managementView(daily,buildList,today),...reviewState},sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business:{...business,currentStateUpdates:currentStateUpdates(business)},events,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),capabilities:businessAgentCapabilities(),
       work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
       rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today,calendarClose,requests,cadence:row?.cadence||null})};
   }
@@ -351,7 +372,7 @@ function createBusinessAgentService(options={}) {
       if(!row.grant||run.agentAuthority?.agentId!==String(row._id)||run.agentAuthority?.grantId!==row.grant.id||run.agentAuthority?.ownerId!==ownerId||!run.planHash)return false;
       await guard('authority');
       let outcome;
-      try{outcome=await governanceFor(run.agentAuthority,{token,now}).resolveUnknownAutomatically(user,run.operationId,{planHash:run.planHash},{signal:controller.signal});}
+      try{await retainAutomaticDecision(run,'automatic-unknown-resolution');outcome=await governanceFor(run.agentAuthority,{token,now}).resolveUnknownAutomatically(user,run.operationId,{planHash:run.planHash},{signal:controller.signal});}
       catch(error){if(error?.businessAgentFatal)throw error;outcome={state:'ambiguous',message:safeError(error)};}
       if(['attributed','not-created'].includes(outcome.state)){try{await store.event(row,'plan-decision',outcome.state==='attributed'?'Main accountant attributed an uncertain QuickBooks request':'Main accountant proved an uncertain QuickBooks request created nothing',outcome.message,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant',qboWrites:0,...(outcome.qboId?{qboId:outcome.qboId}:{})},null,hash({operationId:run.operationId,phase:'auto-unknown',state:outcome.state,qboId:outcome.qboId||null}),'accountant');}catch{/* The recovery audit is the durable record. */}return true;}
       if(outcome.state==='ambiguous'){try{await store.event(row,'attention','An uncertain QuickBooks request is held',outcome.message,{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-unknown-held',message:outcome.message}),'accountant');}catch{/* Visible on the next pass. */}}
@@ -359,6 +380,10 @@ function createBusinessAgentService(options={}) {
     };
     // After an automatic recovery the operation continues at once under the standing grant (the same
     // execution request resumeBusinessOperation queues), without waiting for a model review.
+    const retainAutomaticDecision=async(run,phase)=>{
+      const data={version:1,day:cadence.localParts(now()).date,tool:phase,goal:'Preserve accepted records and continue governed business activity',reason:'Continue the exact retained operation after current recovery checks; preserve the original payload and request identity.',planItem:'Recovery of original operation '+run.operationId,planId:null,decisionKey:run.decisionKey||run.activityBatch?.decisionKey||('operation:'+run.operationId),operationId:run.operationId};
+      return store.event(row,'accountant-write-decision','Automatic accountant continuation',data.reason,data,null,hash({operationId:run.operationId,phase,minute:Math.floor(now()/60000)}));
+    };
     const continueRecovered=async(run,recoveryDue=false)=>{
       // General plans keep their exact saved payload and decision identity; no model reconstruction.
       if(run.contract==='general-write-v1'){
@@ -376,6 +401,7 @@ function createBusinessAgentService(options={}) {
         try{
           if(!await companyAllows())return false;
           const general=options.generalWrites||require('./general-write-service').createDefaultGeneralWrite({now,access});
+          await retainAutomaticDecision(run,'automatic-general-continuation');
           const result=await general.execute({scope,ownerId,actorId:ownerId,agentAuthority:run.agentAuthority},run.operationId);
           if(typeof store.forgetToday==='function')store.forgetToday();
           return result?.status==='complete';
@@ -396,7 +422,7 @@ function createBusinessAgentService(options={}) {
       }
       if(!check.pending)return false;
       await guard('authority');
-      try{await execution.request(user,run.operationId,{planHash:run.planHash,requestKey:hash({operationId:run.operationId,phase:'auto-recovery-continue',at:check.at})});}
+      try{await retainAutomaticDecision(run,'automatic-fixed-continuation');await execution.request(user,run.operationId,{planHash:run.planHash,requestKey:hash({operationId:run.operationId,phase:'auto-recovery-continue',at:check.at})});}
       catch(error){if(error?.businessAgentFatal)throw error;try{await store.event(row,'attention','Recovered work could not be continued',safeError(error),{operationId:run.operationId,href:'/company/manage'},null,hash({operationId:run.operationId,phase:'auto-recovery-continue-failed',at:check.at}),'accountant');}catch{/* Visible on the next pass. */}return false;}
       try{await store.event(row,'plan-decision',pendingClose?'Main accountant retried an open calendar close':'Main accountant continued its recovered work',pendingClose?'The earlier day remains open and unverified while its original report close retries. Independent current-day activity can continue.':`The uncertain QuickBooks request was resolved automatically; the operation's remaining records are being sent.`,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({operationId:run.operationId,phase:'auto-recovery-continued',at:check.at}),'accountant');}catch{/* The execution audit is the durable record. */}
       return true;
@@ -489,9 +515,10 @@ function createBusinessAgentService(options={}) {
           try { return await tools.execute(name,input); } finally { requiredEntities = null; }
         };
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
-        const reviewBlockers=(await blockerView(scope)).blockers;
-        business={...business,errorBlockers:reviewBlockers};
-        const context={blockers:reviewBlockers,usage:usageState,ownerInstructions:row.settings.instructions,memory:reconcileRetained(role==='accountant'?row.memory:row.specialists?.[role]?.memory,business),currentStateUpdates:currentStateUpdates(business),company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,owned,requests,cadence:row.cadence||null}).items};
+        const diagnosticState=await blockerView(scope),reviewBlockers=diagnosticState.blockers;
+        business={...business,errorBlockers:reviewBlockers,diagnosticsUnavailable:diagnosticState.unavailable===true};
+        const reviewState=role==='accountant'?await reviewEvidence(row,business,today,{persist:true}).catch(()=>({evidenceUnavailable:true})):{};
+        const context={...reviewState,blockers:reviewBlockers,usage:usageState,ownerInstructions:row.settings.instructions,memory:require('./business-agent-beliefs').memoryForReview(reconcileRetained(role==='accountant'?row.memory:row.specialists?.[role]?.memory,business),reviewState.beliefChecks),currentStateUpdates:currentStateUpdates(business),company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,owned,requests,cadence:row.cadence||null}).items};
         let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(executeScoped),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:REVIEW_LIMITS.ms,maxRounds:REVIEW_LIMITS.rounds,maxCalls:REVIEW_LIMITS.calls,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
           // Model calls are not writes: they need authority, not current sources. Write steps refresh sources themselves.
           await guard('authority');

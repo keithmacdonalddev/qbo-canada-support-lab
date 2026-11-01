@@ -17,7 +17,7 @@ test('retained population and calendar blockers prevent historical regeneration'
  const h=fixture();h.business.blockers=[{detail:'Verify original populated history; do not rebuild.'}];await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-23'}),/do not rebuild/);assert.equal(h.prepared,0);
 });
 test('exact grant-owned plan approval retains agent decision before queuing work',async()=>{
- const h=fixture();await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'The due published work is ready.'});assert.equal(h.approved,1);assert.equal(h.queued,1);assert.equal(h.events[0][1],'plan-decision');assert.equal(h.events[0][4].approvalSource,'standing-owner-grant');
+ const h=fixture();await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'The due published work is ready.'});assert.equal(h.approved,1);assert.equal(h.queued,1);assert.ok(h.events.some(e=>e[1]==='plan-decision'));assert.equal(h.events[0][1],'accountant-write-decision');assert.equal(h.events.find(e=>e[1]==='plan-decision')[4].approvalSource,'standing-owner-grant');
  h.run.agentAuthority.grantId='0'.repeat(64);await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Try another grant'}),/belonging/);assert.equal(h.queued,1);
 });
 test('pause and specialist role prevent accounting dispatch',async()=>{
@@ -30,7 +30,7 @@ test('specialist findings report to the main accountant and operating memory is 
 });
 
 test('resume uses the exact existing recovery review before queueing original work',async()=>{
- const h=fixture();h.run.status='stopped';h.run.executionRevision=7;await h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Resume the exact original work after the owner enabled business operation.'});assert.equal(h.resumed,1);assert.equal(h.queued,1);assert.equal(h.events[0][1],'plan-decision');
+ const h=fixture();h.run.status='stopped';h.run.executionRevision=7;await h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Resume the exact original work after the owner enabled business operation.'});assert.equal(h.resumed,1);assert.equal(h.queued,1);assert.ok(h.events.some(e=>e[1]==='plan-decision'));assert.equal(h.events[0][1],'accountant-write-decision');
  h.run.agentAuthority.grantId='0'.repeat(64);await assert.rejects(h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Do not permit another grant to resume retained work.'}),/standing grant/);assert.equal(h.resumed,1);
 });
 
@@ -60,10 +60,10 @@ const NOON=Date.parse('2026-10-30T15:00:00Z');// 12:00 Halifax, Friday: slot 4 o
 const sale={decisionKey:'model-chosen-key-01',purpose:'A completed same-day service visit with its accepted customer payment.',activities:[{type:'settled-service-sale',customerKey:'field-client-001',itemKey:'field-service-hour',quantity:3,unitPriceCents:12500,purpose:'Completed on-site maintenance visit and collected the accepted invoice.'}]};
 const additions={decisionKey:'list-additions-0001',purpose:'Add the new customer that signed a service agreement today.',activities:[{type:'add-customer',name:'Harbour Fixture Co',purpose:'A new customer signed a service agreement today.'}]};
 function slotFixture({now=NOON,verifiedThrough='2026-10-29'}={}){
- const h={prepared:[],periods:[],approved:0,queued:0,forgets:0,owned:[],todayCalls:[],leases:[],today:cadence.summarizeToday({rhythm:cadence.dayRhythm(cadence.localParts(now).date),now})};
+ const h={events:[],prepared:[],periods:[],approved:0,queued:0,forgets:0,owned:[],todayCalls:[],leases:[],today:cadence.summarizeToday({rhythm:cadence.dayRhythm(cadence.localParts(now).date),now})};
  h.run={_id:operationId,createdBy:ownerId,planHash,status:'previewed',recordCount:5,activityBatch:{day:'2026-10-30',activities:[{type:'settled-service-sale'}]},agentAuthority:{version:1,agentId,grantId,authorityHash,ownerId}};
  h.tools=createBusinessAgentTools({row:{_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},passId:'slot-pass',scope,user:{id:ownerId},signal:new AbortController().signal,now:()=>now,
-  store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough,blockers:[]}),run:async()=>h.run,event:async()=>({id:'2'.repeat(24)}),forgetToday:()=>{h.forgets++;},unfinishedRuns:async(scope,agent,grant)=>{h.unfinishedQuery=grant;return h.owned;}},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
+  store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough,blockers:[]}),run:async()=>h.run,event:async(...args)=>{h.events.push(args);return {id:'2'.repeat(24)};},forgetToday:()=>{h.forgets++;},unfinishedRuns:async(scope,agent,grant)=>{h.unfinishedQuery=grant;return h.owned;}},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
   governanceFor:(origin,lease)=>{h.leases.push(lease);return {prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},prepare:async(user,input)=>{h.periods.push(input.throughDate);return {operationId,planHash};},approve:async()=>{h.approved++;}};},lease:{token:'worker-lease-token',now:()=>now},
   execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async options=>{h.todayCalls.push(options||{});return h.today;}});
  return h;
@@ -72,6 +72,7 @@ test('a same-day slice takes the due slot identity; duty and list batches keep t
  const h=slotFixture();
  await h.tools.execute('prepareBusinessActivity',sale);
  assert.equal(h.prepared[0].decisionKey,'slot-20261030-r2-s4','the model chooses contents, the server names the slot');
+  assert.equal(h.events.find(e=>e[1]==='accountant-write-key')[4].decisionKey,h.prepared[0].decisionKey,'effective key is durable before preparation returns');
  await h.tools.execute('prepareBusinessActivity',additions);
  assert.equal(h.prepared[1].decisionKey,'list-additions-0001');
  // The slot's batch was prepared: another slice in the same slot is refused and points at that plan.
@@ -174,7 +175,7 @@ test('independent general batches prepare beside recovery and the fourth operati
  generalModule.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return {runId:'new-general',status:'prepared',admitted:false};},dispatchEnabled:()=>true,execute:async()=>{executed++;return {status:'held'};}});
  const row={_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},origin={version:1,agentId,grantId,authorityHash,ownerId};
  let business={verifiedThrough:'2026-10-22',blockers:[{code:'current-operation'},{code:'uncertain-write'}],currentOperation:{operationId:'stuck',status:'blocked',agentAuthority:origin}};
- const tools=createBusinessAgentTools({row,passId:'general-independent',scope,user:{id:ownerId},now:()=>Date.parse('2026-10-23T15:00:00Z'),guard:async()=>{},store:{models:{},business:async()=>business,unfinishedRuns:async()=>owned},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
+ const tools=createBusinessAgentTools({row,passId:'general-independent',scope,user:{id:ownerId},now:()=>Date.parse('2026-10-23T15:00:00Z'),guard:async()=>{},store:{models:{},event:async()=>({id:'2'.repeat(24)}),business:async()=>business,unfinishedRuns:async()=>owned},access:{authorize:async()=>{}},readTools:{toolDefinitions:[],toolHandlers:{}},todayFor:async()=>today});
  const input={decisionKey:'independent-general-001',purpose:'Record an independent service estimate for a new customer.',operations:[{ref:'quote',op:'create',entity:'Estimate',payload:{}}]};
  try{
   owned=[{operationId:'stuck',status:'blocked',agentAuthority:origin,disposition:'continue'}];

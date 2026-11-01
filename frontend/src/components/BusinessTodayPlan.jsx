@@ -12,7 +12,7 @@ const BUILD_PREVIEW = 5
 export default function BusinessTodayPlan({ management }) {
   const [allRequests, setAllRequests] = useState(false)
   if (!management?.available) return null
-  const { plan, progress, capabilityRequests: requests = [] } = management
+  const { plan, progress, capabilityRequests: requests = [], recentResolutions = [], scorecard } = management
   const share = progress?.target ? Math.min(100, Math.round((progress.saved / progress.target) * 100)) : 0
   const shown = allRequests ? requests : requests.slice(0, BUILD_PREVIEW)
   return <section className="bpl" aria-labelledby="todays-plan-title">
@@ -24,6 +24,11 @@ export default function BusinessTodayPlan({ management }) {
       </div>}
       {progress && progress.target === 0 && <span className="bpl-progress-note">No activity target today</span>}
     </header>
+    {scorecard && <div className="bpl-note" aria-label="Daily business scorecard">
+      <strong>Business results today</strong>
+      <p>{scorecard.records ? scorecard.records.saved + ' of ' + scorecard.records.target + ' records saved' : 'Saved record count unavailable'} · {scorecard.situations?.newlyCovered == null ? 'New situations: baseline pending' : scorecard.situations.newlyCovered + ' newly covered situations'} · {scorecard.collections ? scorecard.collections.count + ' customer payments' : 'Collections unavailable'} · {scorecard.blockers == null ? 'Blockers unavailable' : scorecard.blockers + ' current blockers'}</p>
+      <small>Calendar verified through {scorecard.closes?.verifiedThrough || 'no verified close'}. Reconciliation and filing require their own evidence.</small>
+    </div>}
     {plan ? <>
       <p className="bpl-note">{plan.note}</p>
       <div className="bpl-grid">
@@ -48,11 +53,14 @@ export default function BusinessTodayPlan({ management }) {
         <span className={'bpl-priority bpl-priority--' + row.priority}>{row.priority}</span>
         <div>
           <h4>{row.missing}</h4>
+          <p>{row.status || 'open'}{row.remainingGap ? ' · ' + row.remainingGap : ''}</p>
+          {row.evidence?.length > 0 && <small>{row.evidence.join('; ')}</small>}
           <p className="bpl-request-meta">{row.feature} · {REQUIREMENTS[row.requirement] || row.requirement}</p>
           {row.why && <p>{row.why}</p>}
         </div>
       </li>)}</ol> : <p className="bpl-muted">No missing tools recorded yet. The accountant adds one whenever a goal needs a tool it does not have.</p>}
       {requests.length > BUILD_PREVIEW && <button type="button" className="bw-text-button bpl-more" aria-expanded={allRequests} onClick={() => setAllRequests(value => !value)}>{allRequests ? 'Show fewer' : 'Show all ' + requests.length}</button>}
+      {recentResolutions.length > 0 && <details><summary>Resolved build items · {recentResolutions.length}</summary><ol className="bpl-requests">{recentResolutions.map(row => <li key={row.key}><h4>{row.feature || row.missing}</h4><p>{row.outcomeVerified ? 'Outcome verified' : 'Capability available; business outcome still needs verification'}</p><small>{(row.evidence || []).join('; ')}</small></li>)}</ol></details>}
     </div>
   </section>
 }

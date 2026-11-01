@@ -505,3 +505,7 @@ test('saved needs-check work is automatically queued between model reviews once 
  h.owned[0].executionRequestedAt=new Date(h.clock).toISOString();
  await h.service._worker(agentId,new AbortController());assert.equal(h.requested,1,'another wake in the same minute cannot queue a duplicate check');h.service.close();
 });
+
+test('a previous-day scorecard is not shown as business results today',async()=>{
+ const h=fixture();h.store.latestScorecard=async()=>({scorecard:{day:'2026-10-22',records:{saved:220,target:220}}});const view=await h.service.status({id:ownerId});assert.equal(view.management.scorecard,null);h.service.close();
+});

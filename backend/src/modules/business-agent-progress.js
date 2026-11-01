@@ -72,6 +72,13 @@ function stepNote(name, input, value) {
 }
 const safeNote = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, MAX_NOTE) : '';
 const FIXED = Object.freeze({
+  findBusinessOperation: "Finding original retained work",
+  getCoverageSituations: "Reviewing measured business situations",
+  getWeeklyCoverage: "Reviewing weekly feature gaps",
+  getCloseChecklist: "Reading month-end evidence",
+  recordCloseChecklistEvidence: "Recording month-end evidence",
+  reviewCapability: "Reviewing a build-list item",
+
   lookupCustomer: 'Looking up a customer',
   lookupInvoice: 'Looking up an invoice',
   getTransactionChain: 'Tracing linked transactions',

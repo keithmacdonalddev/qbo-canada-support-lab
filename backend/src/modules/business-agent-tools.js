@@ -13,6 +13,13 @@ const READ_NOTES=Object.freeze({lookupCustomer:LOCAL_NOTE,lookupInvoice:LOCAL_NO
 function accountantReadDefinitions(native){return native.toolDefinitions.filter(tool=>READ_NAMES.includes(tool.name)).map(tool=>({...tool,description:tool.description+(READ_NOTES[tool.name]||'')}));}
 const QUERY_OPS=require('./business-company-query').OPS, QUERY_VALUE={type:['string','number','boolean','null']};
 const EXTRA_TOOLS = Object.freeze([
+  {name:'findBusinessOperation',description:'Find original fixed and general operations by exact decisionKey within your authenticated company and agent ownership, including retired unsent previews. Returns retained choices and effects; never grants execution authority or changes retry identities.',input_schema:schema({decisionKey:text},['decisionKey'])},
+  {name:'getCoverageSituations',description:'Read measured current QBO situations from the synchronized company copy. Unknown observations are not gaps. Plan deliberate eligible situations using governed tools.',input_schema:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:40}})},
+  {name:'getWeeklyCoverage',description:'Read seven-day record, lifecycle, class and location breadth; plan reachable missing situations without padding volume.',input_schema:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:40}})},
+  {name:'getCloseChecklist',description:'Read monthly close checks, retained evidence and explicit manual status. Calendar verification does not prove reconciliation, tax filing or closing-date protection.',input_schema:schema({period:{type:'string',pattern:'^20[0-9]{2}-(0[1-9]|1[0-2])$'}},['period'])},
+  {name:'recordCloseChecklistEvidence',description:'Attach intact retained evidence, review, exception or reopening to a monthly check. Manual owner attestations cannot be made by this tool. Read getCloseChecklist for contextHash and current revision first.',input_schema:schema({period:text,contextHash:digest,accountId:{type:['string','null']},checkKey:text,expectedRevision:{type:'integer',minimum:0,maximum:9999},requestKey:text,note:text,disposition:{type:'string',enum:['evidence','review','exception','reopen']},evidenceReferences:{type:'array',items:schema({kind:{type:'string',enum:['operation-evidence','business-baseline','business-event']},id,hash:digest},['kind','id','hash'])}},['period','contextHash','accountId','checkKey','expectedRevision','requestKey','note','disposition','evidenceReferences'])},
+  {name:'reviewCapability',description:'Append a current build-list status: open, in-progress, resolved with evidence, or reopened. Record code availability separately from verified QBO outcomes. Recheck before carrying a blocking belief into later work.',input_schema:schema({key:text,status:{type:'string',enum:['open','in-progress','resolved','reopened']},remainingGap:text,evidence:{type:'array',items:text},availableTools:{type:'array',items:text},outcomeVerified:{type:'boolean'}},['key','status','evidence'])},
+
   {name:'getBusinessDecision',description:'Read the full retained evidence of one exact decision: an owner question with its answer, or your own recorded management decision. Another id (an operation, plan or build request) is refused with the tool that reads it.',input_schema:schema({decisionId:id},['decisionId'])},
   {name:'getBusinessState',description:'Inspect current synchronization, published policy, retained work, accounting checks, owner decisions and blockers before acting. today shows the day’s activity target (about 220 records a day, every day, spread through the day), what QuickBooks already received, work in progress, how far today is behind schedule, the daily ceiling, the rolling hourly limit and the due batch (dueSlot); calendarClose names the next period to close; unfinishedOperations lists your approved work that must finish first; dueObligations counts adopted invoices and bills now due. The usage field shows token totals, estimated API spend (USD), monthly owner caps and ChatGPT plan-limit/reset status. Usage is read-only; only the owner can change limits.',input_schema:schema()},
   {name:'getBusinessWork',description:'Read the complete business work list: what you (the accountant) own, what is blocked and why, which QuickBooks features still need to be used, and the few items only the owner can do. Treat accountant-owned items as your responsibility.',input_schema:schema()},
@@ -111,7 +118,8 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     if(Math.max(ids.size,(Number(today?.inFlight)||0)-(reuse&&today?.open?.some(run=>run.operationId===reuse)?1:0))>=cadence.MAX_IN_FLIGHT)fail('Three operations are already prepared, queued or executing. Continue an existing operation before preparing another.');
     return today;
   }
-  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord'].includes(tool.name))];
+  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord','reviewCapability','recordCloseChecklistEvidence'].includes(tool.name))].map(tool=>({...tool,input_schema:{...tool.input_schema}}));
+  for(const tool of definitions)if(require('./business-agent-accountability').WRITE_TOOLS.has(tool.name)){tool.description+=' Include decision.goal and decision.planItem to connect this write to your business objective and exact daily-plan change; use an explicit independent-work item when unplanned.';tool.input_schema={...tool.input_schema,properties:{...tool.input_schema.properties,decision:schema({goal:text,planItem:text},['goal','planItem'])}};}
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0,local=null;
   const localReads=()=>local||(local=require('./business-local-reads').createLocalReads({Records:store.models.Records,scope,freshness:()=>require('./business-agent-service').publicSync(row,now())}));
   async function readClient(reportsOnly=false){
@@ -127,7 +135,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     const management=require('./business-management-review'),day=cadence.localParts(now()).date;
     try{
       const plan=typeof store?.latestDailyPlan==='function'?await store.latestDailyPlan(row):null,requests=typeof store?.capabilityRequests==='function'?await store.capabilityRequests(row):[];
-      return {todaysPlan:management.planContext(plan,day),openRequests:management.openRequests(requests).slice(0,40).map(item=>({key:item.key,priority:item.priority,requirement:item.requirement,missing:String(item.missing||'').slice(0,120)})),fullReview:'getManagementReview'};
+      return {recentResolutions:management.recentResolutions(requests),todaysPlan:management.planContext(plan,day),openRequests:management.openRequests(requests).slice(0,40).map(item=>({key:item.key,priority:item.priority,requirement:item.requirement,missing:String(item.missing||'').slice(0,120)})),fullReview:'getManagementReview'};
     }catch{return {unavailable:true};}
   }
   async function execute(name,input={}){
@@ -137,11 +145,30 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       const type=input.type||input.entityType;if(type&&!SPECIALIST_TYPES[role].includes(type))fail('This record type belongs to another specialist responsibility.',403);
       if(name==='getObligations'&&input.area!==role)fail('This obligations queue belongs to another responsibility.',403);
     }
-    let result;
+    let result,writeDecision=null;
+    if(require('./business-agent-accountability').WRITE_TOOLS.has(name)){
+      await guard(true);
+      const plan=typeof store.latestDailyPlan==='function'?await store.latestDailyPlan(row):null;
+      const operation=input.operationId&&typeof store.run==='function'?await store.run(scope,input.operationId):null;
+      const data=require('./business-agent-accountability').decisionData({name,input,plan,operation,day:cadence.localParts(now()).date,passId});
+      writeDecision=await event(row,'accountant-write-decision','Accountant write: '+name,data.reason,data,null,hash({passId,name,input}),role);
+      input={...input};delete input.decision;
+    }
     if(READ_NAMES.includes(name)){
       // Mirrored, current record types answer from the synced copy; otherwise (and for reports) QuickBooks live.
       const answered=name==='runReport'?{live:'reports are computed by QuickBooks'}:store?.models?.Records?await localReads().answer(name,input):{live:'the synced copy is not available in this review'};
       result=answered.result||{...await native.toolHandlers[name](input,{qbo:await readClient(name==='runReport'),userId:String(row.ownerId),realmId:scope.realmId,connection:{_id:scope.connectionId}}),source:{answeredBy:'quickbooks-live',reason:answered.live}};
+    }
+    else if(name==='findBusinessOperation'){await access.authorize(scope,'operations.read',{signal});result={success:true,data:await require('./business-agent-operation-lookup').findOperations({models:store.models,scope,row,decisionKey:input.decisionKey})};}
+    else if(name==='getCoverageSituations'||name==='getWeeklyCoverage'){
+      const snapshot=await require('./business-management-review').snapshotFor(scope,{Records:store.models?.Records,nowMs:now(),sources:row.sync?.sources||{}}),value=snapshot?.[name==='getWeeklyCoverage'?'weekly':'situations'],offset=input.offset||0,limit=input.limit||25;
+      result=value?{success:true,data:{...value,rows:value.rows.slice(offset,offset+limit),total:value.rows.length,nextOffset:offset+limit<value.rows.length?offset+limit:null}}:{success:false,error:'Current measured coverage is unavailable; do not claim missing or covered situations.'};
+    }
+    else if(name==='getCloseChecklist')result={success:true,data:await governanceFor(null).getCloseChecklist(user,input)};
+    else if(name==='recordCloseChecklistEvidence')result={success:true,data:await governanceFor(null).recordCloseChecklistEvidence(user,{...input,attestation:null})};
+    else if(name==='reviewCapability'){
+      const rows=await store.capabilityRequests(row),helper=require('./business-capability-review'),prior=helper.fold(rows).find(r=>r.key===input.key),value=helper.reviewEvent(input,prior);
+      result={success:true,data:await event(row,'capability-review',value.title,value.detail,value.data,null,value.key,role)};
     }
     else if(name==='getBusinessDecision')result={success:true,data:await store.decision(row,input.decisionId)};
     else if(name==='getBusinessWork'){const business=await businessWithErrors();result={success:true,data:require('./business-agent-work').businessWork({usage:await usageFor(),settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:require('./business-agent-service').publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};}
@@ -221,6 +248,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
           input={...input,decisionKey:today.dueSlot.decisionKey};
         }
       }
+      if(writeDecision&&writeDecision.decisionKey!==input.decisionKey){await event(row,'accountant-write-key','Effective governed decision identity',writeDecision.reason,{decisionId:writeDecision.id,decisionKey:input.decisionKey},null,hash({decisionId:writeDecision.id,decisionKey:input.decisionKey}),role);writeDecision={...writeDecision,decisionKey:input.decisionKey};}
       await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)};
       try{result={success:true,data:await governed(origin).prepareActivityBatch(user,input,{signal})};}finally{forgetToday();}
     }else if(name==='prepareBusinessPeriod'){
@@ -285,7 +313,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     }else if(name==='requestCapability'){
       // Deduplicated by key: the same gap stays one build-list entry.
       const value=require('./business-management-review').capabilityRequestEvent(input);
-      const prior=typeof store.capabilityRequests==='function'?(await store.capabilityRequests(row)).find(item=>item.key===value.data.key):null;
+      const prior=typeof store.capabilityRequests==='function'?require('./business-capability-review').fold(await store.capabilityRequests(row)).find(item=>item.key===value.data.key):null;
       result=prior?{success:true,data:{duplicate:true,request:prior}}:{success:true,data:await event(row,'capability-request',value.title,value.detail,value.data,null,'capability:'+value.data.key,role)};
     }else if(name==='rememberBusinessContext'){
       if(input.memory.length>4000)fail('Keep the operating handoff within 4000 characters.',400);await persistMemory(input.memory);result={success:true,data:{saved:true}};
@@ -293,6 +321,11 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       const session=linkCase?await linkCase(input.sessionId):await require('../models/AISession').findOne({_id:input.sessionId,userId:row.ownerId,realmId:scope.realmId,mode:'reproduce'}).select('_id').maxTimeMS(3000).lean();
       if(!session||!ID.test(String(session._id)))fail('This troubleshooting case does not belong to the selected company.');
       result={success:true,data:await event(row,'case-linked','Troubleshooting case linked',input.reason.slice(0,3000),{sessionId:input.sessionId,href:'/cases/'+input.sessionId},null,hash({passId,sessionId:input.sessionId}),role)};
+    }
+    if(writeDecision){
+      const operationId=result?.data?.operationId||result?.data?.runId||input.operationId||null;
+      if(operationId){await event(row,'accountant-write-link','Retained accountant operation',writeDecision.reason,{decisionId:writeDecision.id,operationId},null,hash({decisionId:writeDecision.id,operationId}),role);writeDecision={...writeDecision,operationId};}
+      try{await require('./business-agent-accountability').retainOutcome({store,row,scope,decision:writeDecision});}catch{result={...result,decisionEvidencePending:true};}
     }
     await guard();if(name==='runReport')await access.authorize(scope,'reports.observe',{signal});const bytes=Buffer.byteLength(JSON.stringify(result));if(bytes>100000)return {success:false,error:'This result is too large for one review. Use smaller record/report pages; no complete observation is claimed.',truncated:true};return result;
   }

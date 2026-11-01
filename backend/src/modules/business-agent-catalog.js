@@ -10,6 +10,12 @@ const GROUPS = Object.freeze([
   { key: 'notes', label: 'Notes and handoffs' },
 ]);
 const TOOLS = Object.freeze({
+  reviewCapability: {group:"notes",summary:"Records build-list status changes, resolutions and regressions with evidence."},
+  recordCloseChecklistEvidence: {group:"notes",summary:"Records close evidence and exceptions; manual owner attestations stay manual."},
+  getCloseChecklist: {group:"business-read",summary:"Reads month-end checks and evidence."},
+  getWeeklyCoverage: {group:"business-read",summary:"Measures seven-day feature, class and location breadth."},
+  getCoverageSituations: {group:"business-read",summary:"Measures present and missing situations from the synchronized copy."},
+  findBusinessOperation: {group:"business-read",summary:"Finds original operations and retained choices by decision key."},
   lookupCustomer: { group: 'quickbooks-read', summary: 'Finds a customer and their balance.' },
   lookupInvoice: { group: 'quickbooks-read', summary: 'Finds an invoice by number or customer.' },
   searchEntities: { group: 'quickbooks-read', summary: 'Searches any record type: customers, bills, items, journal entries, settings and more. Answers from the synced copy when it is current.' },
