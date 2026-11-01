@@ -1,0 +1,91 @@
+import client from './client'
+
+// BF4 v1. Company scope is server-owned; callers never send realm/account overrides.
+const base = '/company/banking-workspace'
+const segment = value => encodeURIComponent(String(value))
+export const bankingApi = {
+  async list({ signal } = {}) {
+    const data = (await client.get(base, { signal })).data?.data
+    if (!Array.isArray(data?.packages)) throw new Error('The server did not return a banking workspace. Refresh after integration is complete.')
+    return data
+  },
+  async detail(id, { signal } = {}) {
+    const data = (await client.get(base + '/packages/' + segment(id), { signal })).data?.data
+    if (data?.id !== id || !data.snapshot || !data.evidence) throw new Error('The server did not return the requested banking package. Refresh and select the month again.')
+    return data
+  },
+  async file(id, file, { signal } = {}) {
+    const response = await client.get(base + '/packages/' + segment(id) + '/files/' + segment(file.fileId), { signal, responseType: 'blob' })
+    const blob = response.data
+    const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
+    const actual = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+    if (actual !== file.sha256) throw new Error('The downloaded file has changed. Refresh the package before using it.')
+    return blob
+  },
+}
+
+export function bankingError(error) {
+  if (error.response?.status === 404) return 'Banking is not available on this server yet. Refresh after the workspace has been connected.'
+  return error.response?.data?.error || error.message || 'Banking could not be loaded. Try refreshing.'
+}
+
+export function bankMoney(minor, currency) {
+  if (!Number.isSafeInteger(minor)) return 'Unavailable'
+  // Format integer minor units without rounding near the safe-integer boundary.
+  const digits = (BigInt(minor) < 0n ? -BigInt(minor) : BigInt(minor)).toString().padStart(3, '0')
+  return (minor < 0 ? '−' : '') + currency + ' ' + BigInt(digits.slice(0, -2)).toLocaleString('en-CA') + '.' + digits.slice(-2)
+}
+
+export function bankingPeriodState(pkg) {
+  const summary = pkg.summary || {}, snapshot = pkg.snapshot || pkg
+  const total = snapshot.rows?.length ?? (snapshot.files || []).filter(file => file.kind === 'csv').reduce((sum, file) => sum + file.rowCount, 0)
+  const noUpload = summary.uploadRequired === false
+  const superseded = Boolean(pkg.evidence?.supersededBy)
+  const blockers = snapshot.blockers || []
+  return {
+    total, blockers, superseded,
+    needsReview: Boolean(summary.needsReview || superseded),
+    stages: [
+      { key: 'generated', label: 'Generated', value: summary.generated ? 'Ready' : 'Not generated', done: summary.generated === true },
+      { key: 'uploaded', label: 'Uploaded', value: noUpload ? 'Not required' : summary.uploaded ? 'Confirmed' : 'Not confirmed', done: !noUpload && summary.uploaded === true },
+      { key: 'reviewed', label: 'Reviewed', value: noUpload ? 'No rows' : (summary.reviewed ?? 0) + ' / ' + total, done: total > 0 && summary.reviewed === total },
+      { key: 'reconciled', label: 'Reconciled', value: summary.reconciled ? 'Evidence retained' : 'Not completed', done: summary.reconciled === true },
+    ],
+  }
+}
+
+export function currentBankingPackages(packages) {
+  const current = new Map()
+  for (const pkg of packages) {
+    const key = pkg.accountId + ':' + pkg.period
+    if (!current.has(key) || pkg.revision > current.get(key).revision) current.set(key, pkg)
+  }
+  // Oldest first per account: native reconciliation must proceed chronologically.
+  return [...current.values()].sort((a, b) => a.accountId.localeCompare(b.accountId, undefined, { numeric: true }) || a.period.localeCompare(b.period))
+}
+
+export function bankingEvidenceEntries(pkg) {
+  const state = pkg.evidence || {}, entries = [], seen = new Set()
+  const add = (stage, ev) => {
+    if (!ev) return
+    const key = JSON.stringify([stage, ev.observedAt, ev.artifact?.sha256, ev.note, ev.automation])
+    if (!seen.has(key)) { seen.add(key); entries.push({ stage, ...ev }) }
+  }
+  for (const run of state.imports || []) for (const ev of run.evidence || []) add('Import · ' + run.status, ev)
+  for (const [id, row] of Object.entries(state.rows || {})) {
+    for (const action of ['reviewed', 'matched', 'added', 'excluded']) add(id + ' · ' + action, row[action]?.evidence)
+    for (const ev of row.synced || []) add(id + ' · synced ' + ev.entity + ' #' + ev.id, ev)
+  }
+  for (const key of ['report', 'completion', 'statementAttachment', 'evidence']) add('Reconciliation · ' + key, state.reconciled?.[key])
+  for (const entry of state.history || []) add('History · ' + entry.action, entry.evidence)
+  return entries
+}
+
+// BF7's journal status is optional until BF6 exposes it. Never infer independent
+// observation from a screenshot label or borrow another package's operator run.
+export function bankingOperatorStatus(pkg, status) {
+  if (!status || status.packageId !== pkg.id || status.accountId !== pkg.accountId || status.period !== pkg.period) return null
+  const scope = pkg.snapshot?.scope
+  if (!scope || !Array.isArray(status.steps) || status.steps.some(run => run.packageId !== pkg.id || run.accountId !== pkg.accountId || run.period !== pkg.period || ['environment', 'realmId', 'connectionId'].some(key => run.scope?.[key] !== scope[key]))) return null
+  return status
+}
