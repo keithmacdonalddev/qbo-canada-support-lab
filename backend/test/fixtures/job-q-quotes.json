@@ -1,0 +1,531 @@
+{
+  "input": {
+    "decisionKey": "winter-quotes-20261031-chester-tantallon",
+    "purpose": "Prepare two independent winter advisory quotes without claiming delivery.",
+    "operations": [
+      {
+        "ref": "quote-0",
+        "op": "create",
+        "entity": "Estimate",
+        "payload": {
+          "TxnDate": "2026-10-31",
+          "ExpirationDate": "2026-11-14",
+          "TxnStatus": "Pending",
+          "CustomerRef": {
+            "value": "150"
+          },
+          "GlobalTaxCalculation": "TaxExcluded",
+          "PrivateNote": "Pending winter advisory proposal",
+          "Line": [
+            {
+              "Amount": 250,
+              "Description": "Proposed advisory review",
+              "DetailType": "SalesItemLineDetail",
+              "SalesItemLineDetail": {
+                "ItemRef": {
+                  "value": "53"
+                },
+                "Qty": 2,
+                "UnitPrice": 125,
+                "TaxCodeRef": {
+                  "value": "16"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "ref": "quote-1",
+        "op": "create",
+        "entity": "Estimate",
+        "payload": {
+          "TxnDate": "2026-10-31",
+          "ExpirationDate": "2026-11-14",
+          "TxnStatus": "Pending",
+          "CustomerRef": {
+            "value": "151"
+          },
+          "GlobalTaxCalculation": "TaxExcluded",
+          "PrivateNote": "Pending winter advisory proposal",
+          "Line": [
+            {
+              "Amount": 125,
+              "Description": "Proposed advisory review",
+              "DetailType": "SalesItemLineDetail",
+              "SalesItemLineDetail": {
+                "ItemRef": {
+                  "value": "53"
+                },
+                "Qty": 1,
+                "UnitPrice": 125,
+                "TaxCodeRef": {
+                  "value": "16"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "taxes": [
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "24",
+                "name": "HST ON"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "23",
+                "name": "HST (ITC) ON"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "11",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "26",
+                "name": "HST NS"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "25",
+                "name": "HST (ITC) NS"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "12",
+        "SyncToken": "4"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "4",
+                "name": "GST"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            },
+            {
+              "TaxRateRef": {
+                "value": "28",
+                "name": "QST 9.975"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 1
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "3",
+                "name": "GST (ITC)"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            },
+            {
+              "TaxRateRef": {
+                "value": "27",
+                "name": "QST 9.975 (ITR)"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 1
+            }
+          ]
+        },
+        "Id": "13",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "34",
+                "name": "HST NS 2025"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "35",
+                "name": "HST (ITC) NS 2025"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "16",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "2",
+                "name": "GST/HST ZR"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "1",
+                "name": "GST/HST (ITC) ZR"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "2",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "4",
+                "name": "GST"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "3",
+                "name": "GST (ITC)"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "3",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxCode",
+      "record": {
+        "Active": true,
+        "Taxable": true,
+        "SalesTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "6",
+                "name": "GST ES"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "PurchaseTaxRateList": {
+          "TaxRateDetail": [
+            {
+              "TaxRateRef": {
+                "value": "5",
+                "name": "GST EP"
+              },
+              "TaxTypeApplicable": "TaxOnAmount",
+              "TaxOrder": 0
+            }
+          ]
+        },
+        "Id": "4",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "1",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "2",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 13,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 13,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "23",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 13,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 13,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "24",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 15,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 15,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "25",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 15,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 15,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "26",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 9.975,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 9.975,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "27",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 9.975,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 9.975,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "28",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 5,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 5,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "3",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 14,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 14,
+            "EffectiveDate": "2025-04-01T00:00:00-07:00"
+          }
+        ],
+        "Id": "34",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 14,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 14,
+            "EffectiveDate": "2025-04-01T00:00:00-07:00"
+          }
+        ],
+        "Id": "35",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 5,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 5,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "4",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "5",
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "record": {
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ],
+        "Id": "6",
+        "SyncToken": "0"
+      }
+    }
+  ]
+}

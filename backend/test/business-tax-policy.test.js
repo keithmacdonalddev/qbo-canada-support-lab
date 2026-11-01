@@ -49,11 +49,16 @@ test('tax source comparison accepts transport and reference-label differences in
   }
 });
 test('canonical tax comparison still refuses rate, history, accounts, applicability, status, partial and version changes', async () => {
-  for (const change of [h => { h.records.TaxCode.Active = false; }, h => { h.records.TaxCode.Taxable = false; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.value = '951'; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxTypeApplicable = 'TaxOnTax'; }, h => { h.records.TaxRate.EffectiveTaxRate[0].RateValue++; }, h => { h.records.TaxRate.EffectiveTaxRate[0].EffectiveDate = '2021-01-01'; }, h => { h.records.TaxRate.AgencyRef.value = '2'; }, h => { h.records.TaxRate.TaxReturnLineRef.value = '3'; }, h => { h.records.TaxRate.sparse = true; }, h => { h.records.TaxRate.sparse = 'false'; }, h => { h.records.TaxRate.SyncToken = '01'; }, h => { delete h.records.TaxRate.SyncToken; }]) {
+  for (const change of [h => { h.records.TaxCode.Active = false; }, h => { h.records.TaxCode.Taxable = false; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxRateRef.value = '951'; }, h => { h.records.TaxCode.PurchaseTaxRateList.TaxRateDetail[0].TaxTypeApplicable = 'TaxOnTax'; }, h => { h.records.TaxRate.EffectiveTaxRate[0].RateValue++; }, h => { h.records.TaxRate.EffectiveTaxRate[0].EffectiveDate = '2026-10-07'; }, h => { h.records.TaxRate.AgencyRef.value = '2'; }, h => { h.records.TaxRate.TaxReturnLineRef.value = '3'; }, h => { h.records.TaxRate.sparse = true; }, h => { h.records.TaxRate.sparse = 'false'; }, h => { h.records.TaxRate.SyncToken = '01'; }, h => { delete h.records.TaxRate.SyncToken; }]) {
     const h = fixture(); h.records.TaxRate.AgencyRef = { value: '1' }; h.records.TaxRate.TaxReturnLineRef = { value: '2' };
     const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now); change(h);
     await assert.rejects(verifyBusinessTaxSources(policy, h.client));
   }
   const h = fixture(); h.records.TaxRate.SyncToken = '2'; const [{ policy }] = await deriveBusinessPolicies(h.assembly, h.client, hash('authority'), h.f.now); h.records.TaxRate.SyncToken = '1';
   await assert.rejects(verifyBusinessTaxSources(policy, h.client));
+});
+
+test('a changed pre-period start with identical effective tax does not invalidate current policy', async () => {
+ const h=fixture(); const [{policy}]=await deriveBusinessPolicies(h.assembly,h.client,hash('authority'),h.f.now);
+ h.records.TaxRate.EffectiveTaxRate[0].EffectiveDate='2021-01-01'; await verifyBusinessTaxSources(policy,h.client);
 });

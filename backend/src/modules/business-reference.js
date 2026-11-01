@@ -39,7 +39,7 @@ const FALSE_DEFAULTS = Object.freeze({
 function canonicalDefinitionFields(entity, record) {
   const fields = definitionFields(entity, record);
   for (const key of FALSE_DEFAULTS[entity] || []) if (fields[key] === null || fields[key] === false) delete fields[key];
-  return fields;
+  return require('./qbo-semantic-compare').canonicalQboValue(fields, { entity });
 }
 function sameCanonicalDefinition(entity, a, b) { return hash(canonicalDefinitionFields(entity, a)) === hash(canonicalDefinitionFields(entity, b)); }
 function referenceDefinition(scope, entity, record, version = ['Item', 'TaxCode'].includes(entity) ? 2 : 1) {

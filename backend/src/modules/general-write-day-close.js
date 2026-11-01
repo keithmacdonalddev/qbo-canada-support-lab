@@ -119,7 +119,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
     changed = false;
     for (const row of pending) {
       if (trusted.has(row.key)) continue;
-      if (hash(row.record) !== hash(row.current) && !explainedByOwnSettlements(row.record, row.current, trusted, row.key.split(':')[0])) continue;
+      if (!require('./general-write-close').sameProvenRecord(row.key.split(':')[0], row.record, row.current, hash(row.record)) && !explainedByOwnSettlements(row.record, row.current, trusted, row.key.split(':')[0])) continue;
       trusted.set(row.key, new Set(row.targets)); changed = true;
     }
   }

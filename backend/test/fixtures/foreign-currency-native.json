@@ -1708,6 +1708,38 @@
           "LastUpdatedTime": "2026-08-12T21:20:56-07:00"
         }
       }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "21",
+      "record": {
+        "Id": "21",
+        "SyncToken": "0",
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ]
+      }
+    },
+    {
+      "entity": "TaxRate",
+      "qboId": "22",
+      "record": {
+        "Id": "22",
+        "SyncToken": "0",
+        "Active": true,
+        "RateValue": 0,
+        "EffectiveTaxRate": [
+          {
+            "RateValue": 0,
+            "EffectiveDate": "1970-01-01T00:00:00-08:00"
+          }
+        ]
+      }
     }
   ]
 }

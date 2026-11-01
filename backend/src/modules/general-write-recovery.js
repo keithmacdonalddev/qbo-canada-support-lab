@@ -28,18 +28,10 @@ function matchesVoid(item, record) {
 }
 // Compare every requested nested field, including line account/item/tax and links.
 // QuickBooks may add computed fields and reference display names.
-function matchesRequest(sent, saved) {
-  if (Array.isArray(sent)) return Array.isArray(saved) && sent.length === saved.length && sent.every((value, n) => matchesRequest(value, saved[n]));
-  if (sent && typeof sent === 'object') {
-    if (!saved || typeof saved !== 'object') return false;
-    if ('value' in sent) return String(sent.value) === String(saved.value) && Object.entries(sent).filter(([key]) => !['value', 'name'].includes(key)).every(([key, value]) => matchesRequest(value, saved[key]));
-    return Object.entries(sent).every(([key, value]) => ['sparse', 'SyncToken'].includes(key) || matchesRequest(value, key === 'Line' && Array.isArray(saved.Line) ? saved.Line.filter(line => line.DetailType !== 'SubTotalLineDetail') : saved[key]));
-  }
-  return typeof sent === 'number' ? typeof saved === 'number' && Math.abs(sent - saved) < 1e-8 : sent === saved;
-}
+function matchesRequest(sent, saved, entity) { return require('./qbo-semantic-compare').matchesQboRequest(sent, saved, { entity }); }
 // Sparse readback must preserve native billable history omitted from the payload.
 function matchesSavedRequest(item, record) {
-  return matchesRequest(item.payload || {}, record) && preservesBillableState(item.before, record, item.entity) && require('./general-write-currency').preservesCurrency(item.before, record, item.payload, item.entity);
+  return matchesRequest(item.payload || {}, record, item.entity) && preservesBillableState(item.before, record, item.entity) && require('./general-write-currency').preservesCurrency(item.before, record, item.payload, item.entity);
 }
 // Correlation available for an item whose outcome is unknown.
 function correlation(item) {

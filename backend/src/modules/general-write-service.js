@@ -79,7 +79,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
   async function guard(scope, operations, extras = [], stale = new Set(), session, runId) {
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
-    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => ['Invoice', 'SalesReceipt'].includes(op?.entity)).flatMap(op => (Array.isArray(op.payload?.Line) ? op.payload.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value)).filter(id => typeof id === 'string'))] });
+    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
     const result = checkGeneralWrite({ proposal: { operations }, local, context });
     // A later posting day is independent; changing an earlier pending day's records,
     // names or links would change the close's exact readback evidence and must wait.
@@ -281,33 +281,45 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     const mappings = published?.view?.mappings || {};
     const { bindDatedTax, datedTaxChoice } = require('./business-dated-tax');
     const dated = bindDatedTax(published.view.business, mappings);
-    const selected = key => dated ? datedTaxChoice(dated, key, day).id : mappings[key];
-    const primarySales = String(selected('salesTax') || '');
-    // The synced company supplies line-specific Canadian sales codes. Every referenced
-    // code still needs complete active dated rates below; the published default remains bound.
-    const outdatedSales = dated ? String(dated.before.salesTax === primarySales ? dated.after.salesTax : dated.before.salesTax) : null;
-    const salesCodes = salesTaxCodes.filter(id => id !== outdatedSales && (local.get('TaxCode', id)?.SalesTaxRateList || local.get('TaxCode', id)?.Taxable === false));
-    const taxCodes = { sales: [...new Set([primarySales, ...salesCodes].filter(Boolean))], purchases: [selected('purchaseTax')].filter(Boolean).map(String) };
-    if (!taxCodes.sales.length || !taxCodes.purchases.length) fail('The published business has no sales and purchase tax codes.');
-    const taxPercent = {};
-    for (const [direction, ids] of Object.entries(taxCodes)) for (const id of ids) {
-      const code = local.get('TaxCode', id);
-      // Only referenced records are loaded; unrelated writes need no tax read.
-      if (!code) continue;
-      const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail ?? (code.Taxable === false ? [] : undefined);
-      if (code.Active !== true || code.sparse === true || !Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length)) fail('The published tax code has no complete current rates.');
-      const ids = new Set();
-      const percent = details.reduce((sum, row) => {
-        const rateId = row.TaxRateRef?.value;
-        if (typeof rateId !== 'string' || ids.has(rateId) || row.TaxTypeApplicable !== 'TaxOnAmount' || (row.TaxOnTaxOrder != null && row.TaxOnTaxOrder !== 0)) fail('The published tax code has ambiguous or compound rates.');
-        ids.add(rateId);
-        const rate = local.get('TaxRate', rateId);
-        if (rate?.sparse === true) fail('The published tax rate is incomplete.');
-        return sum + require('./business-tax-policy').applicableRate(rate, day);
-      }, 0);
-      if (dated && (direction !== 'sales' || id === primarySales) && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', day).percent) fail('The published dated tax rate differs from its approved policy.');
-      taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
+    const selected = (key, on = day) => dated ? datedTaxChoice(dated, key, on).id : mappings[key];
+    const taxFor = (on, requestedSales) => {
+      const primarySales = String(selected('salesTax', on) || '');
+      // The synced company supplies line-specific Canadian sales codes. Every referenced
+      // code still needs complete active dated rates below; the published default remains bound.
+      const outdatedSales = dated ? String(dated.before.salesTax === primarySales ? dated.after.salesTax : dated.before.salesTax) : null;
+      const salesCodes = requestedSales.filter(id => id !== outdatedSales && (local.get('TaxCode', id)?.SalesTaxRateList || local.get('TaxCode', id)?.Taxable === false));
+      const taxCodes = { sales: [...new Set([primarySales, ...salesCodes].filter(Boolean))], purchases: [selected('purchaseTax', on)].filter(Boolean).map(String) };
+      if (!taxCodes.sales.length || !taxCodes.purchases.length) fail('The published business has no sales and purchase tax codes.');
+      const taxPercent = {};
+      for (const [direction, ids] of Object.entries(taxCodes)) for (const id of ids) {
+        const code = local.get('TaxCode', id);
+        // Only referenced records are loaded; unrelated writes need no tax read.
+        if (!code) continue;
+        const details = code[direction === 'sales' ? 'SalesTaxRateList' : 'PurchaseTaxRateList']?.TaxRateDetail ?? (code.Taxable === false ? [] : undefined);
+        if (code.Active !== true || code.sparse === true || !Array.isArray(details) || details.length > 5 || (code.Taxable !== false && !details.length)) fail('The published tax code has no complete current rates.');
+        const ids = new Set();
+        const percent = details.reduce((sum, row) => {
+          const rateId = row.TaxRateRef?.value;
+          if (typeof rateId !== 'string' || ids.has(rateId) || row.TaxTypeApplicable !== 'TaxOnAmount' || (row.TaxOnTaxOrder != null && row.TaxOnTaxOrder !== 0)) fail('The published tax code has ambiguous or compound rates.');
+          ids.add(rateId);
+          const rate = local.get('TaxRate', rateId);
+          if (rate?.sparse === true) fail('The published tax rate is incomplete.');
+          return sum + require('./business-tax-policy').applicableRate(rate, on);
+        }, 0);
+        if (dated && (direction !== 'sales' || id === primarySales) && percent !== datedTaxChoice(dated, direction === 'sales' ? 'salesTax' : 'purchaseTax', on).percent) fail('The published dated tax rate differs from its approved policy.');
+        taxPercent[id] = Math.max(taxPercent[id] || 0, percent);
+      }
+      return { taxCodes, taxPercent };
+    };
+    const taxByDate = {};
+    for (const on of [...new Set([day, ...operations.map(op => op.payload?.TxnDate || (op.id ? local.get(op.entity, String(op.id))?.TxnDate : null)).filter(Boolean)])]) {
+      const requestedSales = operations.filter(op => require('./qbo-entity-schema').ENTITIES[op.entity]?.direction === 'sales').flatMap(op => {
+        const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload };
+        return record.TxnDate === on ? (record.Line || []).map(line => line.SalesItemLineDetail?.TaxCodeRef?.value).filter(id => typeof id === 'string') : [];
+      });
+      taxByDate[on] = taxFor(on, [...new Set([...requestedSales, ...(on === day ? salesTaxCodes : [])])]);
     }
+    const { taxCodes, taxPercent } = taxByDate[day];
     // Fence Stop and a concurrent close in the same admission transaction. A
     // snapshot read alone would allow Stop to commit without conflicting.
     if (session?.inTransaction?.()) {
@@ -340,7 +352,7 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     }
     const { readCurrencyPolicy, currencyOf, TXNS } = require('./general-write-currency');
     const currency = await readCurrencyPolicy({ models, scope, session, readRate, requests: operations.filter(op => TXNS.has(op.entity) && (op.op === 'create' || op.payload?.ExchangeRate !== undefined || op.payload?.TxnDate !== undefined)).map(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return { currency: currencyOf(record), day: record.TxnDate }; }) });
-    return { currency, inventory, stock, historyReverification, day, calendarClosePending: calendar.verifiedThrough < shift(day, -1), verifiedThrough: calendar.verifiedThrough, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
+    return { currency, inventory, stock, historyReverification, day, calendarClosePending: calendar.verifiedThrough < shift(day, -1), verifiedThrough: calendar.verifiedThrough, taxByDate, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
   };
 }
 // Server composition: the synced copy through the hardened observation store (fresh

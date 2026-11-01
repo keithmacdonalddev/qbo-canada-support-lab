@@ -66,22 +66,8 @@ function exactLinks(expected, actual) {
   const ordered = values => values.map(value => canonical(value)).sort();
   return canonical(ordered(linkList(expected))) === canonical(ordered(linkList(actual)));
 }
-function subset(expected, actual, path = '') {
-  if (expected === null || typeof expected !== 'object') {
-    if (typeof expected === 'number') {
-      if (['Amount', 'TotalAmt', 'UnitPrice'].includes(path.split('.').at(-1))) { try { return cents(expected) === cents(actual); } catch { return false; } }
-      return typeof actual === 'number' && Number.isFinite(actual) && Math.abs(expected - actual) < 0.0000001;
-    }
-    return expected === actual;
-  }
-  if (!actual || typeof actual !== 'object' || Array.isArray(expected) || Array.isArray(actual)) return false;
-  return Object.entries(expected).every(([key, value]) => {
-    if (key === 'LinkedTxn') return exactLinks(value, actual[key]);
-    // Omitted processing flags are not proof of a bank movement. Creation intent
-    // explicitly forbids processing; an affirmative saved flag is a mismatch.
-    if (['ProcessPayment', 'ProcessBillPayment'].includes(key) && value === false && actual[key] === undefined) return true;
-    return subset(value, actual[key], path + '.' + key);
-  });
+function subset(expected, actual, path = '', entity) {
+  return require('./qbo-semantic-compare').matchesQboRequest(expected, actual, { entity, path, transport: false });
 }
 function checkedObservation(value, scope, entity, qboId, now) {
   if (!value || !sameScope(value.scope, scope) || value.entity !== entity || !fresh(value.observedAt, now) || !value.record || value.record.Id !== qboId || typeof value.record.SyncToken !== 'string' || !VERSION.test(value.record.SyncToken) || value.recordHash !== hash(value.record)) invalid('A scoped fresh read of the exact saved record is required.');
@@ -202,7 +188,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
     if (verifyAccountPosting({ observed, compiled, receipt, now }) !== payload[postingAccount].value) invalid('The transaction posted to a different approved account.');
     delete expectedHeader[postingAccount];
   }
-  if (!subset(expectedHeader, record)) mismatch('Saved header fields differ from the requested transaction.');
+  if (!subset(expectedHeader, record, '', compiled.entity)) mismatch('Saved header fields differ from the requested transaction.');
   const listRecord = require('./business-transaction-compiler').LISTS.has(compiled.entity);
   if (listRecord && record.Active !== true) mismatch('The added customer, supplier or item is not active.');
   // An added list record is standalone: no parent, sub-customer/project, billing
@@ -224,7 +210,7 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
       // This separate proof reports a whole-Estimate header conversion. It does
       // not insert a provider line link or alter the original compiled request.
       if (estimateConversion) delete expected.LinkedTxn;
-      const index = actualLines.findIndex((actual, index) => !used.has(index) && subset(expected, actual));
+      const index = actualLines.findIndex((actual, index) => !used.has(index) && subset(expected, actual, 'Line.*', compiled.entity));
       if (index < 0) { mismatch('Saved line amounts, quantities, tax codes or source links differ.'); continue; }
       used.add(index); const actual = actualLines[index], detail = actual[actual.DetailType];
       for (const key of ['ClassRef', 'ProjectRef']) if (!expected[key] && actual[key]?.value) mismatch('An unplanned line dimension is present.');

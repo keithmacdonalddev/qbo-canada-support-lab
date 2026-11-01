@@ -94,6 +94,21 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
   }
   return policies;
 }
+// A source history may acquire future rates without changing this reviewed period.
+// Authenticate the raw evidence first, then bind every rate boundary in the period.
+function sameDatedTaxDefinition(entity, before, current, fromDate, throughDate) {
+  if (entity !== 'TaxRate' || !fromDate || !throughDate) return sameCanonicalDefinition(entity, before, current);
+  date(fromDate); date(throughDate);
+  if (throughDate < fromDate) return false;
+  const withoutHistory = record => Object.fromEntries(Object.entries(record).filter(([key]) => !['RateValue', 'EffectiveTaxRate'].includes(key)));
+  if (!sameCanonicalDefinition(entity, withoutHistory(before), withoutHistory(current))) return false;
+  const boundaries = new Set([fromDate, throughDate]);
+  try {
+    for (const record of [before, current]) for (const row of record.EffectiveTaxRate || []) for (const key of ['EffectiveDate', 'EndDate']) if (row[key] != null) { const on = rateDate(row[key]); if (on >= fromDate && on <= throughDate) boundaries.add(on); }
+    const extra = (record, on) => { const selected = [...record.EffectiveTaxRate].filter(row => rateDate(row.EffectiveDate) <= on).sort((a,b) => rateDate(a.EffectiveDate).localeCompare(rateDate(b.EffectiveDate))).at(-1); return Object.fromEntries(Object.entries(selected).filter(([key]) => !['RateValue', 'EffectiveDate', 'EndDate'].includes(key))); };
+    return [...boundaries].every(on => applicableRate(before, on) === applicableRate(current, on) && require('./qbo-semantic-compare').sameQboValue(extra(before, on), extra(current, on)));
+  } catch { return false; }
+}
 async function verifyBusinessTaxSources(policy, client) {
   if (!policy.taxSources) return;
   for (const source of policy.taxSources) {
@@ -102,7 +117,7 @@ async function verifyBusinessTaxSources(policy, client) {
     taxDefinition(source.entity, source.id, source.record);
     const current = response?.[source.entity];
     if (current) taxDefinition(source.entity, source.id, current);
-    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || !sameCanonicalDefinition(source.entity, source.record, current)) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.', { entity: source.entity, recordId: source.id, expectedVersion: source.record.SyncToken, observedVersion: current?.SyncToken, differences: require('./business-error-detail').definitionDifferences(definitionFields(source.entity, source.record), current ? definitionFields(source.entity, current) : {}) });
+    if (!current || typeof current.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(current.SyncToken) || BigInt(current.SyncToken) < BigInt(source.record.SyncToken) || !sameDatedTaxDefinition(source.entity, source.record, current, policy.fromDate, policy.throughDate)) fail('Tax definitions changed after this operation was reviewed. Prepare a new operation.', { entity: source.entity, recordId: source.id, expectedVersion: source.record.SyncToken, observedVersion: current?.SyncToken, differences: require('./business-error-detail').definitionDifferences(definitionFields(source.entity, source.record), current ? definitionFields(source.entity, current) : {}) });
   }
 }
-module.exports = { applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };
+module.exports = { sameDatedTaxDefinition, applicableRate, taxCents, deriveBusinessPolicies, verifyBusinessTaxSources };

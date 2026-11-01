@@ -63,7 +63,7 @@ function grossCents(entity, record, context, { saved = false } = {}) {
   // A saved record's (or unchanged lines') tax is QuickBooks' own.
   if (saved && cents(record.TxnTaxDetail?.TotalTax) !== null) return net + cents(record.TxnTaxDetail.TotalTax);
   const tax = (Array.isArray(record.Line) ? record.Line : []).filter(line => TAXED_LINES.includes(line?.DetailType)).reduce((sum, line) => {
-    const code = String(line[line.DetailType]?.TaxCodeRef?.value ?? ''), percent = Number(context.taxPercent?.[code]) || 0;
+    const code = String(line[line.DetailType]?.TaxCodeRef?.value ?? ''), percent = Number((context.taxByDate?.[record.TxnDate] || context).taxPercent?.[code]) || 0;
     return sum + Math.round((cents(line.Amount) || 0) * percent / 100);
   }, 0);
   return net + tax;
@@ -246,7 +246,8 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (record.Active === false) say(ref, path + ' ' + target.value + ' is inactive.');
       if (['Customer', 'Vendor'].includes(kind) && (path.includes('.') || key === 'EntityRef' || !['Invoice', 'Bill', 'Payment', 'BillPayment'].includes(op.entity)) && currencyOf(record) !== currencyOf(after)) say(ref, path + ' currency must match the transaction currency.');
       if (kind === 'Account' && ACCOUNT_TYPES[key] && !ACCOUNT_TYPES[key].includes(record.AccountType)) say(ref, path + ' ' + target.value + ' is a ' + record.AccountType + ' account; ' + key + ' needs ' + ACCOUNT_TYPES[key].join(' or ') + '.');
-      if (kind === 'TaxCode' && spec.direction && !(context.taxCodes?.[spec.direction] || []).includes(String(target.value))) say(ref, path + ' tax code ' + target.value + ' is not in the published ' + spec.direction + ' tax policy (' + (context.taxCodes?.[spec.direction] || []).join(', ') + ').');
+      const taxPolicy = context.taxByDate?.[after?.TxnDate] || context;
+      if (kind === 'TaxCode' && spec.direction && !(taxPolicy.taxCodes?.[spec.direction] || []).includes(String(target.value))) say(ref, path + ' tax code ' + target.value + ' is not in the published ' + spec.direction + ' tax policy (' + (taxPolicy.taxCodes?.[spec.direction] || []).join(', ') + ').');
     }
     // 6. Tax: QuickBooks computes it from published codes on tax-excluded lines.
     if (spec.direction && after && Array.isArray(after.Line) && (op.op === 'create' || payload.Line !== undefined || payload.GlobalTaxCalculation !== undefined)) {

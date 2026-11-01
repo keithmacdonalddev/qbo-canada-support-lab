@@ -198,7 +198,7 @@ async function settleCaseGeneralResult({ step, decision, scope, caseId, planId, 
     const qboId = String(decision.result?.data?.id || ''), deleted = op.op === 'delete';
     if (!/^\d+$/.test(qboId) || (op.id && String(op.id) !== qboId)) refuse('The recovered record identity differs.');
     if (!deleted && (!record || String(record.Id) !== qboId || !require('./general-write-merge').isComplete(op.entity, record)
-        || !(op.op === 'void' ? require('./general-write-recovery').matchesVoid(item, record) : require('./general-write-recovery').matchesRequest(item.payload, record)))) refuse('The recovered governed record is incomplete or differs from its exact request.');
+        || !(op.op === 'void' ? require('./general-write-recovery').matchesVoid(item, record) : require('./general-write-recovery').matchesRequest(item.payload, record, item.entity)))) refuse('The recovered governed record is incomplete or differs from its exact request.');
     entry = { entity: op.entity, op: op.op, outcome: deleted ? 'deleted' : 'saved', qboId, request: item.payload,
       ...(item.before ? { before: item.before } : {}), ...(deleted ? {} : { record, complete: true, version: record.SyncToken }),
       parents: require('./general-write-merge').invalidatedParents(item.before, record), caseRecovery: { caseId, planId, stepNumber: step.stepNumber } };

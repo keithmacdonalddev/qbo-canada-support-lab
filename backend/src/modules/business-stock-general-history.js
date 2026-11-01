@@ -8,7 +8,7 @@ async function acceptedGeneralItem(models, scope, run, ref, session) {
   const item = run.items?.[ref], op = run.plan?.operations?.find(row => row.ref === ref);
   const batch = [...(run.batches || [])].reverse().find(row => row.attempt === item?.attempt && row.items.some(row => row.ref === ref));
   const sent = batch?.items.find(row => row.ref === ref), gated = batch?.transport?.items?.find(row => row.ref === ref);
-  if (!item || item.op !== 'create' || item.outcome !== 'saved' || op?.op !== 'create' || item.entity !== op.entity || batch?.state !== 'answered' || gated?.outcome !== 'saved' || gated.qboId !== item.qboId || sent?.entity !== item.entity || sent.op !== 'create' || canonical(sent.payload) !== canonical(item.request) || !require('./general-write-recovery').matchesRequest(item.request, item.record)) fail('General stock lost its original saved create and resolved request.');
+  if (!item || item.op !== 'create' || item.outcome !== 'saved' || op?.op !== 'create' || item.entity !== op.entity || batch?.state !== 'answered' || gated?.outcome !== 'saved' || gated.qboId !== item.qboId || sent?.entity !== item.entity || sent.op !== 'create' || canonical(sent.payload) !== canonical(item.request) || !require('./general-write-recovery').matchesRequest(item.request, item.record, item.entity)) fail('General stock lost its original saved create and resolved request.');
   const receipt = await read(models.Receipts, { _id: batch.transport.receiptId, ...scope }, session);
   const request = require('./general-write-transport').buildGeneralBatch(scope, batch);
   const native = receipt?.observed?.items?.find(row => row.ref === ref);

@@ -48,7 +48,7 @@ function classifyGeneralResponse(scope, batch, response, intuitTid = '') {
     if (group.length !== 1) return { bId: item.bId, ref: item.ref, outcome: 'unknown' };
     const { bId, ...body } = group[0], status = body.Fault?.type === 'ValidationFault' ? 400 : response.status;
     const observed = classifyWriteResponse(itemRequest(scope, item), { status, json: body }, intuitTid);
-    if (observed.outcome === 'saved' && item.op !== 'delete' && !(item.op === 'void' ? matchesVoid(item, body[item.entity]) : matchesRequest(item.payload, body[item.entity]))) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
+    if (observed.outcome === 'saved' && item.op !== 'delete' && !(item.op === 'void' ? matchesVoid(item, body[item.entity]) : matchesRequest(item.payload, body[item.entity], item.entity))) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
     return { bId, ref: item.ref, ...observed };
   });
   return { ...base, outcome: items.every(item => ['saved', 'rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };

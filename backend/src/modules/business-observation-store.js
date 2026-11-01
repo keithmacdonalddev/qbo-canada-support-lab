@@ -58,7 +58,10 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
       if (await query(db.Receipts, { ...scope, entity: { $in: affectedEntities }, $or: [{ state: { $in: ['possibly-sent','unknown'] } }, { sentAt: { $gte: new Date(coverage) } }, { observedAt: { $gte: new Date(coverage) } }] })) return null;
     }
     if (guard && await query(db.Receipts, { ...scope, $or: [{ 'periodProof.evidence.records': { $elemMatch: { entity, id } } }, { 'periodProof.proofs.evidence.records': { $elemMatch: { entity, id } } }], $and: [{ $or: [{ state: { $in: ['possibly-sent','unknown'] } }, { sentAt: { $gte: new Date(coverage) } }, { observedAt: { $gte: new Date(coverage) } }] }] })) return null;
-    if (transactions ? await affectingWrite(db,scope,entity,id,coverage) : await query(db.Receipts,{...scope,entity:entity.toLowerCase(),sentAt:{$gte:new Date(coverage)},$or:[{'observed.qboId':id},{state:{$in:['possibly-sent','unknown']}}]})) return null;
+    // Tax definitions cannot be changed by a general batch. Its unresolved transaction
+    // outcome must not erase a current tax snapshot; explicit tax writes still invalidate it.
+    const transactional = transactions && !['TaxCode', 'TaxRate'].includes(entity);
+    if (transactional ? await affectingWrite(db,scope,entity,id,coverage) : await query(db.Receipts,{...scope,entity:entity.toLowerCase(),sentAt:{$gte:new Date(coverage)},$or:[{'observed.qboId':id},{state:{$in:['possibly-sent','unknown']}}]})) return null;
     const observedAt=new Date(now()).toISOString();
     const result=observation(scope,entity,stored.record,observedAt,{kind:'qbo-current-mirror',generation:row.generation,completedAt:new Date(row.lastSuccessAt).toISOString(),freshUntil:new Date(stamp(row.lastSuccessAt)+Math.max(120000,(Number.isSafeInteger(row.everyMs)?row.everyMs:60000)*2)).toISOString(),coverageAt:Number.isFinite(coverage)?new Date(coverage).toISOString():null});
     const after=await source(scope,entity); signal?.throwIfAborted();
