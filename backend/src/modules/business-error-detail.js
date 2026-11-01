@@ -25,7 +25,7 @@ function businessErrorDetail(error, context = {}) {
   const existing = error?.errorDetail?.version === 1 ? error.errorDetail : error?.version === 1 && error.check ? error : null;
   const source = existing || error;
   const code = /^[A-Z][A-Z0-9_]{2,99}$/.test(source?.code || '') ? source.code : 'BUSINESS_OPERATION_FAILED';
-  const known = /^(BUSINESS_|GENERAL_WRITE_|QBO_|AI_|CODEX_)/.test(source?.code || '');
+  const known = /^(BUSINESS_|GENERAL_(?:WRITE_|DAY_CLOSE_)|QBO_|AI_|CODEX_)/.test(source?.code || '');
   let detail = bounded(redact(existing?.detail || { ...(context.detail || {}), ...(error?.businessDetail || {}), ...((error?.referenceDiagnostic || error?.diagnostic?.reference) ? { reference: error.referenceDiagnostic || error.diagnostic.reference } : {}) }));
   if (Buffer.byteLength(JSON.stringify(detail)) > 3500) detail = { truncated: true, note: 'Diagnostic detail exceeded its retained budget.' };
   const check = { ...checkFrom(error), ...(existing?.check || context.check || error?.businessCheck || {}) };
@@ -92,8 +92,29 @@ async function businessBlockersFor({models,scope,now=Date.now()}) {
     rows(models?.Runs,{status:{$nin:['verified','retired','stopped','previewed']}},'_id status nextOrdinal errorDetail errorHistory progressAt createdAt updatedAt executionRequest'),
     rows(models?.GeneralWriteRuns,{status:{$nin:['complete','expired-unsent']}},'_id status errorDetail errorHistory progressAt createdAt updatedAt lastError'),
   ]);
+  // Only the newest attempt for each period is current; a later passing proof
+  // clears its failure without erasing historical evidence.
+  const closes = models?.GeneralDayCloses?.find ? await models.GeneralDayCloses.find({ ...scope, kind: 'period' }).select('_id fromDate throughDate ok errorDetail verifiedAt failures').sort({ verifiedAt: -1, _id: -1 }).limit(201).maxTimeMS(3000).lean() : [];
+  const periods = new Map(), closeRuns = [];
+  for (const close of closes) {
+    const period = close.fromDate + ':' + close.throughDate;
+    if (!periods.has(period)) periods.set(period, []);
+    periods.get(period).push(close);
+  }
+  for (const attempts of periods.values()) {
+    const latest = attempts[0];
+    if (latest.ok || !latest.errorDetail) continue;
+    const errorDetail = businessErrorDetail(latest.errorDetail), key = fingerprint(errorDetail);
+    const same = [];
+    for (const attempt of attempts) {
+      if (attempt.ok) break;
+      if (attempt.errorDetail && fingerprint(businessErrorDetail(attempt.errorDetail)) === key) same.push(attempt);
+    }
+    closeRuns.push({ _id: latest._id, status: 'blocked', errorDetail, createdAt: same.at(-1).verifiedAt,
+      errorHistory: [{ key, errorDetail, count: same.length, firstAt: new Date(same.at(-1).verifiedAt).toISOString(), lastAt: new Date(latest.verifiedAt).toISOString() }] });
+  }
   const steps=await rows(models?.Steps,{$or:[{operationId:{$in:runs.map(row=>row._id)},state:{$ne:'verified'}},{state:{$in:['dispatched','unknown']}}]},'_id operationId logicalKey entity qboId state errorDetail errorHistory progressAt createdAt updatedAt verification dispatch.at');
-  return {blockers:collectBusinessBlockers({runs:runs.slice(0,200),steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),truncated:[runs,steps,generalRuns].some(rows=>rows.length>200)};
+  return {blockers:collectBusinessBlockers({runs:[...runs.slice(0,200), ...closeRuns],steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),truncated:[runs,steps,generalRuns,closes].some(rows=>rows.length>200)};
 }
 function blockerWork(blocker) { return {key:'business-blocker-'+blocker.key,owner:'accountant',state:'blocked',title:blocker.overdue?'Business work has been stuck for over fifteen minutes':'Business work needs attention',detail:blocker.errorDetail.message,next:'Inspect the failed check and continue independent work.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,href:'/company/live'}; }
 function blockerBuild(blocker) {return {key:'business-blocker-'+blocker.key,kind:'capability-request',priority:'high',requirement:'R11',status:'open',title:'Fix blocked business work',missing:blocker.errorDetail.message,feature:'Business execution diagnostics',why:'Saved business work has not progressed for over fifteen minutes.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,at:blocker.lastAt};}

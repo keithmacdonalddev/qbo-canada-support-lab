@@ -66,7 +66,7 @@ test('pre-opening markers cannot resolve while the old opening baseline remains 
   const run={_id:'history',dirty:[{date:'2026-10-15'}],plan:{operations:[]},items:{}};
   const h=setup({run,copyRecord:null});h.closes.push({kind:'reverify',ok:true,markers:['history:2026-10-15']});
   await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',openingDate:'2026-11-01',mappings,readLedger:h.readLedger}),/opening baseline.*must be re-proved/);
-  assert.equal(h.reads.length,0);assert.equal(h.closes.length,1);
+  assert.equal(h.reads.length,0);assert.equal(h.closes.length,2);assert.equal(h.closes.at(-1).ok,false);assert.equal(h.closes.at(-1).errorDetail.code,'GENERAL_DAY_CLOSE_UNVERIFIED');
 });
 
 test('multiple tax accounts retain distinct identities and cannot hide a tax-account substitution',async()=>{
@@ -80,7 +80,7 @@ test('posting-reference changes during the ledger read cannot produce a passing 
   const run={_id:'race',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:saved}}};
   const h=setup({run,copyRecord:saved,itemRecord:item});
   await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const report=await h.readLedger(...args);item.IncomeAccountRef.value='999';return report;}}),/posting references changed/);
-  assert.equal(h.closes.length,0);
+  assert.equal(h.closes.length,1);assert.equal(h.closes[0].ok,false);assert.match(h.closes[0].errorDetail.message,/posting references changed/);
 });
 
 test('an external move from a closed day into the closing period cannot escape enumeration', async () => {

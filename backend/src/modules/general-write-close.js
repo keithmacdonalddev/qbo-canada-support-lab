@@ -7,6 +7,7 @@
 // never clears an externally edited record. dirtyRange turns durable dirty-period markers
 // into the closes that must be re-verified, through the current cursor.
 const { hash } = require('./business-calendar');
+const { businessErrorDetail, definitionDifferences } = require('./business-error-detail');
 // Fields an own later settlement may change on a parent: balance, remaining credit,
 // backlinks, version metadata and the deposit/billing status those links imply.
 const SETTLEMENT_FIELDS = new Set(['Balance', 'HomeBalance', 'RemainingCredit', 'LinkedTxn', 'SyncToken', 'MetaData', 'TxnStatus', 'BillableStatus', 'POStatus', 'UnappliedAmt', 'DepositToAccountRef']);
@@ -68,7 +69,7 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
   for (const row of records) {
     const key = row.entity + ':' + row.id, classified = classifyRecord({ entity: row.entity, current: row.current, deleted: row.deleted, evidence: row.evidence, ownSettlements });
     const result = { key, kind: classified.kind, reason: classified.reason };
-    if (classified.kind === 'external-change') failures.push({ key, reason: classified.reason });
+    if (classified.kind === 'external-change') failures.push({ key, reason: classified.reason, differences: definitionDifferences(row.evidence?.accountant?.record || {}, row.current || {}) });
     if (row.unavailable) failures.push({ key, reason: 'Its current version is unavailable; a retained response cannot substitute for current evidence.' });
     if (classified.kind === 'accountant') {
       try {
@@ -83,7 +84,7 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });
         if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, { ...ctx, postingSources: proof?.postingSources }));
-      } catch (error) { failures.push({ key, reason: error.message }); }
+      } catch (error) { failures.push({ key, reason: error.message, errorDetail: businessErrorDetail(error, { entity: row.entity, recordId: row.id }) }); }
     }
     results.push(result);
   }

@@ -12,6 +12,7 @@ const schema = new mongoose.Schema({
   fromDate: fixed(String), throughDate: fixed(String), kind: { ...fixed(String), enum: ['period', 'reverify'] },
   snapshotHash: fixed(String, false),
   ok: fixed(Boolean), ledgerHash: fixed(String), recordCount: fixed(Number),
+  errorDetail: fixed(mongoose.Schema.Types.Mixed, false),
   failures: { type: [mongoose.Schema.Types.Mixed], immutable: true, default: [] },
   records: { type: [mongoose.Schema.Types.Mixed], immutable: true, default: [] },
   // Dirty markers ('runId:date') this verification covered.

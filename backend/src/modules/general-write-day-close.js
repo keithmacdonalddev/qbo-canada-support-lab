@@ -12,7 +12,7 @@ const { evaluateDay, dirtyRange, explainedByOwnSettlements } = require('./genera
 const SETTLEMENT_ENTITIES = new Set(['Payment', 'BillPayment', 'CreditMemo', 'VendorCredit', 'Deposit']);
 const settlementKey = link => (link.TxnType === 'BillPaymentCheck' ? 'BillPayment' : link.TxnType) + ':' + String(link.TxnId);
 function settlementLinks(record) { return [...(record?.LinkedTxn || []), ...(record?.Line || []).flatMap(line => line.LinkedTxn || [])].filter(link => /^\d{1,30}$/.test(String(link?.TxnId || ''))).map(settlementKey); }
-function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED' }); }
+function fail(message, businessDetail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail }); }
 // General Ledger transaction-type labels (Canadian and US wording) -> entity.
 const LABELS = Object.freeze({
   'Invoice': 'Invoice', 'Payment': 'Payment', 'Credit Memo': 'CreditMemo', 'Sales Receipt': 'SalesReceipt', 'Refund': 'RefundReceipt', 'Refund Receipt': 'RefundReceipt',
@@ -42,9 +42,16 @@ function parseLedger(report, day, through = day, accountKey = id => id) {
       if (row.type === 'Section') { const id = row.Header?.ColData?.[0]?.id; walk(row.Rows?.Row, id || account); continue; }
       if (row.type !== 'Data' || !Array.isArray(row.ColData)) continue;
       const cell = row.ColData[typeAt], entity = LABELS[cell?.value], cents = money(row.ColData[debitAt]) - money(row.ColData[creditAt]);
-      if (!account) fail('A General Ledger row has no account section.');
       const dated = row.ColData[dateAt]?.value;
-      if (dated && (dated < day || dated > through)) fail('A General Ledger row is dated outside ' + day + (day === through ? '' : ' to ' + through) + '.');
+      const detail = { entity: entity || null, recordId: cell?.id || null, accountId: account || null, fromDate: day, throughDate: through, differences: [{ field: 'tx_date', expected: day === through ? day : [day, through], current: dated || null }] };
+      // QBO emits opening balances as Data rows. They are not period movements.
+      // Only the exact blank-identity, zero-movement row can be excluded.
+      if (dated === 'Beginning Balance' && !cell?.id && !cell?.value && !cents && !money(row.ColData[debitAt]) && !money(row.ColData[creditAt])) continue;
+      if (dated && (!/^\d{4}-\d{2}-\d{2}$/.test(dated) || dated < day || dated > through)) fail('A General Ledger row is dated outside ' + day + (day === through ? '' : ' to ' + through) + '.', detail);
+      // Zero-value applications can appear under QBO's Not Specified section.
+      // They carry no posting; any nonzero unidentified account still fails.
+      if (!account && (cents || money(row.ColData[debitAt]) || money(row.ColData[creditAt]))) fail('A General Ledger row has no account section.', detail);
+      if (!account) continue;
       if (!entity || !/^\d{1,30}$/.test(cell?.id || '')) { if (cents) unknown.push({ label: cell?.value || null, id: cell?.id || null, accountId: account, cents }); continue; }
       (out[entity + ':' + cell.id] ||= []).push({ accountId: String(accountKey(String(account))), cents });
     }

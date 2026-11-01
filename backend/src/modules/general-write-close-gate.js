@@ -2,9 +2,10 @@
 // General closes bind every run, current record and posting reference version. Historical
 // edits are held by durable markers until downstream periods and opening evidence re-prove.
 const { hash } = require('./business-calendar');
+const { businessErrorDetail } = require('./business-error-detail');
 const persistedHash = value => hash(JSON.parse(JSON.stringify(value)));
 const { closeGeneralDay, ledgerEndpoint, generalRecordsFor, settlementLinks, SETTLEMENT_ENTITIES } = require('./general-write-day-close');
-function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED' }); }
+function fail(message, businessDetail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail }); }
 const TAX_SUBTYPES = ['GlobalTaxPayable', 'GlobalTaxSuspense', 'SalesTaxPayable', 'OtherCurrentLiabilities'];
 function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun'), Closes = models.GeneralDayCloses || require('../models/GeneralDayClose'), Records = models.Records || require('../models/CompanySyncRecord');
@@ -79,23 +80,53 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     const settlements = await fixedSettlementsFor(scope, preview);
     const snapshotHash = hash({ fromDate, throughDate, ...preview, settlements, context: ctx.evidence });
     const prior = await Closes.findOne({ ...company(scope), fromDate, throughDate, kind: 'period', ok: true, snapshotHash }).sort({ verifiedAt: -1 }).maxTimeMS(3000).lean();
-    if (!force && prior?.snapshotHash === snapshotHash) return prior;
+    if (!force && prior?.snapshotHash === snapshotHash) {
+      // Reuse its exact accounting proof without another report, but record this
+      // successful attempt so a later transient failure does not stay current.
+      const reused = { ...prior, _id: hash({ prior: prior._id, at: now(), snapshotHash }).slice(0, 24), verifiedAt: new Date(now()) };
+      delete reused.createdAt; delete reused.updatedAt; delete reused.__v;
+      await Closes.create([reused]);
+      return reused;
+    }
     const report = await readLedger(fromDate, throughDate);
     const after = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy, models, now });
     const afterContext = await contextFor(scope, mappings, after.records), afterSettlements = await fixedSettlementsFor(scope, after);
     if (hash(preview) !== hash(after) || hash(ctx.evidence) !== hash(afterContext.evidence) || hash(settlements) !== hash(afterSettlements)) fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
     const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
-    const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures.map(row => ({ key: row.key, reason: row.reason })), records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], verifiedAt: new Date(now()) };
+    if (!closed.ok) {
+      const first = closed.failures[0] || {};
+      const error = Object.assign(new Error('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + closed.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.'), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail: { ...failureContext(first), fromDate, throughDate, recordCount: closed.records.length, failures: closed.failures.slice(0, 5) }, ...(first.errorDetail?.check ? { businessCheck: first.errorDetail.check } : {}) });
+      throw error;
+    }
+    const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures, records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], verifiedAt: new Date(now()) };
     await Closes.create([row]);
     return row;
   }
-  async function assertPeriodReady(scope, { fromDate, throughDate, verifiedThrough, openingDate, mappings, readLedger }) {
+  async function checkPeriodReady(scope, { fromDate, throughDate, verifiedThrough, openingDate, mappings, readLedger }) {
     const need = await pending(scope, { fromDate, throughDate, verifiedThrough });
     if (need.unresolved.length) fail('General history edits have unresolved accounting invalidation from ' + need.unresolved.map(row => row.earliestDate).sort()[0] + '. Historical completions, downstream movements' + (openingDate && need.unresolved.some(row => row.earliestDate < openingDate) ? ' and the opening baseline' : '') + ' must be re-proved; record-only ledger checks cannot clear these markers.');
     const results = need.hasRecords ? [await verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered: need.gathered })] : [];
     const failed = results.filter(row => !row.ok);
-    if (failed.length) fail('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + failed.flatMap(row => row.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason)).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.');
+    if (failed.length) fail('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + failed.flatMap(row => row.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason)).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.', { ...failureContext(failed[0].failures[0]), fromDate, throughDate, failures: failed.flatMap(row => row.failures).slice(0, 10) });
     return { required: results.length > 0, results: results.map(row => ({ fromDate: row.fromDate, throughDate: row.throughDate, kind: row.kind, ok: row.ok, recordCount: row.recordCount })) };
+  }
+
+  function failureContext(failure = {}) {
+    const [entity, recordId] = (failure.key || '').split(':');
+    return { entity: entity || null, recordId: recordId || null, differences: failure.differences || failure.errorDetail?.detail?.differences || [] };
+  }
+  // Preparation can fail before an OperationRun exists. Retain that failure as a
+  // close attempt so blockers and the accountant see the same diagnostic.
+  async function assertPeriodReady(scope, options) {
+    let ledger = null;
+    try { return await checkPeriodReady(scope, { ...options, readLedger: async (...args) => (ledger = await options.readLedger(...args)) }); }
+    catch (error) {
+      error.errorDetail = businessErrorDetail(error, { detail: { fromDate: options.fromDate, throughDate: options.throughDate } });
+      const errorDetail = error.errorDetail;
+      try { await Closes.create([{ _id: hash({ scope: company(scope), fromDate: options.fromDate, throughDate: options.throughDate, errorDetail, at: now() }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate: options.fromDate, throughDate: options.throughDate, kind: 'period', ok: false, ledgerHash: hash(ledger), recordCount: error.businessDetail?.recordCount || 0, failures: [{ key: errorDetail.entity && errorDetail.recordId ? errorDetail.entity + ':' + errorDetail.recordId : null, reason: errorDetail.message, errorDetail }], records: [], markers: [], errorDetail, verifiedAt: new Date(now()) }]); }
+      catch { error.errorDetail = businessErrorDetail({ ...errorDetail, detail: { ...errorDetail.detail, diagnosticPersistence: 'unavailable' } }); }
+      throw error;
+    }
   }
 
   async function reverifyDirty(scope, { verifiedThrough, openingDate, mappings, readLedger, readReports, references, verifyFixedDay, guard, transaction }) {

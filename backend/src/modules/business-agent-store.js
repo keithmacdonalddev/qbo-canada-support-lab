@@ -9,7 +9,7 @@ function loadModels() { return {
   Calendars:require('../models/BusinessCalendar'), Writers:require('../models/CompanyWriter'), Policies:require('../models/CompanyWritePolicy'),
   Runs:require('../models/OperationRun'), Jobs:require('../models/BusinessPopulationJob'), Authorities:require('../models/BusinessAuthority'), Baselines:require('../models/BusinessBaseline'),
   Plans:require('../models/OperationPlan'), Receipts:require('../models/QboWriteReceipt'), Steps:require('../models/OperationStep'), Intents:require('../models/OperationIntent'),
-  Versions:require('../models/BlueprintVersion'), Evidence:require('../models/OperationEvidence'), Transcripts:require('../models/BusinessAgentTranscript'), GeneralWriteRuns:require('../models/GeneralWriteRun'),
+  Versions:require('../models/BlueprintVersion'), Evidence:require('../models/OperationEvidence'), Transcripts:require('../models/BusinessAgentTranscript'), GeneralWriteRuns:require('../models/GeneralWriteRun'), GeneralDayCloses:require('../models/GeneralDayClose'),
 }; }
 const DUTY_TYPES=['receive-purchase-order','correct-own-record','collect-adopted-invoice','pay-adopted-bill'],FACT_TTL_MS=30000,TODAY_TTL_MS=10000;
 const scopeOf=row=>({environment:row.environment,realmId:row.realmId,connectionId:String(row.connectionId)});

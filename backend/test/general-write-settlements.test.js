@@ -109,11 +109,11 @@ test('fixed settlement proof changes during the ledger read cannot produce a clo
   const payment = settlement(), f = paidFixture(payment), step = fixedStep(payment); delete f.items.pay;
   const h = harness({ ...f, fixed: [step] });
   await assert.rejects(h.close(async () => { const report = await h.readLedger(); step.revision++; return report; }), /changed while the ledger was read/);
-  assert.equal(h.closes.length, 0);
+  assert.equal(h.closes.length, 1);assert.equal(h.closes[0].ok, false);assert.match(h.closes[0].errorDetail.message, /changed while the ledger was read/);
 });
 
 test('out-of-range current settlement changes during the ledger read invalidate the snapshot', async () => {
   const f = paidFixture(), h = harness(f);
   await assert.rejects(h.close(async () => { const report = await h.readLedger(); f.current.set('Payment:900', { ...f.items.pay.record, TotalAmt: 50 }); return report; }), /changed while the ledger was read/);
-  assert.equal(h.closes.length, 0);
+  assert.equal(h.closes.length, 1);assert.equal(h.closes[0].ok, false);assert.match(h.closes[0].errorDetail.message, /changed while the ledger was read/);
 });
