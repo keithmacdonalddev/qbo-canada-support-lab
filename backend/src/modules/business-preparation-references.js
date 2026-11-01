@@ -7,7 +7,7 @@ const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key
 function fail(message) { throw Object.assign(new Error(message), { status: 409, businessPlanError: true, code: 'BUSINESS_PREPARATION_CHANGED' }); }
 // Server-owned read-only preparation. Full definitions are observed here, never
 // approved here. Unresolved choices and earlier-transaction blockers are retained.
-async function bindPreparedOperationReferences(prepared, { authorize, resolveClient, now = () => Date.now(), signal } = {}) {
+async function bindPreparedOperationReferences(prepared, { authorize, resolveClient, now = () => Date.now(), signal, observationStore } = {}) {
   if ([authorize, resolveClient, now].some(value => typeof value !== 'function')) throw new TypeError('Preparation needs current authority and a scoped company client');
   const serialized = canonical(prepared);
   if (Buffer.byteLength(serialized) > 8000000) fail('The prepared activity exceeds its observation budget.');
@@ -22,8 +22,7 @@ async function bindPreparedOperationReferences(prepared, { authorize, resolveCli
     if (!Array.isArray(step.references) || step.references.length > 100) fail('The prepared record choices are incomplete.');
     for (const ref of step.references.filter(value => value.status === 'resolved')) {
       if (typeof ref.syncToken !== 'string' || !VERSION.test(ref.syncToken)) fail('A selected record has no exact version.');
-      const key = ref.entity + ':' + ref.id, existing = unique.get(key);
-      if (existing && existing.syncToken !== ref.syncToken) fail('The same company record has conflicting observed versions.');
+      const key = ref.entity + ':' + ref.id;
       unique.set(key, ref);
     }
   }
@@ -41,7 +40,7 @@ async function bindPreparedOperationReferences(prepared, { authorize, resolveCli
   try {
     const actor = await call(() => authorize(scope, 'operations.preview', { signal: controller.signal })); check();
     if (!ID.test(actor?.actorId || '') || !ID.test(actor?.ownerId || '')) fail('Current company preparation permission is required.');
-    const read = createBusinessReferenceReader({ now, authorize: async (...args) => {
+    const read = createBusinessReferenceReader({ now, observationStore, authorize: async (...args) => {
       const current = await authorize(...args);
       if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The company reader changed during preparation.');
       return current;
@@ -55,12 +54,26 @@ async function bindPreparedOperationReferences(prepared, { authorize, resolveCli
     const worker = async () => {
       while (next < jobs.length) {
         check(); const [key, ref] = jobs[next++];
-        const observed = await call(() => read(scope, ref.entity, ref.id, { signal: controller.signal })); check();
-        if (observed.record.SyncToken !== ref.syncToken) fail('A chosen company record changed during preparation. Prepare the activity again.');
+        let observed = await call(() => read(scope, ref.entity, ref.id, { signal: controller.signal })); check();
+        // A changed list choice refreshes once; the current complete record wins.
+        if (observed.record.SyncToken !== ref.syncToken) { observed = await call(() => read(scope, ref.entity, ref.id, { signal: controller.signal, live: true })); check(); }
         observations.set(key, observed);
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, worker)); check();
+    // A cohort cannot combine two generations of the same mirrored entity.
+    // Refresh just that entity's references once; full GETs do not reuse a generation.
+    const generations = new Map();
+    for (const observed of observations.values()) if (observed.source.kind === 'qbo-current-mirror') {
+      if (!generations.has(observed.entity)) generations.set(observed.entity, new Set());
+      generations.get(observed.entity).add(observed.source.generation);
+    }
+    for (const [entity, values] of generations) if (values.size > 1) {
+      for (const [key, ref] of jobs.filter(([, value]) => value.entity === entity)) {
+        if (observations.get(key).source.kind === 'qbo-full-entity-get') continue;
+        observations.set(key, await call(() => read(scope, ref.entity, ref.id, { signal: controller.signal, live: true }))); check();
+      }
+    }
     for (const step of payload.steps) step.references = step.references.map(ref => ref.status !== 'resolved' ? ref : {
       ...ref, ...bindBusinessReference({ scope, key: ref.key, entity: ref.entity, observed: observations.get(ref.entity + ':' + ref.id), now: now() }),
     });

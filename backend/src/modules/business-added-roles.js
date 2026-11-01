@@ -7,9 +7,6 @@
 // a record by name. An entry whose evidence is incomplete, duplicated or beyond
 // capacity is listed as unusable (with its reason) instead of blocking other work.
 const { hash } = require('./business-calendar');
-const { createHash } = require('node:crypto');
-// Creation definitions stay private and never become public role/choice properties.
-const retainedDefinitions = new WeakMap();
 const QBO_ID = /^\d{1,30}$/, HASH = /^[a-f0-9]{64}$/;
 const ENTITY = Object.freeze({ customer: 'Customer', supplier: 'Vendor', item: 'Item' });
 const KIND = Object.freeze({ Customer: 'customer', Vendor: 'supplier', Item: 'item' });
@@ -33,21 +30,18 @@ function creationProblem(step, company) {
   if (!r || r.version !== 1 || !HASH.test(d.key || '') || r.dispatchKey !== d.key || r.requestHash !== d.requestHash || !QBO_ID.test(step.qboId || '') || r.qboId !== step.qboId || !HASH.test(r.evidenceHash || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(r.source)) return 'its creation receipt does not match its dispatch';
   if (!v || v.kind !== 'business-readback' || v.compilationHash !== d.compilationHash || !HASH.test(v.observedHash || '') || !HASH.test(v.evidenceHash || '') || !HASH.test(v.graphEvidenceHash || '') || !step.lastAuditId) return 'its read-back verification proof is missing';
   if (v.evidenceHash !== require('./business-readback').listReadbackEvidenceHash({ requestHash: d.requestHash, compilationHash: d.compilationHash, receiptHash: r.evidenceHash, recordHash: v.observedHash })) return 'its read-back proof does not match its receipt and observed record';
-  // By design, a role verified before definition hashes were retained (none exist:
-  // no add-* operation ran before this rule) stays unusable; there is no migration.
-  if (!HASH.test(v.listDefinitionHash || '')) return 'its verified QuickBooks definition was not retained';
   return null;
 }
 // The step's retained receipt must be rebuilt from its stored origin: a business
 // dispatch's transport receipt row and its two transport audits (the same proof the
 // step store's receipt recovery uses), or an owner-confirmed attribution.
-async function receiptProblem(models, company, step, definitions) {
+async function receiptProblem(models, company, step) {
   const r = step.receipt, d = step.dispatch, problem = 'its creation receipt or transport audit is missing or changed';
   try {
     if (r.source === 'owner-attributed-readback') { await require('./business-owner-attribution').assertOwnerAttribution(models, company, step, null); return null; }
     if (r.source !== 'request-correlated-readback') return problem;
     const transport = require('./business-dispatch-receipt'), input = { ...company, operationId: String(step.operationId), logicalKey: step.logicalKey, entity: step.entity, dispatch: d };
-    const row = await models.Receipts.findOne({ ...company, operationId: String(step.operationId), logicalKey: step.logicalKey, kind: 'business', operation: 'create', dispatchKey: d.key, requestHash: d.requestHash }).select(definitions ? '+savedResponse' : '').maxTimeMS(3000).lean();
+    const row = await models.Receipts.findOne({ ...company, operationId: String(step.operationId), logicalKey: step.logicalKey, kind: 'business', operation: 'create', dispatchKey: d.key, requestHash: d.requestHash }).select('+savedResponse').maxTimeMS(3000).lean();
     const evidence = row ? transport.businessTransportEvidence(input, row) : null;
     if (!evidence) return problem;
     const audits = [];
@@ -55,10 +49,10 @@ async function receiptProblem(models, company, step, definitions) {
     transport.assertBusinessTransportAudits(row, evidence, audits);
     const rebuilt = evidence.result.receipt;
     if (rebuilt.evidenceHash !== r.evidenceHash || rebuilt.qboId !== step.qboId || rebuilt.dispatchKey !== r.dispatchKey) return problem;
-    // A saved response is historical evidence only after its exact bytes and the
-    // independently verified list definition match their retained audited hashes.
-    const payload = row.savedResponse, record = payload?.[step.entity];
-    if (definitions && payload && Object.keys(payload).every(key => [step.entity, 'time'].includes(key)) && createHash('sha256').update(JSON.stringify(payload)).digest('hex') === row.observed.responseHash && record?.Id === step.qboId && record.SyncToken === row.observed.syncToken && [1, 2].some(version => { try { return require('./business-reference').referenceDefinition(company, step.entity, record, version).hash === step.verification.listDefinitionHash; } catch { return false; } })) definitions.set(step.logicalKey, record);
+    // Retained response bytes remain immutable evidence when present. Ordinary
+    // reuse does not require a creation-definition witness or saved response body.
+    const payload = row.savedResponse;
+    if (payload && require('node:crypto').createHash('sha256').update(JSON.stringify(payload)).digest('hex') !== row.observed.responseHash) return problem;
     return null;
   } catch { return problem; }
 }
@@ -95,7 +89,7 @@ async function listAddedRoles(models, scope, ownerId) {
   if (!steps.length) return registry;
   const runIds = [...new Set(steps.map(step => String(step.operationId)))];
   const runs = new Map((await models.Runs.find({ ...company, _id: { $in: runIds } }).limit(runIds.length).maxTimeMS(5000).lean()).map(run => [String(run._id), run]));
-  const completions = new Map(), candidates = [], definitions = new Map();
+  const completions = new Map(), candidates = [];
   for (const [index, step] of steps.entries()) {
     const run = runs.get(String(step.operationId)), payload = parse(step.compilation?.request?.body);
     const intent = run ? await models.Intents.findOne({ ...company, planId: run.planId, planHash: run.planHash, logicalKey: step.logicalKey }).maxTimeMS(3000).lean() : null;
@@ -111,7 +105,7 @@ async function listAddedRoles(models, scope, ownerId) {
     if (lifecycle?.mode !== 'list-record' || lifecycle.listRole.kind !== entry.kind || lifecycle.activityBatch.key !== run.activityBatch?.key) { unusable('its approved creation intent is unavailable or changed'); continue; }
     const problem = creationProblem(step, company);
     if (problem) { unusable(problem); continue; }
-    const audited = await receiptProblem(models, company, step, definitions) || await auditProblem(models, company, ownerId, step);
+    const audited = await receiptProblem(models, company, step) || await auditProblem(models, company, ownerId, step);
     if (audited) { unusable(audited); continue; }
     if (!completions.has(entry.operationId)) completions.set(entry.operationId, await runCompletion(models, company, ownerId, run));
     const completion = completions.get(entry.operationId), record = completion.records?.get(step.logicalKey);
@@ -127,7 +121,7 @@ async function listAddedRoles(models, scope, ownerId) {
   for (const role of candidates) { bump('key:' + role.key); bump('id:' + role.entity + ':' + role.id); }
   for (const role of candidates) {
     if (tally.get('key:' + role.key) > 1 || tally.get('id:' + role.entity + ':' + role.id) > 1) { const { definitionHash, incomeRole, unit, unitPriceCents, ...entry } = role; registry.unusable.push({ ...entry, reason: 'another added record claims the same role or QuickBooks record' }); }
-    else { registry.roles.push(role); if (definitions.has(role.logicalKey)) retainedDefinitions.set(role, definitions.get(role.logicalKey)); }
+    else registry.roles.push(role);
   }
   registry.roles.sort((a, b) => a.key.localeCompare(b.key));
   return registry;
@@ -156,31 +150,28 @@ function assertCapacity(registry, batch) {
   const additions = (batch?.activities || []).filter(row => LIST_TYPES.includes(row?.type)).length;
   if (additions && (registry.overCapacity || registry.count + additions > MAX_ROLES)) fail('The added customer, supplier and item registry has room for ' + Math.max(0, MAX_ROLES - registry.count) + ' more record(s); this batch adds ' + additions + '.');
 }
-// Roles a batch uses must exist, be the right entity, keep their retained capabilities
-// and still have their verified full QuickBooks definition (any drift refuses use).
-async function resolveBatchRoles({ registry, batch, readRecord, scope, readDefinitionWitness, now = () => Date.now() }) {
-  const { ADDED } = require('./business-activity-batch'), { referenceDefinition, sameCanonicalDefinition, definitionFields } = require('./business-reference'), used = new Map();
+// Role ownership comes from the receipt registry. Reuse consumes the current
+// scoped reader's full record; creation hashes and provider defaults are audit only.
+// Raw-record callers must supply their scoped reader (governance uses a full GET).
+async function resolveBatchRoles({ registry, batch, readRecord, scope }) {
+  const { ADDED } = require('./business-activity-batch'), { referenceDefinition } = require('./business-reference'), used = new Map();
   const want = (key, kind) => { if (key && ADDED[kind].test(key)) used.set(key, kind); };
   for (const row of batch.activities) { want(row.customerKey, 'customer'); want(row.vendorKey, 'supplier'); want(row.itemKey, 'item'); }
   const resolved = [];
   for (const [key, kind] of used) {
     const role = registry.roles.find(value => value.key === key), blocked = registry.unusable.find(value => value.key === key);
     if (!role && blocked) fail('The added ' + kind + ' ' + (blocked.name || key) + ' cannot be used: ' + blocked.reason + '.');
-    if (!role || role.kind !== kind) fail('The added ' + kind + ' ' + key + ' is not a verified accountant-added role yet. Use it in a later batch, after the batch that created it verified.');
+    if (!role || role.kind !== kind || role.entity !== ENTITY[kind]) fail('The added ' + kind + ' ' + key + ' is not a verified accountant-added role yet. Use it in a later batch, after the batch that created it verified.');
     for (const row of batch.activities.filter(value => value.itemKey === key)) if (row.incomeRole !== role.incomeRole || row.unit !== role.unit) fail('The added item ' + key + ' sale must use its retained income role and unit.');
     const observed = await readRecord(role.entity, role.id);
-    let definition = null, legacyDefinition = null, approved = retainedDefinitions.get(role);
-    try { definition = referenceDefinition(scope, role.entity, observed).hash; legacyDefinition = referenceDefinition(scope, role.entity, observed, 1).hash; } catch { definition = null; }
-    if (definition !== role.definitionHash && legacyDefinition !== role.definitionHash && typeof readDefinitionWitness === 'function') {
-      const witness = await readDefinitionWitness(role.entity, role.id);
-      try { if ([1, 2].some(version => require('./business-reference').matchesReferenceDefinition(scope, role.entity, observed, { version, hash: role.definitionHash }, witness, now()))) { legacyDefinition = role.definitionHash; approved = witness.record; } } catch { /* Missing or changed evidence refuses the role below. */ }
-    }
-    // Authenticate the old definition before allowing provider-default drift.
-    let canonicalMatch = false;
-    try { canonicalMatch = definition !== null && approved && [1, 2].some(version => referenceDefinition(scope, role.entity, approved, version).hash === role.definitionHash) && sameCanonicalDefinition(role.entity, approved, observed); } catch { canonicalMatch = false; }
-    let versionValid = false;
-    try { versionValid = /^(0|[1-9]\d{0,63})$/.test(observed?.SyncToken) && (!approved || BigInt(observed.SyncToken) >= BigInt(approved.SyncToken)); } catch { /* Invalid or regressed versions refuse use. */ }
-    if (!observed || definition === null || observed.Id !== role.id || observed.Active !== true || typeof observed.SyncToken !== 'string' || !versionValid || (definition !== role.definitionHash && legacyDefinition !== role.definitionHash && !canonicalMatch)) fail('The added ' + kind + ' ' + role.name + ' changed in QuickBooks after it was created; it cannot be used.', { entity: role.entity, recordId: role.id, roleKey: key, expectedVersion: approved?.SyncToken || null, observedVersion: observed?.SyncToken || null, approvedObservationAvailable: Boolean(approved), differences: approved && observed ? require('./business-error-detail').definitionDifferences(definitionFields(role.entity, approved), definitionFields(role.entity, observed)).map(({ field }) => ({ field })) : [], note: approved ? 'Compared the authenticated creation definition with the current definition; only differing field paths are retained.' : 'The approved hash is retained, but authenticated creation field values are unavailable.' });
+    let valid = false;
+    try {
+      referenceDefinition(scope, role.entity, observed);
+      valid = observed.Id === role.id && (role.entity === 'Item'
+        ? observed.Type === 'Service' && QBO_ID.test(observed.IncomeAccountRef?.value || '')
+        : observed.CurrencyRef?.value === 'CAD' && (role.entity !== 'Customer' || observed.IsProject !== true));
+    } catch { /* The current full record must fit its accounting purpose. */ }
+    if (!valid) fail('The added ' + kind + ' ' + role.name + ' changed in QuickBooks and no longer fits this activity.', { entity: role.entity, recordId: role.id, roleKey: key, observedVersion: typeof observed?.SyncToken === 'string' ? observed.SyncToken : null, note: 'Current identity, active status, completeness and accounting purpose are required.' });
     resolved.push({ key, entity: role.entity, id: role.id, syncToken: observed.SyncToken, ...(role.entity === 'Item' ? { incomeRole: role.incomeRole } : {}) });
   }
   return resolved;

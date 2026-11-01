@@ -45,8 +45,8 @@ test('real preparation binds complete GET definitions once per distinct record w
   assert.deepEqual(result.steps.map(step => step.blockers), original.steps.map(step => step.blockers));
   assert.deepEqual(h.prepared, original); assert.equal(JSON.stringify(result).includes('Fixture private address'), false);
 });
-test('changed, inactive, sparse and wrong-identity full records cannot become accepted definitions', async () => {
-  for (const change of [r => { r.SyncToken = '1'; }, r => { r.Active = false; }, r => { r.sparse = true; }, r => { r.Id = '99999'; }]) {
+test('inactive, sparse and wrong-identity full records cannot become accepted definitions', async () => {
+  for (const change of [r => { r.Active = false; }, r => { r.sparse = true; }, r => { r.Id = '99999'; }]) {
     const h = harness(); change(h.records.values().next().value.record); await assert.rejects(h.bind());
     assert.ok(h.sent.length <= 3);
   }
@@ -115,7 +115,7 @@ test('authenticated existing route returns full bindings for operators and struc
   }
 });
 test('route discards bindings after saved-plan or permission drift and keeps local failures distinct from QBO failures', async () => {
-  for (const [mode, expected] of [['plan-change', 409], ['permission-change', 403], ['version-change', 409], ['upstream', 502]]) {
+  for (const [mode, expected] of [['plan-change', 409], ['permission-change', 403], ['upstream', 502]]) {
     const h = harness();
     if (mode === 'version-change') h.records.values().next().value.record.SyncToken = '1';
     if (mode === 'upstream') h.onSend = async () => { throw Object.assign(new Error('Fixture provider forbidden'), { status: 403, intuit_tid: 'fixture-trace' }); };
@@ -148,4 +148,26 @@ test('preparation identifies saved current work before new full GETs and leaves 
       assert.equal(JSON.stringify(data).includes('not for public output'), false);
     });
   }
+});
+
+test('changed and conflicting preview versions resolve to the current record with one refresh', async () => {
+  const h=harness(), selected=h.prepared.steps.flatMap(s=>s.references).find(r=>r.status==='resolved');
+  const record=h.records.get(selected.entity.toLowerCase()+'/'+selected.id).record; record.SyncToken='7';
+  const duplicate=h.prepared.steps.flatMap(s=>s.references).filter(r=>r.entity===selected.entity&&r.id===selected.id); if(duplicate.length>1)duplicate[1].syncToken='3';
+  const {operationHash,preparedAt,readyToExecute,persisted,summary,limitations,...payload}=h.prepared; h.prepared.operationHash=hash(payload);
+  const result=await h.bind();
+  assert.ok(result.steps.flatMap(s=>s.references).filter(r=>r.entity===selected.entity&&r.id===selected.id).every(r=>r.syncToken==='7'));
+  assert.equal(h.sent.length,h.records.size+1); assert.equal(h.prepared.steps.flatMap(s=>s.references).find(r=>r.key===selected.key).syncToken,selected.syncToken);
+});
+
+test('mixed mirror generations refresh that entity once before binding the cohort', async () => {
+  const h=harness(); const item=[...h.records.values()].find(r=>r.entity==='Item'); item.record.SyncToken='7'; let itemReads=0; const store={read:async(_scope,entity,id)=>{
+    const record=h.records.get(entity.toLowerCase()+'/'+id).record, recordHash=hash(record);
+    const generation=entity==='Item'&&itemReads++<2?'g1':'g2';
+    return {scope:h.scope,entity,record:structuredClone(record),recordHash,observedAt:new Date(h.clock).toISOString(),source:{version:1,kind:'qbo-current-mirror',scope:h.scope,entity,id,recordHash,generation,completedAt:new Date(h.clock-1000).toISOString(),freshUntil:new Date(h.clock+60000).toISOString()}};
+  }};
+  const result=await h.bind({observationStore:store});
+  const items=[...h.records.values()].filter(r=>r.entity==='Item'); assert.ok(items.length>2);
+  assert.equal(h.sent.length,items.length); assert.ok(h.sent.every(url=>url.includes('/item/')));
+  assert.equal(result.referenceDefinitions.distinctRecords,h.records.size);
 });

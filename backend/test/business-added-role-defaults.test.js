@@ -34,30 +34,30 @@ function fixture(t, entity, version, alterReceipt = () => {}) {
   alterReceipt(row);
   const models = { Steps: { find: () => query([step]) }, Runs: { find: () => query([run]) }, Intents: { findOne: () => query({ step: intent }) }, Receipts: { findOne: () => query(row) }, Audits: { findOne: filter => query(audits.find(a => String(a._id) === String(filter._id))) } };
   const batch = { activities: [{ [item ? 'itemKey' : entity === 'Vendor' ? 'vendorKey' : 'customerKey']: key, ...(item ? { incomeRole: 'careIncome', unit: 'month' } : {}) }] };
-  return { record, models, batch, role, row };
+  return { record, models, batch, role, row, step };
 }
-for (const [entity, version] of [['Customer', 1], ['Vendor', 1], ['Item', 1], ['Item', 2]]) test(entity + ' v' + version + ' added role compares authenticated canonical creation definitions', async t => {
-  const f = fixture(t, entity, version), registry = await roles.listAddedRoles(f.models, scope, owner);
+for (const [entity, version] of [['Customer', 1], ['Vendor', 1], ['Item', 1], ['Item', 2]]) test(entity + ' v' + version + ' added role uses current meaning across provider defaults', async t => {
+  const f = fixture(t, entity, version); delete f.step.verification.listDefinitionHash;
+  const registry = await roles.listAddedRoles(f.models, scope, owner);
   assert.equal(registry.roles.length, 1); assert.deepEqual(registry.unusable, []);
   const observed = structuredClone(f.record); observed.SyncToken = '4'; observed.MetaData = { LastUpdatedTime: '2026-10-31T11:00:00Z' };
   if (entity === 'Item') { delete observed.IncomeAccountRef.name; observed.DeferredRevenue = false; }
   else { observed.ClientEntityId = '0'; observed.V4IDPseudonym = 'provider-only-id'; observed.IsProject = false; observed.Balance = 200; delete observed.CurrencyRef.name; }
   const resolve = record => roles.resolveBatchRoles({ scope, registry, batch: f.batch, readRecord: async () => record });
   assert.equal((await resolve(observed))[0].id, '55');
-  assert.equal(JSON.stringify(registry).includes('office@example.test'), false, 'private creation record must not be serializable with the registry');
+  assert.equal(JSON.stringify(registry).includes('office@example.test'), false);
   assert.equal(JSON.stringify(roles.choiceRoles(registry)).includes('provider-only-id'), false);
-  const drift = entity === 'Item' ? [{ UnitPrice: 150 }, { IncomeAccountRef: { value: '999' } }, { SalesTaxCodeRef: { value: '12' } }, { Type: 'NonInventory' }] : [{ PrimaryEmailAddr: { Address: 'changed@example.test' } }, { ClientEntityId: '7' }, { CurrencyRef: { value: 'USD' } }, { Job: true }];
-  for (const change of [...drift, { Notes: 'Owner changed this' }, { Active: false }, { sparse: true }, { SyncToken: '1' }, { UnknownProviderSetting: true }]) await assert.rejects(resolve({ ...observed, ...change }), /changed in QuickBooks/, JSON.stringify(change));
+  const drift = entity === 'Item' ? [{ UnitPrice: 150 }, { IncomeAccountRef: { value: '999' } }, { SalesTaxCodeRef: { value: '12' } }] : [{ PrimaryEmailAddr: { Address: 'changed@example.test' } }, { ClientEntityId: '7' }, { Job: true }];
+  for (const change of [...drift, { Notes: 'Owner changed this' }, { SyncToken: '1' }, { UnknownProviderSetting: true }]) assert.equal((await resolve({ ...observed, ...change }))[0].id,'55');
+  const risk = entity === 'Item' ? [{ Type:'NonInventory' }, { IncomeAccountRef: null }] : [{ CurrencyRef:{value:'USD'} }, ...(entity==='Customer'?[{IsProject:true}]:[])];
+  for (const change of [...risk, { Id:'999' }, { Active:false }, { sparse:true }]) await assert.rejects(resolve({...observed,...change}), /changed in QuickBooks/);
   if (entity !== 'Item') await assert.rejects(resolve({ ...observed, Balance: 'invalid' }), /changed in QuickBooks/);
-  await assert.rejects(resolve({ ...observed, Notes: 'Sensitive customer note' }), error => {
-    const detail = businessErrorDetail(error);
-    assert.equal(detail.entity, entity); assert.equal(detail.recordId, '55');
-    assert.ok(detail.detail.differences.some(row => row.field === 'Notes'));
-    assert.equal(JSON.stringify(detail).includes('Sensitive customer note'), false);
-    return true;
+  await assert.rejects(resolve({ ...observed, Active: false, Notes: 'Sensitive customer note' }), error => {
+    const detail = businessErrorDetail(error); assert.equal(detail.entity,entity); assert.equal(detail.recordId,'55');
+    assert.equal(JSON.stringify(detail).includes('Sensitive customer note'),false); return true;
   });
 });
-for (const tamper of ['bytes', 'approved-definition', 'missing']) test('unauthenticated creation baseline refuses default drift: ' + tamper, async t => {
+for (const tamper of ['bytes', 'approved-definition']) test('tampered retained receipt evidence still refuses reuse: ' + tamper, async t => {
   const f = fixture(t, 'Customer', 1, row => {
     if (tamper === 'bytes') row.savedResponse.Customer.Notes = 'tampered';
     if (tamper === 'approved-definition') { row.savedResponse.Customer.DisplayName = 'Changed'; row.observed.responseHash = createHash('sha256').update(JSON.stringify(row.savedResponse)).digest('hex'); }
@@ -65,4 +65,10 @@ for (const tamper of ['bytes', 'approved-definition', 'missing']) test('unauthen
   });
   const registry = await roles.listAddedRoles(f.models, scope, owner);
   await assert.rejects(roles.resolveBatchRoles({ scope, registry, batch: f.batch, readRecord: async () => ({ ...f.record, ClientEntityId: '0', V4IDPseudonym: 'provider-only-id' }) }), /changed in QuickBooks|cannot be used/);
+});
+
+test('missing creation response body is not required for reuse with intact ownership receipts', async t => {
+  const f=fixture(t,'Vendor',1,row=>{delete row.savedResponse;});
+  const registry=await roles.listAddedRoles(f.models,scope,owner);
+  assert.equal((await roles.resolveBatchRoles({scope,registry,batch:f.batch,readRecord:async()=>({...f.record,IsProject:false,FutureProviderDefault:true})}))[0].id,'55');
 });

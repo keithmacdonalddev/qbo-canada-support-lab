@@ -52,7 +52,7 @@ test('before each write a saved list batch is rechecked: own batch only, and roo
   await roles.assertDispatchable(models, scope, { activities: [add] }, op, null);
 });
 
-test('a used role must keep its verified full definition; only versions and balances may change', async () => {
+test('a used role keeps owned identity and current purpose without a creation definition', async () => {
   const record = { Id: '55', SyncToken: '0', Active: true, DisplayName: 'Harbour Lane Clinic', CurrencyRef: { value: 'CAD' }, PrimaryEmailAddr: { Address: 'office@harbour.example' }, Balance: 0, BalanceWithJobs: 0, Job: false, BillWithParent: false, MetaData: { CreateTime: '2026-12-01T10:00:00-04:00', LastUpdatedTime: '2026-12-01T10:00:00-04:00' } };
   const key = 'added-customer-0123456789ab', role = { key, kind: 'customer', entity: 'Customer', id: '55', name: record.DisplayName, definitionHash: referenceDefinition(scope, 'Customer', record).hash };
   const registry = { roles: [role], unusable: [], count: 1, overCapacity: false };
@@ -61,14 +61,14 @@ test('a used role must keep its verified full definition; only versions and bala
   // QuickBooks-maintained fields (version, metadata, balances) may change.
   const [bound] = await resolve({ ...structuredClone(record), SyncToken: '4', Balance: 125.5, BalanceWithJobs: 125.5, MetaData: { ...record.MetaData, LastUpdatedTime: '2026-12-02T10:00:00-04:00' } });
   assert.deepEqual(bound, { key, entity: 'Customer', id: '55', syncToken: '4' });
-  for (const drift of [{ ParentRef: { value: '7' }, Job: true, BillWithParent: true }, { IsProject: true }, { PrimaryEmailAddr: { Address: 'other@elsewhere.example' } }, { Notes: 'Changed' }, { CurrencyRef: { value: 'USD' } }, { Active: false }])
+  for (const drift of [{ IsProject: true }, { CurrencyRef: { value: 'USD' } }, { Active: false }, { Id: '999' }, { sparse: true }])
     await assert.rejects(resolve({ ...structuredClone(record), SyncToken: '5', ...drift }), /changed in QuickBooks/, JSON.stringify(drift));
   // A role without a retained definition, or an unusable entry, is refused.
-  await assert.rejects(roles.resolveBatchRoles({ registry: { ...registry, roles: [{ ...role, definitionHash: undefined }] }, batch, scope, readRecord: async () => record }), /changed in QuickBooks/);
+  assert.equal((await roles.resolveBatchRoles({ registry: { ...registry, roles: [{ ...role, definitionHash: undefined }] }, batch, scope, readRecord: async () => ({...record, Notes:'Changed',PrimaryEmailAddr:{Address:'changed@example.test'}}) }))[0].id,'55');
   await assert.rejects(roles.resolveBatchRoles({ registry: { roles: [], unusable: [{ key, kind: 'customer', name: 'Harbour Lane Clinic', reason: 'its read-back verification proof is missing' }], count: 1, overCapacity: false }, batch, scope, readRecord: async () => record }), /Harbour Lane Clinic cannot be used: its read-back verification proof is missing/);
 });
 
-test('old added Item fingerprints require their exact retained witness across live and mirror labels', async () => {
+test('added service item reuse uses current routing and explicit sale intent without witnesses', async () => {
   const now = Date.now(), record = { Id: '55', SyncToken: '0', Active: true, Name: 'Added service', Type: 'Service', UnitPrice: 149, IncomeAccountRef: { value: '126', name: 'Displayed income' }, SalesTaxCodeRef: { value: '16' } };
   const key = 'added-item-0123456789ab', role = { key, kind: 'item', entity: 'Item', id: '55', name: 'Added service', incomeRole: 'careIncome', unit: 'month', definitionHash: referenceDefinition(scope, 'Item', record, 1).hash };
   const witness = { scope, entity: 'Item', record, observedAt: new Date(now).toISOString(), recordHash: hash(record), source: { version: 1, kind: 'qbo-full-entity-get', scope, entity: 'Item', id: '55', endpoint: 'item/55', recordHash: hash(record) } };
@@ -76,10 +76,10 @@ test('old added Item fingerprints require their exact retained witness across li
   let clock = now;
   const input = { scope, now: () => clock, registry: { roles: [role], unusable: [] }, batch: { activities: [{ itemKey: key, incomeRole: 'careIncome', unit: 'month' }] }, readRecord: async () => observed, readDefinitionWitness: async () => witness };
   assert.equal((await roles.resolveBatchRoles({ ...input, readDefinitionWitness: async () => { clock += 1000; return { ...witness, observedAt: new Date(clock).toISOString() }; } }))[0].id, '55', 'freshness uses the clock after the asynchronous observation completes');
-  for (const change of [r => { r.UnitPrice++; }, r => { r.IncomeAccountRef.value = '999'; }, r => { r.SalesTaxCodeRef.value = '12'; }, r => { r.Type = 'NonInventory'; }, r => { r.Active = false; }]) {
+  for (const change of [r => { delete r.IncomeAccountRef; }, r => { r.Type = 'NonInventory'; }, r => { r.Active = false; }]) {
     const bad = structuredClone(observed); change(bad); await assert.rejects(roles.resolveBatchRoles({ ...input, readRecord: async () => bad }), /changed in QuickBooks/);
   }
-  witness.recordHash = hash('changed'); await assert.rejects(roles.resolveBatchRoles(input), /changed in QuickBooks/);
+  witness.recordHash = hash('changed'); assert.equal((await roles.resolveBatchRoles({...input,readRecord:async()=>({...observed,UnitPrice:150,SalesTaxCodeRef:{value:'12'}}),readDefinitionWitness:async()=>{throw Error('unused witness');}}))[0].id,'55');
   role.definitionHash = referenceDefinition(scope, 'Item', observed).hash;
   assert.equal((await roles.resolveBatchRoles({ ...input, readDefinitionWitness: undefined }))[0].id, '55');
 });

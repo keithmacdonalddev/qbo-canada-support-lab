@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createBusinessReferenceReader, bindBusinessReference, verifyBusinessReference, referenceDefinition } = require('../src/modules/business-reference');
+const { createBusinessReferenceReader, bindBusinessReference, verifyBusinessReference, referenceDefinition, readAndVerifyBusinessReference } = require('../src/modules/business-reference');
 const { hash } = require('../src/modules/business-calendar');
 const scope = { realmId: '123', environment: 'sandbox', connectionId: 'a'.repeat(24) };
 const now = Date.parse('2026-10-06T12:00:00.000Z');
@@ -36,40 +36,48 @@ test('supported live balance and inventory fields can change without replacing i
 test('metadata-only refresh works for employees and tax codes as well as other masters', () => {
   for (const entity of ['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']) { const h = setup(entity, {}); h.observed.record.SyncToken = '1'; h.observed.record.MetaData = { LastUpdatedTime: '2026-10-06T11:59:59Z' }; h.refresh(); assert.doesNotThrow(h.verify); }
 });
-test('all remaining fields are bound including unknown future provider fields', () => {
+test('current full reference wins over old labels defaults prices and unknown fields', () => {
   for (const change of [r => { r.Type = 'Service'; }, r => { r.IncomeAccountRef.value = '999'; }, r => { r.Name = 'different product'; }, r => { r.TaxCodeRef = { value: '55' }; }, r => { r.UnrecognizedFutureSetting = true; }, r => { delete r.IncomeAccountRef; }]) {
-    for (const version of ['0', '1']) { const h = setup(); change(h.observed.record); h.observed.record.SyncToken = version; h.refresh(); assert.throws(h.verify, /definition/); }
+    const h = setup(), before = clone(h.binding); change(h.observed.record); h.refresh();
+    assert.equal(h.verify(), h.observed.record); assert.deepEqual(h.binding, before);
   }
 });
-test('customer project, parent, address, currency and tax treatment changes need new intent', () => {
-  for (const change of [r => { r.IsProject = true; }, r => { r.ParentRef = { value: '99' }; }, r => { r.BillAddr = { CountrySubDivisionCode: 'BC' }; }, r => { r.CurrencyRef = { value: 'USD' }; }, r => { r.TaxExemptionReasonId = '1'; }]) { const h = setup('Customer', { CurrencyRef: { value: 'CAD' }, BillAddr: { CountrySubDivisionCode: 'ON' } }); change(h.observed.record); h.refresh(); assert.throws(h.verify, /definition/); }
+
+test('reference resolution leaves typed transaction purpose checks to the compiler', () => {
+  for (const change of [r => { r.IsProject = true; }, r => { r.ParentRef = { value: '99' }; }, r => { r.BillAddr = { CountrySubDivisionCode: 'BC' }; }, r => { r.CurrencyRef = { value: 'USD' }; }, r => { r.TaxExemptionReasonId = '1'; }]) {
+    const h = setup('Customer', { CurrencyRef: { value: 'CAD' } }); change(h.observed.record); h.refresh(); assert.equal(h.verify(), h.observed.record);
+  }
 });
-test('tax-code rates and account destinations cannot change under a newer version', () => {
-  const h = setup('TaxCode', { SalesTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '50' } }] } }); h.observed.record.SalesTaxRateList.TaxRateDetail[0].TaxRateRef.value = '51'; h.observed.record.SyncToken = '1'; h.refresh(); assert.throws(h.verify, /definition/);
-  const account = setup('Account', { AccountType: 'Bank', CurrencyRef: { value: 'CAD' } }); account.observed.record.AccountType = 'Expense'; account.refresh(); assert.throws(account.verify, /definition/);
+
+test('current tax and account definitions are returned for dated tax and routing validation', () => {
+  for (const entity of ['TaxCode', 'TaxRate', 'Term', 'Account']) {
+    const h = setup(entity, {}); h.observed.record.SyncToken = '3'; h.observed.record.FutureProviderField = { enabled: true }; h.refresh(); assert.equal(h.verify(), h.observed.record);
+  }
 });
+
 test('snapshot of another company, entity, ID, record hash or old observation is rejected', () => {
   for (const change of [h => { h.observed.scope.realmId = '456'; }, h => { h.observed.scope.environment = 'production'; }, h => { h.observed.scope.connectionId = 'b'.repeat(24); }, h => { h.observed.entity = 'Account'; }, h => { h.observed.record.Id = '101'; h.refresh(); }, h => { h.observed.recordHash = hash('other'); }, h => { h.observed.observedAt = '2026-10-06T11:54:59.000Z'; }, h => { h.observed.observedAt = '2026-10-06T12:00:01.000Z'; }]) { const h = setup(); change(h); assert.throws(h.verify); }
 });
-test('record versions are canonical strings and never regress behind the approved version', () => {
+test('record versions remain canonical; the historical version is not a current floor', () => {
   for (const version of [1, '01', '-1', '', '9'.repeat(65)]) { const h = setup(); h.observed.record.SyncToken = version; h.refresh(); assert.throws(h.verify); }
-  const h = setup(); h.binding.syncToken = '2'; h.observed.record.SyncToken = '1'; h.refresh(); assert.throws(h.verify, /version/);
+  const h = setup(); h.binding.syncToken = '2'; h.observed.record.SyncToken = '1'; h.refresh(); assert.equal(h.verify(), h.observed.record);
   const large = setup(); large.binding.syncToken = '9'.repeat(63); large.observed.record.SyncToken = '1' + '0'.repeat(63); large.refresh(); assert.doesNotThrow(large.verify);
 });
 test('partial, inactive and malformed live values cannot bypass definition comparison', () => {
-  for (const change of [r => { r.Active = false; }, r => { delete r.Active; }, r => { r.sparse = true; }, r => { r.sparse = 'false'; }, r => { r.QtyOnHand = '24'; }, r => { r.QtyOnHand = null; }, r => { r.QtyOnHand = Infinity; }]) { const h = setup(); change(h.observed.record); if (Number.isFinite(h.observed.record.QtyOnHand) || h.observed.record.QtyOnHand !== Infinity) h.refresh(); assert.throws(h.verify); }
+  for (const change of [r => { r.Active = false; }, r => { r.status = 'Deleted'; }, r => { delete r.Active; }, r => { r.sparse = true; }, r => { r.sparse = 'false'; }, r => { r.QtyOnHand = '24'; }, r => { r.QtyOnHand = null; }, r => { r.QtyOnHand = Infinity; }]) { const h = setup(); change(h.observed.record); if (Number.isFinite(h.observed.record.QtyOnHand) || h.observed.record.QtyOnHand !== Infinity) h.refresh(); assert.throws(h.verify); }
 });
-test('definition contract cannot be removed, changed or extended by caller exclusions', () => {
-  for (const change of [b => { delete b.definition; }, b => { b.definition.version = 3; }, b => { b.definition.hash = hash('other'); }]) { const h = setup(); change(h.binding); assert.throws(h.verify); }
-  const h = setup(); h.binding.definition.exclude = ['IncomeAccountRef']; h.observed.record.IncomeAccountRef.value = '999'; h.refresh(); assert.throws(h.verify, /definition/);
+test('historical definition hashes do not grant or gate current reference admission', () => {
+  for (const change of [b => { delete b.definition; }, b => { b.definition.version = 3; }, b => { b.definition.hash = hash('other'); }]) { const h = setup(); change(h.binding); assert.equal(h.verify(), h.observed.record); }
+  const h = setup(); h.binding.definition.exclude = ['Active']; h.observed.record.Active = false; h.refresh(); assert.throws(h.verify);
 });
+
 test('definition observations are bounded and preparation itself requires fresh exact source evidence', () => {
   const observed = observation('Item', { Description: 'x'.repeat(256001) }); assert.throws(() => bindBusinessReference({ scope, key: 'item', entity: 'Item', observed, now }), /budget/);
   const stale = observation('Account'); stale.observedAt = '2026-10-06T11:00:00.000Z'; assert.throws(() => bindBusinessReference({ scope, key: 'account', entity: 'Account', observed: stale, now }), /stale/);
   const wrong = observation('Item'); wrong.recordHash = hash('other'); assert.throws(() => bindBusinessReference({ scope, key: 'item', entity: 'Item', observed: wrong, now }));
 });
 test('same-name replacements cannot satisfy a retained exact record choice', () => {
-  const h = setup(); h.observed.record.Id = '101'; h.refresh(); assert.throws(h.verify, /provenance|definition|version/);
+  const h = setup(); h.observed.record.Id = '101'; h.refresh(); assert.throws(h.verify, /provenance|identity/);
 });
 
 test('matching projected records are rejected without exact full-read provenance', () => {
@@ -130,21 +138,15 @@ test('canonical Item and TaxCode definitions match live, mirror and saved shapes
     }
   }
 });
-test('legacy approval needs an authenticated matching witness; genuine Item changes still refuse', () => {
-  const h = setup('Item', serviceFields());
-  h.binding.definition = referenceDefinition(scope, 'Item', h.original.record, 1);
-  delete h.observed.record.IncomeAccountRef.name; h.refresh();
-  assert.throws(h.verify, /definition/);
-  h.observed.definitionObservation = clone(h.original); assert.doesNotThrow(h.verify);
-  const binding = clone(h.binding);
-  for (const change of [r => { r.UnitPrice++; }, r => { r.IncomeAccountRef.value = '999'; }, r => { r.SalesTaxCodeRef.value = '12'; }, r => { r.Type = 'NonInventory'; }, r => { r.Active = false; }, r => { r.IncomeAccountRef.type = 'Other'; }, r => { r.FutureSetting = true; }]) {
-    const saved = clone(h.observed.record); change(h.observed.record); h.refresh(); assert.throws(h.verify); h.observed.record = saved; h.refresh();
+test('Item 44 reference default drift needs no creation or approval witness', () => {
+  const h = setup('Item', serviceFields()); h.binding.id = '44'; h.observed.record.Id = '44'; h.observed.source.id = '44'; h.observed.source.endpoint = 'item/44';
+  for (const value of [undefined, null, false]) {
+    delete h.observed.record.DeferredRevenue; if (value !== undefined) h.observed.record.DeferredRevenue = value;
+    delete h.observed.record.IncomeAccountRef.name; h.refresh(); assert.equal(h.verify(), h.observed.record);
   }
-  for (const change of [o => { o.record.UnitPrice++; o.recordHash = hash(o.record); o.source.recordHash = o.recordHash; }, o => { o.scope.realmId = '999'; }, o => { o.observedAt = '2026-10-06T11:54:59.000Z'; }, o => { o.recordHash = hash('tampered'); }]) {
-    h.observed.definitionObservation = clone(h.original); change(h.observed.definitionObservation); assert.throws(h.verify);
-  }
-  assert.deepEqual(h.binding, binding);
+  h.observed.definitionObservation = { recordHash: hash('invalid old witness') }; assert.equal(h.verify(), h.observed.record);
 });
+
 test('forced live Item reads keep live quantities and a fresh mirror witness for saved v1 bindings', async () => {
   const h = readerHarness(), mirror = observation('Item', { ...serviceFields(), QtyOnHand: 2 });
   mirror.source = { version: 1, kind: 'qbo-current-mirror', scope, entity: 'Item', id: '100', recordHash: mirror.recordHash, generation: 'current', completedAt: new Date(now - 1000).toISOString(), freshUntil: new Date(now + 60000).toISOString() };
@@ -154,9 +156,61 @@ test('forced live Item reads keep live quantities and a fresh mirror witness for
   const binding = { ...bindBusinessReference({ scope, entity: 'Item', key: 'chosen', observed: mirror, now }), definition: referenceDefinition(scope, 'Item', mirror.record, 1) };
   assert.equal(observed.record.QtyOnHand, 9); assert.equal(observed.source.kind, 'qbo-full-entity-get');
   assert.equal(verifyBusinessReference({ scope, binding, observed, now }).QtyOnHand, 9); assert.equal(h.calls.length, 1);
-  observed.definitionObservation.source.freshUntil = new Date(now - 1).toISOString();
-  assert.throws(() => verifyBusinessReference({ scope, binding, observed, now }), /provenance/);
-  observed.definitionObservation.source.freshUntil = new Date(now + 60000).toISOString();
-  observed.definitionObservation.source.generation = '';
-  assert.throws(() => verifyBusinessReference({ scope, binding, observed, now }), /provenance/);
+  assert.equal(observed.definitionObservation, undefined, 'current full read does not load an old definition witness');
+});
+
+test('pre-send current reference retry is bounded and preserves exact provider faults', async () => {
+  const h = setup(), options = [], original = clone(h.binding);
+  const read = async (_s,_e,_i,opts) => { options.push(opts.live); return options.length === 1 ? { ...h.observed, observedAt: new Date(now-300001).toISOString() } : h.observed; };
+  assert.equal(await readAndVerifyBusinessReference({read,scope,binding:h.binding,now:()=>now}),h.observed);
+  assert.deepEqual(options,[false,true]); assert.deepEqual(h.binding,original);
+  let calls=0; await assert.rejects(readAndVerifyBusinessReference({scope,binding:h.binding,now:()=>now,read:async()=>{calls++;return {...h.observed,observedAt:new Date(now-300001).toISOString()};}})); assert.equal(calls,2);
+  const fault=Object.assign(new Error('Exact QBO fault'),{status:400,Fault:{Error:[{code:'2010',Message:'Exact QBO fault'}]}}); calls=0;
+  await assert.rejects(readAndVerifyBusinessReference({scope,binding:h.binding,read:async()=>{calls++;throw fault;}}),e=>e===fault); assert.equal(calls,1);
+});
+test('invalid current mirror falls back once to exact scoped GET without old witness reads', async () => {
+  const h = readerHarness(); let misses=0;
+  const reader=createBusinessReferenceReader({resolveClient:async()=>h.client,authorize:async()=>({actorId:'actor'}),now:()=>now,observationStore:{read:async()=>{misses++;return observation('Item',{Active:false});},definition:async()=>{throw Error('historical witness must not be loaded');}}});
+  assert.equal((await reader(scope,'Item','100')).source.kind,'qbo-full-entity-get'); assert.equal(misses,1); assert.equal(h.calls.length,1);
+});
+
+test('pre-send refresh never retries scope authority cancellation or deadline failures', async () => {
+  const h=setup();
+  for(const code of ['BUSINESS_REFERENCE_UNVERIFIED','BUSINESS_ACCESS_DENIED']){
+    let calls=0;const error=Object.assign(new Error('reader denied'),{code});
+    await assert.rejects(readAndVerifyBusinessReference({scope,binding:h.binding,read:async()=>{calls++;throw error;}}),e=>e===error);assert.equal(calls,1);
+  }
+  let calls=0,clock=now;await assert.rejects(readAndVerifyBusinessReference({scope,binding:h.binding,now:()=>clock,read:async()=>{calls++;clock+=60001;return h.observed;}}),/budget/);assert.equal(calls,1);
+  calls=0;const stop=new AbortController();stop.abort();await assert.rejects(readAndVerifyBusinessReference({scope,binding:h.binding,signal:stop.signal,read:async()=>{calls++;return h.observed;}}),/cancelled/);assert.equal(calls,0);
+});
+
+test('current-reference drift still passes through real compiler accounting-purpose checks', () => {
+  const {fixture}=require('./helpers/business-transaction-fixtures');
+  const baseline=fixture('Estimate'); assert.doesNotThrow(baseline.compile);
+  for(const [entity,change] of [
+    ['Customer',r=>{r.CurrencyRef={value:'USD'};}], ['Customer',r=>{r.IsProject=true;}],
+    ['Item',r=>{r.Type='NonInventory';}], ['Item',r=>{r.IncomeAccountRef={value:'999'};}],
+    ['Account',r=>{r.AccountType='Expense';}]
+  ]){
+    const f=fixture('Estimate'), value=f.referenceEvidence.find(r=>r.entity===entity&&(entity!=='Account'||r.record.Id==='604')); change(value.record);f.refresh();assert.throws(f.compile,undefined,entity);
+  }
+  const f=fixture('Estimate');const item=f.referenceEvidence.find(r=>r.entity==='Item');item.record.UnitPrice=99999;item.record.UnknownDefault={active:true};f.refresh();
+  assert.deepEqual(JSON.parse(f.compile().request.body).Line,JSON.parse(baseline.compile().request.body).Line,'explicit sale economics survive catalog-price drift');
+});
+test('TaxRate current reader supports one forced refresh for dated-tax consumers and preserves faults', async () => {
+  const {QBOClient}=require('../src/modules/qbo-client'),{readBusinessTaxRecord}=require('../src/modules/business-observation-store');
+  const client=Object.create(QBOClient.prototype); Object.defineProperty(client,'apiBase',{value:'https://sandbox-quickbooks.api.intuit.com/v3/company/123'});
+  client.realmId=scope.realmId; client.connection={_id:scope.connectionId,realmId:scope.realmId,status:'active'};
+  let cached=0;const record={Id:'1',SyncToken:'0',Active:true,RateValue:13};const store={read:async()=>{cached++;return {record};}};
+  assert.deepEqual(await readBusinessTaxRecord(client,'TaxRate','1',{store}),{TaxRate:record});assert.equal(cached,1);
+  const reader=readerHarness();reader.body={TaxRate:record};
+  const full=createBusinessReferenceReader({resolveClient:async()=>reader.client,authorize:async()=>({actorId:'actor'}),now:()=>now,observationStore:{read:async()=>{throw Error('forced read must skip mirror');}}});
+  assert.equal((await full(scope,'TaxRate','1',{live:true})).record.RateValue,13);
+});
+
+test('pre-send stalled readers reject cancellation without another read', async () => {
+  const h=setup(), stop=new AbortController();let calls=0,ready,finish;
+  const started=new Promise(resolve=>{ready=resolve;});
+  const pending=readAndVerifyBusinessReference({scope,binding:h.binding,signal:stop.signal,read:()=>{calls++;ready();return new Promise(resolve=>{finish=resolve;});}});
+  await started;stop.abort();await assert.rejects(pending,/cancelled/);assert.equal(calls,1);finish(h.observed);
 });

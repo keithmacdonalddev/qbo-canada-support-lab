@@ -4,14 +4,14 @@ const { scoped } = require('./qbo-write-contract');
 const { runWithCaller } = require('./qbo-request-meter');
 const { createBusinessObservationStore } = require('./business-observation-store');
 const ID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/, HASH = /^[a-f0-9]{64}$/;
-const ENTITIES = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode']);
+const ENTITIES = new Set(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'TaxCode', 'Term', 'TaxRate']);
 // Saved-record reads: transactions plus the list records the accountant adds.
 const TRANSACTIONS = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry', 'Customer', 'Vendor', 'Item']);
 // Keep v1 stable for saved approvals. Items/tax codes use canonical v2 definitions.
 // Balances and stock are current observations, not approved master definitions.
-const DYNAMIC = Object.freeze({ Customer: ['Balance', 'BalanceWithJobs'], Vendor: ['Balance'], Employee: [], Item: ['QtyOnHand'], Account: ['CurrentBalance', 'CurrentBalanceWithSubAccounts'], TaxCode: [] });
+const DYNAMIC = Object.freeze({ Customer: ['Balance', 'BalanceWithJobs'], Vendor: ['Balance'], Employee: [], Item: ['QtyOnHand'], Account: ['CurrentBalance', 'CurrentBalanceWithSubAccounts'], TaxCode: [], Term: [], TaxRate: [] });
 const METADATA = new Set(['SyncToken', 'MetaData', 'domain', 'sparse']);
-function fail(message, detail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_REFERENCE_UNVERIFIED', businessDetail: detail }); }
+function fail(message, detail = {}, referenceRefreshable = false) { throw Object.assign(new Error(message), { status: 409, referenceRefreshable, code: 'BUSINESS_REFERENCE_UNVERIFIED', businessDetail: detail }); }
 function fresh(stamp, now) { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(now) && Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= now && now - value <= 300000; }
 function sameScope(a, b) { return ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]); }
 // Canonical definition fields exclude transport state and reference display labels.
@@ -44,7 +44,7 @@ function canonicalDefinitionFields(entity, record) {
 function sameCanonicalDefinition(entity, a, b) { return hash(canonicalDefinitionFields(entity, a)) === hash(canonicalDefinitionFields(entity, b)); }
 function referenceDefinition(scope, entity, record, version = ['Item', 'TaxCode'].includes(entity) ? 2 : 1) {
   scope = scoped(scope);
-  if (!ENTITIES.has(entity) || !record || Object.getPrototypeOf(record) !== Object.prototype || typeof record.Id !== 'string' || !ID.test(record.Id) || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken) || record.Active !== true || (record.sparse !== undefined && record.sparse !== false)) fail('A complete active company record with an exact version is required.');
+  if (!ENTITIES.has(entity) || !record || Object.getPrototypeOf(record) !== Object.prototype || typeof record.Id !== 'string' || !ID.test(record.Id) || typeof record.SyncToken !== 'string' || !VERSION.test(record.SyncToken) || record.Active !== true || record.status === 'Deleted' || (record.sparse !== undefined && record.sparse !== false)) fail('A complete active company record with an exact version is required.');
   let serialized;
   try { serialized = canonical(record); } catch { fail('Company reference observations must be plain JSON.'); }
   if (Buffer.byteLength(serialized) > 256000) fail('The company reference exceeds its observation size budget.');
@@ -54,65 +54,67 @@ function referenceDefinition(scope, entity, record, version = ['Item', 'TaxCode'
   return { version, hash: hash({ version, scope, entity, fields }) };
 }
 function validateReferenceBinding(binding) {
-  if (!binding || !ENTITIES.has(binding.entity) || typeof binding.key !== 'string' || !binding.key || binding.key.length > 100 || typeof binding.id !== 'string' || !ID.test(binding.id) || typeof binding.syncToken !== 'string' || !VERSION.test(binding.syncToken) || binding.status !== 'resolved' || ![1, 2].includes(binding.definition?.version) || typeof binding.definition.hash !== 'string' || !HASH.test(binding.definition.hash)) fail('Each record choice requires its approved definition and original version.');
+  if (!binding || !ENTITIES.has(binding.entity) || typeof binding.key !== 'string' || !binding.key || binding.key.length > 100 || typeof binding.id !== 'string' || !ID.test(binding.id) || typeof binding.syncToken !== 'string' || !VERSION.test(binding.syncToken) || binding.status !== 'resolved') fail('Each record choice requires its exact entity, identity and an observed version.');
 }
 function observedRecord(scope, entity, observed, now) {
-  if (!observed || !sameScope(observed.scope, scope) || observed.entity !== entity || !fresh(observed.observedAt, now) || !observed.record || observed.recordHash !== hash(observed.record)) fail('The company reference is stale, incomplete or from another company.');
+  if (!observed || !sameScope(observed.scope, scope) || observed.entity !== entity || !observed.record || observed.recordHash !== hash(observed.record)) fail('The company reference is incomplete or from another company.');
+  if (!fresh(observed.observedAt, now)) fail('The company reference is stale.', {}, true);
   const source = observed.source, record = observed.record;
   if (!source || source.version !== 1 || !['qbo-full-entity-get', 'qbo-current-mirror'].includes(source.kind) || !sameScope(source.scope, scope) || source.entity !== entity || source.id !== record.Id || (source.kind === 'qbo-full-entity-get' ? source.endpoint !== entity.toLowerCase() + '/' + record.Id : typeof source.generation !== 'string' || !source.generation || !Number.isFinite(Date.parse(source.completedAt)) || Date.parse(source.completedAt) > Date.parse(observed.observedAt) || !Number.isFinite(Date.parse(source.freshUntil)) || Date.parse(source.freshUntil) < Date.parse(observed.observedAt)) || source.recordHash !== observed.recordHash) fail('The reference requires provenance from a complete QuickBooks entity GET or current synchronized source.');
   return record;
 }
-// Preparation only: bind a fresh full entity read BEFORE the step's policy is
-// approved. Calling this function does not confer approval or write authority.
+// Preparation binds a current full record and keeps its definition hash for audit.
+// Calling this function does not confer write authority.
 function bindBusinessReference({ scope, key, entity, observed, now = Date.now() }) {
   scope = scoped(scope);
   const record = observedRecord(scope, entity, observed, now), definition = referenceDefinition(scope, entity, record);
   const binding = { key, entity, id: record.Id, syncToken: record.SyncToken, status: 'resolved', definition };
   validateReferenceBinding(binding); return binding;
 }
-// Execution never rewrites the saved binding. Version drift is permitted only
-// when the complete master definition still matches the approved definition.
-function matchesReferenceDefinition(scope, entity, record, definition, definitionObservation, now = Date.now(), resolveDefinitionObservation) {
-  if (referenceDefinition(scope, entity, record, definition.version).hash === definition.hash) return true;
-  if (![1, 2].includes(definition.version) || !['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity)) return false;
-  const matches = witnessObservation => {
-    if (!witnessObservation) return false;
-  // Authenticate the old full record before comparing canonical definitions.
-  // Historical evidence authenticates only the approved baseline. It must never
-  // be used as a fresh observation for preparation, stock or execution.
-  let retained;
-  if (witnessObservation.source?.kind === 'qbo-retained-mirror') {
-    const witness = witnessObservation, source = witness.source;
-    if (!sameScope(witness.scope, scope) || witness.entity !== entity || !witness.record || witness.recordHash !== hash(witness.record) || !sameScope(source.scope, scope) || source.version !== 1 || source.entity !== entity || source.id !== witness.record.Id || source.recordHash !== witness.recordHash || typeof source.generation !== 'string' || !source.generation || typeof witness.observedAt !== 'string' || !Number.isFinite(Date.parse(witness.observedAt)) || new Date(Date.parse(witness.observedAt)).toISOString() !== witness.observedAt || Date.parse(witness.observedAt) > now || source.retainedAt !== witness.observedAt) fail('The approved definition requires exact retained company evidence.');
-    retained = witness.record;
-  } else retained = observedRecord(scope, entity, witnessObservation, now);
-  return retained.Id === record.Id && referenceDefinition(scope, entity, retained, definition.version).hash === definition.hash && sameCanonicalDefinition(entity, retained, record);
-  };
-  let originalError;
-  try { if (matches(definitionObservation)) return true; } catch (error) { originalError = error; }
-  if (typeof resolveDefinitionObservation === 'function') {
-    const retained = resolveDefinitionObservation(scope, entity, record.Id, definition);
-    if (retained) return matches(retained);
-  }
-  if (originalError) throw originalError;
-  return false;
+// Ordinary reuse follows the current full record. Old hashes/versions remain audit
+// evidence; callers retain responsibility for typed tax, currency and account purpose.
+// This compatibility name is used only by pre-send compiler reference resolution.
+function matchesReferenceDefinition(scope, entity, record) {
+  referenceDefinition(scope, entity, record);
+  return true;
 }
-function verifyBusinessReference({ scope, binding, observed, now = Date.now(), resolveDefinitionObservation }) {
-  let retained = false, retainedObservation = null;
-  const resolve = typeof resolveDefinitionObservation === 'function' ? (...args) => { const witness = resolveDefinitionObservation(...args); retained ||= Boolean(witness); retainedObservation ||= witness; return witness; } : undefined;
+function verifyBusinessReference({ scope, binding, observed, now = Date.now() }) {
   try {
-  scope = scoped(scope); validateReferenceBinding(binding);
-  const record = observedRecord(scope, binding.entity, observed, now);
-  const matches = matchesReferenceDefinition(scope, binding.entity, record, binding.definition, observed.definitionObservation, now, resolve);
-  if (record.Id !== binding.id || BigInt(record.SyncToken) < BigInt(binding.syncToken) || !matches) {
-    const approvedObservation = [retainedObservation, observed.definitionObservation].find(value => { try { return value?.record?.Id === binding.id && value.entity === binding.entity && sameScope(value.scope, scope) && value.recordHash === hash(value.record) && referenceDefinition(scope, binding.entity, value.record, binding.definition.version).hash === binding.definition.hash; } catch { return false; } });
-    fail('The selected ' + binding.entity + ' (' + binding.key + ') differs from its approved definition or version.', { entity: binding.entity, recordId: binding.id, bindingKey: binding.key, expectedVersion: binding.syncToken, observedVersion: record.SyncToken, approvedDefinition: binding.definition, observedDefinition: referenceDefinition(scope, binding.entity, record, binding.definition.version), approvedObservationAvailable: Boolean(approvedObservation?.record), differences: approvedObservation?.record ? require('./business-error-detail').definitionDifferences(definitionFields(binding.entity, approvedObservation.record), definitionFields(binding.entity, record)) : [], note: approvedObservation?.record ? 'Compared retained approved observation with the current definition.' : 'The approved hash is retained, but approved field values are unavailable; they cannot be reconstructed from a hash.' });
-  }
-  return record;
+    scope = scoped(scope); validateReferenceBinding(binding);
+    const record = observedRecord(scope, binding.entity, observed, now);
+    referenceDefinition(scope, binding.entity, record);
+    if (record.Id !== binding.id) fail('The selected company reference has a different identity.', { entity: binding.entity, recordId: binding.id, bindingKey: binding.key });
+    return record;
   } catch (error) {
-    error.referenceDiagnostic = { observationSource: ({ 'qbo-full-entity-get': 'live', 'qbo-current-mirror': 'mirror', 'qbo-write-response': 'saved' })[observed?.source?.kind] || 'unknown', definitionVersion: [1, 2].includes(binding?.definition?.version) ? binding.definition.version : null, definitionObservationPresent: Boolean(observed?.definitionObservation), retainedDefinitionResolved: retained };
+    error.referenceDiagnostic = { observationSource: ({ 'qbo-full-entity-get': 'live', 'qbo-current-mirror': 'mirror' })[observed?.source?.kind] || 'unknown', definitionVersion: [1, 2].includes(binding?.definition?.version) ? binding.definition.version : null, definitionObservationPresent: Boolean(observed?.definitionObservation), retainedDefinitionResolved: false };
     throw error;
   }
+}
+// Pre-send only: one current observation, then at most one forced full scoped read.
+// Never use this to recompile/re-send an admitted request or an unknown outcome.
+async function readAndVerifyBusinessReference({ read, scope, binding, now = () => Date.now(), signal }) {
+  scope = scoped(scope); validateReferenceBinding(binding);
+  const started = now(), controller = new AbortController(), abort = () => controller.abort();
+  if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 60000); timer.unref?.();
+  const check = () => { if (controller.signal.aborted || !Number.isFinite(now()) || now() < started || now() - started > 60000) fail('Current reference resolution was cancelled or exceeded its one-minute budget.'); };
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      check();
+      try {
+        const observed = await new Promise((resolve, reject) => {
+          const cancelled = () => { try { check(); } catch (error) { reject(error); } };
+          controller.signal.addEventListener('abort', cancelled, { once: true });
+          Promise.resolve().then(() => { check(); return read(scope, binding.entity, binding.id, { signal: controller.signal, live: attempt === 1 }); }).then(resolve, reject).finally(() => controller.signal.removeEventListener('abort', cancelled));
+        });
+        check(); verifyBusinessReference({ scope, binding, observed, now: now() });
+        return observed;
+      } catch (error) {
+        check();
+        if (attempt || error.referenceRefreshable !== true) throw error;
+      }
+    }
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
 }
 // Fixed full GET only; there is no caller-provided endpoint, query projection or
 // record-enrichment hook. The resolver must supply the existing scoped QBO client.
@@ -145,32 +147,16 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
           if (!cached && transactions) cached = await call(() => observationStore.saved(scope, entity, id, { signal: controller.signal }));
         } catch { check(); /* An unavailable mirror falls back to the full scoped GET. */ }
         if (cached) {
-          check();
-          if (!sameScope(cached.scope, scope) || cached.entity !== entity || cached.record?.Id !== id || cached.recordHash !== hash(cached.record) || !fresh(cached.observedAt, now())) fail('The local observation differs from the exact company record.');
-          if (!transactions) { observedRecord(scope, entity, cached, now()); referenceDefinition(scope, entity, cached.record); }
-          if (cached.source.kind === 'qbo-write-response') try { await call(() => observationStore.retain(scope, entity, cached.record, cached.observedAt)); } catch { check(); /* The durable receipt survives mirror failure. */ }
-          check();
-          let definitionObservation;
-          if (['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity) && typeof observationStore.definition === 'function') {
-            try { definitionObservation = await call(() => observationStore.definition(scope, entity, id, { signal: controller.signal })); }
-            catch { check(); /* Compatibility evidence is optional when the exact definition matches. */ }
-          }
-          check();
+          try {
+            check();
+            observedRecord(scope, entity, cached, now()); referenceDefinition(scope, entity, cached.record);
+            if (cached.record.Id !== id) fail('The local observation differs from the exact company record.');
+          } catch { check(); cached = null; /* Invalid current source is a cache miss, followed by one full scoped GET. */ }
+        }
+        if (cached) {
           const current = await call(() => authorize(scope, action, { signal: controller.signal })); check();
           if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The company reader changed during the local observation.');
-          return definitionObservation ? { ...cached, definitionObservation } : cached;
-        }
-      }
-      let definitionObservation;
-      if (!transactions && observationStore && ['Item', 'TaxCode', 'Customer', 'Vendor'].includes(entity)) {
-        try { definitionObservation = await call(() => observationStore.read(scope, entity, id, { signal: controller.signal })); }
-        catch { check(); /* The current mirror may be unavailable. */ }
-        // A stale sync does not invalidate a historical approval witness. This
-        // separate read supplies no current authority; matchesReferenceDefinition
-        // must authenticate its exact versioned hash before comparing canonical fields.
-        if (!definitionObservation && typeof observationStore.definition === 'function') {
-          try { definitionObservation = await call(() => observationStore.definition(scope, entity, id, { signal: controller.signal })); }
-          catch { check(); /* Missing evidence still fails closed for v1 approvals. */ }
+          return cached;
         }
       }
       const client = await call(() => resolveClient(scope, { signal: controller.signal })); check();
@@ -192,10 +178,10 @@ function createBusinessRecordReader({ resolveClient, authorize, now = () => Date
       const recordHash = hash(record), observedAt = new Date(now()).toISOString();
       const currentActor = await call(() => authorize(scope, action, { signal: controller.signal })); check(); clientScope();
       if (currentActor?.actorId !== actor.actorId || (transactions && (currentActor?.ownerId !== actor.ownerId || String(client.connection?.userId) !== actor.ownerId))) fail('The company reader changed during the reference read.');
-      return { scope, entity, observedAt, record, recordHash, ...(definitionObservation ? { definitionObservation } : {}), source: { version: 1, kind: 'qbo-full-entity-get', scope, entity, id, endpoint: entity.toLowerCase() + '/' + id, recordHash } };
+      return { scope, entity, observedAt, record, recordHash, source: { version: 1, kind: 'qbo-full-entity-get', scope, entity, id, endpoint: entity.toLowerCase() + '/' + id, recordHash } };
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
 }
 const createBusinessReferenceReader = options => createBusinessRecordReader(options);
 const createBusinessTransactionReader = options => createBusinessRecordReader({ observationStore: null, ...options }, true);
-module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, referenceDefinition, definitionFields, sameCanonicalDefinition, matchesReferenceDefinition };
+module.exports = { createBusinessReferenceReader, createBusinessTransactionReader, bindBusinessReference, verifyBusinessReference, validateReferenceBinding, readAndVerifyBusinessReference, referenceDefinition, definitionFields, sameCanonicalDefinition, matchesReferenceDefinition };

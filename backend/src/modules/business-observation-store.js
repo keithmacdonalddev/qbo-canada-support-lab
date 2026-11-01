@@ -161,12 +161,13 @@ function createBusinessObservationStore({ Records, Agents, Receipts, Writers, Au
   }
   return {read,definition,saved,retain,deposits,unchanged};
 }
-async function readBusinessTaxRecord(client,entity,id) {
+async function readBusinessTaxRecord(client,entity,id,{ signal, live = false, store = createBusinessObservationStore() } = {}) {
+ signal?.throwIfAborted();
  const {QBOClient}=require('./qbo-client');
  if(client instanceof QBOClient && client.read===QBOClient.prototype.read && client.apiCall===QBOClient.prototype.apiCall && client.connection?.status==='active') {
   const environment=client.apiBase==='https://quickbooks.api.intuit.com/v3/company/'+client.realmId?'production':client.apiBase==='https://sandbox-quickbooks.api.intuit.com/v3/company/'+client.realmId?'sandbox':null;
-  if(environment) { const scope=scoped({environment,realmId:String(client.realmId),connectionId:String(client.connection?._id)});
-   try { const observed=await createBusinessObservationStore().read(scope,entity,id);if(observed)return {[entity]:observed.record}; } catch { /* A stale/unavailable mirror needs a complete scoped GET. */ }
+  if(environment && String(client.connection?.realmId) === String(client.realmId)) { const scope=scoped({environment,realmId:String(client.realmId),connectionId:String(client.connection?._id)});
+   try { const observed=!live && await store.read(scope,entity,id,{signal});signal?.throwIfAborted();if(observed)return {[entity]:observed.record}; } catch { signal?.throwIfAborted(); /* A stale/unavailable mirror needs a complete scoped GET. */ }
   }
  }
  return require('./qbo-request-meter').runWithCaller('business-tax-policy',()=>client.read(entity.toLowerCase(),id));
