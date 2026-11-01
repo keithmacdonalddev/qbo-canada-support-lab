@@ -192,14 +192,39 @@ module.exports.sourceBalances = sourceBalances;
 module.exports.compareHistoryBalances = compareHistoryBalances;
 module.exports.reverifyHistory = reverifyHistory;
 
+// Retry unanswered general batches on the existing one-minute accountant wake.
+// Retained replies are attributed without dispatch; genuinely lost replies use the
+// saved requestid/bIds through the normal gate. Never reconstruct a proposal.
+async function recheckGeneralWrites({ scope, models, access, now = () => Date.now(), guard = async () => {}, signal, service = null }) {
+  if (!models?.GeneralWriteRuns || !models.Agents) return [];
+  const agent = await models.Agents.findOne({ ...scope, 'settings.monitoring': true, 'settings.autonomous': true }).maxTimeMS(3000).lean();
+  if (!agent?.grant) return [];
+  const runs = await models.GeneralWriteRuns.find({ ...scope, contract: 'general-write-v1', status: { $in: ['unknown', 'sending'] }, updatedAt: { $lte: new Date(now() - RECHECK_MS) }, batches: { $elemMatch: { state: { $ne: 'answered' } } }, 'agentAuthority.agentId': String(agent._id), 'agentAuthority.grantId': agent.grant.id, 'agentAuthority.authorityHash': agent.grant.authorityHash, 'agentAuthority.ownerId': String(agent.ownerId), ownerId: agent.ownerId }).sort({ updatedAt: 1, _id: 1 }).limit(3).maxTimeMS(3000).lean();
+  const results = [];
+  for (const run of runs) {
+    if (signal?.aborted) break;
+    await guard();
+    // Replay admission rechecks the same grant transactionally before dispatch.
+    const a = run.agentAuthority;
+    try {
+      const api = service || require('./general-write-service').createDefaultGeneralWrite({ now, access });
+      const result = await api.execute({ scope, ownerId: String(run.ownerId), actorId: String(run.actorId), agentAuthority: a }, String(run._id));
+      results.push({ runId: String(run._id), ok: result.status === 'complete' || Object.values(result.items || {}).some(item => item.qboId), status: result.status });
+    } catch (error) { if (error?.businessAgentFatal) throw error; results.push({ runId: String(run._id), ok: false, code: error.code || 'GENERAL_WRITE_RECOVERY_FAILED' }); }
+  }
+  return results;
+}
+module.exports.recheckGeneralWrites = recheckGeneralWrites;
+
 // Composed only on an existing accountant wake. No independent timer or startup work.
 async function recheckGeneralHistory({ scope, access, models, now = () => Date.now(), guard = async () => {}, signal }) {
-  if (!models?.Calendars || !models.Writers || !models.GeneralWriteRuns) return { checked: false };
+  const recovered = await recheckGeneralWrites({ scope, models, access, now, guard, signal });
+  if (!models?.Calendars || !models.Writers || !models.GeneralWriteRuns) return { checked: false, results: recovered };
   const { hash } = require('./business-calendar');
   const persistedHash = value => hash(JSON.parse(JSON.stringify(value)));
   const read = (model, filter, session) => model.findOne(filter).session(session).maxTimeMS(3000).lean();
   const calendar = await read(models.Calendars, scope), writer = await read(models.Writers, { environment: scope.environment, realmId: scope.realmId });
-  if (!calendar?.verifiedThrough || !writer || calendar.pendingCommit || calendar.currentOperationId || writer.operationId || writer.unresolved || writer.resourceClaims?.some(row => row.state === 'admitted')) return { checked: false };
+  if (!calendar?.verifiedThrough || !writer || calendar.pendingCommit || calendar.currentOperationId || writer.operationId || writer.unresolved || writer.resourceClaims?.some(row => row.state === 'admitted')) return { checked: false, results: recovered };
   const fence = async session => {
     if (signal?.aborted) historyFail('History re-check was cancelled.');
     await guard(); await access.authorize(scope, 'operations.verify', { session, signal });
@@ -270,6 +295,6 @@ async function recheckGeneralHistory({ scope, access, models, now = () => Date.n
     history = await gate.reverifyDirty(scope, { ...options, references, verifyFixedDay, readReports: period => readReports(scope, period, { signal }), guard: fence, transaction });
   }
   const results = await gate.retryFailed(scope, options);
-  return { checked: true, history, results };
+  return { checked: true, history, results: [...recovered, ...results] };
 }
 module.exports.recheckGeneralHistory = recheckGeneralHistory;

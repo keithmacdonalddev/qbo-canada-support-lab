@@ -124,11 +124,11 @@ test('resumed saved batches rerun full balance, amount and inventory guards insi
   }
 });
 
-test('a mismatched successful response keeps the general company barrier', async () => {
+test('a native saved identity settles transport while retaining its value mismatch', async () => {
   const h=harness(),gate=h.gateFor(),ticket=await h.begin(gate);
   const wrong=clone(answered);wrong.json.BatchItemResponse[0].Customer.DisplayName='Wrong customer';
   const result=await gate.complete(ticket,h.request(),wrong,'wrong');
-  assert.equal(result.outcome,'unknown');assert.equal(h.writer().unresolved.kind,'general-write');
+  assert.equal(result.outcome,'saved');assert.equal(result.items[0].mismatch,true);assert.equal(h.writer().unresolved,null);
 });
 
 test('a durable duplicate response stays unknown after restart while valid siblings are retained',async()=>{

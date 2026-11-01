@@ -48,7 +48,7 @@ function classifyGeneralResponse(scope, batch, response, intuitTid = '') {
     if (group.length !== 1) return { bId: item.bId, ref: item.ref, outcome: 'unknown' };
     const { bId, ...body } = group[0], status = body.Fault?.type === 'ValidationFault' ? 400 : response.status;
     const observed = classifyWriteResponse(itemRequest(scope, item), { status, json: body }, intuitTid);
-    if (observed.outcome === 'saved' && item.op !== 'delete' && !(item.op === 'void' ? matchesVoid(item, body[item.entity]) : matchesRequest(item.payload, body[item.entity], item.entity))) return { bId, ref: item.ref, ...observed, outcome: 'unknown', mismatch: true };
+    if (observed.outcome === 'saved' && item.op !== 'delete' && !(item.op === 'void' ? matchesVoid(item, body[item.entity]) : matchesRequest(item.payload, body[item.entity], item.entity))) return { bId, ref: item.ref, ...observed, ...(item.op === 'void' ? { outcome: 'unknown' } : {}), mismatch: true };
     return { bId, ref: item.ref, ...observed };
   });
   return { ...base, outcome: items.every(item => ['saved', 'rejected'].includes(item.outcome)) ? 'saved' : 'unknown', responseHash, items };
@@ -225,6 +225,11 @@ async function sendGeneralBatch({ client, gate, scope, runId, batch }) {
 function createGeneralLiveTransport({ access, models = {}, admissionGuard, warmCurrency = null, now = () => Date.now() }) {
   return {
     historyMarkersAtAdmission: true,
+    async recoverBatch(scope, { runId, batch }) {
+      await access.authorize(scope, 'operations.verify');
+      const gate = require('./qbo-write-gate').createCoordinatedGate({ generalTransport: createGeneralGateTransport({ models, scope, runId, batchIndex: batch.index, admissionGuard, warmCurrency, now }), now });
+      return gate.recoverGeneral({ request: buildGeneralBatch(scope, batch), receiptId: batch.transport.receiptId, response: { status: 200, json: { BatchItemResponse: batch.transport.response } } });
+    },
     async sendBatch(scope, { runId, batch }) {
       const client = await access.resolveClient(scope), { QBOClient } = require('./qbo-client');
       if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall) throw denied('General writes require the original scoped QuickBooks transport.');

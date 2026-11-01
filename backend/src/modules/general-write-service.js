@@ -116,7 +116,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
   }
   function summary(plan) { return { operations: plan.operations.length, batches: plan.layers.length, reverifyDates: plan.reverifyDates, externalEdits: plan.externalEdits, exposureCents: plan.exposureCents }; }
   async function save(run, changes) {
-    if (changes.lastError) changes = { ...changes, ...failureFields(run, { code: 'GENERAL_WRITE_REFUSED', message: changes.lastError, businessDetail: { status: changes.status, problems: changes.problems || [], items: Object.entries(changes.items || {}).filter(([,item]) => !['saved','deleted'].includes(item.outcome)).map(([ref,item]) => ({ ref, entity: item.entity, outcome: item.outcome, fault: item.fault, next: item.next })) } }, { operationId: String(run._id) }, now()) };
+    if (changes.lastError) changes = { ...changes, ...failureFields(run, Object.assign(new Error(changes.lastError), { code: 'GENERAL_WRITE_REFUSED', businessDetail: { status: changes.status, problems: changes.problems || [], items: Object.entries(changes.items || {}).filter(([,item]) => !['saved','deleted'].includes(item.outcome)).map(([ref,item]) => ({ ref, entity: item.entity, outcome: item.outcome, fault: item.fault, next: item.next })) } }), { operationId: String(run._id) }, now()) };
     if (changes.status === 'complete' || changes.items && canonical(changes.items) !== canonical(run.items)) changes = { ...changes, progressAt: new Date(now()), ...(changes.status === 'complete' ? { errorDetail: null, errorHistory: [] } : {}) };
     const saved = await Runs.findOneAndUpdate({ _id: run._id, revision: run.revision }, { $set: changes, $inc: { revision: 1 } }, { new: true }).lean();
     if (!saved) fail('This write changed concurrently; read it again.');
@@ -176,6 +176,17 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       // so a replay is a new receipt with the same requestid and bIds.
       // A response settled by the gate survives a crash before this service ingests it.
       let response = batch.transport?.response;
+      if (response && batch.transport?.outcome === 'unknown' && transport.recoverBatch) {
+        try {
+          const recovered = await transport.recoverBatch(scope, { runId: run._id, batch });
+          run = await refreshSettlement(run, batch);
+          if (recovered?.retryExact) response = null;
+        } catch (error) {
+          attachBusinessError(error, { operationId: String(run._id), detail: { batch: batch.index } });
+          await save(run, failureFields(run, error, {}, now()));
+          throw error;
+        }
+      }
       if (!response) {
       run = await save(run, { ...(['prepared', 'held'].includes(run.status) ? { status: 'sending' } : {}), batches: run.batches.map(row => row.index === batch.index ? { ...row, sends: (row.sends || 0) + 1 } : row) });
       batch = run.batches.find(row => row.index === batch.index);
@@ -214,19 +225,19 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if (outcome.outcome === 'saved') {
           const record = outcome.record, complete = isComplete(item.entity, record, item.op === 'create' ? item.payload : item.before?.CurrencyRef?.value && item.before.CurrencyRef.value !== 'CAD' ? { CurrencyRef: item.before.CurrencyRef, ...(item.before.ExchangeRate !== undefined ? { ExchangeRate: item.before.ExchangeRate } : {}), ...(item.before.HomeTotalAmt !== undefined ? { HomeTotalAmt: item.before.HomeTotalAmt } : {}) } : null);
           entry.qboId = String(record?.Id ?? ''); entry.version = record?.SyncToken ?? null; entry.record = record || null;
-          if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest(item, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'unresolved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
-          else {
+          if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest(item, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'check-saved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
+          owned.push({ key: item.entity + ':' + entry.qboId, ref: item.ref, op: item.op });
+          if (entry.outcome === 'saved') {
             entry.complete = complete; entry.parents = invalidatedParents(item.before || null, record);
             if (complete && retain) await retain(scope, item.entity, record, new Date(now()).toISOString());
-            owned.push({ key: item.entity + ':' + entry.qboId, ref: item.ref, op: item.op });
           }
         }
         if (outcome.outcome === 'deleted') owned.push({ key: item.entity + ':' + item.id, ref: item.ref, op: 'delete' });
-        if (!['saved','deleted'].includes(entry.outcome)) entry.errorDetail = businessErrorDetail({ code: 'GENERAL_WRITE_ITEM_UNVERIFIED', message: entry.next?.reason || 'The QuickBooks item did not complete.', businessDetail: { fault: entry.fault || [], outcome: entry.outcome, differences: outcome.record ? require('./business-error-detail').definitionDifferences(item.payload, outcome.record) : [] } }, { operationId: String(run._id), logicalKey: item.ref, entity: item.entity, recordId: entry.qboId || item.id });
+        if (!['saved','deleted'].includes(entry.outcome)) entry.errorDetail = businessErrorDetail(Object.assign(new Error(entry.next?.reason || 'The QuickBooks item did not complete.'), { code: 'GENERAL_WRITE_ITEM_UNVERIFIED', businessDetail: { fault: entry.fault || [], outcome: entry.outcome, differences: outcome.record ? require('./business-error-detail').definitionDifferences(item.payload, outcome.record) : [] } }), { operationId: String(run._id), logicalKey: item.ref, entity: item.entity, recordId: entry.qboId || item.id });
         items[item.ref] = entry;
       }
       const open = Object.values(items).filter(item => !['saved', 'deleted'].includes(item.outcome));
-      const status = open.some(item => ['unknown', 'mismatch'].includes(item.outcome)) ? 'unknown' : open.length ? 'needs-correction' : 'sending';
+      const status = open.some(item => item.outcome === 'unknown') ? 'unknown' : open.length ? 'needs-correction' : 'sending';
       run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, waiting: null, state: 'answered', answeredAt: new Date(now()).toISOString() } : row), items, owned, status, lastError: open.length ? open.map(item => item.entity + ' (' + item.outcome + ')' + (item.fault ? ': ' + item.fault.map(row => row.code + ' ' + row.message).join('; ') : '')).join(' | ') : null });
       if (status !== 'sending') return report(run);
       if (run.batches.length >= MAX_ATTEMPTS * Math.max(1, run.plan.layers.length)) fail('This general write used its attempt budget.');

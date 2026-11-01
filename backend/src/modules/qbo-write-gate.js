@@ -193,7 +193,31 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     try { return await finish(ticket, request, observed, 'sdk-failure'); }
     finally { if (ticket?.resourceClaim) trackResourceAttempt(ticket.receiptId, false); }
   }
-  async function finish(ticket, request, observed, endKind, payload = null) {
+  // Reclassify only the exact retained HTTP response already bound to an unknown
+  // receipt. No dispatch, new request identity or similarity-based attribution.
+  async function recoverGeneral({ request, receiptId, response }) {
+    await assertReady();
+    const receipt = await read(Receipts, { _id: receiptId, ...request.scope, kind: 'general-write', state: 'unknown', requestHash: request.requestHash });
+    const payload = responsePayload(response);
+    // Older batches retained only BatchItemResponse, dropping the envelope's time.
+    // Each original receipt item separately hashes the exact native entity body.
+    const rows = payload?.BatchItemResponse;
+    const itemProof = receipt && Array.isArray(rows) && rows.length > 0 && new Set(rows.map(row => row?.bId)).size === rows.length && rows.length === receipt.general?.items?.length && rows.every(row => {
+      const original = receipt.observed?.items?.find(item => item.bId === row.bId);
+      const { bId, ...body } = row;
+      return original?.responseHash && require('node:crypto').createHash('sha256').update(JSON.stringify(body)).digest('hex') === original.responseHash;
+    });
+    if (!receipt || !payload || !receipt.observed?.responseHash || hash(payload) !== receipt.observed.responseHash && !itemProof) throw denied('The retained general response does not match its original receipt.');
+    const writer = (await policyState(request.scope))?.writer;
+    if (!writer) throw denied('The company writer is unavailable for attribution.');
+    const claim = claimsOf(writer).find(row => row.barrier?.transportConsumed?.receiptId === receiptId);
+    const ticket = { coordinated: true, scope: request.scope, receiptId, dispatchKey: receipt.dispatchKey, requestHash: receipt.requestHash, kind: receipt.kind, ownerId: receipt.ownerId, actorId: receipt.actorId, entity: request.entity, operation: request.operation, ...(claim ? { resourceClaim: { id: claim.id } } : {}) };
+    if (receipt.observed.entity !== 'batch' || receipt.observed.operation !== 'create' || receipt.observed.httpStatus < 200 || receipt.observed.httpStatus >= 300 || !Number.isInteger(receipt.observed.httpStatus)) throw denied('The retained reply has no successful original HTTP status.');
+    const observed = await generalTransport.classify({ ticket, request, response: { status: receipt.observed.httpStatus, json: payload }, intuitTid: receipt.observed.intuitTid });
+    if (observed.outcome === 'unknown') return { outcome: 'unknown', retryExact: true };
+    return finish(ticket, request, observed, 'retained-general-response', payload, receipt.observed.responseHash);
+  }
+  async function finish(ticket, request, observed, endKind, payload = null, retainedHash = null) {
     // Retain the response privately, after classification. Partial responses keep
     // their saved receipt but require a later complete read for verification.
     const savedResponse = observed.outcome === 'saved' && ['create', 'update'].includes(request.operation) && request.entity !== 'batch' && payload && Buffer.byteLength(JSON.stringify(payload)) <= 256000 && require('node:crypto').createHash('sha256').update(JSON.stringify(payload)).digest('hex') === observed.responseHash ? JSON.parse(JSON.stringify(payload)) : null;
@@ -201,7 +225,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     const resultAuditId = hash({ receiptId: ticket.receiptId, event: 'response', observed }).slice(0, 24);
     return transaction(async session => {
       const stored = await read(Receipts, { _id: ticket.receiptId, ...ticket.scope, dispatchKey: ticket.dispatchKey, requestHash: request.requestHash }, session);
-      if (!stored || stored.state !== 'possibly-sent') throw denied('The request receipt already changed; recover its saved result.', true);
+      if (!stored || (retainedHash ? stored.kind !== 'general-write' || stored.state !== 'unknown' || stored.observed?.responseHash !== retainedHash : stored.state !== 'possibly-sent')) throw denied('The request receipt already changed; recover its saved result.', true);
       const state = await policyState(ticket.scope, session), storageWriter = state?.writer;
       const heldClaim = ticket.resourceClaim ? claimsOf(storageWriter).find(row => row.id === ticket.resourceClaim.id) : null;
       const writer = heldClaim ? writerForRequest(storageWriter, request) : storageWriter;
@@ -209,7 +233,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       const observedAt = new Date(now());
       const terminal = observed.outcome === 'unknown' ? { version: 1, scope: ticket.scope, receiptId: stored._id, dispatchKey: stored.dispatchKey, requestHash: stored.requestHash, kind: endKind, endedAt: observedAt.toISOString(), observedHash: hash(observed) } : null;
       const terminalHash = terminal ? hash(terminal) : null, terminalAuditId = terminal ? hash({ terminalHash }).slice(0, 24) : null;
-      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: 'possibly-sent', requestHash: request.requestHash }, { $set: { state: observed.outcome, observed, savedResponse, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
+      const saved = await Receipts.findOneAndUpdate({ _id: stored._id, state: retainedHash ? 'unknown' : 'possibly-sent', requestHash: request.requestHash, ...(retainedHash ? { 'observed.responseHash': retainedHash } : {}) }, { $set: { state: observed.outcome, observed, savedResponse, observedAt, resultAuditId, ...(terminal ? { terminal: { ...terminal, contentHash: terminalHash, auditId: terminalAuditId } } : {}) } }, { new: true, session }).lean();
       if (!saved) throw denied('The response receipt changed while saving.', true);
       if (stored.kind === 'business-population') {
         if (typeof populationTransport?.settle !== 'function') throw denied('Population settlement requires its native runtime.', true);
@@ -372,7 +396,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       return { released: true, state: 'claimed' };
     });
   }
-  return { preflight, begin, complete, failTransport, settleCase, assertCaseSettled, releaseUnsent };
+  return { preflight, begin, complete, failTransport, recoverGeneral, settleCase, assertCaseSettled, releaseUnsent };
 }
 let defaultGate, defaultParts;
 function getQboWriteGate() {

@@ -1,0 +1,637 @@
+{
+  "run": {
+    "_id": "01b4f4b62cae18ccc27b617a",
+    "contract": "general-write-v1",
+    "environment": "sandbox",
+    "realmId": "123",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "ownerId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "actorId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "agentAuthority": {
+      "version": 1,
+      "agentId": "cccccccccccccccccccccccc",
+      "ownerId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+      "grantId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "authorityHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "caseAuthority": null,
+    "decisionKey": "winter-access-po-20261031-149",
+    "contentHash": "f64a34d6c34cad2f82aaac6d99fc6ebebf81b81c6ff5e18295b82ee182e3dfab",
+    "purpose": "Stored winter access purchase order replay",
+    "day": "2026-10-31",
+    "plan": {
+      "contract": "general-write-v1",
+      "currencyEvidence": {
+        "enabled": true,
+        "homeCurrency": "CAD",
+        "currencies": [
+          "CAD",
+          "CNY",
+          "USD",
+          "GBP",
+          "AUD",
+          "EUR"
+        ],
+        "rates": {},
+        "controls": [
+          {
+            "id": "102",
+            "type": "Accounts Receivable",
+            "currency": "CNY"
+          },
+          {
+            "id": "103",
+            "type": "Accounts Payable",
+            "currency": "USD"
+          },
+          {
+            "id": "59",
+            "type": "Accounts Payable",
+            "currency": "CAD"
+          },
+          {
+            "id": "63",
+            "type": "Accounts Receivable",
+            "currency": "CAD"
+          },
+          {
+            "id": "69",
+            "type": "Accounts Receivable",
+            "currency": "GBP"
+          },
+          {
+            "id": "71",
+            "type": "Accounts Payable",
+            "currency": "EUR"
+          },
+          {
+            "id": "88",
+            "type": "Accounts Receivable",
+            "currency": "USD"
+          }
+        ],
+        "preferences": {
+          "Id": "1",
+          "CurrencyPrefs": {
+            "MultiCurrencyEnabled": true,
+            "HomeCurrency": {
+              "value": "CAD"
+            }
+          }
+        }
+      },
+      "operations": [
+        {
+          "ref": "winter-access-order",
+          "op": "create",
+          "entity": "PurchaseOrder",
+          "payload": {
+            "VendorRef": {
+              "value": "149"
+            },
+            "APAccountRef": {
+              "value": "59"
+            },
+            "TxnDate": "2026-10-31",
+            "DueDate": "2026-11-02",
+            "GlobalTaxCalculation": "TaxExcluded",
+            "PrivateNote": "Stored winter access purchase order replay",
+            "Line": [
+              {
+                "Amount": 360,
+                "Description": "Stored winter access purchase order replay",
+                "DetailType": "AccountBasedExpenseLineDetail",
+                "AccountBasedExpenseLineDetail": {
+                  "AccountRef": {
+                    "value": "127"
+                  },
+                  "TaxCodeRef": {
+                    "value": "16"
+                  },
+                  "BillableStatus": "NotBillable"
+                }
+              }
+            ]
+          },
+          "order": 0,
+          "dependsOn": []
+        }
+      ],
+      "layers": [
+        [
+          "winter-access-order"
+        ]
+      ],
+      "reverifyDates": [],
+      "externalEdits": [],
+      "exposureCents": 41040
+    },
+    "status": "unknown",
+    "batches": [
+      {
+        "index": 0,
+        "attempt": 1,
+        "requestId": "c1793dea9f59daa0fdb3ed90731e564e",
+        "items": [
+          {
+            "bId": "1",
+            "ref": "winter-access-order",
+            "op": "create",
+            "entity": "PurchaseOrder",
+            "operation": "create",
+            "payload": {
+              "VendorRef": {
+                "value": "149"
+              },
+              "APAccountRef": {
+                "value": "59"
+              },
+              "TxnDate": "2026-10-31",
+              "DueDate": "2026-11-02",
+              "GlobalTaxCalculation": "TaxExcluded",
+              "PrivateNote": "Stored winter access purchase order replay",
+              "Line": [
+                {
+                  "Amount": 360,
+                  "Description": "Stored winter access purchase order replay",
+                  "DetailType": "AccountBasedExpenseLineDetail",
+                  "AccountBasedExpenseLineDetail": {
+                    "AccountRef": {
+                      "value": "127"
+                    },
+                    "TaxCodeRef": {
+                      "value": "16"
+                    },
+                    "BillableStatus": "NotBillable"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "state": "lost",
+        "savedAt": "2026-11-01T02:07:06.419Z",
+        "dirtyDates": [],
+        "sends": 1,
+        "transport": {
+          "receiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018",
+          "outcome": "unknown",
+          "response": [
+            {
+              "PurchaseOrder": {
+                "EmailStatus": "NotSet",
+                "POStatus": "Open",
+                "domain": "QBO",
+                "sparse": false,
+                "Id": "11216",
+                "SyncToken": "0",
+                "MetaData": {
+                  "CreateTime": "2026-10-31T19:07:09-07:00",
+                  "LastUpdatedTime": "2026-10-31T19:07:09-07:00"
+                },
+                "CustomField": [],
+                "TxnDate": "2026-10-31",
+                "CurrencyRef": {
+                  "value": "CAD",
+                  "name": "Reference display"
+                },
+                "ExchangeRate": 1,
+                "PrivateNote": "Stored winter access purchase order replay",
+                "LinkedTxn": [],
+                "Line": [
+                  {
+                    "Id": "1",
+                    "LineNum": 1,
+                    "Description": "Stored winter access purchase order replay",
+                    "Amount": 360,
+                    "DetailType": "AccountBasedExpenseLineDetail",
+                    "AccountBasedExpenseLineDetail": {
+                      "AccountRef": {
+                        "value": "127",
+                        "name": "Reference display"
+                      },
+                      "BillableStatus": "NotBillable",
+                      "TaxCodeRef": {
+                        "value": "16"
+                      }
+                    },
+                    "CustomExtensions": []
+                  }
+                ],
+                "TxnTaxDetail": {
+                  "TotalTax": 50.4,
+                  "TaxLine": [
+                    {
+                      "Amount": 50.4,
+                      "DetailType": "TaxLineDetail",
+                      "TaxLineDetail": {
+                        "TaxRateRef": {
+                          "value": "35"
+                        },
+                        "PercentBased": true,
+                        "TaxPercent": 14,
+                        "NetAmountTaxable": 360
+                      }
+                    }
+                  ]
+                },
+                "VendorRef": {
+                  "value": "149",
+                  "name": "Reference display"
+                },
+                "APAccountRef": {
+                  "value": "59",
+                  "name": "Reference display"
+                },
+                "TotalAmt": 410.4,
+                "GlobalTaxCalculation": "TaxExcluded"
+              },
+              "bId": "1"
+            }
+          ],
+          "items": [
+            {
+              "bId": "1",
+              "ref": "winter-access-order",
+              "outcome": "unknown",
+              "mismatch": true,
+              "qboId": "11216"
+            }
+          ],
+          "observedAt": "2026-11-01T02:07:07.669Z"
+        }
+      }
+    ],
+    "owned": [],
+    "dirty": [],
+    "revision": 5,
+    "lastError": "The QuickBooks response was lost; the same request will be replayed with its original identity.",
+    "errorDetail": {
+      "version": 1,
+      "code": "GENERAL_WRITE_REFUSED",
+      "message": "The QuickBooks response was lost; the same request will be replayed with its original identity.",
+      "check": {
+        "module": "business",
+        "function": "unknown",
+        "file": null,
+        "line": null
+      },
+      "operationId": "01b4f4b62cae18ccc27b617a",
+      "logicalKey": null,
+      "entity": null,
+      "recordId": null,
+      "detail": {
+        "status": "unknown",
+        "problems": [],
+        "items": []
+      }
+    },
+    "errorHistory": [
+      {
+        "key": "79a1bd717a2b2c60bf16167cdaf10cbd80742b1d7fd1b3c9da9d7da7423dd73e",
+        "errorDetail": {
+          "version": 1,
+          "code": "GENERAL_WRITE_REFUSED",
+          "message": "The QuickBooks response was lost; the same request will be replayed with its original identity.",
+          "check": {
+            "module": "business",
+            "function": "unknown",
+            "file": null,
+            "line": null
+          },
+          "operationId": "01b4f4b62cae18ccc27b617a",
+          "logicalKey": null,
+          "entity": null,
+          "recordId": null,
+          "detail": {
+            "status": "unknown",
+            "problems": [],
+            "items": []
+          }
+        },
+        "count": 1,
+        "firstAt": "2026-11-01T02:07:07.722Z",
+        "lastAt": "2026-11-01T02:07:07.722Z"
+      }
+    ],
+    "items": {},
+    "createdAt": "2026-11-01T02:07:00.919Z",
+    "updatedAt": "2026-11-01T02:07:07.722Z",
+    "__v": 0
+  },
+  "receipt": {
+    "_id": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018",
+    "contractVersion": 1,
+    "realmId": "123",
+    "environment": "sandbox",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "ownerId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "actorId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+    "kind": "general-write",
+    "operationId": "01b4f4b62cae18ccc27b617a",
+    "dispatchKey": "7ac50502ec2228d69a8f9f9f713bc0c60a9f6f031f53cbab712c7608173d8923",
+    "requestHash": "41517f8e468eadef33b9409b1cf218fec71e8e5a320633d75022993d44cd3921",
+    "entity": "batch",
+    "operation": "create",
+    "state": "unknown",
+    "workflow": {
+      "version": 1,
+      "kind": "general-write",
+      "runId": "01b4f4b62cae18ccc27b617a",
+      "batchIndex": 0,
+      "sends": 1
+    },
+    "general": {
+      "version": 1,
+      "contract": "general-write-v1",
+      "runId": "01b4f4b62cae18ccc27b617a",
+      "batchIndex": 0,
+      "requestId": "c1793dea9f59daa0fdb3ed90731e564e",
+      "sends": 1,
+      "decisionKey": "winter-access-po-20261031-149",
+      "items": [
+        {
+          "bId": "1",
+          "ref": "winter-access-order",
+          "entity": "PurchaseOrder",
+          "operation": "create",
+          "requestHash": "d2d72036542a7f3c0a6bd0692aecb1c056436b9569daad5c0eb0dec6beb95298"
+        }
+      ]
+    },
+    "periodProof": {
+      "version": 1,
+      "kind": "general-period-proof",
+      "runId": "01b4f4b62cae18ccc27b617a",
+      "batchIndex": 0,
+      "proofs": [
+        {
+          "evidenceHash": "fabb42068951efae8ac7188f0a326ed18d0b8bdbb1ef6b9581d4228463a3dec1",
+          "controlHash": "107865a76247b9f37951f0083f185ad21e2dd7b6f79b2d69649c9539f4e32304",
+          "protectedThrough": null,
+          "affectedDates": [
+            "2026-10-31"
+          ],
+          "evidence": {
+            "version": 1,
+            "scope": {
+              "realmId": "123",
+              "environment": "sandbox",
+              "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "coordination": {
+              "policyRevision": 1912,
+              "writerRevision": 6085,
+              "controlHash": "107865a76247b9f37951f0083f185ad21e2dd7b6f79b2d69649c9539f4e32304",
+              "resourceClaim": {
+                "id": "294d46ef-8dc7-49f5-99c2-7310bd6601eb",
+                "token": "294d46ef-8dc7-49f5-99c2-7310bd6601eb",
+                "requestHash": "31b536c3855f438c74f3ec3981ac5eda8ef4af6d177b2fc9818e3935ec9da5f1"
+              },
+              "sharedItems": []
+            },
+            "requestHash": "197e706b6d86ea37533e05a5f225ca8bd5aa369ed4bc2cfe7e3b5a5f996aec48",
+            "startedAt": "2026-11-01T02:07:06.647Z",
+            "observedAt": "2026-11-01T02:07:07.041Z",
+            "directDates": [
+              "2026-10-31"
+            ],
+            "affectedDates": [
+              "2026-10-31"
+            ],
+            "records": [],
+            "preferencesHash": "c4f8ea77cf1607923a2413a7ef676aec0c9e87849c2d1e753d6ffe0346cb780f",
+            "qboClosedThrough": null,
+            "evidenceHash": "fabb42068951efae8ac7188f0a326ed18d0b8bdbb1ef6b9581d4228463a3dec1"
+          },
+          "controls": {
+            "closedThrough": null,
+            "contentHash": "107865a76247b9f37951f0083f185ad21e2dd7b6f79b2d69649c9539f4e32304",
+            "evidenceNote": "Owner confirmed this Production test company has no reconciled or bank-matched transactions, filed tax returns or protected accounting periods. Reply evidence 15c4ac5e64a646634f28d650a64b809fc50ee6ead360660893e82f8060cd3fa6.",
+            "ownerId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+            "reconciledThrough": null,
+            "recordedAt": "2026-10-16T15:46:31.634Z",
+            "scope": {
+              "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa",
+              "environment": "sandbox",
+              "realmId": "123"
+            },
+            "status": "owner-recorded",
+            "version": 1
+          }
+        }
+      ],
+      "protectedThrough": null,
+      "evidenceHash": "37fdc4cce28dbb3406c41828bc30ad17cf350e5b62fa08d803a2f1fb0e049b7b"
+    },
+    "reconciliation": null,
+    "terminal": {
+      "version": 1,
+      "scope": {
+        "realmId": "123",
+        "environment": "sandbox",
+        "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "receiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018",
+      "dispatchKey": "7ac50502ec2228d69a8f9f9f713bc0c60a9f6f031f53cbab712c7608173d8923",
+      "requestHash": "31b536c3855f438c74f3ec3981ac5eda8ef4af6d177b2fc9818e3935ec9da5f1",
+      "kind": "http-response",
+      "endedAt": "2026-11-01T02:07:07.669Z",
+      "observedHash": "74409224be5ba8c27baa6d02ecb4fe7ff47a3653e6c2de7468de45b4c0129625",
+      "contentHash": "62778506f6718abf1ac97a184319d3c8c15d005c547b4c9943830a2f8daf738b",
+      "auditId": "37421bd8c3c9db6a8ffe9247"
+    },
+    "ownerRecovery": null,
+    "savedResponse": null,
+    "observed": {
+      "entity": "batch",
+      "operation": "create",
+      "httpStatus": 200,
+      "intuitTid": "1-6ae69ecc-0d5005654e604e6934891743",
+      "outcome": "unknown",
+      "responseHash": "5c9bc3f2f244b4688e7b43fe98c200005819c905b2e90d7bf9afe34789b8ee7f",
+      "items": [
+        {
+          "bId": "1",
+          "ref": "winter-access-order",
+          "httpStatus": 200,
+          "intuitTid": "1-6ae69ecc-0d5005654e604e6934891743",
+          "responseHash": "c6f036d694daaa823bf9f7ce9218848ce319128d2121ba1eb2a007ce0aaeccdb",
+          "entity": "purchaseorder",
+          "operation": "create",
+          "outcome": "unknown",
+          "qboId": "11216",
+          "syncToken": "0",
+          "mismatch": true
+        }
+      ]
+    },
+    "sentAt": "2026-11-01T02:07:07.116Z",
+    "startAuditId": "ce3e7742defe4e492b2331da",
+    "__v": 0,
+    "observedAt": "2026-11-01T02:07:07.669Z",
+    "resultAuditId": "1aadd4e7b145e7b262b700b4"
+  },
+  "writer": {
+    "_id": "production:9130357222392856",
+    "contractVersion": 1,
+    "environment": "sandbox",
+    "realmId": "123",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "revision": 6091,
+    "operationId": null,
+    "planHash": null,
+    "workflowKind": null,
+    "unresolved": {
+      "version": 1,
+      "kind": "general-write",
+      "key": "7ac50502ec2228d69a8f9f9f713bc0c60a9f6f031f53cbab712c7608173d8923",
+      "runId": "01b4f4b62cae18ccc27b617a",
+      "batchIndex": 0,
+      "requestId": "c1793dea9f59daa0fdb3ed90731e564e",
+      "requestHash": "41517f8e468eadef33b9409b1cf218fec71e8e5a320633d75022993d44cd3921",
+      "actorId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+      "transportConsumed": {
+        "receiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018",
+        "consumedAt": "2026-11-01T02:07:07.114Z"
+      },
+      "responseReceiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018"
+    },
+    "lastReleasedOperationId": "34282b42ef7d9de9bc6c8e8c",
+    "createdAt": "2026-10-16T14:43:45.309Z",
+    "updatedAt": "2026-11-01T02:09:38.553Z",
+    "__v": 0,
+    "populationDelegation": null,
+    "resourceClaims": [
+      {
+        "id": "294d46ef-8dc7-49f5-99c2-7310bd6601eb",
+        "requestHash": "41517f8e468eadef33b9409b1cf218fec71e8e5a320633d75022993d44cd3921",
+        "resources": [],
+        "reads": [],
+        "uncertainty": [
+          "party:vendor:149:purchaseorder"
+        ],
+        "exclusive": false,
+        "expiresAt": 1793499126536,
+        "state": "unknown",
+        "barrier": {
+          "version": 1,
+          "kind": "general-write",
+          "key": "7ac50502ec2228d69a8f9f9f713bc0c60a9f6f031f53cbab712c7608173d8923",
+          "runId": "01b4f4b62cae18ccc27b617a",
+          "batchIndex": 0,
+          "requestId": "c1793dea9f59daa0fdb3ed90731e564e",
+          "requestHash": "41517f8e468eadef33b9409b1cf218fec71e8e5a320633d75022993d44cd3921",
+          "actorId": "bbbbbbbbbbbbbbbbbbbbbbbb",
+          "transportConsumed": {
+            "receiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018",
+            "consumedAt": "2026-11-01T02:07:07.114Z"
+          },
+          "responseReceiptId": "14b5eb39a75528b126efd40988d90d3db8b2874fc1533762798525468d163018"
+        },
+        "replayToken": null,
+        "replayExpiresAt": null
+      }
+    ],
+    "resourceQueue": []
+  },
+  "mirror": {
+    "_id": "2817f5c7cec291fd6915d263c80292c94f52fc95c494b454ca5b847f57e60d4a",
+    "realmId": "123",
+    "entity": "PurchaseOrder",
+    "environment": "sandbox",
+    "qboId": "11216",
+    "connectionId": "aaaaaaaaaaaaaaaaaaaaaaaa",
+    "__v": 0,
+    "changedAt": "2026-11-01T02:07:09.000Z",
+    "createdAt": "2026-11-01T02:09:36.561Z",
+    "deleted": false,
+    "generation": "6f3f7a90-e2ca-4b5b-93cf-ad04de300875",
+    "lastObservedAt": "2026-11-01T02:09:36.553Z",
+    "lastReadStartedAt": "2026-11-01T02:09:34.793Z",
+    "record": {
+      "EmailStatus": "NotSet",
+      "POStatus": "Open",
+      "domain": "QBO",
+      "sparse": false,
+      "Id": "11216",
+      "SyncToken": "0",
+      "MetaData": {
+        "CreateTime": "2026-10-31T19:07:09-07:00",
+        "LastUpdatedTime": "2026-10-31T19:07:09-07:00"
+      },
+      "CustomField": [],
+      "TxnDate": "2026-10-31",
+      "CurrencyRef": {
+        "value": "CAD",
+        "name": "Reference display"
+      },
+      "ExchangeRate": 1,
+      "PrivateNote": "Stored winter access purchase order replay",
+      "LinkedTxn": [],
+      "Line": [
+        {
+          "Id": "1",
+          "LineNum": 1,
+          "Description": "Stored winter access purchase order replay",
+          "Amount": 360,
+          "DetailType": "AccountBasedExpenseLineDetail",
+          "AccountBasedExpenseLineDetail": {
+            "AccountRef": {
+              "value": "127",
+              "name": "Reference display"
+            },
+            "BillableStatus": "NotBillable",
+            "TaxCodeRef": {
+              "value": "16"
+            }
+          },
+          "CustomExtensions": []
+        }
+      ],
+      "TxnTaxDetail": {
+        "TotalTax": 50.4,
+        "TaxLine": [
+          {
+            "Amount": 50.4,
+            "DetailType": "TaxLineDetail",
+            "TaxLineDetail": {
+              "TaxRateRef": {
+                "value": "35"
+              },
+              "PercentBased": true,
+              "TaxPercent": 14,
+              "NetAmountTaxable": 360
+            }
+          }
+        ]
+      },
+      "VendorRef": {
+        "value": "149",
+        "name": "Reference display"
+      },
+      "APAccountRef": {
+        "value": "59",
+        "name": "Reference display"
+      },
+      "TotalAmt": 410.4,
+      "GlobalTaxCalculation": "TaxExcluded"
+    },
+    "reportCache": null,
+    "summary": {
+      "name": "Reference display",
+      "docNumber": "",
+      "txnDate": "2026-10-31",
+      "dueDate": null,
+      "active": true,
+      "currency": "CAD",
+      "amountCents": 41040,
+      "balanceCents": null,
+      "homeBalanceCents": null,
+      "bankBalanceCents": null,
+      "status": "Recorded"
+    },
+    "updatedAt": "2026-11-01T02:09:36.561Z",
+    "version": 1
+  }
+}

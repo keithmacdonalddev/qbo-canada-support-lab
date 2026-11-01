@@ -133,7 +133,7 @@ test('a saved mismatch cannot be retried as a new create identity', async () => 
   const prepared=await s.api.prepare(bound,input('mismatch-never-recreate',[invoiceOp]));
   assert.equal((await s.api.execute(bound,prepared.runId)).items.inv1.outcome,'mismatch');
   const retried=await s.api.execute(bound,prepared.runId);
-  assert.equal(retried.status,'unknown');assert.equal(h.sent.length,1);assert.equal(s.Runs.rows.get(prepared.runId).batches.length,1);
+  assert.equal(retried.status,'needs-correction');assert.equal(retried.items.inv1.next.action,'check-saved');assert.equal(h.sent.length,1);assert.equal(s.Runs.rows.get(prepared.runId).batches.length,1);
 });
 
 test('a durable gate response is ingested after a crash without another transport send', async () => {
