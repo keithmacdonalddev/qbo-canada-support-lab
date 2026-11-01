@@ -59,19 +59,22 @@ async function readGeneralRuns(Runs, scope) {
   const out = [], size = 500;
   let after = null;
   for (;;) {
-    const rows = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day').sort({ _id: 1 }).limit(size).maxTimeMS(3000).lean();
+    const rows = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day retirement').sort({ _id: 1 }).limit(size).maxTimeMS(3000).lean();
     if (!Array.isArray(rows) || after && rows.some(row => String(row._id) <= after)) fail('General-write enumeration did not advance; close is incomplete.');
     out.push(...rows);
     if (rows.length < size) return out;
     after = String(rows.at(-1)._id);
   }
 }
-async function generalRecordsFor({ Runs, scope, day, through = day, copy }) {
+async function generalRecordsFor({ Runs, scope, day, through = day, copy, models = {}, now = () => Date.now() }) {
   const runs = await readGeneralRuns(Runs, scope), candidates = new Map(), dirty = [];
   const inside = date => typeof date === 'string' && date >= day && date <= through;
-  for (const run of runs) {
+  const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
+  for (const [index, original] of runs.entries()) {
+    const run = runs[index] = await unsent.retire(scope, original);
+    if (run.status === 'expired-unsent') continue;
     dirty.push(...(run.dirty || []).map(row => ({ earliestDate: row.date, reason: row.reason || null, runId: String(run._id) })));
-    for (const batch of run.batches || []) if (batch.state !== 'answered' && batch.items.some(item => inside(item.payload?.TxnDate || run.day) || inside(item.before?.TxnDate))) fail('General write ' + run._id + ' has an unsettled batch; recover its original response before close.');
+    for (const batch of run.batches || []) if (batch.state !== 'answered' && batch.items.some(item => inside(item.payload?.TxnDate || run.day) || inside(item.before?.TxnDate)) && !await unsent.provesUnsent(scope, run, batch)) fail('General write ' + run._id + ' has an unsettled batch; recover its original response before close.');
     for (const [ref, item] of Object.entries(run.items || {})) {
       const op = run.plan.operations.find(row => row.ref === ref), id = item.qboId || op?.id;
       const dispatched = [...(run.batches || [])].reverse().find(batch => (!item.attempt || batch.attempt === item.attempt) && batch.items.some(row => row.ref === ref))?.items.find(row => row.ref === ref);

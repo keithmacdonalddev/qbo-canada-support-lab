@@ -10,7 +10,7 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun'), Closes = models.GeneralDayCloses || require('../models/GeneralDayClose'), Records = models.Records || require('../models/CompanySyncRecord');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId });
   async function pending(scope, { fromDate, throughDate, verifiedThrough }) {
-    const gathered = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy });
+    const gathered = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy, models, now });
     // Include current dates: an external move into this period must not escape close.
     const unresolved = gathered.dirty.filter(row => verifiedThrough && row.earliestDate <= verifiedThrough).map(row => ({ key: String(row.runId) + ':' + row.earliestDate, earliestDate: row.earliestDate }));
     return { hasRecords: gathered.records.length > 0, unresolved, gathered };
@@ -75,13 +75,13 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     return evidence.sort((a, b) => a.key.localeCompare(b.key));
   }
   async function verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered, force = false }) {
-    const preview = gathered || await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy }), ctx = await contextFor(scope, mappings, preview.records);
+    const preview = gathered || await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy, models, now }), ctx = await contextFor(scope, mappings, preview.records);
     const settlements = await fixedSettlementsFor(scope, preview);
     const snapshotHash = hash({ fromDate, throughDate, ...preview, settlements, context: ctx.evidence });
     const prior = await Closes.findOne({ ...company(scope), fromDate, throughDate, kind: 'period', ok: true, snapshotHash }).sort({ verifiedAt: -1 }).maxTimeMS(3000).lean();
     if (!force && prior?.snapshotHash === snapshotHash) return prior;
     const report = await readLedger(fromDate, throughDate);
-    const after = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy });
+    const after = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy, models, now });
     const afterContext = await contextFor(scope, mappings, after.records), afterSettlements = await fixedSettlementsFor(scope, after);
     if (hash(preview) !== hash(after) || hash(ctx.evidence) !== hash(afterContext.evidence) || hash(settlements) !== hash(afterSettlements)) fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
     const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
@@ -101,7 +101,11 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
   async function reverifyDirty(scope, { verifiedThrough, openingDate, mappings, readLedger, readReports, references, verifyFixedDay, guard, transaction }) {
     const { reverifyHistory } = require('./general-write-recovery'), { dirtyRange } = require('./general-write-close');
     const { readGeneralRuns } = require('./general-write-day-close');
-    const runs = await readGeneralRuns(Runs, scope), markers = runs.flatMap(run => (run.dirty || []).map(marker => ({ ...marker, earliestDate: marker.date, runId: String(run._id) })));
+    const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
+    let runs = await readGeneralRuns(Runs, scope);
+    for (const run of runs) await unsent.retire(scope, run);
+    runs = await readGeneralRuns(Runs, scope);
+    const markers = runs.flatMap(run => (run.dirty || []).map(marker => ({ ...marker, earliestDate: marker.date, runId: String(run._id) })));
     const range = dirtyRange({ markers, verifiedThrough, openingDate });
     if (!range) return { ok: true, required: false };
     if (typeof transaction !== 'function' || typeof guard !== 'function') fail('History re-verification needs transactional company fences.');
@@ -112,14 +116,14 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     };
     await check();
     const earliest = markers.map(row => row.earliestDate).sort()[0];
-    const changed = await generalRecordsFor({ Runs, scope, day: earliest, through: verifiedThrough, copy });
+    const changed = await generalRecordsFor({ Runs, scope, day: earliest, through: verifiedThrough, copy, models, now });
     const ctx = await contextFor(scope, mappings, changed.records);
     const result = await reverifyHistory({ scope: company(scope), range, runs, references, readReports, context: ctx, now, guard: check,
       verifyDay: async day => {
         const from = range.baseline && day < openingDate ? earliest : day;
-        const preview = await generalRecordsFor({ Runs, scope, day: from, through: day, copy }), dayCtx = await contextFor(scope, mappings, preview.records);
+        const preview = await generalRecordsFor({ Runs, scope, day: from, through: day, copy, models, now }), dayCtx = await contextFor(scope, mappings, preview.records);
         const ledgerReport = await readLedger(from, day);
-        const after = await generalRecordsFor({ Runs, scope, day: from, through: day, copy });
+        const after = await generalRecordsFor({ Runs, scope, day: from, through: day, copy, models, now });
         if (hash(preview) !== hash(after) || hash(dayCtx.evidence) !== hash((await contextFor(scope, mappings, after.records)).evidence)) fail('History records changed during ledger verification.');
         const settlements = await fixedSettlementsFor(scope, preview);
         if (typeof verifyFixedDay !== 'function') fail('Historical fixed-record re-verification is unavailable.');

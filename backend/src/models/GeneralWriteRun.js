@@ -16,7 +16,7 @@ const schema = new mongoose.Schema({
   decisionKey: fixed(String), contentHash: fixed(String), purpose: fixed(String), day: fixed(String),
   // The guard result at preparation: normalized operations, batches, dirty dates.
   plan: fixed(mongoose.Schema.Types.Mixed),
-  status: { type: String, required: true, enum: ['prepared', 'sending', 'needs-correction', 'unknown', 'complete', 'held'] },
+  status: { type: String, required: true, enum: ['prepared', 'sending', 'needs-correction', 'unknown', 'complete', 'held', 'expired-unsent'] },
   // [{ index, attempt, requestId, items: [{ bId, ref }], state: 'sending'|'answered'|'lost', sentAt, answeredAt }]
   batches: { type: [mongoose.Schema.Types.Mixed], default: [] },
   // ref -> { outcome, qboId?, entity, record?, request (exact resolved payload), fault?, next?, attempt }
@@ -29,6 +29,7 @@ const schema = new mongoose.Schema({
   lastError: { type: String, default: null },
   errorDetail: { type: mongoose.Schema.Types.Mixed, default: null },
   errorHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  retirement: { type: mongoose.Schema.Types.Mixed, default: null },
   progressAt: Date,
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true });

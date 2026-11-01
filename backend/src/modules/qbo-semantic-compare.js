@@ -3,6 +3,9 @@
 // only documented presentation/defaults and known unordered collections normalize.
 const { canonical } = require('./business-calendar');
 const FALSE_DEFAULTS = Object.freeze({
+ // QBO adds this presentation flag to Estimate read/CDC responses while omitting
+ // it from create receipts. Only absent/false is equivalent; true stays distinct.
+ Estimate: ['FreeFormAddress'],
  Item: ['DeferredRevenue','SalesTaxIncluded','PurchaseTaxIncluded','TrackQtyOnHand','SubItem','Taxable','PrintGroupedItems'],
  Customer: ['Job','BillWithParent','IsProject','Taxable'], Vendor: ['Vendor1099','T4AEligible','T5018Eligible'], TaxCode: ['Hidden','Taxable','TaxGroup'],
 });

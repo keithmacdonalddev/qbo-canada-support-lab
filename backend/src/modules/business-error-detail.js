@@ -60,11 +60,16 @@ function definitionDifferences(approved, current, prefix = '', out = []) {
   return bounded(redact(out));
 }
 const stamp = value => { const n=new Date(value || 0).getTime(); return Number.isFinite(n) ? n : 0; };
+function savedDayRefusal(row) {
+  const error = row.errorDetail;
+  return row.status !== 'unknown' && error?.detail?.qboStage === 'write_admission' && error.detail.outcomeUnknown === false && (error.code === 'GENERAL_WRITE_DAY_CHANGED' || error.code === 'QBO_WRITE_ADMISSION_DENIED' && error.message === 'The business day changed since this general write was prepared. Nothing was sent.');
+}
 function collectBusinessBlockers({runs=[],steps=[],generalRuns=[],now=Date.now()} = {}) {
   const groups=new Map();
   const add=(row,kind)=>{
-    const terminal=kind==='step'?row.state==='verified':kind==='general'?row.status==='complete':['verified','retired','stopped','previewed'].includes(row.status);
+    const terminal=kind==='step'?row.state==='verified':kind==='general'?['complete','expired-unsent'].includes(row.status):['verified','retired','stopped','previewed'].includes(row.status);
     if(terminal)return;
+    if(kind==='general' && savedDayRefusal(row))return;
     const history=row.errorHistory || [], last=history.at(-1), saved=row.errorDetail || row.verification?.errorDetail || row.executionRequest?.result?.errorDetail;
     const blocked=Boolean(saved || ['blocked','needs-check','rejected','unknown','held','needs-correction'].includes(row.state || row.status));
     const since=stamp(last?.firstAt || row.progressAt || row.dispatch?.at || row.createdAt || row.updatedAt);
@@ -85,7 +90,7 @@ async function businessBlockersFor({models,scope,now=Date.now()}) {
   async function rows(Model,filter,fields){return Model?.find ? Model.find({...scope,...filter}).select(fields).sort({_id:1}).limit(201).maxTimeMS(3000).lean() : [];}
   const [runs,generalRuns]=await Promise.all([
     rows(models?.Runs,{status:{$nin:['verified','retired','stopped','previewed']}},'_id status nextOrdinal errorDetail errorHistory progressAt createdAt updatedAt executionRequest'),
-    rows(models?.GeneralWriteRuns,{status:{$ne:'complete'}},'_id status errorDetail errorHistory progressAt createdAt updatedAt lastError'),
+    rows(models?.GeneralWriteRuns,{status:{$nin:['complete','expired-unsent']}},'_id status errorDetail errorHistory progressAt createdAt updatedAt lastError'),
   ]);
   const steps=await rows(models?.Steps,{$or:[{operationId:{$in:runs.map(row=>row._id)},state:{$ne:'verified'}},{state:{$in:['dispatched','unknown']}}]},'_id operationId logicalKey entity qboId state errorDetail errorHistory progressAt createdAt updatedAt verification dispatch.at');
   return {blockers:collectBusinessBlockers({runs:runs.slice(0,200),steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),truncated:[runs,steps,generalRuns].some(rows=>rows.length>200)};

@@ -66,6 +66,7 @@ function resolve(value, saved) {
 const unresolved = value => JSON.stringify(value).includes('"$ref"');
 function createGeneralWriteService({ models, copy, contextFor, transport = null, retain = null, markDirty = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
+  const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
   async function ownedSet(scope, operations, session) {
     const inSession = query => session ? query.session(session) : query;
     const keys = operations.filter(op => op?.id).map(op => op.entity + ':' + op.id), owned = new Set();
@@ -102,7 +103,8 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     if (bound.caseAuthority && (bound.agentAuthority || !Array.isArray(input?.operations) || input.operations.length !== 1 || !['create', 'update', 'void', 'delete'].includes(input.operations[0].op))) fail('Case general writes accept exactly one case-authorized operation.');
     if (!plain(input) || Object.keys(input).some(key => !['decisionKey', 'purpose', 'operations'].includes(key)) || !KEY.test(input.decisionKey || '') || typeof input.purpose !== 'string' || input.purpose.trim().length < 10 || input.purpose.length > 2000 || !Array.isArray(input.operations)) fail('Send { decisionKey (8-100 letters, digits, - or _), purpose (10-2,000 characters), operations: [...] }.', 400);
     const contentHash = hash({ purpose: input.purpose.trim(), operations: input.operations }), _id = hash({ scope, ownerId: String(bound.ownerId), kind: 'general-write', decisionKey: input.decisionKey }).slice(0, 24);
-    const existing = await Runs.findOne({ _id, environment: scope.environment, realmId: scope.realmId }).lean();
+    let existing = await Runs.findOne({ _id, environment: scope.environment, realmId: scope.realmId }).lean();
+    if (existing) existing = await unsent.retire(scope, existing);
     if (existing) {
       if (canonical(existing.caseAuthority || null) !== canonical(bound.caseAuthority || null)) fail('This write belongs to a different case authority.');
       if (existing.contentHash !== contentHash) fail('decisionKey ' + input.decisionKey + ' already names different work (' + existing.status + '). Use a new decisionKey for a new decision.');
@@ -163,7 +165,8 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     let run = await Runs.findOne({ _id: runId, environment: scope.environment, realmId: scope.realmId }).lean();
     if (!run || String(run.connectionId) !== scope.connectionId) fail('This general write is unavailable.', 404);
     if (canonical(run.caseAuthority || null) !== canonical(bound.caseAuthority || null) || run.caseAuthority && !caseWrites) fail('This write belongs to a different case authority.');
-    if (run.status === 'complete') return report(run);
+    run = await unsent.retire(scope, run);
+    if (['complete', 'expired-unsent'].includes(run.status)) return report(run);
     if (!dispatchEnabled() || !transport) { if (run.status !== 'held') run = await save(run, { status: 'held', lastError: 'Dispatch of general writes is not enabled on this server yet; the plan is saved and nothing was sent.' }); return report(run); }
     run = await recheckSavedMismatch(run, scope);
     if (run.status === 'complete') return report(run);
@@ -183,7 +186,13 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         const stale = new Set(Object.values(run.items).filter(item => ['saved', 'deleted'].includes(item.outcome)).flatMap(item => item.parents || []));
         const used = new Set(operations.flatMap(op => [op.id ? op.entity + ':' + op.id : null, ...wanted(op.payload).map(([entity, id]) => entity + ':' + id)]).filter(Boolean));
         const { result, local, context } = await guard(scope, operations, extras, new Set([...stale].filter(key => used.has(key))), undefined, String(run._id));
-        if (context.day !== run.day) { run = await save(run, { status: 'needs-correction', lastError: 'The business day changed since this write was prepared (' + run.day + ' → ' + context.day + '). Prepare it again with a new decisionKey.' }); return report(run); }
+        if (context.day !== run.day) {
+          run = await unsent.retire(scope, run);
+          if (run.status === 'expired-unsent') return report(run);
+          const error = Object.assign(new Error('The business day changed. Retain saved effects and replan only unsent work with a new decisionKey.'), { code: 'GENERAL_WRITE_DAY_CHANGED', qboStage: 'write_admission', outcomeUnknown: false });
+          run = await save(run, { status: 'needs-correction', ...failureFields(run, error, { operationId: String(run._id) }, now()) });
+          return report(run);
+        }
         if (!result.ok) { run = await save(run, { status: 'needs-correction', lastError: 'The company changed since preparation: ' + result.problems.map(row => (row.ref ? row.ref + ': ' : '') + row.message).join(' ') }); return report(run, result.problems); }
         const first = new Set(result.plan.layers[0]), attempt = run.batches.length + 1;
         const items = result.plan.operations.filter(op => first.has(op.ref)).map((op, n) => {
@@ -225,6 +234,10 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if(error?.qboStage==='write_admission'&&error.outcomeUnknown!==true&&error.lost!==true){
           run=await refreshSettlement(run,batch);
           run=await save(run,{...(!run.batches.find(row=>row.index===batch.index)?.transport?.receiptId?{status:'prepared'}:{}),batches:run.batches.map(row=>row.index===batch.index?{...row,sends:Math.max(0,(row.sends||0)-1)}:row)});
+        }
+        if (error?.code === 'GENERAL_WRITE_DAY_CHANGED' && error.qboStage === 'write_admission' && error.outcomeUnknown === false && error.lost !== true) {
+          run = await unsent.retire(scope, run);
+          if (run.status === 'expired-unsent') return report(run);
         }
         if (error?.code === 'QBO_RESOURCE_BUSY' && error.qboStage === 'write_admission' && error.outcomeUnknown === false && error.lost !== true) {
           const previous = run.batches.find(row => row.index === batch.index)?.waiting;
@@ -272,7 +285,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     return report(run);
   }
   function report(run, problems = null) {
-    return { runId: run._id, status: run.status, items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
+    return { runId: run._id, status: run.status, ...(run.status === 'expired-unsent' ? { next: { action: 'replan', day: run.retirement.currentDay, reason: 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
   }
   // Called again INSIDE gate admission for every unsent/resumed saved batch.
   async function guardBatch({ scope, run, batch, session, periodProof }) {
@@ -283,7 +296,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       if (!current || hash(current) !== record.recordHash) fail('The general batch copy differs from its fresh linked-record evidence.');
     }
     for (const item of batch.items) for (const [key, snapshot] of Object.entries(item.postingSources || {})) { const [entity, id] = key.split(':'); if (hash(local.get(entity, id)) !== hash(snapshot)) fail('The foreign settlement source changed before admission; retain its current balance under a new decision.'); }
-    if (context.day !== run.day) fail('The business day changed since this general write was prepared.');
+    if (context.day !== run.day) throw Object.assign(new Error('The business day changed since this general write was prepared. Nothing was sent.'), { code: 'GENERAL_WRITE_DAY_CHANGED', qboStage: 'write_admission', outcomeUnknown: false });
     if (!result.ok) (function () { throw Object.assign(new Error('General batch admission refused: ' + result.problems.map(row => row.message).join(' ')), { status: 409, code: 'GENERAL_WRITE_REFUSED', businessDetail: { problems: result.problems } }); })();
     for (const item of batch.items) if (item.id && String(local.get(item.entity, item.id)?.SyncToken) !== String(item.payload.SyncToken)) fail('The target version changed before general batch admission.');
     if (run.agentAuthority) {

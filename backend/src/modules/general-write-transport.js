@@ -157,7 +157,7 @@ function createGeneralGateTransport({ models, scope, runId, batchIndex, admissio
       // Exact already-admitted identity recovery is allowed across midnight. It cannot
       // authorize new work; replay may return a record that already consumed its balance.
       if (!replay) {
-        if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw denied('The business day changed since this general write was prepared. Nothing was sent.');
+        if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw Object.assign(denied('The business day changed since this general write was prepared. Nothing was sent.'), { code: 'GENERAL_WRITE_DAY_CHANGED' });
         if (typeof admissionGuard !== 'function') throw denied('Full general-write admission guards are required.');
         try { historyDates = (await admissionGuard({ scope, run, batch, session, periodProof }))?.reverifyDates || []; }
         catch (error) {
