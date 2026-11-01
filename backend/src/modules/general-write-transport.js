@@ -78,7 +78,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
       return { version: 1, contract: 'general-write-v1', runId, batchIndex, requestId: batch.requestId, sends: batch.sends || 1, decisionKey: run.decisionKey, items: batch.items.map(item => ({ bId: item.bId, ref: item.ref, entity: item.entity, operation: item.operation, ...(item.id ? { id: item.id, targetVersion: item.before?.SyncToken ?? null, beforeHash: hash(item.before || null) } : {}), requestHash: itemRequest(scope, item).requestHash })) };
     },
     async preflight({ request, client, coordination }) {
-      const { batch } = await saved();
+      const { run, batch } = await saved();
       if (buildGeneralBatch(scope, batch).requestHash !== request.requestHash) throw denied('The general batch request differs from its saved identity.');
       recovery = null; preflighted = batch;
       // Reuse the original admission evidence: a saved update advances its target
@@ -99,7 +99,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
         recovery.evidence = JSON.parse(JSON.stringify(evidence));
         return evidence;
       }
-      if (warmCurrency) await warmCurrency(scope, batch);
+      if (warmCurrency) await warmCurrency(scope, batch, run);
       // Linked records shared by several items are read once.
       const memo = new Map(), memoClient = { read: (entity, id) => { const key = entity + ':' + id; if (!memo.has(key)) memo.set(key, client.read(entity, id)); return memo.get(key); }, query: text => { if (!memo.has(text)) memo.set(text, client.query(text)); return memo.get(text); } };
       preflighted = batch;

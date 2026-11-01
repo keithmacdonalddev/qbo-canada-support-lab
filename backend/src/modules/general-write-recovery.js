@@ -257,7 +257,7 @@ async function recheckGeneralHistory({ scope, access, models, now = () => Date.n
     await guard(); const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id, undefined, 0, 0, { signal }))?.[entity==='CreditCardPayment'?'CreditCardPaymentTxn':entity];
     return record || null;
   } };
-  const gate = require('./general-write-close-gate').createGeneralCloseGate({ models: allModels, copy, now });
+  const gate = require('./general-write-close-gate').createGeneralCloseGate({ models: allModels, copy, now, readValuation: require('./business-stock-valuation').createValuationReader({access,now}) });
   const options = { verifiedThrough: calendar.verifiedThrough, openingDate: calendar.openingDate, mappings: active.view.mappings || {}, readLedger: async (from, through) => { await guard(); return client.apiCall('GET', gate.ledgerEndpoint(from, through), undefined, 0, 0, { signal }); } };
   const dirtyRuns = await require('./general-write-day-close').readGeneralRuns(models.GeneralWriteRuns, scope);
   const need = { unresolved: dirtyRuns.flatMap(run => (run.dirty || []).filter(marker => marker.date <= calendar.verifiedThrough)) };

@@ -10,19 +10,20 @@ const scope={environment:'sandbox',realmId:'123456',connectionId:'a'.repeat(24)}
 const identity={itemKey:'stock-one',itemId:'101',assetAccountId:'9',costAccountId:'10'};
 const opening=()=>emptyStockState({scope,rootHash:hash('accepted root'),throughDate:'2026-09-30',items:[identity]});
 const query=value=>({session(){return this;},select(){return this;},sort(){return this;},limit(){return this;},maxTimeMS(){return this;},lean:async()=>value});
-function fixture(){
+function fixture(entity='Purchase'){
  const payload={TxnDate:'2026-10-01',CurrencyRef:{value:'CAD'},GlobalTaxCalculation:'TaxExcluded',VendorRef:{value:'30'},AccountRef:{value:'50'},PaymentType:'Cash',Line:[{Amount:12,DetailType:'ItemBasedExpenseLineDetail',ItemBasedExpenseLineDetail:{Qty:2,UnitPrice:6,ItemRef:{value:'101'},TaxCodeRef:{value:'8'}}}]};
+ if(entity!=='Purchase'){delete payload.AccountRef;delete payload.PaymentType;if(entity!=='VendorCredit'){delete payload.VendorRef;payload.CustomerRef={value:'1'};const line=payload.Line[0];line.DetailType='SalesItemLineDetail';line.SalesItemLineDetail=line.ItemBasedExpenseLineDetail;delete line.ItemBasedExpenseLineDetail;if(entity==='RefundReceipt')payload.DepositToAccountRef={value:'50'};}}
  const record={...payload,Id:'201',SyncToken:'0',TotalAmt:12,TxnTaxDetail:{TotalTax:0}};
- const run={_id:'b'.repeat(24),ownerId:'c'.repeat(24),actorId:'c'.repeat(24),plan:{operations:[{ref:'buy',op:'create',entity:'Purchase',payload}]},items:{buy:{op:'create',entity:'Purchase',outcome:'saved',attempt:1,qboId:'201',request:payload,record}}};
- const batch={index:0,attempt:1,sends:1,requestId:'d'.repeat(32),state:'answered',items:[{bId:'1',ref:'buy',entity:'Purchase',op:'create',operation:'create',payload}]};
- const response=[{bId:'1',Purchase:record}],request=buildGeneralBatch(scope,batch),observed=classifyGeneralResponse(scope,batch,{status:200,json:{BatchItemResponse:response}});
+ const run={_id:'b'.repeat(24),ownerId:'c'.repeat(24),actorId:'c'.repeat(24),plan:{operations:[{ref:'buy',op:'create',entity,payload}]},items:{buy:{op:'create',entity,outcome:'saved',attempt:1,qboId:'201',request:payload,record}}};
+ const batch={index:0,attempt:1,sends:1,requestId:'d'.repeat(32),state:'answered',items:[{bId:'1',ref:'buy',entity,op:'create',operation:'create',payload}]};
+ const response=[{bId:'1',[entity]:record}],request=buildGeneralBatch(scope,batch),observed=classifyGeneralResponse(scope,batch,{status:200,json:{BatchItemResponse:response}});
  const dispatchKey=hash({version:1,kind:'general-write',runId:run._id,batchIndex:0,sends:1}),receiptId=hash({scope,dispatchKey});
  const startId=hash({receiptId,event:'started'}).slice(0,24),resultId=hash({receiptId,event:'response',observed}).slice(0,24);
  const receipt={_id:receiptId,...scope,kind:'general-write',ownerId:run.ownerId,actorId:run.actorId,state:'saved',general:{runId:run._id,batchIndex:0,requestId:batch.requestId},requestHash:request.requestHash,dispatchKey,observed,startAuditId:startId,resultAuditId:resultId,periodProof:{kind:'general-period-proof',runId:run._id,batchIndex:0}};
  batch.transport={receiptId,response,items:observed.items};run.batches=[batch];
  const params={environment:scope.environment,connectionId:scope.connectionId,dispatchKey,requestHash:request.requestHash,entity:'batch',operation:'create'};
  const audits=[{_id:startId,userId:run.ownerId,realmId:scope.realmId,action:'QuickBooks write dispatch recorded',actionType:'manual',outcome:'partial',inputParams:params,afterState:{state:'possibly-sent',receiptId}},{_id:resultId,userId:run.ownerId,realmId:scope.realmId,action:'QuickBooks write response recorded',actionType:'manual',outcome:'success',inputParams:params,afterState:{state:'saved',receiptId,...observed}}];
- const models={Receipts:{findOne:()=>query(receipt)},Audits:{findOne:filter=>query(audits.find(a=>a._id===filter._id))},GeneralWriteRuns:{findOne:()=>query(run),find:()=>query([run])}};
+ const models={Receipts:{findOne:()=>query(receipt)},Audits:{findOne:filter=>query(audits.find(a=>a._id===filter._id))},GeneralWriteRuns:{findOne:()=>query(run),find:()=>({...query([run]),select(fields){assert.match(fields,/\bownerId\b/);assert.match(fields,/\bactorId\b/);return this}})}};
  return {models,run,record,batch,receipt,audits};
 }
 test('native general Purchase is reconstructed into prior activity, survives next-day FIFO carry and typed source readback',async t=>{
@@ -58,4 +59,21 @@ test('Bill and Purchase numeric IDs may overlap; missing PO backlinks still coun
  const header={...bill,Line:structuredClone(bill.Line),LinkedTxn:[{TxnType:'PurchaseOrder',TxnId:'400'}]};delete header.Line[0].LinkedTxn;
  assert.throws(()=>checkPurchaseReceipts([{entity:'Bill',after:header}],local),/exact line/);
  assert.throws(()=>checkPurchaseReceipts([{entity:'Bill',after:bill}],local,{receiptHistory:[{entity:'Bill',record:header}]}),/no complete forward/);
+});
+
+test('native customer return receipt and retained report survive immutable carry and next-day consumption',async t=>{
+ const {detail}=require('./helpers/inventory-reports'),valuation=require('../src/modules/business-stock-valuation');
+ for(const entity of ['CreditMemo','RefundReceipt']){
+  const f=fixture(entity),native=detail('2026-10-01',entity,'201','101',2,1200),records=[{entity,record:f.record}];
+  const current=structuredClone(f.record);current.SyncToken='1';current.RemainingCredit=0;current.LinkedTxn=[{TxnType:'Invoice',TxnId:'999'}];
+  const saved=valuation.evidence(scope,'2026-10-01',[{entity,record:current}],native);f.models.GeneralDayCloses={findOne:()=>query({stock:{returns:saved}})};
+  t.mock.method(require('../src/modules/business-stock-history'),'readCommittedStockOpening',async()=>({state:opening()}));
+  const rows=await readGeneralStockRows(f.models,{value:{scope},calendar:{verifiedThrough:'2026-09-30'}});
+  const closing=calculateStockCost(opening(),rows,{fromDate:'2026-10-01',throughDate:'2026-10-01'}).closing;
+  assert.equal(summarizeStockState(closing).valueCents,1200);
+  const origin=await generalPurchaseOrigin(f.models,closing,'201',closing.items[0].lots);assert.equal(origin.entity,entity);
+  const source={...rows[0].source,logicalKey:hash('later sale'),qboId:'202'};delete source.entity;
+  const next=calculateStockCost(closing,[{entity:'Invoice',txnDate:'2026-10-02',itemId:'101',quantity:1,source}],{fromDate:'2026-10-02',throughDate:'2026-10-02'});assert.equal(next.costOfSalesCents,600);
+  saved.records[0].record.Line[0].SalesItemLineDetail.Qty=3;await assert.rejects(generalPurchaseOrigin(f.models,closing,'201',closing.items[0].lots),/retained native|record version/);
+ }
 });

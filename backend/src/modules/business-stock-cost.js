@@ -40,7 +40,7 @@ function itemIdentity(item) {
 function validateOrigin(source, scope) {
   exact(source, ['operationId', 'scopeHash', 'logicalKey', 'qboId', 'lineIndex', 'compilationHash', 'requestHash', 'receiptHash', 'receiptSource', ...(source?.entity !== undefined ? ['entity'] : [])], 'Original stock-line provenance');
   if (!ID.test(source.operationId || '') || !['request-correlated-readback', 'owner-attributed-readback', 'population-readback', 'general-copy-replay'].includes(source.receiptSource) || source.scopeHash !== hash(scope) || (typeof source.qboId !== 'string' || !QID.test(source.qboId)) || ![source.logicalKey, source.compilationHash, source.requestHash, source.receiptHash].every(value => HASH.test(value || ''))) fail('Original stock-line receipt provenance is incomplete or scoped elsewhere.');
-  if (source.entity !== undefined && !['Bill','Purchase','CreditMemo','RefundReceipt'].includes(source.entity)) fail('Unknown general stock source entity.');
+  if (source.entity !== undefined && !['Bill','Purchase','CreditMemo','RefundReceipt','VendorCredit'].includes(source.entity)) fail('Unknown general stock source entity.');
   integer(source.lineIndex, { max: 99 });
   return source;
 }
@@ -94,16 +94,16 @@ function validateStockRows(rows, state, period, { general = state.orderingVersio
   if (period.fromDate !== shift(state.throughDate, 1) || period.throughDate < period.fromDate || period.fromDate.slice(0, 7) !== period.throughDate.slice(0, 7)) fail('Stock-cost periods must be contiguous and stay within one calendar month.');
   const identities = new Set(), physical = new Set(), itemMap = new Map(state.items.map(item => [item.itemId, item]));
   for (const row of rows) {
-    exact(row, ['entity', 'txnDate', 'itemId', 'quantity', 'source', ...(['Bill', 'Purchase', 'CreditMemo', 'RefundReceipt'].includes(row?.entity) ? ['unitCostCents'] : []), ...(row?.returnEvidenceHash !== undefined ? ['returnEvidenceHash'] : [])], 'Accepted stock-cost line');
-    if (!['Bill', 'Purchase', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt'].includes(row.entity) || !itemMap.has(row.itemId)) fail('Only original managed stock bills, purchases, sales and evidenced returns are supported.');
+    exact(row, ['entity', 'txnDate', 'itemId', 'quantity', 'source', ...(['Bill', 'Purchase', 'CreditMemo', 'RefundReceipt', 'VendorCredit'].includes(row?.entity) ? ['unitCostCents'] : []), ...(row?.returnEvidenceHash !== undefined ? ['returnEvidenceHash'] : [])], 'Accepted stock-cost line');
+    if (!['Bill', 'Purchase', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt', 'VendorCredit'].includes(row.entity) || !itemMap.has(row.itemId)) fail('Only original managed stock bills, purchases, sales and evidenced returns are supported.');
     if (!general && !['Bill', 'SalesReceipt'].includes(row.entity)) fail('Only original managed stock bills and sales receipts are supported.');
     day(row.txnDate); validateOrigin(row.source, state.scope);
     if (general) quantity(row.quantity, { positive: true }); else integer(row.quantity, { positive: true, max: LIMITS.quantity });
     const key = row.source.logicalKey + ':' + row.source.lineIndex;
     const physicalKey = row.entity + ':' + row.source.qboId + ':' + row.source.lineIndex;
     if (identities.has(key) || physical.has(physicalKey) || row.txnDate < period.fromDate || row.txnDate > period.throughDate) fail('A stock line is repeated or outside its original accounting period.'); identities.add(key); physical.add(physicalKey);
-    if (['Bill', 'Purchase', 'CreditMemo', 'RefundReceipt'].includes(row.entity)) { if (!general) integer(row.unitCostCents, { positive: true }); cost(row.quantity, row.unitCostCents); }
-    if (['CreditMemo', 'RefundReceipt'].includes(row.entity) && !HASH.test(row.returnEvidenceHash || '')) fail('A stock return requires independent native valuation evidence; its sales price is not its cost.');
+    if (['Bill', 'Purchase', 'CreditMemo', 'RefundReceipt', 'VendorCredit'].includes(row.entity)) { if (!general) integer(row.unitCostCents, { positive: true }); cost(row.quantity, row.unitCostCents); }
+    if (['CreditMemo', 'RefundReceipt', 'VendorCredit'].includes(row.entity) && !HASH.test(row.returnEvidenceHash || '')) fail('A stock return requires independent native valuation evidence; its sales price is not its cost.');
   }
   return rows;
 }
@@ -126,6 +126,9 @@ function calculateStockCost(opening, rows, period, { general = opening?.ordering
     }
     for (const row of onDate) {
       const item = itemMap.get(row.itemId);
+      // Native return totals do not establish ordering across different cost layers.
+      // Keep returns and any carried return lots in a homogeneous-cost item until depleted.
+      if ((row.returnEvidenceHash || item.lots.some(lot => lot.returnEvidenceHash)) && new Set([...item.lots.map(lot => lot.unitCostCents), ...(incoming(row) || row.returnEvidenceHash ? [row.unitCostCents] : [])]).size > 1) fail('Mixed-cost return layers need native layer-order evidence.');
       if (incoming(row)) {
         const lot = { lotKey: lotKeyFor(opening.scope, row.itemId, row.source), txnDate: row.txnDate, originalQuantity: row.quantity, remainingQuantity: row.quantity, unitCostCents: row.unitCostCents, source: structuredClone(row.source), ...(row.returnEvidenceHash ? { returnEvidenceHash: row.returnEvidenceHash } : {}) };
         if (items.some(value => value.lots.some(old => old.lotKey === lot.lotKey || (old.source.lineIndex === lot.source.lineIndex && ((old.source.entity || 'Bill') === (lot.source.entity || 'Bill') && old.source.qboId === lot.source.qboId || old.source.logicalKey === lot.source.logicalKey))))) fail('A saved purchase lot cannot be added again.');
@@ -147,8 +150,11 @@ function calculateStockCost(opening, rows, period, { general = opening?.ordering
           consumed.push({ lotKey: lot.lotKey, quantity, unitCostCents: lot.unitCostCents, amountCents: cents, sourceHash: hash(lot.source) });
           amountCents = add(amountCents, cents); remaining = addQuantity(remaining, -quantity); lot.remainingQuantity = addQuantity(lot.remainingQuantity, -quantity); if (!lot.remainingQuantity) item.lots.shift();
         }
-        costOfSalesCents = add(costOfSalesCents, amountCents);
-        allocations.push({ itemId: row.itemId, logicalKey: row.source.logicalKey, lineIndex: row.source.lineIndex, qboId: row.source.qboId, quantity: row.quantity, amountCents, sourceHash: hash(row.source), consumed });
+        if (row.entity === 'VendorCredit') {
+          purchaseCents = add(purchaseCents, -amountCents);
+          purchases.push({ itemId: row.itemId, quantity: -row.quantity, amountCents: -amountCents });
+        } else costOfSalesCents = add(costOfSalesCents, amountCents);
+        allocations.push({ itemId: row.itemId, logicalKey: row.source.logicalKey, lineIndex: row.source.lineIndex, qboId: row.source.qboId, quantity: row.quantity, amountCents, sourceHash: hash(row.source), consumed, ...(row.returnEvidenceHash ? { returnEvidenceHash: row.returnEvidenceHash } : {}) });
       }
     }
   }

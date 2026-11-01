@@ -60,7 +60,7 @@ for (const entity of ['Invoice','Estimate','SalesReceipt','CreditMemo','RefundRe
   add(entity,'class','Class on saved activity',r => refs(r,'ClassRef').length>0,{setting:'classes',dependencies:['Preferences']});
   add(entity,'location','Location on saved activity',r => refs(r,'DepartmentRef').length>0,{setting:'locations',dependencies:['Preferences']});
   add(entity,'custom-field','Custom field has a value',r => (r.CustomField || []).some(f => [f.StringValue,f.NumberValue,f.DateValue,f.BooleanValue].some(v => v!==undefined && v!==null && v!=='')),{tool:'Add governed custom-field values after inspecting field definitions.'});
-  add(entity,'inventory-line','Inventory item line',(r,c) => details(r).some(d => c.byId.get('Item:'+d.ItemRef?.value)?.Type==='Inventory'),{dependencies:['Item'],...(['Bill','PurchaseOrder','Invoice'].includes(entity)?{need:'Use supported fixed stock workflows or an enabled verified inventory tool.'}:{tool:'Enable this inventory entity with dated FIFO and return valuation proof.'})});
+  add(entity,'inventory-line','Inventory item line',(r,c) => details(r).some(d => c.byId.get('Item:'+d.ItemRef?.value)?.Type==='Inventory'),{dependencies:['Item'],need:'Enable the inventory master and entity flag after dated FIFO and native valuation checks.'});
 }
 for (const entity of ['Invoice','Estimate','SalesReceipt','CreditMemo','RefundReceipt']) {
   add(entity,'discounted','Discount detail line',r => line(r).some(l => l.DetailType==='DiscountLineDetail' && positive(l.Amount)),{tool:'Add governed discount-line writing; the current guard refuses DiscountLineDetail.'});
@@ -97,6 +97,7 @@ for (const entity of ['CreditMemo','VendorCredit']) {
   add(entity,'partially-applied','Partly applied credit',r=>positive(r.RemainingCredit ?? r.Balance) && positive(r.TotalAmt) && Number(r.RemainingCredit ?? r.Balance)<Number(r.TotalAmt));
   add(entity,'fully-applied','Fully applied credit',r=>zero(r.RemainingCredit ?? r.Balance) && positive(r.TotalAmt));
 }
+for(const entity of ['CreditMemo','RefundReceipt','VendorCredit']) add(entity,'stock-return',entity==='VendorCredit'?'Stock returned to supplier':'Customer stock returned',(r,c)=>details(r).some(d=>positive(d.Qty)&&c.byId.get('Item:'+d.ItemRef?.value)?.Type==='Inventory'),{dependencies:['Item'],need:'Enable the inventory master and return entity flag; homogeneous cost layers and native per-item quantity/value proof are required. A stock line proves the transaction, not its costing verification.'});
 for (const entity of ['SalesReceipt','RefundReceipt']) {
   add(entity,'payment-method','Payment method specified',r=>!!r.PaymentMethodRef?.value);
   add(entity,'bank-account','Bank/cash account specified',r=>!!r.DepositToAccountRef?.value);
@@ -136,7 +137,7 @@ add('TimeActivity','vendor','Vendor time',r=>r.NameOf==='Vendor');
 add('TimeActivity','minutes','Fractional-hour time',r=>positive(r.Minutes));
 add('TimeActivity','class','Class on time',r=>!!r.ClassRef?.value,{setting:'classes',dependencies:['Preferences']});
 add('TimeActivity','location','Location on time',r=>!!r.DepartmentRef?.value,{setting:'locations',dependencies:['Preferences']});
-for (const [key,label,pred] of [['increase','Positive quantity adjustment',v=>positive(v)],['decrease','Negative quantity adjustment',v=>finite(v)&&Number(v)<0]]) add('InventoryAdjustment',key,label,r=>details(r).some(d=>pred(d.QtyDiff)),{tool:'Build a supported Canadian adjustment contract and independently dated valuation proof.'});
+for (const [key,label,pred] of [['increase','Positive quantity adjustment',v=>positive(v)],['decrease','Negative quantity adjustment',v=>finite(v)&&Number(v)<0]]) add('InventoryAdjustment',key,label,r=>details(r).some(d=>pred(d.QtyDiff)),{tool:'Intuit publishes InventoryAdjustment at minorversion 75; Canadian write shape, posting and valuation contract remain unverified. Direct Item.QtyOnHand edits are held.'});
 for (const entity of ['Customer','Vendor','Employee','Item','Account','Class','Department','Term','PaymentMethod']) {
   add(entity,'active','Active list record',r=>r.Active===true);
   add(entity,'inactive','Inactive list record',r=>r.Active===false);

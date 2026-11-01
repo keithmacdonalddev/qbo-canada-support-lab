@@ -12,7 +12,7 @@ const period = { fromDate: '2026-10-01', throughDate: '2026-10-31' };
 const item = { Id: '101', Active: true, Type: 'Inventory', TrackQtyOnHand: true, QtyOnHand: 0, AssetAccountRef: { value: '9' }, ExpenseAccountRef: { value: '10' }, IncomeAccountRef: { value: '11' } };
 const inventory = { enabled: true, entities: { Invoice: true, SalesReceipt: true, Bill: true, Purchase: true, PurchaseOrder: true, Estimate: true } };
 function record(entity, id, day, qty, price, extras = {}) {
-  const buy = ['Bill', 'Purchase'].includes(entity), type = buy ? 'ItemBasedExpenseLineDetail' : 'SalesItemLineDetail';
+  const buy = ['Bill', 'Purchase', 'VendorCredit'].includes(entity), type = buy ? 'ItemBasedExpenseLineDetail' : 'SalesItemLineDetail';
   return { Id: id, SyncToken: '0', TxnDate: day, CurrencyRef: { value: 'CAD' }, GlobalTaxCalculation: 'TaxExcluded', ...(buy ? { VendorRef: { value: '30' } } : { CustomerRef: { value: '1' } }),
     ...(entity === 'Purchase' ? { PaymentType: 'Cash', AccountRef: { value: '50' } } : {}),
     ...(['SalesReceipt', 'RefundReceipt'].includes(entity) ? { DepositToAccountRef: { value: '50' } } : {}),
@@ -142,4 +142,12 @@ test('complete-day stock reader checks empty-source freshness, pending writes, i
   await assert.rejects(readGeneralStockContext(input), /routing/);
   liveItem.ExpenseAccountRef = { value: '10' }; liveItem.QtyOnHand = 1;
   await assert.rejects(readGeneralStockContext(input), /on-hand/);
+});
+
+test('full governed guard admits stock returns only under explicit entity gates',()=>{
+ const buy=record('Bill','201','2026-10-01',5,6),basis={opening:opening(),records:[pair('Bill',buy)],period};
+ for(const entity of ['CreditMemo','RefundReceipt','VendorCredit']){
+  const proposal=op(entity,record(entity,'202','2026-10-01',2,entity==='VendorCredit'?6:20));
+  const accepted=guard([proposal],basis,local(),{enabled:true,entities:{...inventory.entities,[entity]:true}});assert.equal(accepted.ok,true,messages(accepted));
+ }
 });

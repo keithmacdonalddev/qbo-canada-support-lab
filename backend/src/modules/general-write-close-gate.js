@@ -4,19 +4,19 @@
 const { hash } = require('./business-calendar');
 const { businessErrorDetail } = require('./business-error-detail');
 const persistedHash = value => hash(JSON.parse(JSON.stringify(value)));
-const { closeGeneralDay, ledgerEndpoint, generalRecordsFor, settlementLinks, SETTLEMENT_ENTITIES } = require('./general-write-day-close');
+const { closeGeneralDay, ledgerEndpoint, generalRecordsFor, settlementEvidence, settlementLinks, SETTLEMENT_ENTITIES } = require('./general-write-day-close');
 function fail(message, businessDetail = {}) { throw Object.assign(new Error(message), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail }); }
 const TAX_SUBTYPES = ['GlobalTaxPayable', 'GlobalTaxSuspense', 'SalesTaxPayable', 'OtherCurrentLiabilities'];
 function closeWindow(gathered) {
   const { accountingView } = require('./general-write-postings');
-  return { ...gathered, records: gathered.records.map(row => ({ ...row, current: require('./general-write-close').accountingRecord(row.entity, row.current) })), ownSettlements: (gathered.ownSettlements || []).map(row => ({ ...row, record: accountingView(row.record) })), settlementVersions: (gathered.settlementVersions || []).map(row => ({ ...row, current: accountingView(row.current) })) };
+  return { ...gathered, records: gathered.records.map(row => ({ ...row, current: require('./general-write-close').accountingRecord(row.entity, row.current) })), ownSettlements: (gathered.ownSettlements || []).map(row => (row.record ? { ...row, record: accountingView(row.record) } : row)), settlementVersions: (gathered.settlementVersions || []).map(row => ({ ...row, current: accountingView(row.current) })) };
 }
 function postingContext(evidence) {
   const { accountingView } = require('./general-write-postings');
   return { ...evidence, items: evidence.items.map(([id, record]) => [id, accountingView(record)]), sources: evidence.sources.map(([id, record]) => [id, accountingView(record)]), taxAccounts: evidence.taxAccounts.map(row => ({ qboId: row.qboId, record: accountingView(row.record) })) };
 }
 function settlementWindow(rows) { return rows.map(row => ({ ...row, record: require('./general-write-postings').accountingView(row.record) })); }
-function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
+function createGeneralCloseGate({ models = {}, copy, readValuation = null, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun'), Closes = models.GeneralDayCloses || require('../models/GeneralDayClose'), Records = models.Records || require('../models/CompanySyncRecord');
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId });
   async function pending(scope, { fromDate, throughDate, verifiedThrough }) {
@@ -44,22 +44,43 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     const features = require('../config').features || {}, inventory = { enabled: features.generalWriteInventory === true, entities: features.generalWriteInventoryEntities || {} };
     let stock = null;
     if ([...items.values()].some(item => item.Type === 'Inventory')) {
-      if (!inventory.enabled) fail('Inventory close proof is disabled on this server.');
+      // Admission switches cannot erase or prevent verification of saved stock.
+      inventory.enabled=true; inventory.entities=Object.fromEntries(['Invoice','SalesReceipt','Bill','Purchase','CreditMemo','RefundReceipt','VendorCredit'].map(e=>[e,true]));
       const stockModels = { ...require('./business-runtime').loadModels(), ...models, Records, Agents: models.Agents || require('../models/BusinessAgent'), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
       const active = await require('./business-authority').readPublishedBusiness({ ...stockModels, scope });
       const days = [...new Set(records.flatMap(row => [row.current?.TxnDate, row.before?.TxnDate]).filter(Boolean))];
       if (days.length !== 1) fail('Inventory close needs one complete open-day replay.');
-      stock = await require('./business-stock-general').readGeneralStockContext({ models: stockModels, scope, active, day: days[0], observations: require('./business-observation-store').createBusinessObservationStore({ ...stockModels, now }) });
+      stock = await require('./business-stock-general').readGeneralStockContext({ models: stockModels, scope, active, day: days[0], readValuation, verifyValuation:true, observations: require('./business-observation-store').createBusinessObservationStore({ ...stockModels, now }) });
     }
-    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash } : {}), mappings, sources: [...sources], items: [...items], taxAccountIds: [...tax].sort(), taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
-    return { evidence, inventory, ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), homeCurrency: 'CAD', currencyAccount, exchangeGainLoss: gains.length === 1 ? String(gains[0].qboId) : null, get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : sources.get(entity + ':' + id) || null,
+    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash, valuationChecks:stock.valuationChecks } : {}), mappings, sources: [...sources], items: [...items], taxAccountIds: [...tax].sort(), taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
+    return { evidence, inventory, ...(stock ? { stockEvidence:{returns:stock.returnEvidence,checks:stock.valuationChecks,reportJson:require('./report-json').canonicalReport(stock.valuationReport)} } : {}), ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), homeCurrency: 'CAD', currencyAccount, exchangeGainLoss: gains.length === 1 ? String(gains[0].qboId) : null, get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : sources.get(entity + ':' + id) || null,
       receivables: mappings.accountsReceivable ? String(mappings.accountsReceivable) : null, payables: mappings.accountsPayable ? String(mappings.accountsPayable) : null, undepositedFunds: mappings.undepositedFunds ? String(mappings.undepositedFunds) : null,
       // Retain real account identities. Multiple agency accounts require an explicit
       // rate-to-account proof; guessing or collapsing them could hide a substitution.
       taxAccount: () => { if (tax.length !== 1) fail('The tax posting account cannot be attributed uniquely; retain a rate-to-account proof before close.'); return tax[0]; }, accountKey: id => String(id) };
   }
+  async function retainStockReturns(scope,{day,mappings}) {
+    const runs=await require('./general-write-day-close').readGeneralRuns(Runs,scope,{day});
+    const records=[];
+    for(const run of runs) for(const item of Object.values(run.items||{})) {
+      if(!['CreditMemo','RefundReceipt','VendorCredit'].includes(item.entity)||item.op!=='create'||item.outcome!=='saved'||item.record?.TxnDate!==day)continue;
+      let stock=false;
+      for(const line of item.record.Line||[]) {const id=line[line.DetailType]?.ItemRef?.value;if(id && (await copy.read(scope,'Item',id))?.Type==='Inventory')stock=true;}
+      if(!stock)continue;
+      const current=await copy.read(scope,item.entity,item.qboId);
+      if(!current || require('./business-stock-valuation').returnRecordHash(current)!==require('./business-stock-valuation').returnRecordHash(item.record)) fail('Saved stock return changed before its native cost proof.');
+      records.push({entity:item.entity,id:item.qboId,current,before:null});
+    }
+    if(!records.length)return {required:false};
+    if(records.length>100)fail('Stock return proof exceeds its complete-day return budget.');
+    const ctx=await contextFor(scope,mappings,records);
+    if(!ctx.stockEvidence?.returns)fail('Native stock return proof is unavailable.');
+    const row={_id:hash({scope:company(scope),day,stock:ctx.stockEvidence,at:now()}).slice(0,24),contract:'general-write-v1',...company(scope),fromDate:day,throughDate:day,kind:'inventory',ok:true,ledgerHash:hash(null),recordCount:records.length,records:records.map(r=>({key:r.entity+':'+r.id})),stock:ctx.stockEvidence,verifiedAt:new Date(now())};
+    await Closes.create([row]);
+    return {required:true,recordCount:records.length};
+  }
   async function fixedSettlementsFor(scope, gathered) {
-    const trusted = new Map((gathered.ownSettlements || []).map(row => [row.key, row])), wanted = new Map(), found = new Map();
+    const trusted = new Map(settlementEvidence(gathered).map(row => [row.key, row])), wanted = new Map(), found = new Map();
     const add = (record, target) => { for (const key of settlementLinks(record)) {
       if (trusted.has(key) || !SETTLEMENT_ENTITIES.has(key.split(':')[0])) continue;
       if (!wanted.has(key)) wanted.set(key, new Set()); wanted.get(key).add(target);
@@ -135,7 +156,7 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     if (hash(closeWindow(preview)) !== hash(closeWindow(after)) || hash(postingContext(ctx.evidence)) !== hash(postingContext(afterContext.evidence)) || hash(settlementWindow(settlements)) !== hash(settlementWindow(afterSettlements))) {
       // Refresh current accounting evidence once. Durable run/receipt/dirty fences
       // and changed ownership revisions are never retried as harmless copy drift.
-      if (!retry && hash(preview.runVersions) === hash(after.runVersions) && hash(settlements.map(row => [row.key,row.revision,row.verification])) === hash(afterSettlements.map(row => [row.key,row.revision,row.verification]))) return verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered: after, force: true, retry: 1 });
+      if (!retry && hash(settlementWindow(preview.settlementVersions || [])) === hash(settlementWindow(after.settlementVersions || [])) && hash(preview.runVersions) === hash(after.runVersions) && hash(settlements.map(row => [row.key,row.revision,row.verification])) === hash(afterSettlements.map(row => [row.key,row.revision,row.verification]))) return verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered: after, force: true, retry: 1 });
       fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
     }
     const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
@@ -144,7 +165,7 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
       const error = Object.assign(new Error('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + closed.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.'), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail: { ...failureContext(first), fromDate, throughDate, recordCount: closed.records.length, failures: closed.failures.slice(0, 5) }, ...(first.errorDetail?.check ? { businessCheck: first.errorDetail.check } : {}) });
       throw error;
     }
-    const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures, records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], verifiedAt: new Date(now()) };
+    const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures, records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], ...(ctx.stockEvidence ? {stock:ctx.stockEvidence} : {}), verifiedAt: new Date(now()) };
     await Closes.create([row]);
     return row;
   }
@@ -242,7 +263,7 @@ function createGeneralCloseGate({ models = {}, copy, now = () => Date.now() }) {
     }
     return results;
   }
-  return { pending, assertPeriodReady, reverifyDirty, retryFailed, ledgerEndpoint };
+  return { pending, assertPeriodReady, reverifyDirty, retryFailed, ledgerEndpoint, retainStockReturns };
 
 }
 module.exports = { createGeneralCloseGate };

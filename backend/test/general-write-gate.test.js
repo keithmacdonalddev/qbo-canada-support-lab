@@ -492,3 +492,9 @@ test('real fixed fence observation and completion preserve a concurrent general 
  await h.transaction(session=>fence.release(fixed,scope,session));assert.equal(h.writer().operationId,null);assert.equal(h.writer().unresolved.transportConsumed.receiptId,ticket.receiptId);
  await batch.finish(ticket);assert.equal(h.writer().unresolved,null);assert.deepEqual(h.writer().resourceClaims,[]);
 });
+
+test('transport preflight warms a resumed saved batch with its exact run before transactional admission',async()=>{
+ const h=harness();let warmed=false;
+ const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:createGeneralGateTransport({models:h.models,scope,runId,batchIndex:0,admissionGuard:input=>{assert.equal(warmed,true);return h.service.guardBatch(input)},warmCurrency:async(s,batch,run)=>{assert.deepEqual(s,scope);assert.equal(run._id,runId);assert.equal(batch.requestId,run.batches[0].requestId);warmed=true;},now:()=>h.clock})});
+ const ticket=await h.begin(gate);assert.equal(warmed,true);assert.equal(ticket.kind,'general-write');
+});

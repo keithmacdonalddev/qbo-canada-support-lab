@@ -107,3 +107,16 @@ test('a tax-role rename during the ledger window refreshes once and detects new 
   await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const result=await h.readLedger(...args);accounts[1].record.Name='HST liability';return result;}}),/tax posting account cannot be attributed uniquely/);
   assert.equal(h.reads.length,2);assert.equal(h.closes.at(-1).ok,false);
 });
+
+test('fixed workflow stock-proof preparation bypasses unrelated unresolved general work when no stock return exists',async()=>{
+ const run={_id:'unresolved',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'unknown',op:'create',entity:'Invoice'}}};
+ const h=setup({run,copyRecord:null});assert.deepEqual(await h.gate.retainStockReturns(scope,{day:'2026-12-02',mappings}),{required:false});assert.equal(h.closes.length,0);assert.equal(h.reads.length,0);
+});
+
+test('more than one hundred unrelated daily decisions do not block native stock-proof preparation',async()=>{
+ const run={_id:'unresolved',dirty:[],plan:{operations:[]},items:{}};const h=setup({run,copyRecord:null});
+ // Exercise the paged reader on a complete sub-page, rather than a 101-run cap.
+ const dayRuns=Array.from({length:220},(_,i)=>({...run,_id:String(i).padStart(24,'0')}));
+ const gate=createGeneralCloseGate({models:{GeneralWriteRuns:{find:()=>chain(dayRuns)},GeneralDayCloses:{},Records:{}},copy:{read:async()=>{throw Error('No item read expected')}}});
+ assert.deepEqual(await gate.retainStockReturns(scope,{day:'2026-12-02',mappings}),{required:false});
+});

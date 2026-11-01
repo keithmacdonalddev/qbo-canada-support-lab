@@ -11,7 +11,7 @@
 //   - period movement: date-allocated before/after differences (movementsOf).
 // Provider presentation is audit data. Only typed accounting content participates in
 // close comparisons; retained request/receipt bodies themselves are never rewritten.
-const ACCOUNTING_FIELDS = new Set(['Id','TxnDate','DueDate','TotalAmt','HomeTotalAmt','Amount','Balance','HomeBalance','RemainingCredit','UnappliedAmt','CurrencyRef','ExchangeRate','GlobalTaxCalculation','TxnTaxDetail','TotalTax','TaxLine','TaxLineDetail','TaxRateRef','NetAmountTaxable','TaxPercent','PercentBased','Line','DetailType','SalesItemLineDetail','ItemBasedExpenseLineDetail','AccountBasedExpenseLineDetail','JournalEntryLineDetail','DepositLineDetail','DiscountLineDetail','SubTotalLineDetail','SalesItemLineGroupDetail','GroupLineDetail','Qty','UnitPrice','TaxInclusiveAmt','MarkupInfo','Percent','Value','PriceLevelRef','LinkedTxn','TxnId','TxnType','TxnLineId','PostingType','Credit','PaymentType','PayType','CheckPayment','CreditCardPayment','Entity','Type','BillableStatus','Billable','Taxable','Hours','Minutes','HourlyRate','StartTime','EndTime','BreakHours','BreakMinutes','TimeActivityType','NameOf','PurchaseCost','PurchaseTaxIncluded','SalesTaxIncluded','TrackQtyOnHand','QtyOnHand','InvStartDate','AccountType','AccountSubType','Active','status']);
+const ACCOUNTING_FIELDS = new Set(['FreeFormAddress','Id','TxnDate','DueDate','TotalAmt','HomeTotalAmt','Amount','Balance','HomeBalance','RemainingCredit','UnappliedAmt','CurrencyRef','ExchangeRate','GlobalTaxCalculation','TxnTaxDetail','TotalTax','TaxLine','TaxLineDetail','TaxRateRef','NetAmountTaxable','TaxPercent','PercentBased','Line','DetailType','SalesItemLineDetail','ItemBasedExpenseLineDetail','AccountBasedExpenseLineDetail','JournalEntryLineDetail','DepositLineDetail','DiscountLineDetail','SubTotalLineDetail','SalesItemLineGroupDetail','GroupLineDetail','Qty','UnitPrice','TaxInclusiveAmt','MarkupInfo','Percent','Value','PriceLevelRef','LinkedTxn','TxnId','TxnType','TxnLineId','PostingType','Credit','PaymentType','PayType','CheckPayment','CreditCardPayment','Entity','Type','BillableStatus','Billable','Taxable','Hours','Minutes','HourlyRate','StartTime','EndTime','BreakHours','BreakMinutes','TimeActivityType','NameOf','PurchaseCost','PurchaseTaxIncluded','SalesTaxIncluded','TrackQtyOnHand','QtyOnHand','InvStartDate','AccountType','AccountSubType','Active','status']);
 function accountingView(value, key = '') {
   if (Array.isArray(value)) return value.map(row => accountingView(row, key));
   if (!value || typeof value !== 'object') return value;
@@ -54,7 +54,7 @@ function nativePostingsOf(entity, record, ctx) {
         if (item.Type === 'Inventory') {
           if (ctx.inventory?.enabled !== true || ctx.inventory.entities?.[entity] !== true) fail('Inventory postings for ' + entity + ' are disabled.');
           if (purchases !== undefined) {
-            if (!['Bill', 'Purchase'].includes(entity) || record.Credit === true || type !== 'ItemBasedExpenseLineDetail') fail('Unsupported inventory purchase reversal.');
+            if (!['Bill', 'Purchase', 'VendorCredit'].includes(entity) || record.Credit === true || type !== 'ItemBasedExpenseLineDetail') fail('Unsupported inventory purchase reversal.');
             account = id(item.AssetAccountRef);
           } else {
             if (type !== 'SalesItemLineDetail' || typeof ctx.stockCost !== 'function') fail('Inventory sales require independent FIFO replay.');

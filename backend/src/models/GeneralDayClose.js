@@ -9,7 +9,7 @@ const schema = new mongoose.Schema({
   _id: { type: String, required: true },
   contract: { ...fixed(String), enum: ['general-write-v1'] },
   environment: { ...fixed(String), enum: ['sandbox', 'production'] }, realmId: fixed(String), connectionId: fixed(mongoose.Schema.Types.ObjectId),
-  fromDate: fixed(String), throughDate: fixed(String), kind: { ...fixed(String), enum: ['period', 'reverify'] },
+  fromDate: fixed(String), throughDate: fixed(String), kind: { ...fixed(String), enum: ['period', 'reverify', 'inventory'] },
   snapshotHash: fixed(String, false),
   ok: fixed(Boolean), ledgerHash: fixed(String), recordCount: fixed(Number),
   errorDetail: fixed(mongoose.Schema.Types.Mixed, false),
@@ -18,6 +18,7 @@ const schema = new mongoose.Schema({
   // Dirty markers ('runId:date') this verification covered.
   markers: { type: [String], immutable: true, default: [] },
   // Fresh daily sources and accounting proof that supersede invalidated history.
+  stock: fixed(mongoose.Schema.Types.Mixed, false),
   history: fixed(mongoose.Schema.Types.Mixed, false),
   verifiedAt: fixed(Date),
 }, { timestamps: true, autoCreate: false, autoIndex: false });

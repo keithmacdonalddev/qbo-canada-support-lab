@@ -5,11 +5,11 @@ const { hash, canonical } = require('./business-calendar');
 const { calculateGeneralStockCost: calculateStockCost, quantity, cost, summarizeStockState } = require('./business-stock-cost');
 const RECEIPTS = new Set(['Bill', 'Purchase']);
 const SALES = new Set(['Invoice', 'SalesReceipt']);
-const RETURNS = new Set(['CreditMemo', 'RefundReceipt']);
+const RETURNS = new Set(['CreditMemo', 'RefundReceipt', 'VendorCredit']);
 const NON_POSTING = new Set(['Estimate', 'PurchaseOrder']);
 const STOCK_ENTITIES = Object.freeze(['Bill', 'Purchase', 'Invoice', 'SalesReceipt', 'CreditMemo', 'RefundReceipt', 'VendorCredit', 'JournalEntry', 'Transfer', 'Deposit']);
 function fail(message) { throw Object.assign(Error(message), { status: 409, code: 'BUSINESS_STOCK_COST_UNVERIFIED' }); }
-function stockLines(entity, record, opening, sourceFor, returnValuations = {}) {
+function stockLines(entity, record, opening, sourceFor, returnValuations = {}, { pending = false } = {}) {
   if (!record || NON_POSTING.has(entity) || record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) return [];
   const rows = [], seenItems = new Set();
   for (const [lineIndex, line] of (record.Line || []).entries()) {
@@ -19,7 +19,7 @@ function stockLines(entity, record, opening, sourceFor, returnValuations = {}) {
     seenItems.add(item.itemId);
     if (!RECEIPTS.has(entity) && !SALES.has(entity) && !RETURNS.has(entity)) fail(entity + ' inventory movement is not supported.');
     if (entity === 'Purchase' && record.Credit === true) fail('Stock supplier refunds require a separate valuation contract.');
-    const wanted = RECEIPTS.has(entity) ? 'ItemBasedExpenseLineDetail' : 'SalesItemLineDetail';
+    const wanted = RECEIPTS.has(entity) || entity === 'VendorCredit' ? 'ItemBasedExpenseLineDetail' : 'SalesItemLineDetail';
     if (line.DetailType !== wanted) fail('Inventory line type differs from its stock movement.');
     quantity(detail.Qty, { positive: true });
     if (record.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD' || record.GlobalTaxCalculation !== 'TaxExcluded') fail('Stock proof requires CAD and fully recoverable tax-excluded purchase costs.');
@@ -27,11 +27,14 @@ function stockLines(entity, record, opening, sourceFor, returnValuations = {}) {
     if (typeof detail.UnitPrice !== 'number' || !Number.isFinite(detail.UnitPrice) || detail.UnitPrice < 0 || cost(detail.Qty, unitCostCents) !== Math.round(line.Amount * 100)) fail('Stock line quantity times price must equal its exact-cent amount.');
     const row = { entity, txnDate: record.TxnDate, itemId: item.itemId, quantity: detail.Qty, source: sourceFor(lineIndex) };
     if (RECEIPTS.has(entity)) row.unitCostCents = unitCostCents;
-    if (RETURNS.has(entity)) {
+    if (RETURNS.has(entity) && !pending) {
       // This evidence is server-owned; it is NEVER read from the proposed payload.
       const proof = returnValuations[hash({ entity, record, lineIndex })];
       if (!proof || proof.recordHash !== hash(record) || !/^[a-f0-9]{64}$/.test(proof.evidenceHash || '')) fail('Stock returns need independent native cost valuation evidence.');
-      row.unitCostCents = proof.unitCostCents; row.returnEvidenceHash = proof.evidenceHash;
+      if (!Number.isFinite(proof.unitCostCents) || proof.unitCostCents < 0) fail('Native return cost is invalid.');
+      if (entity === 'VendorCredit') { if (proof.unitCostCents !== unitCostCents) fail('Supplier return native cost differs from its credit amount.'); }
+      row.unitCostCents = proof.unitCostCents;
+      row.returnEvidenceHash = proof.evidenceHash;
     }
     rows.push(row);
   }
@@ -98,22 +101,46 @@ function checkPurchaseReceipts(entries, local, stock = {}) {
 }
 function checkStockPlan(entries, local, stock) {
   if (!stock?.opening || !Array.isArray(stock.records)) fail('Inventory requires a complete current-day copy and the accepted FIFO opening.');
+  for(const entry of entries) for(const line of entry.after?.Line||[]) { const id=line[line.DetailType]?.ItemRef?.value; if(local.get('Item',id)?.Type==='Inventory' && !stock.opening.items.some(i=>i.itemId===id)) fail('This inventory item is outside the accepted managed stock root.'); }
   checkPurchaseReceipts(entries, local, stock);
-  let records = structuredClone(stock.records);
-  // Replay at each resource-ordered prefix: a later receipt cannot authorize an
-  // earlier sale. Creates use synthetic identities only for local prediction.
+  let records = structuredClone(stock.records), pendingReturns = false; const returnedItems=new Set(), unpricedItems=new Set();
   for (const entry of entries) {
     if (NON_POSTING.has(entry.entity)) continue;
-    if (entry.id) records = records.filter(row => !(row.entity === entry.entity && row.record.Id === entry.id));
-    if (entry.after) records.push({ entity: entry.entity, record: { ...entry.after, Id: entry.id || '9' + String(entry.order + 1).padStart(29, '0') } });
-    try { replayStockRecords({ ...stock, records }); } catch (error) { error.ref = entry.ref; throw error; }
+    const record = entry.after ? { ...entry.after, Id: entry.id || '9' + String(entry.order + 1).padStart(29, '0') } : null;
+    if(record && (record.Line||[]).some(line=>unpricedItems.has(line[line.DetailType]?.ItemRef?.value))) fail('Wait for native valuation of the sold-out item return before dependent stock work.');
+    if (RETURNS.has(entry.entity) && record) {
+      const before = replayStockRecords({ ...stock, records });
+      // Projection only: use an ordinary receipt/sale to test capacity. It is
+      // never retained as accepted stock or represented as native cost evidence.
+      const rows = stockLines(entry.entity, record, stock.opening, index => sourceOf(stock.opening.scope, entry.entity, record, index), {}, { pending:true });
+      const projection = [];
+      for (const row of rows) {
+        const item = before.calculation.closing.items.find(i=>i.itemId===row.itemId);
+        const costs = new Set(item.lots.map(lot=>lot.unitCostCents));
+        if (costs.size > 1 || entry.entity==='VendorCredit' && costs.size!==1) fail('A proposed return requires homogeneous accepted FIFO cost layers; mixed layers need native return-layer evidence.');
+        returnedItems.add(row.itemId);
+        if(!costs.size) unpricedItems.add(row.itemId);
+        const unitCostCents = costs.size ? [...costs][0] : 0;
+        if (entry.entity === 'VendorCredit' && Math.round(record.Line[row.source.lineIndex].Amount*100) !== cost(row.quantity,unitCostCents)) fail('Supplier return credit must equal the homogeneous accepted stock cost.');
+        if (entry.entity !== 'VendorCredit') cost(row.quantity,unitCostCents);
+        const type = entry.entity==='VendorCredit'?'SalesItemLineDetail':'ItemBasedExpenseLineDetail';
+        projection.push({Amount:cost(row.quantity,unitCostCents)/100,DetailType:type,[type]:{ItemRef:{value:row.itemId},Qty:row.quantity,UnitPrice:unitCostCents/100}});
+      }
+      if(projection.length) records.push({entity:entry.entity==='VendorCredit'?'Invoice':'Bill',record:{Id:record.Id,TxnDate:record.TxnDate,CurrencyRef:{value:'CAD'},GlobalTaxCalculation:'TaxExcluded',Line:projection}});
+      pendingReturns ||= rows.length > 0;
+    } else if (record) records.push({ entity:entry.entity,record });
+    try {
+      const result = replayStockRecords({ ...stock, records });
+      // Pending returns do not grant permission to mix cost layers in the same plan.
+      if(pendingReturns && result.calculation.closing.items.some(item=>returnedItems.has(item.itemId) && new Set(item.lots.map(l=>l.unitCostCents)).size>1)) fail('Mixed-cost return plans need native layer-order evidence.');
+    } catch(error) { error.ref=entry.ref;throw error; }
   }
   return true;
 }
 // Read only the mirrored current day, from the independently accepted opening.
 // Every stock source must be current; every enumerated record is checked through
 // the hardened observation store, including its generation and write barrier.
-async function readGeneralStockContext({ models, scope, active, day, observations, session = null, purchaseOrderIds = [] }) {
+async function readGeneralStockContext({ models, scope, active, day, observations, session = null, purchaseOrderIds = [], readValuation = null, verifyValuation = false }) {
   const { state: opening } = await require('./business-stock-history').readCommittedStockOpening(models, active, session);
   const agent = await models.Agents.findOne(scope).session(session).maxTimeMS(3000).lean();
   const sources = agent?.sync?.sources || {}, records = [], receiptHistory = [];
@@ -136,7 +163,7 @@ async function readGeneralStockContext({ models, scope, active, day, observation
       if (entity !== 'Item' && record.TxnDate !== day) continue;
       if (entity === 'Item') {
         const item = opening.items.find(item => item.itemId === record.Id);
-        if (record.Type === 'Inventory' && !item) fail('An inventory item is outside the accepted zero root.');
+        if (record.Type === 'Inventory' && !item && opening.items.some(i=>i.assetAccountId===record.AssetAccountRef?.value||i.costAccountId===record.ExpenseAccountRef?.value)) fail('An unmanaged inventory item shares managed asset or COGS routing.');
         if (item && (record.Type !== 'Inventory' || record.Active !== true || record.TrackQtyOnHand !== true || record.AssetAccountRef?.value !== item.assetAccountId || record.ExpenseAccountRef?.value !== item.costAccountId || record.InvStartDate !== active.value.stockRoot.zeroSource.items.find(row => row.Id === item.itemId)?.InvStartDate)) fail('An inventory item changed its accepted tracking, start date or asset/COGS routing.');
       } else {
         // Direct asset journals/deposits/transfers cannot silently bypass quantity replay.
@@ -147,13 +174,18 @@ async function readGeneralStockContext({ models, scope, active, day, observation
       }
     }
   }
-  const period = { fromDate: day, throughDate: day }, replay = replayStockRecords({ opening, records, period });
+  const returns = records.filter(row=>RETURNS.has(row.entity) && (row.record.Line||[]).some(line=>opening.items.some(i=>i.itemId===line[line.DetailType]?.ItemRef?.value)));
+  const valuation = readValuation && (verifyValuation || returns.length) ? await readValuation({scope,day,records:returns,session,summary:verifyValuation}) : {};
+  const returnValuations = returns.length ? require('./business-stock-valuation').nativeReturnValuations(valuation.InventoryValuationDetail,day,returns,opening) : {};
+  const period = { fromDate: day, throughDate: day }, replay = replayStockRecords({ opening, records, period, returnValuations });
+  const valuationChecks = verifyValuation ? require('./business-stock-valuation').compareItemValuation(valuation.InventoryValuationSummary,day,replay.calculation.closing) : [];
+  const returnEvidence = valuation.InventoryValuationDetail ? require('./business-stock-valuation').evidence(scope,day,returns,valuation.InventoryValuationDetail) : null;
   for (const expected of summarizeStockState(replay.calculation.closing).items) {
     const observed = await observations.read(scope, 'Item', expected.itemId, { transactions: true });
     if (!observed || observed.record.QtyOnHand !== expected.quantity) fail('Current on-hand differs from the complete opening-plus-day replay (an adjustment or missing movement may exist).');
   }
   const after = await models.Agents.findOne(scope).session(session).maxTimeMS(3000).lean();
   if (canonical(JSON.parse(JSON.stringify(sourceView()))) !== canonical(JSON.parse(JSON.stringify(Object.fromEntries(['Item', ...STOCK_ENTITIES].map(entity => [entity, after?.sync?.sources?.[entity]])))))) fail('The stock copy watermark changed during replay.');
-  return { opening, records, receiptHistory, period, replay, basisHash: replay.basisHash };
+  return { opening, records, receiptHistory, period, replay, returnValuations, returnEvidence, valuationChecks, ...(verifyValuation ? {valuationReport:valuation.InventoryValuationSummary} : {}), basisHash: hash({replay:replay.basisHash,valuationChecks}) };
 }
 module.exports = { checkPurchaseReceipts, STOCK_ENTITIES, stockLines, replayStockRecords, stockPostingCost, checkStockPlan, readGeneralStockContext };

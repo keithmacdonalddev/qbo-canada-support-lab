@@ -35,14 +35,14 @@ function sourceFor(scope, run, ref, accepted, lineIndex) {
 async function readGeneralStockRows(models, active, session) {
   const scope = active.value.scope, day = require('./business-calendar').shift(active.calendar.verifiedThrough, 1);
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
-  const runs = await Runs.find({ ...scope, contract: 'general-write-v1', day }).sort({ _id: 1 }).limit(101).session(session).maxTimeMS(3000).lean();
-  if (runs.length > 100) fail('General stock exceeds its complete-day run budget.');
+  const runs = await require('./general-write-day-close').readGeneralRuns(Runs,scope,{day,session});
   const { state } = await require('./business-stock-history').readCommittedStockOpening(models, active, session), rows = [];
   for (const run of runs) for (const [ref, item] of Object.entries(run.items || {})) {
     const relevant = (item.record?.Line || []).some(line => state.items.some(item => item.itemId === line?.[line.DetailType]?.ItemRef?.value));
     if (!relevant || ['Estimate','PurchaseOrder'].includes(item.entity)) continue;
     const accepted = await acceptedGeneralItem(models, scope, run, ref, session);
-    rows.push(...require('./business-stock-general').stockLines(item.entity, item.record, state, index => sourceFor(scope, run, ref, accepted, index)));
+    const returnValuations = ['CreditMemo','RefundReceipt','VendorCredit'].includes(item.entity) ? await require('./business-stock-valuation').retainedValuations(models,scope,day,[{entity:item.entity,record:item.record}],state,session) : {};
+    rows.push(...require('./business-stock-general').stockLines(item.entity, item.record, state, index => sourceFor(scope, run, ref, accepted, index),returnValuations));
   }
   return rows;
 }
@@ -52,7 +52,8 @@ async function generalPurchaseOrigin(models, state, qboId, lots, session) {
   const ref = Object.keys(run?.items || {}).find(ref => hash({ runId: String(run._id), ref }) === first.logicalKey);
   if (!ref) fail('The carried general stock origin is unavailable.');
   const accepted = await acceptedGeneralItem(models, state.scope, run, ref, session);
-  const rows = require('./business-stock-general').stockLines(accepted.item.entity, accepted.item.record, state, index => sourceFor(state.scope, run, ref, accepted, index));
+  const returnValuations = ['CreditMemo','RefundReceipt'].includes(accepted.item.entity) ? await require('./business-stock-valuation').retainedValuations(models,state.scope,accepted.item.record.TxnDate,[{entity:accepted.item.entity,record:accepted.item.record}],state,session) : {};
+  const rows = require('./business-stock-general').stockLines(accepted.item.entity, accepted.item.record, state, index => sourceFor(state.scope, run, ref, accepted, index),returnValuations);
   for (const lot of lots) {
     const row = rows.find(row => row.source.lineIndex === lot.source.lineIndex);
     if (!row || canonical(row.source) !== canonical(lot.source) || row.quantity !== lot.originalQuantity || row.txnDate !== lot.txnDate || row.unitCostCents !== lot.unitCostCents) fail('A carried general stock layer changed its original cost or quantity.');

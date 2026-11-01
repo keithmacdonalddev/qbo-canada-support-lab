@@ -319,7 +319,7 @@ function createGeneralWriteService(config) {
   service.guardBatch = captured.guardBatch;
   return service;
 }
-function createGeneralWriteContext({ models, now = () => Date.now(), readRate = null }) {
+function createGeneralWriteContext({ models, now = () => Date.now(), readRate = null, readValuation = null }) {
   return async (scope, local, { session, runId, operations = [], salesTaxCodes = [] } = {}) => {
     const { businessDate } = require('./business-activity-preview'), { shift } = require('./business-calendar');
     const calendar = await models.Calendars.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId }).session(session).lean();
@@ -396,7 +396,7 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     const inventory = { enabled: features.generalWriteInventory === true && calendar.verifiedThrough === shift(day, -1), entities: features.generalWriteInventoryEntities || {} };
     let stock = null;
     if (inventory.enabled && [...(local.map?.values() || [])].some(record => record.Type === 'Inventory')) {
-      stock = await require('./business-stock-general').readGeneralStockContext({ models, scope, active: published, day, session, purchaseOrderIds: [...local.map.keys()].filter(key => key.startsWith('PurchaseOrder:')).map(key => key.split(':')[1]),
+      stock = await require('./business-stock-general').readGeneralStockContext({ models, scope, active: published, day, session, readValuation, purchaseOrderIds: [...local.map.keys()].filter(key => key.startsWith('PurchaseOrder:')).map(key => key.split(':')[1]),
         observations: require('./business-observation-store').createBusinessObservationStore({ Records: models.Records, Agents: models.Agents, Receipts: models.Receipts, Writers: models.Writers, Audits: models.Audits, session, now }) });
     }
     const { readCurrencyPolicy, currencyOf, TXNS } = require('./general-write-currency');
@@ -420,9 +420,10 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   copy.forSession = session => ({ read: async (scope, entity, id) => (await require('./business-observation-store').createBusinessObservationStore({ Records: models.Records, Agents: models.Agents, Receipts: models.Receipts, Writers: models.Writers, Audits: models.Audits, session, now }).read(scope, entity, id, { transactions: true }))?.record || null });
   let api;
   const readRate = require('./general-write-currency').createRateReader({ access, now });
-  const warmCurrency = async (scope, batch) => { for (const item of batch.items) { const r = { ...item.before, ...item.payload }; if (r.CurrencyRef?.value && r.CurrencyRef.value !== 'CAD' && r.TxnDate && (item.op === 'create' || item.payload.ExchangeRate !== undefined || item.payload.TxnDate !== undefined)) await readRate(scope, r.CurrencyRef.value, r.TxnDate); } };
+  const readValuation = require('./business-stock-valuation').createValuationReader({access,now});
+  const warmCurrency = async (scope, batch, run) => { if(require('../config').features?.generalWriteInventory===true) await api.guardBatch({scope,run,batch}); for (const item of batch.items) { const r = { ...item.before, ...item.payload }; if (r.CurrencyRef?.value && r.CurrencyRef.value !== 'CAD' && r.TxnDate && (item.op === 'create' || item.payload.ExchangeRate !== undefined || item.payload.TxnDate !== undefined)) await readRate(scope, r.CurrencyRef.value, r.TxnDate); } };
   const transport = enabled ? (caseTransport || (access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), warmCurrency, now }) : null)) : null;
-  api = createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now, readRate }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
+  api = createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest };

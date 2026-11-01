@@ -72,8 +72,11 @@ const config = {
       Purchase: enabled('GENERAL_WRITE_INVENTORY_PURCHASE_ENABLED', true),
       PurchaseOrder: enabled('GENERAL_WRITE_INVENTORY_PURCHASE_ORDER_ENABLED', true),
       Estimate: enabled('GENERAL_WRITE_INVENTORY_ESTIMATE_ENABLED', true),
-      // No independently verified Canadian adjustment/return valuation contract yet.
-      CreditMemo: false, RefundReceipt: false, Item: false, InventoryAdjustment: false,
+      CreditMemo: enabled('GENERAL_WRITE_INVENTORY_CREDIT_MEMO_ENABLED', false),
+      RefundReceipt: enabled('GENERAL_WRITE_INVENTORY_REFUND_RECEIPT_ENABLED', false),
+      VendorCredit: enabled('GENERAL_WRITE_INVENTORY_VENDOR_CREDIT_ENABLED', false),
+      // Canada adjustment contract remains unverified; no Item quantity workaround.
+      Item: false, InventoryAdjustment: false,
     },
   },
 };

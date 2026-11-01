@@ -63,11 +63,13 @@ function parseLedger(report, day, through = day, accountKey = id => id) {
 // The day's general records: every saved or deleted item of general runs whose record is
 // dated on the day, plus the current copy version (or deletion) of each.
 // Keyset paging covers every run; a broken/repeated page fails visibly.
-async function readGeneralRuns(Runs, scope) {
+async function readGeneralRuns(Runs, scope, { day = null, session = null } = {}) {
   const out = [], size = 500;
   let after = null;
   for (;;) {
-    const rows = await Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day retirement').sort({ _id: 1 }).limit(size).maxTimeMS(3000).lean();
+    let query = Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(day ? {day} : {}), ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day retirement ownerId actorId').sort({ _id: 1 }).limit(size).maxTimeMS(3000);
+    if(session)query=query.session(session);
+    const rows=await query.lean();
     if (!Array.isArray(rows) || after && rows.some(row => String(row._id) <= after)) fail('General-write enumeration did not advance; close is incomplete.');
     out.push(...rows);
     if (rows.length < size) return out;
@@ -125,7 +127,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
   // Ownership is target-specific and must still explain the current settlement,
   // including settlements dated outside this close. Resolve deposits/credit applications
   // from exact saved versions first, then their own explained parent changes.
-  const trusted = new Map(), pending = settlementVersions.filter(row => row.outcome === 'saved' && row.op !== 'void' && row.targets.length && row.current && require('./general-write-postings').settlementConsistent(row.key.split(':')[0], row.current) && row.record?.Id && row.record.status !== 'Voided' && !row.record.PrivateNote?.startsWith?.('Voided') && row.current.status !== 'Voided' && !row.current.PrivateNote?.startsWith?.('Voided'));
+  const trusted = new Map(), pending = settlementVersions.filter(row => row.outcome === 'saved' && row.op !== 'void' && row.targets.length && row.current && row.record?.Id && row.record.status !== 'Voided' && !row.record.PrivateNote?.startsWith?.('Voided') && row.current.status !== 'Voided' && !row.current.PrivateNote?.startsWith?.('Voided'));
   for (let changed = true; changed;) {
     changed = false;
     for (const row of pending) {
@@ -134,9 +136,16 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
       trusted.set(row.key, { targets: row.targets, record: row.current }); changed = true;
     }
   }
-  const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets, record: value.record })).sort((a, b) => a.key.localeCompare(b.key));
+  const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets })).sort((a, b) => a.key.localeCompare(b.key));
   settlementVersions.sort((a, b) => a.key.localeCompare(b.key));
   return { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
+}
+// Keep the public ownership/target list stable. Runtime consumers also require the
+// exact current body and valid settlement arithmetic before explaining a parent.
+function settlementEvidence(gathered) {
+  const versions = new Map((gathered.settlementVersions || []).map(row => [row.key, row.current]));
+  return (gathered.ownSettlements || []).map(row => ({ ...row, record: row.record || versions.get(row.key) }))
+    .filter(row => row.record && require('./general-write-postings').settlementConsistent(row.key.split(':')[0], row.record));
 }
 // The day close for general records: classification, current postings against the
 // ledger, movements for the period assertion, and dirty ranges through the cursor.
@@ -145,7 +154,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
 async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
   if (records.some(row => [row.current, row.before].some(record => record?.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD')) && ledgerReport?.Header?.Currency !== 'CAD') fail('Foreign records require a General Ledger explicitly expressed in CAD.');
-  const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, { targets: row.targets, record: row.record }]));
+  const settlements = new Map([...settlementEvidence(evidence), ...(ownSettlements || [])].map(row => [row.key, { targets: row.targets, record: row.record }]));
   const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx, fromDate: day, throughDate: through });
   const general = new Set(records.map(row => row.entity + ':' + row.id));
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();
@@ -155,4 +164,4 @@ async function closeGeneralDayImplementation({ Runs, scope, day, through = day, 
 function closeGeneralDay(input) {
   return require('./business-replay-evidence').captureFunction('general-write-day-close', 'closeGeneralDay', closeGeneralDayImplementation, [input]);
 }
-module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS, settlementLinks, SETTLEMENT_ENTITIES };
+module.exports = { settlementEvidence, ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS, settlementLinks, SETTLEMENT_ENTITIES };

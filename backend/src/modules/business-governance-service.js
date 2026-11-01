@@ -224,8 +224,11 @@ function createBusinessGovernanceService(dependencies = {}) {
     // General governed writes (general-write-v1) dated in this period, and history edits
     // inside verified history, must pass their day-close check before the calendar moves.
     // A composition without general-write storage (an isolated fixture) has no general writes.
-    const generalGate = dependencies.generalCloseGate || (!dependencies.models || models.GeneralWriteRuns ? require('./general-write-close-gate').createGeneralCloseGate({ models: dependencies.models ? { GeneralWriteRuns: models.GeneralWriteRuns, GeneralDayCloses: models.GeneralDayCloses, Records: models.Records } : {}, copy: { read: async (s, entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity==='CreditCardPayment'?'CreditCardPaymentTxn':entity] || null }, now }) : null);
+    const generalGate = dependencies.generalCloseGate || (!dependencies.models || models.GeneralWriteRuns ? require('./general-write-close-gate').createGeneralCloseGate({ readValuation: require('./business-stock-valuation').createValuationReader({access,now}), models: dependencies.models ? { GeneralWriteRuns: models.GeneralWriteRuns, GeneralDayCloses: models.GeneralDayCloses, Records: models.Records } : {}, copy: { read: async (s, entity, id) => (await client.apiCall('GET', entity.toLowerCase() + '/' + id))?.[entity==='CreditCardPayment'?'CreditCardPaymentTxn':entity] || null }, now }) : null);
     if (!batchChoices && generalGate) await generalGate.assertPeriodReady(scope, { fromDate, throughDate: request.throughDate, verifiedThrough: active.calendar.verifiedThrough, openingDate: active.value.openingDate, mappings: active.view.mappings || {}, readLedger: (from, through) => client.apiCall('GET', require('./general-write-day-close').ledgerEndpoint(from, through)) });
+    // Retain only native stock-return proof before fixed stock reads. Independent
+    // work does not wait for unrelated general ledger/needs-check failures.
+    if(batchChoices && active.value.stockRoot && generalGate?.retainStockReturns) await generalGate.retainStockReturns(scope,{day:input.throughDate,mappings:active.view.mappings||{}});
     let prepared;
     if (batchChoices) {
       const batchTools = require('./business-activity-batch');
