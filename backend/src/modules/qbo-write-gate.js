@@ -146,7 +146,7 @@ function createQboWriteGateImplementation({ Policies, Writers, Receipts, Audits,
         }
         assertRunApproval(run);
         await require('./business-agent-authority').fenceAgentAuthority({ run, scope, ownerId, actorId, Agents, session });
-        if (run.authorityHash && (!HASH.test(step.dispatch?.policyHash || '') || step.dispatch.policyHash !== writer.unresolved.policyHash || (step.dispatch.policyAmendmentHash || null) !== (run.policyAmendmentHash || null))) throw denied('The exact owner-approved business policy changed before sending.');
+        if (run.authorityHash && (!HASH.test(step.dispatch?.policyHash || '') || step.dispatch.policyHash !== writer.unresolved.policyHash)) throw denied('The dispatched business policy differs from its durable writer marker.');
         if (typeof assertBusinessAuthority !== 'function') throw denied('The published business authority verifier is required.');
         await assertBusinessAuthority({ scope, run, session });
         if (run.leaseToken && (permit.leaseToken !== run.leaseToken || !Number.isFinite(new Date(run.leaseExpiresAt).getTime()) || new Date(run.leaseExpiresAt).getTime() <= now())) throw denied('The operation worker lease changed or expired before sending.');

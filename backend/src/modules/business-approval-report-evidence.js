@@ -2,7 +2,6 @@
 const { hash, canonical } = require('./business-calendar');
 const { evaluateReportSources } = require('./book-evidence');
 const { reportComplete } = require('./business-financial-summary');
-const { assertRunApproval } = require('./business-period-store');
 const { MAX_SOURCE_BYTES, approvalReportNames, evaluateApprovalReportSources } = require('./business-report-source');
 const KIND = 'business-approval-reports', HASH = /^[a-f0-9]{64}$/;
 const scopeOf = run => ({ realmId: run.realmId, environment: run.environment, connectionId: String(run.connectionId) });
@@ -36,9 +35,8 @@ async function retainApprovalReports({ models, scope, operationId, planHash, act
 function auditIdentity(audit, ownerId, actorId, scope, action, actionType = 'manual') {
   return audit && String(audit.userId) === ownerId && String(audit.actorUserId || audit.userId) === actorId && audit.realmId === scope.realmId && audit.action === action && audit.actionType === actionType && audit.outcome === 'success';
 }
-async function readApprovalReports({ models, run, ownerId, session }) {
+async function readExactApprovalReports({ models, run, ownerId, session }) {
   if (!run.approval) return null;
-  assertRunApproval(run);
   const scope = scopeOf(run), operationId = String(run._id), actorId = run.approval.actorId;
   const approved = await models.Audits.findOne({ _id: run.approval.auditId }).session(session).maxTimeMS(3000).lean();
   const eventKey = 'business-plan:' + operationId + ':approved', params = approved?.inputParams, details = params?.details;
@@ -66,5 +64,14 @@ async function readApprovalReports({ models, run, ownerId, session }) {
   const expected = { ...scope, operationId, planHash: run.planHash, reportEvidenceHash: pointer.evidenceHash, reportSourceHash: pointer.sourceHash, observedAt: pointer.observedAt, reports: row.payload.version === 2 ? row.payload.requiredReports.length : 7 };
   if (!auditIdentity(observation, ownerId, actorId, scope, 'Business approval report observation retained') || canonical(observation.afterState) !== canonical(expected)) fail();
   return { ...pointer, period: row.payload.period, reports: evaluation.reportCoverage.required, available: evaluation.reportCoverage.available };
+}
+// Approval reports remain inspectable historical evidence. Missing/changed evidence
+// is shown honestly and never grants or revokes ordinary write authority.
+async function readApprovalReports(input) {
+  try { return await readExactApprovalReports(input); }
+  catch (error) {
+    if (error.code !== 'BUSINESS_APPROVAL_REPORT_UNVERIFIED') throw error;
+    return { status: 'unavailable', authorization: false, code: error.code };
+  }
 }
 module.exports = { KIND, validateApprovalReports, retainApprovalReports, readApprovalReports };

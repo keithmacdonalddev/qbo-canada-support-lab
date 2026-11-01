@@ -27,7 +27,7 @@ test('original earlier steps, policies and ownership survive assembly unchanged'
   assert.equal(assembly.origins[0].operationId, f.history.entries[0].operationId); assert.equal(canonical(f.history.entries[0]), before);
 });
 test('preparation and full history integrity, scope, freshness and roots are required', () => {
-  for (const mutate of [f => f.prepared.steps.pop(), f => f.history.entries.push({}), f => { f.context.scope.realmId = '999'; }, f => { f.context.blueprintHash = hash('different'); }, f => { f.prepared.preparedAt = new Date(f.now - 300001).toISOString(); }, f => { f.history.scope.realmId = '999'; signHistory(f.history); }, f => { f.history.roots.pop(); signHistory(f.history); }, f => { f.history.observedAt = new Date(f.now + 1).toISOString(); signHistory(f.history); }]) {
+  for (const mutate of [f => f.prepared.steps.pop(), f => f.history.entries.push({}), f => { f.context.scope.realmId = '999'; }, f => { f.prepared.preparedAt = new Date(f.now - 300001).toISOString(); }, f => { f.history.scope.realmId = '999'; signHistory(f.history); }, f => { f.history.roots.pop(); signHistory(f.history); }, f => { f.history.observedAt = new Date(f.now + 1).toISOString(); signHistory(f.history); }]) {
     const f = candidateFixture(); mutate(f); assert.throws(() => assembleBusinessOperation(f));
   }
 });
@@ -62,14 +62,16 @@ test('calendar continuity and limits are enforced before policy binding', () => 
     const f = candidateFixture(); mutate(f); assert.throws(() => assembleBusinessOperation(f));
   }
 });
-test('policies are never rewritten to match a different finalized step or approval state', () => {
+test('current typed policies retain scope and complete identities while approval hashes are audit only', () => {
   const { f, assembly } = assembled();
-  for (const mutate of [p => { p[0].policy.stepHash = hash('preview step'); }, p => { p[0].policy.status = 'proposed'; }, p => { p[0].policy.scope.realmId = '999'; }, p => { p[0].policy.country = 'US'; }, p => { p[0].logicalKey = hash('other'); }, p => p.pop(), p => { p[1].logicalKey = p[0].logicalKey; }]) {
+  const current = f.policies(assembly); current[0].policy.status = 'proposed';
+  assert.equal(bindApprovedOperationPolicies(assembly, current, f.now).candidate.entries[0].policy.stepHash, hash(assembly.candidate.entries[0].step));
+  for (const mutate of [p => { p[0].policy.scope.realmId = '999'; }, p => { p[0].policy.country = 'US'; }, p => { p[0].logicalKey = hash('other'); }, p => p.pop(), p => { p[1].logicalKey = p[0].logicalKey; }]) {
     const policies = f.policies(assembly); mutate(policies); const before = canonical(policies);
     assert.throws(() => bindApprovedOperationPolicies(assembly, policies, f.now)); assert.equal(canonical(policies), before);
   }
   const changed = clone(assembly); changed.candidate.entries[0].step.references[0].id = '999';
-  assert.throws(() => bindApprovedOperationPolicies(changed, f.policies(assembly), f.now), /changed/);
+  assert.throws(() => bindApprovedOperationPolicies(changed, f.policies(assembly), f.now), /policy|tax/);
   assert.throws(() => bindApprovedOperationPolicies(assembly, f.policies(assembly), f.now + 300001), /stale/);
 });
 test('assembly is stable across preview order and does not mutate caller inputs', () => {
@@ -156,4 +158,28 @@ test('unrelated original rows and duplicate physical transaction ownership are r
   f.history.entries.push(extra); signHistory(f.history);
   assert.throws(() => assembleBusinessOperation(f), /same QuickBooks record/);
   extra.qboId = '999'; signHistory(f.history); assert.throws(() => assembleBusinessOperation(f), /unrelated/);
+});
+
+test('unsent observation hashes are audit only; typed quantities, totals and scope remain required', () => {
+  const f = candidateFixture(); f.context.blueprintHash = hash('current business publication evidence'); f.prepared.operationHash = hash('old observation'); f.history.sourceHash = hash('old history');
+  f.prepared.steps.forEach(step => { step.detailsHash = hash('old details'); });
+  const assembly = assembleBusinessOperation(f); assembly.assemblyHash = hash('old assembly'); assembly.policyRequests.forEach(row => { row.stepHash = hash('old request observation'); });
+  assert.equal(bindApprovedOperationPolicies(assembly, f.policies(assembly), f.now).candidate.entries.length, 2);
+  for (const change of [g => g.prepared.steps[0].details.lines[0].amountCents++, g => g.prepared.steps[0].details.baseAmountCents++, g => { g.prepared.scope.realmId = '999'; }]) {
+    const g = candidateFixture(); change(g); assert.throws(() => assembleBusinessOperation(g));
+  }
+});
+test('rebinding stale monetary policy proves dated economics and authenticates new evidence', () => {
+  const { f, assembly } = assembled(), policies = f.policies(assembly);
+  const code = { Id: '901', SyncToken: '0', Active: true, PurchaseTaxRateList: { TaxRateDetail: [{ TaxRateRef: { value: '950' }, TaxTypeApplicable: 'TaxOnAmount' }] } };
+  const rate = { Id: '950', SyncToken: '0', Active: true, EffectiveTaxRate: [{ EffectiveDate: '2020-01-01', RateValue: 13 }] };
+  const policy = policies[0].policy, base = assembly.candidate.entries[0].step.details.baseAmountCents;
+  policy.stepHash = hash('old preview'); policy.taxSources = [{ entity: 'TaxCode', id: '901', record: code, recordHash: hash(code) }, { entity: 'TaxRate', id: '950', record: rate, recordHash: hash(rate) }];
+  const amount = require('../src/modules/business-tax-policy').taxCents(base, 13);
+  policy.readbackTax = { version: 1, totalTaxCents: amount, lines: [{ rateId: '950', percent: 13, taxableCents: base, amountCents: amount }] };
+  const refreshed = bindApprovedOperationPolicies(assembly, policies, f.now).candidate.entries[0].policy;
+  const { evidenceHash, ...body } = refreshed; assert.equal(evidenceHash, hash(body));
+  for (const change of [p => p.readbackTax.totalTaxCents++, p => p.readbackTax.lines[0].taxableCents++, p => { p.tax.purchaseTax = '900'; }, p => { delete p.taxSources; }]) {
+    const altered = clone(policies); change(altered[0].policy); assert.throws(() => bindApprovedOperationPolicies(assembly, altered, f.now));
+  }
 });

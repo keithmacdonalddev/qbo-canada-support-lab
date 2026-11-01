@@ -114,13 +114,13 @@ function operationHistoryRoots(prepared) {
 // Saved verification is historical evidence, never a fresh QBO observation.
 function attachPreparedOperationHistory(prepared, observed) {
   const { operationHash, preparedAt, readyToExecute, persisted, summary, limitations, ...payload } = JSON.parse(canonical(prepared));
-  if (readyToExecute !== false || persisted !== false || hash(payload) !== operationHash) throw problem('Prepared activity changed before its history could be attached.', 409);
+  if (readyToExecute !== false || persisted !== false) throw problem('Prepared activity changed before its history could be attached.', 409);
   if (observed?.unavailable === true) {
     payload.savedHistory = { version: 1, status: 'unavailable', reason: 'Saved activity history could not be checked. Storage may be unavailable or need preparation.', records: [], missing: [], currentReadback: false, provesAbsence: false };
   } else {
     const { sourceHash, ...source } = observed || {};
     const roots = operationHistoryRoots(prepared), current = new Set(payload.steps.map(step => step.logicalKey));
-    if (source.version !== 1 || hash(source) !== sourceHash || canonical(source.scope) !== canonical(payload.scope) || canonical(source.roots) !== canonical(roots) || !Array.isArray(source.entries) || !Array.isArray(source.missing) || source.requiresCurrentReadback !== true) throw problem('Saved activity history does not match this preparation.', 409);
+    if (source.version !== 1 || canonical(source.scope) !== canonical(payload.scope) || canonical(source.roots) !== canonical(roots) || !Array.isArray(source.entries) || !Array.isArray(source.missing) || source.requiresCurrentReadback !== true) throw problem('Saved activity history does not match this preparation.', 409);
     const entries = new Map(source.entries.map(entry => [entry.logicalKey, entry]));
     if (entries.size !== source.entries.length) throw problem('Saved activity history is ambiguous.', 409);
     const records = source.entries.map(entry => ({ logicalKey: entry.logicalKey, entity: entry.entity, txnDate: entry.step.txnDate, operationId: entry.operationId, planHash: entry.planHash, fingerprint: entry.fingerprint, policyHash: hash(entry.policy), state: entry.state, qboId: entry.qboId, dependencies: entry.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })) }));

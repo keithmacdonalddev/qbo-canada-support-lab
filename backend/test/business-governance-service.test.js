@@ -99,3 +99,38 @@ test('retained stock-sale validation refusal retries once through native review 
  assert.equal(h.data.Receipts.find(row=>row._id===step.rejection.receiptId).state,'rejected');const replacement=h.data.Steps.find(row=>row.logicalKey===step.logicalKey);assert.notEqual(replacement.dispatch.key,step.dispatch.key);assert.equal(replacement.retryGeneration,1);
  const posts=h.posts;assert.equal((await runtime.execute()).complete,true);assert.equal(h.posts,posts);
 });
+
+test('ordinary approval uses current coordination without reading historical approval reports', async () => {
+ const h=fixture();await h.publish();const p=await h.service.prepare(h.user,{requestKey:'meaning-report-audit-0001',throughDate:'2026-10-06'});
+ h.reportSources=()=>{throw Error('No approval report read is needed');};
+ await h.service.approve(h.user,p.operationId,{planHash:p.planHash});
+ assert.equal(h.data.Runs[0].status,'approved');assert.equal(h.data.Runs[0].approval.reportEvidence,undefined);assert.equal(h.posts,0);
+});
+test('accountant refreshes only unsent tax policies under current authority without another owner decision', async () => {
+ const h=fixture();await h.publish();const p=await savedPlan(h,'standing-tax-refresh-001','2026-10-06');
+ const run=h.data.Runs[0],authority={version:1,agentId:'a'.repeat(24),ownerId,grantId:hash('current grant'),authorityHash:run.authorityHash};
+ run.agentAuthority=authority;delete run.approval;let enabled=true,checks=0;
+ const Agents={findOneAndUpdate(){checks++;return{lean:async()=>enabled?{_id:authority.agentId,ownerId,grant:{id:authority.grantId,authorityHash:authority.authorityHash,ownerId}}:null};}};
+ const tax=require('../src/modules/business-policy-amendment').createBusinessPolicyAmendment({models:h.models,transaction:h.transaction,now:()=>h.clock,agentAuthority:authority,Agents,bind:async()=>({scope,ownerId,actorId:ownerId,access:h.accessFor({ownerId,actorId:ownerId})}),fence:async()=>{}});
+ const before=hash(h.data.Plans[0].manifest),result=await tax.review(h.user,p.operationId,{planHash:p.planHash});
+ assert.equal(result.approved,true);assert.ok(checks);assert.ok(h.data.Audits.some(row=>row.action==='Remaining business tax expectations approved'&&row.actionType==='ai_plan'&&row.afterState.agentGrantId===authority.grantId));assert.equal(hash(h.data.Plans[0].manifest),before);assert.equal(h.posts,0);
+ enabled=false;await assert.rejects(tax.review(h.user,p.operationId,{planHash:p.planHash}),/paused/);
+ h.data.Receipts.push({...scope,operationId:p.operationId,state:'unknown'});
+ await assert.rejects(tax.review(h.user,p.operationId,{planHash:p.planHash}));assert.equal(h.posts,0);
+});
+
+test('owner tax amendment remains readable when an authorized operator prepared the plan', async () => {
+ const h=fixture();await h.publish();const p=await h.service.prepare({id:ownerId,actorId},{requestKey:'operator-tax-amendment-01',throughDate:'2026-10-06'});
+ await h.service.approve(h.user,p.operationId,{planHash:p.planHash});
+ const review=await h.service.reviewTaxChange(h.user,p.operationId,{planHash:p.planHash});
+ await h.service.approveTaxChange(h.user,p.operationId,{planHash:p.planHash,reviewHash:review.reviewHash,reason:'Owner retains the current tax expectations for this operator-prepared plan.'});
+ const shown=await h.service.reviewOperation(h.user,p.operationId);assert.ok(shown.entries.length);assert.equal(h.posts,0);
+});
+
+test('unavailable historical approval reports are audit-only and never shown as verified', async () => {
+ const {readApprovalReports}=require('../src/modules/business-approval-report-evidence');
+ const {model}=require('./replay/memory.cjs');
+ const run={...scope,_id:'a'.repeat(24),planHash:hash('retained plan'),approval:{actorId:ownerId,auditId:'b'.repeat(24),reportEvidence:{sourceHash:hash('dropped empty report objects')}}};
+ const result=await readApprovalReports({models:{Audits:model([])},run,ownerId});
+ assert.equal(result.status,'unavailable');assert.equal(result.authorization,false);assert.equal(result.available,undefined);
+});

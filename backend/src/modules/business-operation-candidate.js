@@ -3,7 +3,7 @@ const { canonical, hash, date } = require('./business-calendar');
 const { scoped } = require('./qbo-write-contract');
 const { validateReferenceBinding } = require('./business-reference');
 const { operationHistoryRoots } = require('./business-operation-preview');
-const { validateOperationCandidate, validateOperationEntry } = require('./business-operation-plan-store');
+const { validateOperationCandidate, validateOperationEntry, validateUnsentStep } = require('./business-operation-plan-store');
 const HASH = /^[a-f0-9]{64}$/, ID = /^[a-f0-9]{24}$/, QBO_ID = /^\d{1,30}$/;
 const MAX_BYTES = 8000000, MAX_ENTRIES = 1000;
 const ENTITIES = new Set(['Estimate', 'TimeActivity', 'Invoice', 'Payment', 'Deposit', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'BillPayment', 'CreditMemo', 'Purchase', 'VendorCredit', 'RefundReceipt', 'Transfer', 'JournalEntry', 'Customer', 'Vendor', 'Item']);
@@ -19,17 +19,17 @@ function fresh(value, now) {
 }
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => a?.[key] === b?.[key]);
 // Pure structural assembly. Callers must obtain these inputs on the server.
-// Hashes are integrity checks, not signatures, ownership proof or authorization.
+// Observation hashes are audit evidence, never ownership proof or authorization.
 // No storage, policy approval, activation or QuickBooks request occurs here.
 function assembleBusinessOperation({ prepared, history, context, now = Date.now() }) {
   ({ prepared, history, context } = snapshot({ prepared, history, context }));
   const { operationHash, preparedAt, readyToExecute, persisted, summary, limitations, ...payload } = prepared;
   const scope = scoped(payload.scope);
-  if (payload.version !== 1 || readyToExecute !== false || persisted !== false || !HASH.test(operationHash || '') || hash(payload) !== operationHash || !Array.isArray(payload.steps) || payload.steps.length > 500) fail('The prepared activity is missing or changed.');
+  if (payload.version !== 1 || readyToExecute !== false || persisted !== false || !HASH.test(operationHash || '') || !Array.isArray(payload.steps) || payload.steps.length > 500) fail('The prepared activity is missing or changed.');
   fresh(preparedAt, now);
   const deferred = new Set(['baseline', 'business_policy', 'period_control', 'execution']);
   if (!Array.isArray(payload.remaining) || payload.remaining.length > 100 || new Set(payload.remaining.map(item => item?.key)).size !== payload.remaining.length || payload.remaining.some(item => !deferred.has(item?.key) || typeof item.reason !== 'string' || !item.reason || item.reason.length > 1000)) fail('Resolve the outstanding operation-wide requirements before assembly.');
-  if (!sameScope(context.scope, scope) || context.blueprintHash !== payload.blueprintHash || context.blueprintId !== payload.blueprintId || context.businessKey !== payload.businessKey || context.openingDate !== payload.openingDate) fail('Preparation differs from its company or business plan.');
+  if (!sameScope(context.scope, scope) || context.blueprintId !== payload.blueprintId || context.businessKey !== payload.businessKey || context.openingDate !== payload.openingDate) fail('Preparation differs from its company or business plan.');
   const base = { version: 1, scope, ...(payload.continuity ? { authorityHash: context.authorityHash } : {}), businessKey: context.businessKey, blueprintId: context.blueprintId, blueprintHash: context.blueprintHash, baselineHash: context.baselineHash,
     openingDate: context.openingDate, fromDate: payload.fromDate, throughDate: payload.throughDate,
     expectedCursor: context.expectedCursor, expectedRevision: context.expectedRevision, requiredAssertions: context.requiredAssertions };
@@ -39,18 +39,18 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
   if (!payload.activityBatch) validateOperationCandidate({ ...base, entries: [] }, scope, now);
   if (!history || typeof history !== 'object') fail('Read original saved activity history before assembly.');
   const { sourceHash, ...source } = history;
-  if (source.version !== 1 || !sameScope(source.scope, scope) || !HASH.test(sourceHash || '') || hash(source) !== sourceHash || source.requiresCurrentReadback !== true || !Array.isArray(source.entries) || source.entries.length > MAX_ENTRIES || !Array.isArray(source.missing) || source.missing.length > MAX_ENTRIES || canonical(source.roots) !== canonical(operationHistoryRoots(prepared))) fail('Original history does not match this prepared operation.');
+  if (source.version !== 1 || !sameScope(source.scope, scope) || !HASH.test(sourceHash || '') || source.requiresCurrentReadback !== true || !Array.isArray(source.entries) || source.entries.length > MAX_ENTRIES || !Array.isArray(source.missing) || source.missing.length > MAX_ENTRIES || canonical(source.roots) !== canonical(operationHistoryRoots(prepared))) fail('Original history does not match this prepared operation.');
   fresh(source.observedAt, now);
-  if (payload.savedHistory && payload.savedHistory.sourceHash !== sourceHash) fail('Prepared history changed. Prepare the activity again.');
   const current = new Map(), original = new Map(), physical = new Set();
-  for (const step of payload.steps) {
+  for (const proposed of payload.steps) {
+    const step = validateUnsentStep(proposed);
     if (!step || !ENTITIES.has(step.entity) || !HASH.test(step.calendarFingerprint || '') || !HASH.test(step.detailsHash || '') || !HASH.test(step.logicalKey || '') || current.has(step.logicalKey) || !Array.isArray(step.references) || step.references.length > 100 || !Array.isArray(step.dependencies) || step.dependencies.length > 20 || !Array.isArray(step.blockers)) fail('Prepared activities have missing or duplicate identities.');
     if (step.blockers.some(blocker => !['prior_record', 'blocked_dependency'].includes(blocker?.kind))) fail('Resolve the outstanding activity requirements before assembly.');
     for (const blocker of step.blockers) if (!step.dependencies.some(link => link.logicalKey === blocker.key && (blocker.kind !== 'prior_record' || !payload.steps.some(row => row.logicalKey === blocker.key)))) fail('The outstanding dependency requirements are inconsistent.');
     if (new Set(step.references.map(ref => ref.entity + ':' + ref.key)).size !== step.references.length || new Set(step.dependencies.map(link => link.logicalKey)).size !== step.dependencies.length || step.dependencies.some(link => !HASH.test(link.logicalKey || '') || !ENTITIES.has(link.entity))) fail('Activity references or dependencies are ambiguous.');
     for (const binding of step.references) validateReferenceBinding(binding);
     date(step.txnDate);
-    if (step.txnDate < base.fromDate || step.txnDate > base.throughDate || step.details?.version !== 1 || step.details.currency !== 'CAD' || hash({ calendarFingerprint: step.calendarFingerprint, details: step.details }) !== step.detailsHash || !Array.isArray(step.details.lines) || step.details.lines.length > 100) fail('Prepared transaction details are missing or changed.');
+    if (step.txnDate < base.fromDate || step.txnDate > base.throughDate || step.details?.version !== 1 || step.details.currency !== 'CAD' || !Array.isArray(step.details.lines) || step.details.lines.length > 100) fail('Prepared transaction details are missing or changed.');
     current.set(step.logicalKey, step);
   }
   for (const entry of source.entries) {
@@ -76,7 +76,7 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
     visiting.add(key);
     const dependencies = input.dependencies.map(link => {
       const parent = visit(link.logicalKey), fingerprint = hash(parent.step);
-      if (parent.step.entity !== link.entity || parent.step.txnDate > input.txnDate || (previous && link.fingerprint !== fingerprint) || (!previous && link.fingerprint !== undefined && link.fingerprint !== fingerprint)) fail('A dependency differs from its exact originating activity.');
+      if (parent.step.entity !== link.entity || parent.step.txnDate > input.txnDate || ((previous || original.has(link.logicalKey)) && link.fingerprint !== undefined && link.fingerprint !== fingerprint)) fail('A dependency differs from its exact originating activity.');
       return { logicalKey: link.logicalKey, entity: link.entity, fingerprint };
     });
     let entry;
@@ -102,15 +102,16 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
     persisted: false, readyToExecute: false, requiresActivationFence: true, requiresOwnershipReview: true, requiresFreshReadback: true };
   const result = { ...value, assemblyHash: hash(value) }; snapshot(result); return result;
 }
-// A matching status/hash is not proof of authorization. The production caller
-// must load reviewed policies itself and fence their current activation on approve.
+// The production caller obtains current policies on the server. Standing authority
+// is fenced at admission; no assembly or policy hash grants write permission.
 function bindApprovedOperationPolicies(assembly, policies, now = Date.now()) {
   ({ assembly, policies } = snapshot({ assembly, policies }));
-  const { assemblyHash, ...value } = assembly;
-  if (value.version !== 1 || value.persisted !== false || value.readyToExecute !== false || value.requiresActivationFence !== true || value.requiresOwnershipReview !== true || value.requiresFreshReadback !== true || !HASH.test(assemblyHash || '') || hash(value) !== assemblyHash || !Array.isArray(value.policyRequests) || !Array.isArray(policies) || policies.length !== value.policyRequests.length) fail('The reviewed assembly or exact policy set changed.');
+  const { assemblyHash: observedAssemblyHash, ...value } = assembly;
+  const assemblyHash = hash(value);
+  if (value.version !== 1 || value.persisted !== false || value.readyToExecute !== false || value.requiresActivationFence !== true || value.requiresOwnershipReview !== true || value.requiresFreshReadback !== true || !HASH.test(assemblyHash || '') || !Array.isArray(value.policyRequests) || !Array.isArray(policies) || policies.length !== value.policyRequests.length) fail('The reviewed assembly or exact policy set changed.');
   fresh(value.sources.preparedAt, now); fresh(value.sources.historyObservedAt, now);
   const expected = value.candidate.entries.filter(entry => entry.kind === 'create').map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) }));
-  if (canonical(expected) !== canonical(value.policyRequests)) fail('The assembly policy requests differ from its finalized activities.');
+  if (value.policyRequests.length !== expected.length || new Set(value.policyRequests.map(row => row?.logicalKey)).size !== expected.length || value.policyRequests.some(row => !expected.some(entry => entry.logicalKey === row?.logicalKey))) fail('The assembly policy identities differ from its finalized activities.');
   const expectedKeys = new Set(expected.map(entry => entry.logicalKey));
   const byKey = new Map();
   for (const supplied of policies) {
@@ -120,8 +121,30 @@ function bindApprovedOperationPolicies(assembly, policies, now = Date.now()) {
   const entries = value.candidate.entries.map(entry => {
     if (entry.kind !== 'create') return entry;
     const policy = byKey.get(entry.step.logicalKey);
-    if (!policy || policy.stepHash !== hash(entry.step)) fail('The approved policy does not match the finalized activity.');
-    return { kind: 'create', step: entry.step, policy };
+    if (!policy || !['approved', 'proposed'].includes(policy.status)) fail('The current Canadian policy is unavailable.');
+    // Approval and assembly hashes describe the observation; current typed intent
+    // is what the compiler will validate. Never rewrite existing/admitted entries.
+    if (policy.stepHash !== hash(entry.step)) {
+      const tax = require('./business-tax-policy'), sources = policy.taxSources;
+      const taxable = new Set(['Estimate', 'Invoice', 'SalesReceipt', 'CreditMemo', 'PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit', 'RefundReceipt']);
+      if (taxable.has(entry.step.entity)) {
+        if (!Array.isArray(sources) || sources.some(source => hash(source.record) !== source.recordHash)) fail('A refreshed monetary policy needs current tax definitions.');
+        const key = ['PurchaseOrder', 'Bill', 'Purchase', 'VendorCredit'].includes(entry.step.entity) ? 'purchaseTax' : 'salesTax';
+        const codeId = entry.step.references.find(ref => ref.entity === 'TaxCode' && ref.key === key)?.id;
+        const get = (entity, id) => { const rows = sources.filter(source => source.entity === entity && source.id === id); if (rows.length !== 1) fail('Current tax definitions are missing or ambiguous.'); return rows[0].record; };
+        if (!codeId || policy.tax?.[key] !== codeId || policy.tax?.calculation !== 'TaxExcluded') fail('The monetary policy names a different tax direction or record.');
+        const meaning = tax.taxMeaning(get('TaxCode', codeId), key === 'salesTax' ? 'sales' : 'purchases', entry.step.txnDate, id => get('TaxRate', id));
+        const base = entry.step.details.lines.reduce((sum, line) => sum + line.amountCents, 0);
+        const lines = meaning.lines.map(line => ({ ...line, taxableCents: base, amountCents: tax.taxCents(base, line.percent) }));
+        const sorted = rows => [...rows].sort((a, b) => a.rateId.localeCompare(b.rateId));
+        if (!Array.isArray(policy.readbackTax?.lines) || canonical(sorted(lines)) !== canonical(sorted(policy.readbackTax.lines)) || policy.readbackTax.totalTaxCents !== lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The policy tax does not match current typed quantities and dated rates.');
+      }
+    }
+    const current = { ...policy, status: 'approved', stepHash: hash(entry.step) };
+    if (current.status !== policy.status || current.stepHash !== policy.stepHash) {
+      delete current.evidenceHash; current.evidenceHash = hash(current);
+    }
+    return { kind: 'create', step: entry.step, policy: current };
   });
   const candidate = { ...value.candidate, entries }, checked = validateOperationCandidate(candidate, candidate.scope, now);
   return { candidate: { ...candidate, entries: checked.entries }, candidateHash: hash({ ...candidate, entries: checked.entries }), planHash: checked.planHash,

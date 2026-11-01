@@ -314,7 +314,7 @@ function withAgent(h) {
   const transaction = h.deps.transaction;
   h.deps.transaction = work => transaction(session => work({ ...session, inTransaction: () => true }));
   h.deps.agentAuthority = authority;
-  h.deps.Agents = { findOneAndUpdate(filter, update, options) { assert.equal(filter['grant.id'], authority.grantId); assert.ok(options.session.inTransaction()); return { lean: async () => h.agentEnabled ? { _id: authority.agentId } : null }; } };
+  h.deps.Agents = { findOneAndUpdate(filter, update, options) { assert.equal(filter._id, authority.agentId); assert.equal(filter['grant.ownerId'], authority.ownerId); assert.ok(options.session.inTransaction()); return { lean: async () => h.agentEnabled ? { _id: authority.agentId, ownerId: authority.ownerId, grant: { id: authority.grantId, authorityHash: authority.authorityHash, ownerId: authority.ownerId } } : null }; } };
   h.store = createBusinessOperationPlanStore(h.deps); return authority;
 }
 test('agent origin is immutable plan evidence and approval records the standing-grant decision source', async () => {
@@ -352,25 +352,33 @@ test('a re-issued standing grant reads its accountant\'s verified earlier-grant 
   const result = await storeFor(reissued).history(scope, [bill.step.logicalKey]);
   assert.equal(result.entries.length, 2); assert.ok(result.entries.every(row => row.operationId === saved.operationId && row.runStatus === 'verified')); assert.deepEqual(result.missing, []);
 });
-test('a re-issued grant cannot read unfinished earlier-grant work as history, nor approve or page it', async () => {
+test('a renewed grant reads unfinished work without changing its admitted identities', async () => {
   for (const status of ['approved', 'running', 'stopped', 'awaiting-evidence', 'committing']) {
-    const { storeFor, bill, reissued } = await earlierGrantHistory(status);
-    await assert.rejects(storeFor(reissued).history(scope, [bill.step.logicalKey]), /unfinished work from an earlier accountant authorization/);
+    const { h, saved, storeFor, bill, reissued } = await earlierGrantHistory(status);
+    const before = canonical([...h.steps.values()]), store = storeFor(reissued);
+    const history = await store.history(scope, [bill.step.logicalKey]);
+    assert.equal(history.entries.length, 2);
+    await store.page(scope, saved.operationId);
+    await store.loadIntent(scope, saved.operationId, bill.step.logicalKey);
+    assert.equal(canonical([...h.steps.values()]), before);
   }
-  const { h, saved, storeFor, reissued } = await earlierGrantHistory('approved'), store = storeFor(reissued);
-  await assert.rejects(store.approve(scope, saved.operationId, saved.planHash), /origin changed/);
-  await assert.rejects(store.page(scope, saved.operationId), /origin changed/);
-  await assert.rejects(store.loadIntent(scope, saved.operationId, [...h.intents.values()][0].logicalKey), /origin changed/);
-  // Verified history is still not an execution authority for the new grant.
-  h.runs.get(saved.operationId).status = 'verified';
-  await assert.rejects(store.page(scope, saved.operationId), /origin changed/);
 });
-test('history from a different agent, owner or published business is still refused', async () => {
-  for (const change of [{ agentId: 'b'.repeat(24) }, { ownerId: 'e'.repeat(24) }, { authorityHash: hash('republished business') }]) {
+test('history from a different accountant or owner and tampered stored origin is refused', async () => {
+  for (const change of [{ agentId: 'b'.repeat(24) }, { ownerId: 'e'.repeat(24) }]) {
     const { storeFor, bill, reissued } = await earlierGrantHistory();
     await assert.rejects(storeFor({ ...reissued, ...change }).history(scope, [bill.step.logicalKey]), /origin changed/);
   }
   const { h, storeFor, bill, earlier } = await earlierGrantHistory();
   const run = [...h.runs.values()][0]; run.agentAuthority = { ...earlier, grantId: hash('tampered run origin') };
   await assert.rejects(storeFor(earlier).history(scope, [bill.step.logicalKey]), /origin changed/);
+});
+
+test('standing-agent approval does not replay old report proofs and still fences current authority', async () => {
+  const h = harness(); withAgent(h); const saved = await h.prepare();
+  h.deps.verifyApproval = async () => { throw Error('historical report proof must not authorize this run'); };
+  h.store = createBusinessOperationPlanStore(h.deps);
+  await h.store.approve(scope, saved.operationId, saved.planHash);
+  delete h.runs.get(saved.operationId).approval;
+  assert.equal((await h.store.approve(scope, saved.operationId, saved.planHash)).reused, true);
+  h.agentEnabled = false; await assert.rejects(h.store.approve(scope, saved.operationId, saved.planHash), /paused/);
 });

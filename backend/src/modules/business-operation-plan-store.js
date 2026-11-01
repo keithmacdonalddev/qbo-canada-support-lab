@@ -20,6 +20,24 @@ function snapshot(value) {
   if (Buffer.byteLength(serialized) > MAX_BYTES) fail('The operation plan exceeds its storage budget');
   return JSON.parse(serialized);
 }
+// Only server-built, never-admitted intent may be normalized. Stored manifests and
+// admitted dispatches retain their original byte identities.
+function validateUnsentStep(step) {
+  if (!step || !ENTITIES.has(step.entity) || !validHash(step.logicalKey) || !validHash(step.calendarFingerprint)) fail('Unsent activity needs its typed identity');
+  date(step.txnDate);
+  const details = step.details;
+  if (!details || details.version !== 1 || details.currency !== 'CAD' || !Array.isArray(details.lines) || details.lines.length > 100) fail('Unsent activity needs typed Canadian quantities and amounts');
+  const money = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000000000;
+  if (details.baseAmountCents != null && !money(details.baseAmountCents)) fail('The unsent subtotal is invalid');
+  const keys = new Set();
+  for (const line of details.lines) {
+    if (!line || !money(line.amountCents) || (line.key !== undefined && (typeof line.key !== 'string' || !line.key || keys.has(line.key)))) fail('The unsent lines have invalid amounts or duplicate identities');
+    keys.add(line.key);
+    if (line.quantity !== undefined && (typeof line.quantity !== 'number' || !Number.isFinite(line.quantity) || line.quantity <= 0 || line.quantity > 1000000 || !money(line.unitPriceCents) || line.unitPriceCents <= 0 || Math.abs(line.quantity * line.unitPriceCents - line.amountCents) > 0.00001)) fail('The unsent line amount does not equal quantity times rate');
+  }
+  if (details.lines.length && details.baseAmountCents != null && step.entity !== 'JournalEntry' && details.baseAmountCents !== details.lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The unsent subtotal differs from its lines');
+  return { ...step, detailsHash: hash({ calendarFingerprint: step.calendarFingerprint, details }) };
+}
 function validateEntry(entry, scope, fromDate, throughDate) {
   const step = entry?.step, policy = entry?.policy;
   if (!['create', 'existing'].includes(entry?.kind) || !step || !validHash(step.logicalKey) || !ENTITIES.has(step.entity) || !validHash(step.calendarFingerprint) || !validHash(step.detailsHash)) fail('A saved activity needs its exact supported intent');
@@ -121,8 +139,8 @@ function runFields(manifest, planId, actorId) {
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, verifyApproval, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, agentLease = null, Agents }) {
-  const { agentAuthority: normalizeAgentAuthority, sameAuthority, sameAgentLineage, fenceAgentAuthority } = require('./business-agent-authority');
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, agentLease = null, Agents }) {
+  const { agentAuthority: normalizeAgentAuthority, fenceAgentAuthority } = require('./business-agent-authority');
   const agentAuthority = suppliedAgentAuthority ? normalizeAgentAuthority(suppliedAgentAuthority) : null;
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
   for (const fn of [assertReady, authorize, transaction, now, ...(!readOnly ? [loadCandidate, checkCurrent, writeAudit] : [])]) if (typeof fn !== 'function') throw new TypeError('Operation plans require explicit trusted adapters');
@@ -137,23 +155,17 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     if (result?.eventKey !== eventKey || typeof result.id !== 'string' || !result.id) fail('Operation plan audit was not saved');
     return result.id;
   }
-  // settledHistory: the caller only reads finished records as dependency history.
-  // Every approve/page/intent/reuse read keeps the exact-origin fence.
-  async function read(scope, operationId, session, check = () => {}, { settledHistory = false } = {}) {
+  // Stored origin remains exact evidence; current grants may renew for the same accountant.
+  async function read(scope, operationId, session, check = () => {}) {
     check();
     if (typeof operationId !== 'string' || !ID.test(operationId)) fail('A valid operation identifier is required', 400);
     const run = await Runs.findOne({ _id: operationId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); assertRun(run, scope);
     const plan = await Plans.findOne({ _id: run.planId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); if (!plan || plan.contractVersion !== 1 || plan.planHash !== run.planHash || hash(plan.manifest) !== plan.planHash || !sameScope(plan.manifest.scope, scope) || String(plan.operationId) !== operationId || !plan.auditId) fail('The immutable saved operation plan is missing or changed');
-    if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && !sameAuthority(run.agentAuthority, plan.agentAuthority))) fail('The immutable agent origin changed.');
-    if (agentAuthority && (!run.agentAuthority || !sameAuthority(agentAuthority, run.agentAuthority))) {
-      // A re-issued standing grant (same accountant, owner and published business)
-      // may build on its accountant's verified history. Unfinished earlier-grant
-      // work is never read as settled; it cannot be approved or resumed either.
-      const lineage = settledHistory && run.agentAuthority && sameAgentLineage(agentAuthority, run.agentAuthority);
-      if (!lineage) fail('The immutable agent origin changed.');
-      if (run.status !== 'verified') fail('Saved activity belongs to unfinished work from an earlier accountant authorization; settle that operation before continuing.');
+    if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && canonical(run.agentAuthority) !== canonical(plan.agentAuthority))) fail('The immutable agent origin changed.');
+    if (agentAuthority && (!run.agentAuthority || agentAuthority.agentId !== run.agentAuthority.agentId || agentAuthority.ownerId !== run.agentAuthority.ownerId)) {
+      fail('The immutable agent origin changed.');
     }
     const expected = runFields(plan.manifest, String(plan._id), String(plan.createdBy));
     for (const [key, value] of Object.entries(expected)) {
@@ -182,7 +194,6 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       if (hash(candidate) !== request.candidateHash) fail('The server candidate changed before it could be saved');
       const prepared = validateOperationCandidate(candidate, scope, now());
       if (agentAuthority) {
-        if (prepared.manifest.authorityHash !== agentAuthority.authorityHash) fail('The agent grant belongs to a different published business.');
         await fenceAgentAuthority({ authority: agentAuthority, run: { ...prepared.manifest, createdBy: actorId }, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session, lease: agentLease });
       }
       const auditId = await audit(scope, actorId, operationId, prepared.planHash, 'prepared', session);
@@ -196,7 +207,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
   async function approve(scope, operationId, planHash, { confirmProduction = false } = {}) {
     scope = scopeOf(scope); if (!validHash(planHash)) fail('Exact reviewed plan hash is required', 400);
     const actorId = await authority(scope, 'operations.execute');
-    if (scope.environment === 'production' && confirmProduction !== true) fail('Explicit confirmation for this real Production company is required before approving business writes.', 400);
+    if (!agentAuthority && scope.environment === 'production' && confirmProduction !== true) fail('Explicit confirmation for this real Production company is required before approving business writes.', 400);
     return transaction(async session => {
       if (await authority(scope, 'operations.execute', session) !== actorId) fail('The operation actor changed', 403);
       const { run, plan } = await read(scope, operationId, session);
@@ -207,8 +218,6 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       await loadEntries(scope, operationId, 0, MAX_RECORDS, session);
       if (run.status !== 'previewed') {
         assertRunApproval(run);
-        if (typeof verifyApproval === 'function') await verifyApproval({ run, session });
-        else if (run.approval.reportEvidence) fail('Retained approval-report verification is required.');
         return { operationId, planHash, status: run.status, approved: true, reused: true };
       }
       if (plan.manifest.throughDate > businessDate(new Date(now()))) fail('Future periods cannot be approved');
@@ -320,7 +329,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
           }
           const operationId = String(row.operationId);
           if (!plans.has(operationId)) {
-            const saved = await call(() => read(scope, operationId, session, check, { settledHistory: true })); check(); assertRunApproval(saved.run);
+            const saved = await call(() => read(scope, operationId, session, check)); check(); assertRunApproval(saved.run);
             if (saved.run.status === 'previewed') fail('Saved activity has no approved originating operation');
             retainSize(saved.plan.manifest);
             plans.set(operationId, { ...saved, byKey: new Map(saved.plan.manifest.records.map((value, ordinal) => [value.logicalKey, { value, ordinal }])) });
@@ -378,4 +387,4 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
   }
   return readOnly ? { page, loadIntent, history } : { prepare, approve, page, loadIntent, history };
 }
-module.exports = { createBusinessOperationPlanStore, validateOperationCandidate, validateOperationEntry: validateEntry };
+module.exports = { createBusinessOperationPlanStore, validateOperationCandidate, validateOperationEntry: validateEntry, validateUnsentStep };

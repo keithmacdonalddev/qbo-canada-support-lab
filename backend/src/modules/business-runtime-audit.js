@@ -4,6 +4,11 @@ const { scoped } = require('./qbo-write-contract');
 const ID = /^[a-f0-9]{24}$/;
 const FIELDS = new Set(['environment', 'realmId', 'connectionId', 'actorId', 'operationId', 'planHash', 'phase', 'nextOrdinal', 'logicalKey', 'revision', 'dispatchKey', 'qboId', 'action', 'evidenceHash', 'sourceHash', 'evidenceRevision', 'recordCount', 'throughDate', 'reportEvidenceHash', 'reportSourceHash', 'decisionSource', 'agentId', 'agentGrantId', 'agentAuthorityHash']);
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_AUDIT_UNAVAILABLE' }); }
+const operationMetadata = params => {
+  const copy = structuredClone(params);
+  if (copy?.details) { delete copy.details.reportEvidenceHash; delete copy.details.reportSourceHash; }
+  return copy;
+};
 function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transaction, access }) {
   scope = scoped(scope);
   if (!ID.test(actorId || '') || !ID.test(ownerId || '') || !Audits || typeof transaction !== 'function' || typeof access?.authorize !== 'function') throw new TypeError('Business audit needs exact authority and storage');
@@ -23,7 +28,7 @@ function createBusinessAuditWriter({ scope, actorId, ownerId, Audits, transactio
       if (actor?.actorId !== actorId || actor?.ownerId !== ownerId) fail('The operation audit actor changed.');
       const row = await Audits.findOne({ _id: id }).session(currentSession).maxTimeMS(3000).lean();
       if (row) {
-        if (String(row.userId) !== ownerId || String(row.actorUserId || row.userId) !== actorId || row.realmId !== scope.realmId || row.action !== 'Business operation evidence recorded' || row.actionType !== actionType || row.outcome !== 'success' || canonical(row.inputParams) !== canonical(params)) fail('The saved audit event differs from this operation.');
+        if (String(row.userId) !== ownerId || String(row.actorUserId || row.userId) !== actorId || row.realmId !== scope.realmId || row.action !== 'Business operation evidence recorded' || row.actionType !== actionType || row.outcome !== 'success' || canonical(operationMetadata(row.inputParams)) !== canonical(operationMetadata(params))) fail('The saved audit event differs from this operation.');
       } else await Audits.create([{ _id: id, userId: ownerId, ...(actorId !== ownerId ? { actorUserId: actorId } : {}), realmId: scope.realmId, action: 'Business operation evidence recorded', actionType, outcome: 'success', inputParams: params }], { session: currentSession });
       return { id, eventKey };
     };

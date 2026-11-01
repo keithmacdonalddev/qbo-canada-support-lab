@@ -97,6 +97,7 @@ function createBusinessExecutionService({ models = loadModels(), connection = re
     const result = await transaction(async session => {
       await selected.access.authorize(selected.scope, 'operations.execute', { session });
       const run = await read({ _id: operationId, ...selected.scope }, session); assertRun(run, selected.scope); assertRunApproval(run);
+      await require('./business-agent-authority').fenceAgentAuthority({ run, scope: selected.scope, ownerId: selected.ownerId, actorId: selected.actorId, Agents: models.Agents, session });
       if (run.planHash !== body.planHash || ['previewed', 'stopped', 'retired'].includes(run.status)) fail('This operation is not an approved runnable plan.');
       const request = { version: 1, mode: 'execute', planHash: body.planHash, requestKey: body.requestKey, actorId: selected.actorId, ownerId: selected.ownerId, requestedAt: new Date(now()).toISOString(), pending: true };
       request.id = hash({ scope: selected.scope, operationId, actorId: selected.actorId, ownerId: selected.ownerId, planHash: request.planHash, requestKey: request.requestKey, mode: request.mode });

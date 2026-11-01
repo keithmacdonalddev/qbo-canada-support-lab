@@ -28,6 +28,14 @@ function assertRun(run, scope) {
   }
 }
 function assertRunApproval(run) {
+  // Standing authority is checked against the CURRENT accountant inside admission.
+  // A historical approval/report snapshot is audit evidence, not that authority.
+  if (run?.agentAuthority) {
+    const origin = require('./business-agent-authority').agentAuthority(run.agentAuthority);
+    scopeFilter(run);
+    if (String(run.createdBy) !== origin.ownerId) throw problem('Accountant work belongs to a different owner');
+    return;
+  }
   if (run?.environment === 'production') {
     const consent = run.approval?.productionConsent;
     if (consent?.confirmed !== true || consent.environment !== 'production' || consent.realmId !== run.realmId || !same(consent.connectionId, run.connectionId) || consent.actorId !== run.approval.actorId || consent.planHash !== run.planHash) throw problem('The exact real Production company and plan require explicit owner confirmation before execution');
