@@ -97,3 +97,7 @@ Typical fixed call:
 Inspect its returned operationId/planHash, executeBusinessPeriod, verify, then reread today. For exact general payloads load qbo-api-records and the relevant routine skill.
 
 End each day with actual saved counts by family, overdue/partial promises, next renewals/releases, scenario IDs and unresolved manual items. A 220-record target, tool success flag or plan does not prove 220 saved records.
+
+## Account rotation
+
+Load banking-and-deposits before each plan. Deliberately distribute weekly activity across **every active bank, card and cash account**, using Account.<id> situations in getWeeklyCoverage and last-7/30-day evidence in getCoverageSituations. Choose due business obligations and intentional support scenarios for unused accounts; each needs a believable role, amount, correct currency and funds. Include monthly card payments, savings interest/sweeps, USD supplier payments, CNY/AUD activity, Square deposits net of fees, petty cash and tips receipt/payout. Review saved IDs after execution. Opening/inactive/zero-balance and reconciliation situations are deliberate support coverage too, subject to the documented setup/UI boundaries. A count of 220 concentrated in one bank is not account coverage.

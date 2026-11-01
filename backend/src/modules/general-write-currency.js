@@ -2,8 +2,8 @@
 // Currency admission and home-currency proof. No settings/currency writes. Rates are
 // observed through Exchangerate, never inferred from an old transaction or inverted.
 const ISO = /^[A-Z]{3}$/, DAY = /^\d{4}-\d{2}-\d{2}$/;
-const FOREIGN = new Set(['Customer', 'Vendor', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Deposit', 'Transfer']);
-const TXNS = new Set(['Invoice', 'Bill', 'Payment', 'BillPayment', 'Deposit', 'Transfer']);
+const FOREIGN = new Set(['Customer', 'Vendor', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Deposit', 'Transfer', 'Purchase']);
+const TXNS = new Set(['Invoice', 'Bill', 'Payment', 'BillPayment', 'Deposit', 'Transfer', 'Purchase']);
 const currencyOf = (record, home = 'CAD') => record?.CurrencyRef?.value || home;
 const exactMoney = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.round(value * 100)) && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001;
 const validRate = rate => typeof rate === 'number' && Number.isFinite(rate) && rate > 0 && rate <= 1000000 && /^\d+(?:\.\d{1,12})?$/.test(String(rate));
@@ -69,9 +69,10 @@ function currencyProblems(entity, op, payload, before, after, local, byRef, cont
     const account = lookup('Account', record[key]);
     if (account && currencyOf(account, home) !== code) out.push(key + ' currency must match ' + code + '.');
   }
-  const bankRefs = [record.DepositToAccountRef, record.CheckPayment?.BankAccountRef, record.CreditCardPayment?.CCAccountRef, ...(entity === 'Transfer' ? [record.FromAccountRef, record.ToAccountRef] : [])].filter(Boolean);
+  const bankRefs = [...(entity === 'CreditCardPayment' ? [record.BankAccountRef,record.CreditCardAccountRef] : []),...(entity === 'Purchase' ? [record.AccountRef] : []), record.DepositToAccountRef, record.CheckPayment?.BankAccountRef, record.CreditCardPayment?.CCAccountRef, ...(entity === 'Transfer' ? [record.FromAccountRef, record.ToAccountRef] : [])].filter(Boolean);
   const banks = bankRefs.map(ref => lookup('Account', ref));
   for (const bank of banks) if (bank && ![home, code].includes(currencyOf(bank, home))) out.push('Bank currency must be home currency or the transaction currency, never a second foreign currency.');
+  if (entity === 'Purchase' && banks[0] && currencyOf(banks[0], home) !== code) out.push('Purchase payment account currency must match CurrencyRef.');
   if (entity === 'Deposit' && foreign && banks[0] && currencyOf(banks[0], home) !== code) out.push('A foreign Deposit requires a bank in that same foreign currency.');
   if (entity === 'Transfer') {
     if (!exactMoney(record.Amount) || record.Amount === 0) out.push('Transfer Amount must be positive finite exact cents.');
@@ -81,6 +82,7 @@ function currencyProblems(entity, op, payload, before, after, local, byRef, cont
   for (const line of Array.isArray(record.Line) ? record.Line : []) {
     const account = lookup('Account', line?.[line.DetailType]?.AccountRef);
     if (account && ![home, code].includes(currencyOf(account, home))) out.push('A line account cannot introduce a second foreign currency.');
+    if (foreign && entity === 'Purchase' && account && ['Accounts Receivable','Accounts Payable','Bank','Credit Card'].includes(account.AccountType)) out.push('Foreign Purchase categories cannot bypass governed AR/AP settlements or bank/card transfers; use Payment, BillPayment or Transfer.');
     if (foreign && entity === 'Deposit' && !(line.LinkedTxn || []).length && account && ['Bank', 'Accounts Receivable', 'Accounts Payable', 'Credit Card'].includes(account.AccountType)) out.push('A free foreign deposit line cannot bypass bank transfers or AR/AP settlement links.');
   }
   // An omitted currency must never route CAD money into an existing foreign bank.

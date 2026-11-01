@@ -4,11 +4,14 @@ const { scoped } = require('./qbo-write-contract');
 const C = require('./period-close-contract');
 const { QBOClient } = require('./qbo-client');
 const MAX_RECORDS = 1000, MAX_ATTEMPTS = 8, MAX_MS = 180000;
-function compact(record) {
+function compact(record, legacy = false) {
   if (!record || !C.QID.test(record.Id || '') || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken) || typeof record.Active !== 'boolean' || !C.text(record.AccountType, 1, 100) || !C.text(record.Name, 1, 500) || (record.sparse !== undefined && record.sparse !== false)) C.fail('Current account metadata is incomplete.');
   const currency = record.CurrencyRef?.value ?? null;
   if (currency !== null && (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency))) C.fail('An account currency is unsupported.');
-  return { id: record.Id, syncToken: record.SyncToken, active: record.Active, type: record.AccountType, name: record.Name, currency };
+  const base = { id: record.Id, syncToken: record.SyncToken, active: record.Active, type: record.AccountType, name: record.Name, currency };
+  if (legacy) return base;
+  if (record.AccountSubType !== undefined && !C.text(record.AccountSubType, 1, 100)) C.fail('Current account subtype is incomplete.');
+  return { ...base, subtype: record.AccountSubType || null, reconciliationType: C.reconciliationType({ type: record.AccountType, subtype: record.AccountSubType }) };
 }
 function eligible(accounts) { return accounts.filter(row => ['Bank','Credit Card'].includes(row.type)); }
 function createPeriodCloseReader({ access, now = () => Date.now() }) {
@@ -53,7 +56,9 @@ function createPeriodCloseReader({ access, now = () => Date.now() }) {
       if (Object.keys(body).some(key => !['Preferences','startPosition','maxResults','totalCount'].includes(key)) || !Array.isArray(values) || values.length !== 1 || (body.maxResults !== undefined && body.maxResults !== 1) || !values[0] || Object.getPrototypeOf(values[0]) !== Object.prototype || !values[0].AccountingInfoPrefs || Object.getPrototypeOf(values[0].AccountingInfoPrefs) !== Object.prototype) C.fail('Current QuickBooks closing preferences are unavailable.');
       const raw = values[0].AccountingInfoPrefs.BookCloseDate, closedThrough = raw === undefined || raw === null || raw === '' ? null : raw;
       if (closedThrough !== null) try { date(closedThrough); } catch { C.fail('The QuickBooks closing date is invalid.'); }
-      return { closedThrough, contentHash: hash(values[0]) };
+      const homeCurrency = values[0].CurrencyPrefs?.HomeCurrency?.value;
+      if (!/^[A-Z]{3}$/.test(homeCurrency || '')) C.fail('Current company home currency is unavailable.');
+      return { closedThrough, contentHash: hash(values[0]), homeCurrency };
     }
     async function scan() {
       const accounts = [], seen = new Set(); let declared = null;
@@ -80,7 +85,7 @@ function createPeriodCloseReader({ access, now = () => Date.now() }) {
       const firstPreferences = await preferences(), accounts = preferencesOnly ? null : await scan(), second = preferencesOnly ? null : await scan(), lastPreferences = await preferences();
       if (!C.same(firstPreferences, lastPreferences) || !C.same(accounts, second)) C.fail('Accounts or closing preferences changed during review. Read them again.');
       await authority(); check();
-      const source = { version: 1, scope, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), accounts, accountInventoryHash: accounts ? hash(accounts) : null, preferences: lastPreferences, qboReadAttempts: attempts, matchingScans: !preferencesOnly };
+      const source = { version: 2, scope, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), accounts, accountInventoryHash: accounts ? hash(accounts) : null, preferences: lastPreferences, qboReadAttempts: attempts, matchingScans: !preferencesOnly };
       C.bounded(source, 260000);
       return { ...source, sourceHash: hash(source) };
     } catch (error) { error.periodReadAttempts = attempts; throw error; }
@@ -89,13 +94,14 @@ function createPeriodCloseReader({ access, now = () => Date.now() }) {
 }
 function validateObservation(source, scope) {
   const { sourceHash, ...value } = source || {};
-  if (value.version !== 1 || !C.same(value.scope, scope) || !C.HASH.test(sourceHash || '') || hash(value) !== sourceHash || !value.preferences || !C.HASH.test(value.preferences.contentHash || '') || !Number.isSafeInteger(value.qboReadAttempts) || value.qboReadAttempts < 2 || value.qboReadAttempts > MAX_ATTEMPTS || !Number.isFinite(Date.parse(value.startedAt)) || !Number.isFinite(Date.parse(value.observedAt)) || Date.parse(value.observedAt) < Date.parse(value.startedAt) || Date.parse(value.observedAt) - Date.parse(value.startedAt) > MAX_MS) C.fail('The retained account/preferences review changed.');
+  if (![1,2].includes(value.version) || !C.same(value.scope, scope) || !C.HASH.test(sourceHash || '') || hash(value) !== sourceHash || !value.preferences || !C.HASH.test(value.preferences.contentHash || '') || !Number.isSafeInteger(value.qboReadAttempts) || value.qboReadAttempts < 2 || value.qboReadAttempts > MAX_ATTEMPTS || !Number.isFinite(Date.parse(value.startedAt)) || !Number.isFinite(Date.parse(value.observedAt)) || Date.parse(value.observedAt) < Date.parse(value.startedAt) || Date.parse(value.observedAt) - Date.parse(value.startedAt) > MAX_MS) C.fail('The retained account/preferences review changed.');
+  if (value.version === 2 && !/^[A-Z]{3}$/.test(value.preferences.homeCurrency || '')) C.fail('The retained company home currency changed.');
   if (value.preferences.closedThrough !== null) try { date(value.preferences.closedThrough); } catch { C.fail('The retained QuickBooks closing date changed.'); }
   if (value.accounts !== null) {
     if (!Array.isArray(value.accounts) || value.accounts.length > MAX_RECORDS || hash(value.accounts) !== value.accountInventoryHash || value.matchingScans !== true || new Set(value.accounts.map(row => row.id)).size !== value.accounts.length) C.fail('The retained complete account inventory changed.');
     for (const row of value.accounts) {
-      if (!C.exact(row, ['id','syncToken','active','type','name','currency'])) C.fail('The retained account fields changed.');
-      const original = compact({ Id: row.id, SyncToken: row.syncToken, Active: row.active, AccountType: row.type, Name: row.name, CurrencyRef: row.currency === null ? undefined : { value: row.currency } });
+      if (!C.exact(row, ['id','syncToken','active','type','name','currency', ...(value.version === 2 ? ['subtype','reconciliationType'] : [])])) C.fail('The retained account fields changed.');
+      const original = compact({ Id: row.id, SyncToken: row.syncToken, Active: row.active, AccountType: row.type, Name: row.name, ...(row.subtype ? { AccountSubType: row.subtype } : {}), CurrencyRef: row.currency === null ? undefined : { value: row.currency } }, value.version === 1);
       if (!C.same(original, row)) C.fail('The retained account metadata changed.');
     }
   }

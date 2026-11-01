@@ -95,6 +95,7 @@ function nativePostingsOf(entity, record, ctx) {
       }
       add(id(record.DepositToAccountRef), total); return out;
     }
+    case 'CreditCardPayment': { const amount=cents(record.Amount); add(id(record.BankAccountRef),-amount); add(id(record.CreditCardAccountRef),amount); return out; }
     case 'Transfer': { const amount = cents(record.Amount); add(id(record.FromAccountRef), -amount); add(id(record.ToAccountRef), amount); return out; }
     case 'JournalEntry':
       for (const line of lines) { const detail = line?.JournalEntryLineDetail; add(id(detail?.AccountRef), (detail?.PostingType === 'Debit' ? 1 : detail?.PostingType === 'Credit' ? -1 : fail('A journal line needs Debit or Credit.')) * cents(line.Amount)); }

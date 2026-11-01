@@ -1,6 +1,6 @@
 # Stored-operation replay gate (RG)
 
-Status: **fail-closed diagnostic delivered; full historical admission/verification coverage is not complete.** Existing stores do not retain the required as-of writer, sync-watermark, calendar and independent read-back snapshots. A hash cannot reconstruct those bodies. This gate refuses to turn that gap into a passing replay.
+Status: **captured decisions replay through current code; missing evidence is reported separately and does not fail the gate.** Historical bodies cannot be reconstructed. A passing gate means retained decisions match, not that missing stages or historical operations were fully verified. See [RG2 capture and storage](../plans/replay-evidence-job-rg2-2026-11-01.md).
 
 ## Run it
 
@@ -15,7 +15,7 @@ npm run replay-gate --workspace=backend -- --prove-activity-choices --json
 
 Default selection is the last 72 hours by creation time. --days accepts 1–31; --since accepts a UTC date or UTC timestamp. --ops is a comma-separated list of exact fixed/general run IDs, intersected with the date selection. Missing requested IDs and empty selections fail. Scoped dependency history is loaded separately from the selected operations.
 
-Before every commit that changes preparation, compilation, write admission, transport recovery or verification, the orchestrator must run the default three-day command against the final working tree, then the affected node --test files. An --ops slice is for diagnosis and does not replace the default gate. Do not waive errored operations, use an empty selection, substitute today's records for missing history, or call a red gate a pass. This is a documented workflow, not an installed commit hook. The current RG instruction forbids commits; none were made.
+Before every commit that changes preparation, compilation, write admission, transport recovery or verification, the orchestrator must run the default three-day command against the final working tree, then the affected node --test files. An --ops slice is for diagnosis and does not replace the default gate. Do not waive captured mismatches, use an empty selection, or substitute today's records for missing history. Missing evidence is an explicit coverage gap rather than a decision refusal. This is a documented workflow, not an installed commit hook. The current RG instruction forbids commits; none were made.
 
 The extra --prove-activity-choices option runs named in-memory source doubles of the 96fe35a bugs. It never modifies source, uses stash/worktrees, or calls QBO.
 
@@ -33,7 +33,7 @@ Fixed-operation stages call current production functions:
 
 General-write stages use createGeneralWriteService.prepare, its guardBatch admission check, buildGeneralBatch, classifyGeneralResponse, the retained period proofs, matchesSavedRequest, and closeGeneralDay when the requisite independent bodies and GL report exist. Saved-to-rejected items are correlated by stable ref, including faults without a QBO ID.
 
-These are offline checks, not execution of the entire live dispatcher or coordinated write gate. In particular, replay does not fabricate a free writer fence, resource claims, standing-grant state, unknown-outcome barriers or before-send receipts. Missing writer state produces REPLAY_WRITER_FENCE_SNAPSHOT_MISSING. The full coordinated-admission/recovery replay still needs historical state capture and its loader. Added-role/adopted/history-specific preparation also needs its original supporting inputs; absent or unsupported inputs fail rather than being silently skipped.
+For operations with captured evidence, the gate instead executes the captured production boundary (compiler, coordinated gate, general guard/transport/recovery, graph reader or fixed/general close) against its exact recorded adapter inputs/results, query/cursor traces, clock, transaction attempts and transport closure state. It checks call arguments, asynchronous completion order, result hashes and transcript exhaustion. Coverage lists missing boundaries separately. The legacy path below remains diagnostic for older operations. These historical checks are offline checks, not execution of the entire live dispatcher or coordinated write gate. In particular, replay does not fabricate a free writer fence, resource claims, standing-grant state, unknown-outcome barriers or before-send receipts. Missing writer state produces REPLAY_WRITER_FENCE_SNAPSHOT_MISSING. The full coordinated-admission/recovery replay still needs historical state capture and its loader. Added-role/adopted/history-specific preparation also needs its original supporting inputs; absent or unsupported inputs fail rather than being silently skipped.
 
 ## Data and isolation
 
@@ -51,11 +51,11 @@ The offline worker has the remaining portion of a nine-minute budget; the whole 
 
 Each stage carries its own baseline. A persisted plan proves preparation, a compiled/sent receipt proves its corresponding admission stage, and a completed verification proves verification. A blocked operation does not downgrade a previously saved step to “refused.”
 
-Operation outcomes are same outcome, newly refused, newly accepted or errored. Any missing/unsupported evidence or unknown baseline makes the operation errored, even if another stage independently identifies a refusal. A newly refused stage has a fixed error code and private-message hash. Newly accepted requires a proven earlier refusal at that same stage, not merely a blocked run. Empty and incomplete results cannot pass. Any newly refused/errored operation or failed advisory preflight exits 1.
+Operation outcomes include same outcome, newly refused, newly accepted, errored and missing evidence. Missing historical inputs/baselines are listed under missingEvidence and coverage; any other unprovable legacy decisions are labelled unverifiedDecisions, never claimed as confirmed regressions. Captured mismatches and malformed evidence remain failures. A newly refused stage has a fixed error code and private-message hash. Newly accepted requires a proven earlier refusal at that same stage, not merely a blocked run. Empty selections cannot pass. Missing evidence alone exits 0. A changed captured decision (including a newly accepted refusal), other replay error or failed advisory preflight exits 1. Partial captured coverage is labelled captured-decisions-only.
 
 CompanySyncRecord has one mutable row per entity/ID, not a version history. The loader cannot load historical snapshots that never existed. A later mirror is never substituted for a pre-send observation. Earlier rows must be within the existing five-minute observation budget. Approved tax sources are never installed as “current” records. A create response only substitutes for an independent fixed read-back when its full body hash is authenticated by the retained read-back proof; an invoice changed by a later payment cannot use its create body.
 
-## Evidence from this job
+## Historical RG evidence before RG2
 
 Read-only command on today's selection:
 
@@ -75,7 +75,7 @@ After dependency-history and review fixes, the default three-day run finished in
 - Real-data activity-choices preflight passed. Restoring the single-use query bug from 96fe35a in memory made the same stored data fail with REPLAY_ACTIVITY_CHOICES_UNAVAILABLE. regressionProof.proved was true.
 - The separate non-JSON Date bug double did not fail on this real capture; its selected payloads did not reproduce that shape. The synthetic Date-bearing test does fail with that bug and passes with current code. These are distinct proofs.
 
-The current gate therefore **does not satisfy the full historical replay acceptance requirement yet**. Its successful parts and its missing inputs are observable. Broad commit gating remains red until a separately scoped production capture change retains per-stage reference/list versions and sync watermarks, writer/calendar/authority state, exact read/query/report responses, and stage-specific success/refusal outcomes. Historical gaps cannot be recovered through hashes, guessed state, or fresh QBO calls. RG owns no production source or database writes, so that capture change was not made here.
+That RG baseline **did not satisfy the full historical replay acceptance requirement**. RG2 adds bounded future capture; the following paragraph describes the original RG job, not the current implementation. Its successful parts and its missing inputs are observable. Broad commit gating remains red until a separately scoped production capture change retains per-stage reference/list versions and sync watermarks, writer/calendar/authority state, exact read/query/report responses, and stage-specific success/refusal outcomes. Historical gaps cannot be recovered through hashes, guessed state, or fresh QBO calls. RG owns no production source or database writes, so that capture change was not made here.
 
 ## Verification and review
 

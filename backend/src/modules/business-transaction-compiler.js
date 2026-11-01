@@ -400,7 +400,7 @@ function compileBusinessTransaction({ scope, step, policy, referenceEvidence, pa
 }
 // Runtime entry: resolve historical approval evidence before the pure compiler.
 // The resolver is private and per compilation; no witness changes stored inputs or hashes.
-async function compileBusinessTransactionWithDefinitions(input, { resolveDefinitionObservation, signal, clock = () => input.now ?? Date.now() } = {}) {
+async function compileBusinessTransactionWithDefinitionsImplementation(input, { resolveDefinitionObservation, signal, clock = () => input.now ?? Date.now() } = {}) {
   const controller = new AbortController(), abort = () => controller.abort();
   if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
   const timer = setTimeout(abort, 10000); timer.unref?.();
@@ -439,5 +439,8 @@ async function compileBusinessTransactionWithDefinitions(input, { resolveDefinit
     check();
     return compileBusinessTransaction({ ...input, now: clock(), resolveDefinitionObservation: (scope, entity, id, definition) => retained.get(key(scope, entity, id, definition)) });
   } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); controller.abort(); }
+}
+function compileBusinessTransactionWithDefinitions(input, options = {}) {
+  return require('./business-replay-evidence').captureFunction('business-transaction-compiler', 'compileBusinessTransactionWithDefinitions', compileBusinessTransactionWithDefinitionsImplementation, [input, options]);
 }
 module.exports = { compileBusinessTransaction, compileBusinessTransactionWithDefinitions, originalTaxMatches, SUPPORTED, LISTS, canonicalTxnType };

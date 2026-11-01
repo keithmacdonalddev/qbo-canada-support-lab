@@ -78,7 +78,10 @@ function createPeriodCloseService(dependencies = {}) {
     return {key:selection.key,id:selection.id,evidenceHash:selection.evidenceHash,requestHash:p.requestHash,definitionHash:p.definitionHash,name:p.definition.name,observedOn:p.request.observedOn,acceptable,checks};
   }
   async function inspect(bound,request,{session,observations,signal}={}) {
-    C.validateRequest(request,bound.scope,now()); await ready(bound,session);
+    C.validateRequest(request,bound.scope,now());
+    // v1 is retained only for historical decisions and exact terminal recovery.
+    if (request.mode !== 'reopen' && request.version !== 2) C.fail('Refresh the period form: new account evidence requires version 2 currency, cash-count and feature-mark checks.', 400);
+    await ready(bound,session);
     const b=budget(), current=await state(bound,session,b); await idle(bound,current,session,b);
     if (!observations) observations=await (dependencies.readObservations || createPeriodCloseReader({access:bound.access,now}))(bound.scope,{signal,preferencesOnly:request.mode==='reopen'});
     validateObservation(observations,bound.scope);
@@ -99,6 +102,7 @@ function createPeriodCloseService(dependencies = {}) {
       if (!lower) C.fail('Choose an actual reduction in at least one app cutoff.');
     } else {
       if (!observations.accounts || request.accountInventoryHash!==observations.accountInventoryHash) C.fail('The complete current account inventory changed. Recheck each account.');
+      if (request.version === 2 && request.bankChecks.some(row => row.currencyEvidence.homeCurrency !== observations.preferences.homeCurrency)) C.fail('The home currency differs from current company preferences.');
       banks=C.bankResults(request,eligible(observations.accounts));
       for (const selected of request.reportChecks) reports.push(await reportSource(bound,selected,request.period,session,b));
       if (request.mode==='close') {
@@ -109,10 +113,10 @@ function createPeriodCloseService(dependencies = {}) {
         const required=critical();
         if (!required.length || required.some(definition=>!reports.some(row=>row.key===definition.key))) blockers.push('Keep a matching manual check for every current critical report ('+required.length+' required).');
         if (reports.some(row=>!row.acceptable)) blockers.push('Every selected report level and assertion must pass; only conditional reports may use explained Not applicable outcomes.');
-        if (banks.some(row=>!['passed','excluded'].includes(row.status))) blockers.push('Resolve each bank/card difference or incomplete account before closing.');
+        if (banks.some(row=>!['passed','excluded'].includes(row.status))) blockers.push('Resolve each bank/card/cash difference or incomplete account before closing.');
         for (const row of banks.filter(row=>row.status==='excluded')) exceptions.push({kind:'account-excluded',key:row.accountId,note:request.bankChecks.find(value=>value.accountId===row.accountId).note});
         for (const report of reports) for (const check of report.checks.filter(row=>row.status==='not-applicable')) exceptions.push({kind:'report-not-applicable',key:report.key,note:check.label+': '+check.note});
-        if (request.advanceReconciled && (!banks.length || banks.some(row=>row.status!=='passed'))) blockers.push('Company-wide reconciliation protection needs a zero-difference checked result for every current bank/card account, with no exclusions.');
+        if (request.advanceReconciled && (!banks.length || banks.some(row=>row.status!=='passed'))) blockers.push('Company-wide reconciliation protection needs a zero-difference checked result for every current bank/card/cash account, with no exclusions.');
         after.closedThrough=request.period.throughDate;
         if (request.advanceReconciled) {
           if (before.reconciledThrough && request.period.throughDate<before.reconciledThrough) blockers.push('Closing cannot lower existing reconciliation protection.');
@@ -133,7 +137,7 @@ function createPeriodCloseService(dependencies = {}) {
     const bound=await bind(user,'periods.manage',true);await ready(bound);
     const observed=await (dependencies.readObservations || createPeriodCloseReader({access:bound.access,now}))(bound.scope,{signal});
     validateObservation(observed,bound.scope);
-    return {...bound.scope,scopeHash:hash(bound.scope),accounts:eligible(observed.accounts),accountInventoryHash:observed.accountInventoryHash,observedAt:observed.observedAt,qboClosedThrough:observed.preferences.closedThrough,qboReadAttempts:observed.qboReadAttempts,currentInventory:true};
+    return {...bound.scope,scopeHash:hash(bound.scope),accounts:eligible(observed.accounts),accountInventoryHash:observed.accountInventoryHash,observedAt:observed.observedAt,qboClosedThrough:observed.preferences.closedThrough,homeCurrency:observed.preferences.homeCurrency,qboReadAttempts:observed.qboReadAttempts,currentInventory:true};
   }
   async function sources(user,period) {
     const bound=await bind(user);C.period(period,now());const b=budget(),items=[];

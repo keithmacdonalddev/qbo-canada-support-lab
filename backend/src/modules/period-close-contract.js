@@ -35,7 +35,7 @@ function period(value, now) {
 }
 function validateRequest(input, scope, now) {
   bounded(input, 96000);
-  if (!input || !UUID.test(input.requestKey || '') || input.version !== 1 || input.scopeHash !== hash(scope) || !text(input.reason, 30, 2000)) fail('Use the exact company decision and a concrete reason of at least thirty characters.', 400);
+  if (!input || !UUID.test(input.requestKey || '') || ![1,2].includes(input.version) || input.scopeHash !== hash(scope) || !text(input.reason, 30, 2000)) fail('Use the exact company decision and a concrete reason of at least thirty characters.', 400);
   if (input.mode === 'reopen') {
     if (!exact(input, ['version','requestKey','scopeHash','mode','previousControlHash','closedThrough','reconciledThrough','reason','evidenceReference','correctionPlan','confirmReopen']) || !HASH.test(input.previousControlHash || '') || !text(input.evidenceReference, 3, 1000) || !text(input.correctionPlan, 30, 2000) || input.confirmReopen !== true) fail('Review both original app cutoffs and explain the reopening and correction plan.', 400);
     for (const key of ['closedThrough', 'reconciledThrough']) if (input[key] !== null) {
@@ -49,7 +49,16 @@ function validateRequest(input, scope, now) {
   if (!Array.isArray(input.bankChecks) || input.bankChecks.length > 64 || new Set(input.bankChecks.map(row => row?.accountId)).size !== input.bankChecks.length) fail('Each current bank or card account needs its own unique entry.', 400);
   let itemCount = 0;
   for (const row of input.bankChecks) {
-    if (!exact(row, ['accountId','status','statementBalance','bookBalance','statementReference','bookReference','observedOn','items','note','confirmMatched','confirmPosted']) || !QID.test(row.accountId || '') || !['checked','excluded','not-checked'].includes(row.status) || !text(row.note, row.status === 'not-checked' ? 0 : 20, 1000) || typeof row.confirmMatched !== 'boolean' || typeof row.confirmPosted !== 'boolean' || !Array.isArray(row.items) || row.items.length > 128) fail('Use a complete, separately explained account observation.', 400);
+    if (!exact(row, ['accountId','status','statementBalance','bookBalance','statementReference','bookReference','observedOn','items','note','confirmMatched','confirmPosted', ...(input.version === 2 ? ['currencyEvidence'] : [])]) || !QID.test(row.accountId || '') || !['checked','excluded','not-checked'].includes(row.status) || !text(row.note, row.status === 'not-checked' ? 0 : 20, 1000) || typeof row.confirmMatched !== 'boolean' || typeof row.confirmPosted !== 'boolean' || !Array.isArray(row.items) || row.items.length > 128) fail('Use a complete, separately explained account observation.', 400);
+    if (input.version === 2) {
+      const e = row.currencyEvidence;
+      if (!exact(e, ['currency','reconciliationType','homeCurrency','statementHomeBalance','bookHomeBalance','homeReference','confirmNoFxMovement','confirmMarksNotCompletion']) || !/^[A-Z]{3}$/.test(e.currency || '') || !/^[A-Z]{3}$/.test(e.homeCurrency || '') || !['bank-statement','card-statement','cash-count'].includes(e.reconciliationType) || typeof e.confirmNoFxMovement !== 'boolean' || typeof e.confirmMarksNotCompletion !== 'boolean' || ['statementHomeBalance','bookHomeBalance','homeReference'].some(k => typeof e[k] !== 'string')) fail('Bind the observation to its account currency, reconciliation type and dated home-currency sources.', 400);
+      if (row.status === 'checked') {
+        cents(e.statementHomeBalance); cents(e.bookHomeBalance);
+        if (!text(e.homeReference, 3, 1000)) fail('Keep the dated home-currency valuation source and exchange-rate reference.', 400);
+        if (e.reconciliationType === 'cash-count' && row.items.length) fail('Cash counts must agree directly to the cashbook; post corrections separately, without outstanding bank items.', 400);
+      } else if (e.statementHomeBalance || e.bookHomeBalance || e.homeReference || e.confirmNoFxMovement || e.confirmMarksNotCompletion) fail('Unchecked accounts cannot carry home-currency results or attestations.', 400);
+    }
     for (const key of ['statementBalance','bookBalance','statementReference','bookReference','observedOn']) if (typeof row[key] !== 'string') fail('Bank evidence fields must be explicit text.', 400);
     if (row.status === 'checked') {
       cents(row.statementBalance); cents(row.bookBalance);
@@ -69,10 +78,27 @@ function validateRequest(input, scope, now) {
   if (input.mode === 'record' && !input.bankChecks.some(row => row.status !== 'not-checked') && !input.reportChecks.length) fail('Record at least one actual observation or explicit exclusion.', 400);
   return input;
 }
+function reconciliationType(account) {
+  return account.type === 'Credit Card' ? 'card-statement' : account.subtype === 'CashOnHand' ? 'cash-count' : 'bank-statement';
+}
 function bankResults(input, accounts) {
   if (!same(input.bankChecks.map(row => row.accountId).sort(), accounts.map(row => row.id).sort())) fail('Review every account from the complete current bank/card inventory.');
   return accounts.map(account => {
     const row = input.bankChecks.find(value => value.accountId === account.id), card = account.type === 'Credit Card';
+    if (input.version === 2) {
+      const e = row.currencyEvidence, kind = reconciliationType(account);
+      if (e.currency !== account.currency || e.reconciliationType !== kind) fail('Account currency or reconciliation type changed. Read the current inventory again.');
+      const base = { accountId: account.id, name: account.name, currency: account.currency, type: account.type, reconciliationType: kind, homeCurrency: e.homeCurrency, nativeMarksCountAsCompletion: false, orientation: card ? 'positive-amount-owed' : kind === 'cash-count' ? 'positive-cash-asset' : 'positive-bank-asset' };
+      if (row.status !== 'checked') return { ...base, status: row.status, differenceCents: null };
+      const receipts = sum(row.items.filter(item => item.kind === 'receipt').map(item => cents(item.amount, false)));
+      const payments = sum(row.items.filter(item => item.kind === 'payment').map(item => cents(item.amount, false)));
+      if (kind === 'cash-count' && row.items.length) fail('Cash counts cannot contain outstanding bank items.');
+      const statementCents = cents(row.statementBalance), bookCents = cents(row.bookBalance);
+      const expectedCents = sum([statementCents, receipts, -payments]), differenceCents = sum([bookCents, -expectedCents]);
+      const statementHomeCents = cents(e.statementHomeBalance), bookHomeCents = cents(e.bookHomeBalance);
+      if (e.currency === e.homeCurrency && (statementCents !== statementHomeCents || bookCents !== bookHomeCents)) fail('Home-currency accounts must use the same native and home amounts.');
+      return { ...base, status: !row.confirmMatched || !row.confirmPosted || !e.confirmNoFxMovement || !e.confirmMarksNotCompletion ? 'incomplete' : differenceCents === 0 ? 'passed' : 'failed', statementCents, bookCents, outstandingIncreaseCents: receipts, outstandingDecreaseCents: payments, expectedCents, differenceCents, statementHomeCents, bookHomeCents, homeValuationDifferenceCents: sum([bookHomeCents, -statementHomeCents]), homeValuesAreInformational: true };
+    }
     if (row.status !== 'checked') return { accountId: account.id, name: account.name, currency: account.currency, type: account.type, status: row.status, differenceCents: null, orientation: card ? 'positive-amount-owed' : 'positive-bank-asset' };
     const receipts = sum(row.items.filter(item => item.kind === 'receipt').map(item => cents(item.amount, false)));
     const payments = sum(row.items.filter(item => item.kind === 'payment').map(item => cents(item.amount, false)));
@@ -92,4 +118,4 @@ function validateDecisionEnvelope(row, scope, ownerId) {
   return p;
 }
 function isPeriodEvent(row) { return row?.action === ACTION || row?.afterState?.kind === KIND; }
-module.exports = { KIND, ACTION, MAX_DECISION_BYTES, HASH, ID, QID, CHECKLIST, same, exact, text, fail, bounded, cents, sum, period, validateRequest, bankResults, decisionId, validateDecisionEnvelope, isPeriodEvent };
+module.exports = { KIND, ACTION, MAX_DECISION_BYTES, HASH, ID, QID, CHECKLIST, same, exact, text, fail, bounded, cents, sum, period, validateRequest, reconciliationType, bankResults, decisionId, validateDecisionEnvelope, isPeriodEvent };

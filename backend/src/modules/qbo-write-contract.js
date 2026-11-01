@@ -53,7 +53,7 @@ function classifyWriteResponse(request, response, intuitTid = '') {
   if (payload) { try { const serialized = JSON.stringify(payload); if (Buffer.byteLength(serialized) <= 8000000) responseHash = createHash('sha256').update(serialized).digest('hex'); } catch { /* remain unknown */ } }
   const base = { httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null, intuitTid: typeof intuitTid === 'string' && /^[a-z0-9._-]{1,128}$/i.test(intuitTid) ? intuitTid : null, responseHash, entity: request.entity, operation: request.operation };
   if (!payload || !responseHash || request.entity === 'batch') return { ...base, outcome: 'unknown' };
-  const matches = Object.entries(payload).filter(([key]) => key.toLowerCase() === request.entity);
+  const matches = Object.entries(payload).filter(([key]) => (request.entity==='creditcardpayment'&&key==='CreditCardPaymentTxn'||key.toLowerCase()===request.entity));
   const fault = payload.Fault;
   // Narrow no-effect classification. System faults and unrecognized error envelopes
   // remain unknown regardless of HTTP status. No request is retried automatically.

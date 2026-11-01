@@ -64,7 +64,7 @@ function resolve(value, saved) {
   return out;
 }
 const unresolved = value => JSON.stringify(value).includes('"$ref"');
-function createGeneralWriteService({ models, copy, contextFor, transport = null, retain = null, markDirty = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
+function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
   async function ownedSet(scope, operations, session) {
@@ -81,7 +81,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
     const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
-    const result = checkGeneralWrite({ proposal: { operations }, local, context });
+    const result = checkGeneralWrite({ proposal: { operations }, local, context, scope, runId });
     // A later posting day is independent; changing an earlier pending day's records,
     // names or links would change the close's exact readback evidence and must wait.
     if (context.calendarClosePending) {
@@ -148,7 +148,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       if (!receipt || receipt.general?.runId !== String(run._id) || receipt.general.batchIndex !== batch.index || receipt.general.requestId !== batch.requestId || proof?.entity !== 'batch' || proof.operation !== 'create' || !Number.isInteger(proof.httpStatus) || proof.httpStatus < 200 || proof.httpStatus >= 300 || !Array.isArray(rows) || rows.length !== batch.items.length || new Set(rows.map(row => row.bId)).size !== rows.length || proof.items?.length !== rows.length) continue;
       if (!rows.every(row => { const { bId, ...body } = row, original = proof.items.find(p => p.bId === bId); return original?.outcome === 'saved' && original.responseHash === require('node:crypto').createHash('sha256').update(JSON.stringify(body)).digest('hex'); })) continue;
       const sent = batch.items.find(row => row.ref === ref), native = rows.find(row => row.bId === sent.bId)?.[sent.entity];
-      if (!native || native.Id !== item.qboId || canonical(sent.payload) !== canonical(item.request) || canonical(native) !== canonical(item.record) || !matchesSavedRequest(sent, native)) continue;
+      if (!native || native.Id !== item.qboId || canonical(sent.payload) !== canonical(item.request) || canonical(native) !== canonical(item.record) || !matchesSavedRequest({ ...sent, scope, runId: String(run._id) }, native)) continue;
       const expectation = { ...sent.payload }; if (native.DueDate == null) delete expectation.DueDate;
       if (!isComplete(sent.entity, native, expectation)) continue;
       const { next, errorDetail, ...saved } = item;
@@ -256,7 +256,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       }
       }
       const recorded = run.batches.find(row => row.index === batch.index)?.transport;
-      const outcomes = itemOutcomes(batch, response).items.map(item => {
+      const outcomes = itemOutcomes({ ...batch, scope, runId: String(run._id) }, response).items.map(item => {
         const gated = recorded?.items?.find(row => row.bId === item.bId);
         return recorded && (!gated || gated.outcome === 'unknown' && !gated.mismatch) ? { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'The gate could not prove this item; attribute its original outcome before continuing.' } } : item;
       }), items = { ...run.items }, owned = [...run.owned];
@@ -265,7 +265,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         if (outcome.outcome === 'saved') {
           const record = outcome.record, complete = isComplete(item.entity, record, item.op === 'create' ? (item.entity === 'PurchaseOrder' && record?.DueDate == null ? Object.fromEntries(Object.entries(item.payload).filter(([key]) => key !== 'DueDate')) : item.payload) : item.before?.CurrencyRef?.value && item.before.CurrencyRef.value !== 'CAD' ? { CurrencyRef: item.before.CurrencyRef, ...(item.before.ExchangeRate !== undefined ? { ExchangeRate: item.before.ExchangeRate } : {}), ...(item.before.HomeTotalAmt !== undefined ? { HomeTotalAmt: item.before.HomeTotalAmt } : {}) } : null);
           entry.qboId = String(record?.Id ?? ''); entry.version = record?.SyncToken ?? null; entry.record = record || null;
-          if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest(item, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'check-saved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
+          if (!QBO_ID.test(entry.qboId) || !matchesSavedRequest({ ...item, scope, runId: String(run._id) }, record || {})) { entry.outcome = 'mismatch'; entry.next = { action: 'check-saved', reason: 'QuickBooks saved values that differ from the request or changed native billable expense history.' }; }
           owned.push({ key: item.entity + ':' + entry.qboId, ref: item.ref, op: item.op });
           if (entry.outcome === 'saved') {
             entry.complete = complete; entry.parents = invalidatedParents(item.before || null, record);
@@ -313,6 +313,12 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
 }
 // The published business context the guards need: open day, protected and verified dates,
 // published tax codes and their total percentages (from the copy's TaxCode/TaxRate).
+function createGeneralWriteService(config) {
+  const service = createGeneralWriteServiceImplementation(config);
+  const captured = require('./business-replay-evidence').captureFactory('general-write-service', 'createGeneralWriteService', createGeneralWriteServiceImplementation, { now: () => Date.now(), ...config }, ['guardBatch']);
+  service.guardBatch = captured.guardBatch;
+  return service;
+}
 function createGeneralWriteContext({ models, now = () => Date.now(), readRate = null }) {
   return async (scope, local, { session, runId, operations = [], salesTaxCodes = [] } = {}) => {
     const { businessDate } = require('./business-activity-preview'), { shift } = require('./business-calendar');
@@ -404,7 +410,7 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   const models = { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
   const observations = require('./business-observation-store').createBusinessObservationStore({ now });
   // fetch: one targeted fresh read, only for a record this same write just changed.
-  const copy = { read: async (scope, entity, id) => (await observations.read(scope, entity, id, { transactions: true }))?.record || null, fetch: async (scope, entity, id) => access ? (await (await access.resolveClient(scope)).read(entity.toLowerCase(), id))?.[entity] || null : null };
+  const copy = { read: async (scope, entity, id) => (await observations.read(scope, entity, id, { transactions: true }))?.record || null, fetch: async (scope, entity, id) => access ? (await (await access.resolveClient(scope)).read(entity.toLowerCase(), id))?.[entity==='CreditCardPayment'?'CreditCardPaymentTxn':entity] || null : null };
   // The live transport exists only when dispatch is enabled on this server.
   const enabled = require('../config').features?.generalWriteDispatch === true;
   models.GeneralWriteRuns = require('../models/GeneralWriteRun');

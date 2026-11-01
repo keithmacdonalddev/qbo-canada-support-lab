@@ -83,7 +83,7 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
 }
 // This reader owns no defaults and performs no writes. Its model snapshot loads both
 // directions so omitting a known saved child cannot turn a used source into unused.
-function createBusinessGraphReader({ Steps, transaction, assertReady, authorize, readFence, readRecord, prepareRecords = null, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
+function createBusinessGraphReaderImplementation({ Steps, transaction, assertReady, authorize, readFence, readRecord, prepareRecords = null, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
   if (!Steps || [transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, now].some(value => typeof value !== 'function')) throw new TypeError('Graph reading needs explicit company-scoped adapters');
   function checkedFence(value, scope) {
     if (!value || !sameScope(value.scope, scope) || !Number.isSafeInteger(value.revision) || value.revision < 0 || !ID.test(value.operationId || '')) fail('The company writer has an unresolved or unavailable state.');
@@ -194,5 +194,8 @@ function createBusinessGraphReader({ Steps, transaction, assertReady, authorize,
       return { ...result, ...(retainSources ? { sourcesJson: JSON.stringify(entries), sourcesHash: hash(JSON.stringify(entries)) } : {}), writerFence: fence, evidenceHash: hash({ graph: result.evidenceHash, writerFence: fence }), durationMs: now() - started };
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
+}
+function createBusinessGraphReader(config) {
+  return require('./business-replay-evidence').captureFactory('business-graph-readback', 'createBusinessGraphReader', createBusinessGraphReaderImplementation, { now: () => Date.now(), ...config }, []);
 }
 module.exports = { reconcileBusinessGraph, createBusinessGraphReader, MAX_RECORDS, MAX_BYTES };

@@ -14,7 +14,7 @@ const COMPLETE = Object.freeze({
   transaction: ['Id', 'SyncToken', 'TxnDate', 'MetaData'], list: ['Id', 'SyncToken', 'MetaData'], attachment: ['Id', 'SyncToken', 'MetaData'], settings: ['Id', 'SyncToken'],
 });
 // Transaction fields whose absence means a sparse response.
-const TRANSACTION_BODY = { Transfer: ['Amount', 'FromAccountRef', 'ToAccountRef'], TimeActivity: ['NameOf'], default: ['Line'] };
+const TRANSACTION_BODY = { CreditCardPayment: ['Amount','BankAccountRef','CreditCardAccountRef'], Transfer: ['Amount', 'FromAccountRef', 'ToAccountRef'], TimeActivity: ['NameOf'], default: ['Line'] };
 const LIST_BODY = { Customer: ['DisplayName'], Vendor: ['DisplayName'], Employee: ['DisplayName'], Item: ['Name', 'Type'], Account: ['Name', 'AccountType'], Class: ['Name'], Department: ['Name'], Term: ['Name'], PaymentMethod: ['Name'] };
 function isComplete(entity, record, requested = null) {
   const spec = ENTITIES[entity];

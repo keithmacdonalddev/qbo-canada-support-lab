@@ -47,3 +47,7 @@ When an operation is blocked or needs-check, call inspectBlocker({operationId}) 
 - Record a second plan for the same day.
 - Ask the owner to do accountant work or to build tools.
 - Claim coverage, reconciliation or filing that records do not show.
+
+## Per-account coverage is a daily management measure
+
+Load banking-and-deposits and page through getWeeklyCoverage/getCoverageSituations. Review every active bank/card/cash Account ID, currency, last-seven/30-day transaction counts, transaction types and missing applicable situations. A healthy operating bank does not mean other accounts are used. Record under R01/R04 the unused account IDs and the deliberate plan for each this week: card spend/credit/payment, savings sweep/interest, foreign suppliers, Square net deposits, petty cash and tips payout. Fit these inside the ten plan changes by grouping related accounts with named IDs; keep the actual schedule in the plan detail. Check completion against saved IDs on the next review, with retained recurring due dates for monthly interest/card payments. Do not retry a saved action merely because a coverage source is stale. File precise tool gaps; reconciliation checklists stay needs owner in QuickBooks UI and are feature tests, not assertions of a real bank statement match.

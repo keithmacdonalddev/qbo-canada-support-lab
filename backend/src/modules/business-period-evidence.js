@@ -20,7 +20,7 @@ const same = (a, b) => String(a) === String(b);
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => same(a?.[key], b?.[key]));
 // Internal collector and immutable proof store. No external verification flags or
 // caller-provided report results are accepted by prepareEvidence.
-function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, Authorities, Receipts, Audits, transaction, access, assertReady, writerFence, steps, readReports, readStock, writeAudit, now = () => Date.now() }) {
+function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Evidence, Intents, Authorities, Receipts, Audits, transaction, access, assertReady, writerFence, steps, readReports, readStock, writeAudit, now = () => Date.now() }) {
   if ([Runs, Plans, Steps, Evidence].some(value => !value) || [transaction, access?.authorize, assertReady, writerFence?.graphSnapshot, writerFence?.assertSettled, steps?.verifyGraph, readReports, writeAudit, now].some(value => typeof value !== 'function')) throw new TypeError('Period evidence requires concrete stores and verification adapters');
   const movementModels = { Intents, Authorities, Receipts, Audits, Runs, Plans, Steps };
   const read = (model, filter, session) => model.findOne(filter).session(session).maxTimeMS(3000).lean();
@@ -227,5 +227,8 @@ function createBusinessPeriodEvidence({ Runs, Plans, Steps, Evidence, Intents, A
     });
   }
   return { prepareEvidence, loadProof, financialSummary };
+}
+function createBusinessPeriodEvidence(config) {
+  return require('./business-replay-evidence').captureFactory('business-period-evidence', 'createBusinessPeriodEvidence', createBusinessPeriodEvidenceImplementation, { now: () => Date.now(), ...config }, ['prepareEvidence', 'loadProof']);
 }
 module.exports = { createBusinessPeriodEvidence };

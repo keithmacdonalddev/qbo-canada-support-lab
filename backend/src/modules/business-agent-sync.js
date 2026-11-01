@@ -21,7 +21,7 @@ const amounts = require('./business-agent-reconciliation');
 //   with the mirror and fully re-reads any source that differs; a cursor older than 29 days
 //   is always fully re-read.
 // Steady state under the all-day rhythm v3 is about 370 requests a day.
-const ENTITIES = Object.freeze(['Preferences', 'CompanyInfo', 'Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
+const ENTITIES = Object.freeze(['Preferences', 'CompanyInfo', 'Customer', 'Vendor', 'Item', 'Account', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'CreditCardPayment', 'TaxPayment', 'JournalEntry', 'TimeActivity', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
 const SNAPSHOT_ONLY = new Set(['TimeActivity', 'TaxCode', 'TaxRate', 'CompanyInfo', 'Preferences']);
 const SINGLETONS = new Set(['CompanyInfo', 'Preferences']);
 const LISTS = new Set(['Customer', 'Vendor', 'Item', 'Account', 'Employee', 'Class', 'Department', 'Term', 'PaymentMethod', 'TaxCode', 'TaxRate']);
@@ -44,11 +44,12 @@ function cents(value) { const n = typeof value === 'number' ? value : NaN; retur
 function recordSummary(entity, record, homeCurrency) {
   const currency = safeText(record.CurrencyRef?.value, 8) || homeCurrency || null;
   const home = currency === homeCurrency;
-  const balance = cents(record.Balance), amount = cents(record.TotalAmt);
+  const balance = cents(record.Balance), amount = cents(entity === 'TaxPayment' ? record.PaymentAmount : entity === 'CreditCardPayment' || entity === 'Transfer' ? record.Amount : record.TotalAmt);
+  const txnDate = entity === 'TaxPayment' ? record.PaymentDate : record.TxnDate;
   const homeBalance = homeCurrency ? cents(record.HomeBalance) ?? (home ? balance : null) : null;
   const accountBalance = entity === 'Account' && record.AccountType === 'Bank' && home ? cents(record.CurrentBalance) : null;
   return { name: safeText(record.DisplayName || record.Name || record.CompanyName), docNumber: safeText(record.DocNumber, 80),
-    txnDate: /^\d{4}-\d{2}-\d{2}$/.test(record.TxnDate || '') ? record.TxnDate : null,
+    txnDate: /^\d{4}-\d{2}-\d{2}$/.test(txnDate || '') ? txnDate : null,
     dueDate: /^\d{4}-\d{2}-\d{2}$/.test(record.DueDate || '') ? record.DueDate : null,
     active: record.Active !== false, currency, amountCents: amount, balanceCents: balance,
     homeBalanceCents: homeBalance, bankBalanceCents: accountBalance,
@@ -69,15 +70,17 @@ function parseBody(body, entity, cdc, clock) {
     if (!plain(body.QueryResponse)) throw fail('The source query response is missing.');
     blocks = [body.QueryResponse];
   }
+  // QBO queries CreditCardPayment but names its response CreditCardPaymentTxn.
+  const canonicalEntity = name => name === 'CreditCardPaymentTxn' ? 'CreditCardPayment' : name;
   const rows = [], byEntity = Object.fromEntries(wanted.map(name => [name, []])), ids = new Set(), named = new Set(); let declared = 0;
   for (const block of blocks) {
     if (!plain(block) || block.Fault || block.fault) throw fail('The source response contains an unexpected or failed entity.');
     // Each block carries at most one requested source; a block with none has no changes.
     const names = Object.keys(block).filter(key => !['startPosition', 'maxResults', 'totalCount'].includes(key));
-    if (names.length > 1 || names.some(name => !wanted.includes(name) || named.has(name))) throw fail('The source response contains an unexpected or failed entity.');
-    const name = names[0]; if (name) named.add(name);
-    if (name && !Array.isArray(block[name])) throw fail('The source record list is malformed.');
-    const members = name ? block[name] : [];
+    if (names.length > 1 || names.some(name => !wanted.includes(canonicalEntity(name)) || named.has(canonicalEntity(name)))) throw fail('The source response contains an unexpected or failed entity.');
+    const responseName = names[0], name = canonicalEntity(responseName); if (name) named.add(name);
+    if (name && !Array.isArray(block[responseName])) throw fail('The source record list is malformed.');
+    const members = name ? block[responseName] : [];
     if (block.maxResults !== undefined && (!Number.isInteger(block.maxResults) || block.maxResults !== members.length)) throw fail('The source page size does not match its records.');
     if (block.startPosition !== undefined && block.startPosition !== 1) throw fail('The source did not start at the requested keyset.');
     if (block.totalCount !== undefined && (!Number.isInteger(block.totalCount) || block.totalCount < members.length)) throw fail('The declared source count is incomplete.');
@@ -369,6 +372,8 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
         // A source read on its own also answers the write gate's freshness demand.
         const demanded = source && source.phase === 'incremental' && !SNAPSHOT_ONLY.has(entity) && perform.freshWithinMs && !(clock - (stamp(source.lastSuccessAt) ?? -Infinity) <= perform.freshWithinMs);
         if (stamp(source?.nextAt) !== null && stamp(source.nextAt) > clock && !demanded && !cdcExpired(source, clock) && !amountFreshnessDue(state, entity, clock)) continue;
+        // New sources have no cursor: the governed full keyset read plus CDC catchup
+        // is their one-time historical backfill; no deployment migration or direct DB edit.
         if (!source || clock - stamp(source.startedAt) > MAX_AGE_MS && source.phase !== 'incremental' || cdcExpired(source, clock) || SNAPSHOT_ONLY.has(entity) && source.phase === 'incremental') source = sourceStart(entity, clock, source);
         else source = copy(source);
         state.sources[entity] = source;

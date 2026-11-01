@@ -289,11 +289,21 @@ async function replayDataset({root,bundle,features={},transform}) {
  }
  for(const [kind,runs] of [['fixed',data.operationruns||[]],['general',data.generalwriteruns||[]]])for(const run of runs.filter(r=>!bundle.selected||bundle.selected.includes(String(r._id)))){
    if(Date.now()-started>480000)throw missing('EXECUTION_BUDGET');
-   try{operations.push(await replayOperation({root,data,run,kind,features,transform}));}
+   try{
+      const evidence=(data.businessreplayevidences||[]).filter(e=>sameScope(e,run)&&e.operationIds?.includes(String(run._id)));
+      if(evidence.length)operations.push(await require('./captured.cjs').replayEvidence({root,data,run,evidence,features,transform}));
+      else {
+        const result=await replayOperation({root,data,run,kind,features,transform});
+        result.missingEvidence=result.errorDetail.filter(e=>/^REPLAY_.*(?:MISSING|UNRESOLVED|UNAVAILABLE|UNRECORDED|INCOMPLETE)/.test(e.code));
+        result.errorDetail=result.errorDetail.filter(e=>!result.missingEvidence.includes(e));
+        if(result.missingEvidence.length){result.unverifiedDecisions=result.errorDetail;result.errorDetail=[];result.outcome='missing evidence';}
+        operations.push(result);
+      }
+    }
    catch(error){operations.push({id:String(run._id),kind,outcome:'errored',errorDetail:[safeError(error,'harness')]});}
  }
- const counts=Object.fromEntries(['same outcome','newly refused','newly accepted','errored'].map(k=>[k,operations.filter(o=>o.outcome===k).length]));
- const failed=!operations.length||bundle.missing?.length||preflight.some(p=>p.status!=='passed')||counts['newly refused']||counts.errored;
- return {version:1,passed:!failed,captureHash:bundle.captureHash,elapsedMs:Date.now()-started,counts,missing:bundle.missing||[],preflight,operations};
+ const counts=Object.fromEntries(['same outcome','newly refused','newly accepted','errored','missing evidence'].map(k=>[k,operations.filter(o=>o.outcome===k).length]));
+ const failed=!operations.length||bundle.missing?.length||preflight.some(p=>p.status!=='passed')||counts['newly refused']||counts['newly accepted']||counts.errored;
+ return {version:2,coverage:{captured:operations.filter(o=>o.evidence==='captured').length,missing:operations.filter(o=>o.missingEvidence?.length).map(o=>({id:o.id,stages:o.missingEvidence}))},passed:!failed,captureHash:bundle.captureHash,elapsedMs:Date.now()-started,counts,missing:bundle.missing||[],preflight,operations};
 }
 module.exports={replayDataset,replayOperation,checkChoices,baselineFor,assertCompiledResponse,assertResponseOutcomes,assertPreparedReferences,stageBaseline,classifyStages};

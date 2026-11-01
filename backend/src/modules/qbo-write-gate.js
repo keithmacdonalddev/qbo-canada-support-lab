@@ -12,7 +12,7 @@ const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Plans, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, caseAdmission, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGateImplementation({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Plans, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, caseAdmission, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   if([populationTransport,populationRepairTransport,generalTransport].filter(Boolean).length>1)throw new TypeError('Install one exact batch transport per coordinated client.');
   const allowsCompanyOwner = async (writer, scope, session) => require('./business-writer-compatibility').allowsFixedWriter({ writer, scope, batch: await generalTransport.savedBatch(session), Runs, Plans, session, now: now() });
@@ -397,6 +397,9 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     });
   }
   return { preflight, begin, complete, failTransport, recoverGeneral, settleCase, assertCaseSettled, releaseUnsent };
+}
+function createQboWriteGate(config) {
+  return require('./business-replay-evidence').captureFactory('qbo-write-gate', 'createQboWriteGate', createQboWriteGateImplementation, { now: () => Date.now(), nonce: randomUUID, ...config }, ['begin', 'complete', 'failTransport', 'recoverGeneral', 'releaseUnsent']);
 }
 let defaultGate, defaultParts;
 function getQboWriteGate() {

@@ -1,13 +1,13 @@
 ---
 name: support-scenarios-for-troubleshooting
-description: Daily support and teaching scenarios using real tools: partial/late payers, credits applied later, non-inventory partial PO receipts, mixed-tax invoices, grouped deposits and fees, corrections; explicitly blocked unapplied payments, overpayments and net fee deposits. Use in every daily mix plan and when a scenario follow-up matures.
+description: Daily support and teaching scenarios using real tools: partial/late payers, credits applied later, non-inventory partial PO receipts, mixed-tax invoices, grouped deposits and fees, corrections; governed unapplied payments, overpayments and net fee deposits. Use in every daily mix plan and when a scenario follow-up matures.
 ---
 
 # Support scenarios inside ordinary business
 
 Use genuine modeled business reasons, stable parties and normal amounts. Start one or two scenarios/day, usually no more than 5% of new records including their later steps. Those records replace ordinary volume; they are not extra test batches. Don't intentionally damage books to create a correction.
 
-Read qbo-api-records first. All recipes below are **source-checked, not live-verified** (general-write-v1 / fixed policy v8, 2026-10-31). Substitute actual IDs/dates and published tax codes. General payload money is decimal CAD.
+Read qbo-api-records first. All recipes below are **source-checked, not live-verified** (general-write-v1 / fixed policy v8, 2026-10-31). Substitute actual IDs/dates and published tax codes. General payload money is decimal transaction currency (CAD unless CurrencyRef specifies a supported existing foreign currency). Load multicurrency for the dated observed rate/account rules.
 
 ## Operate a scenario lifecycle
 
@@ -138,7 +138,7 @@ Use general Payments or SalesReceipts to Undeposited Funds (fixed collections al
   ]
 }
 ```
-The linked amounts must equal the **full actual saved** Payment totals. Use only not-yet-deposited sources. For a no-tax $3 fee the bank movement is +$297; use the actual fee tax treatment and tax-inclusive bank effect. Evidence: Payment -> Deposit links, clearing reduced $300, separate fee expense and bank net. This is **two bank postings**, not one net bank deposit/match; net fee deposit representation is held because negative lines are refused. It does not reconcile the bank.
+The linked amounts must equal the **full actual saved** Payment totals. Use only not-yet-deposited sources. For a no-tax $3 fee the bank movement is +$297; use the actual fee tax treatment and tax-inclusive bank effect. Evidence: Payment -> Deposit links, clearing reduced $300, separate fee expense and bank net. This recipe makes **two bank postings**. For a single net merchant Deposit, instead add a negative DepositLineDetail fee line to the linked full-amount source lines: {"Amount":-3,"DetailType":"DepositLineDetail","DepositLineDetail":{"AccountRef":{"value":"<ACTIVE_FEE_EXPENSE_ACCOUNT_ID>"}}}. The net deposit stays positive; no tax overrides on the fee line. Use the separate taxable Purchase recipe when needed. Neither recipe proves reconciliation.
 
 ## Corrections
 
@@ -156,7 +156,7 @@ Do not intentionally create an incorrect record just to meet a correction count.
 | Overpayment | Refused: TotalAmt greater than net linked applications fails equality guard; no fake invoice or AR journal workaround |
 | Apply an old unapplied Payment later | Would need the missing supported prepayment lifecycle; retain existing records read-only, no duplicate cash |
 | Partial **inventory** PO receipt | Outside this inventory-off scope; fixed workflow receives full orders only |
-| Single deposit net of fees | Negative Deposit line refused; supported gross Deposit + separate fee Purchase shown above |
+| Single deposit net of fees | Supported: full linked receipt amounts plus negative expense fee line and positive net total; taxable fees use separate Purchase |
 | Mixed-tax sale | Current runtime permits only mappings.salesTax; requires a governed multi-code policy capability, not an invented tax code |
 | Historical tax-rate scenario | Compare existing dated history read-only; no backdated new sales or tax overrides |
 

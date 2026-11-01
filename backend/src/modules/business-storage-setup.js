@@ -37,10 +37,12 @@ const GENERAL_WRITE_COLLECTIONS = Object.freeze([
   { name: 'generalwriteruns', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true }), index({ environment: 1, realmId: 1, connectionId: 1, status: 1, updatedAt: -1 }), index({ environment: 1, realmId: 1, 'owned.key': 1 })] },
   { name: 'generaldaycloses', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, fromDate: 1, throughDate: 1, kind: 1, verifiedAt: -1 })] },
 ]);
+const REPLAY_EVIDENCE_COLLECTIONS = Object.freeze([{ name: 'businessreplayevidences', indexes: [index({ capturedAt: 1 }, { expireAfterSeconds: 2592000 }), index({ environment: 1, realmId: 1, connectionId: 1, operationIds: 1, capturedAt: -1 })] }]);
 function freeze(value) { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
 freeze(GENERAL_WRITE_COLLECTIONS); freeze(MASTER_COLLECTIONS); freeze(CONTINUAL_COLLECTIONS); freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
 function setupDefinition(profile = 'blueprint') {
   // Independent additive contract. The existing populated v4 profile is never reinstalled.
+  if (profile === 'replay-evidence') return { version: 7, profile, collections: REPLAY_EVIDENCE_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'diagnostic-evidence-only-existing-business-storage-retained' };
   if (profile === 'general-writes') return { version: 6, profile, collections: GENERAL_WRITE_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'general-write-collections-empty-database-wide-existing-business-storage-retained' };
   if (profile === 'master-preparation') return { version: 5, profile, collections: MASTER_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'master-preparation-runs-empty-database-wide-existing-business-storage-retained' };
   if (profile === 'continual-business') return { version: 4, profile, collections: CONTINUAL_COLLECTIONS, prerequisites: LEGACY_PREREQUISITES, initialState: 'operation-and-authority-collections-empty-database-wide-existing-drafts-cases-observations-retained' };
@@ -56,7 +58,7 @@ function validateTarget(target, configuredEnvironment) {
   if (typeof target.realmId !== 'string' || !/^[0-9]{1,32}$/.test(target.realmId) || ![target.connectionId, target.ownerId].every(id => typeof id === 'string' && /^[a-f0-9]{24}$/.test(id))) fail('Invalid setup target.');
 }
 function exactIndex(index, desired) {
-  return JSON.stringify(index.key) === JSON.stringify(desired.key) && !!index.unique === !!desired.unique && hash(index.partialFilterExpression ?? null) === hash(desired.partialFilterExpression ?? null) && !index.sparse && index.expireAfterSeconds == null && !index.hidden && (!index.collation || index.collation.locale === 'simple');
+  return JSON.stringify(index.key) === JSON.stringify(desired.key) && !!index.unique === !!desired.unique && hash(index.partialFilterExpression ?? null) === hash(desired.partialFilterExpression ?? null) && !index.sparse && (index.expireAfterSeconds ?? null) === (desired.expireAfterSeconds ?? null) && !index.hidden && (!index.collation || index.collation.locale === 'simple');
 }
 async function deployment(db) {
   const hello = await db.admin().command({ hello: 1, maxTimeMS: 5000 });
@@ -179,7 +181,7 @@ async function applySetup(db, client, target, configuredEnvironment, approvedHas
       const indexes = await db.collection(desired.name).indexes(time);
       if (!indexes.some(index => exactIndex(index, wanted))) {
         await assertInitialState(db, definition);
-        await db.collection(desired.name).createIndex(wanted.key, { name: wanted.name, ...(wanted.unique ? { unique: true } : {}), ...(wanted.partialFilterExpression ? { partialFilterExpression: wanted.partialFilterExpression } : {}), ...time, writeConcern: { w: 'majority' } });
+        await db.collection(desired.name).createIndex(wanted.key, { name: wanted.name, ...(wanted.unique ? { unique: true } : {}), ...(wanted.expireAfterSeconds != null ? { expireAfterSeconds: wanted.expireAfterSeconds } : {}), ...(wanted.partialFilterExpression ? { partialFilterExpression: wanted.partialFilterExpression } : {}), ...time, writeConcern: { w: 'majority' } });
       }
     }
   }
@@ -238,7 +240,7 @@ async function assertBaselineSetupCompleted(db, target, session) {
 // Maintenance is deliberately separate from initial installation: existing records and
 // owner/access fences are never updated. Only missing static DDL and append-only audits.
 function additiveDefinition(profile) {
-  if (profile !== 'general-writes') fail('Additive storage preparation supports only the general-writes profile.');
+  if (!['general-writes', 'replay-evidence'].includes(profile)) fail('Additive storage preparation supports only the general-writes or replay-evidence profiles.');
   return setupDefinition(profile);
 }
 async function additiveState(db, target, configuredEnvironment, profile) {
@@ -317,7 +319,7 @@ async function applyAdditiveStorage(db, target, configuredEnvironment, approvedH
     }
     for (const wanted of desired.indexes) {
       step = (await verify()).find(item => item.collection === desired.name);
-      if (step.missingIndexes.includes(wanted.name)) await db.collection(desired.name).createIndex(wanted.key, { name: wanted.name, ...(wanted.unique ? { unique: true } : {}), ...(wanted.partialFilterExpression ? { partialFilterExpression: wanted.partialFilterExpression } : {}), ...time, writeConcern: { w: 'majority' } });
+      if (step.missingIndexes.includes(wanted.name)) await db.collection(desired.name).createIndex(wanted.key, { name: wanted.name, ...(wanted.unique ? { unique: true } : {}), ...(wanted.expireAfterSeconds != null ? { expireAfterSeconds: wanted.expireAfterSeconds } : {}), ...(wanted.partialFilterExpression ? { partialFilterExpression: wanted.partialFilterExpression } : {}), ...time, writeConcern: { w: 'majority' } });
     }
   }
   if ((await verify()).some(step => step.create || step.missingIndexes.length)) fail('Additive storage preparation is incomplete. Retry the reviewed plan.');
@@ -329,4 +331,4 @@ async function applyAdditiveStorage(db, target, configuredEnvironment, approvedH
   }
   return { status: 'complete', planHash: approvedHash, auditId: String(keys.complete), qboWrites: 0 };
 }
-module.exports = { previewAdditiveStorage, applyAdditiveStorage, assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };
+module.exports = { previewAdditiveStorage, applyAdditiveStorage, assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, REPLAY_EVIDENCE_COLLECTIONS, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };

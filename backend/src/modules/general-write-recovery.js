@@ -59,11 +59,12 @@ function itemOutcomes(batch, response) {
       return { ref: item.ref, bId: item.bId, outcome: 'fault', fault: errors.map(error => ({ code: String(error?.code ?? ''), message: String(error?.Message ?? error?.message ?? ''), detail: String(error?.Detail ?? '') })), next: stale ? { action: 'refresh-and-new-attempt', reason: 'Stale SyncToken: read the record once, rerun its guards, then a new attempt with a new requestid.' } : { action: 'correct', reason: 'Return the fault to the model; a corrected item is a new attempt.' } };
     }
     const entity = Object.keys(row).find(key => !['bId', 'Fault', 'time'].includes(key));
-    const record = row[item.entity], valid = entity === item.entity && record && typeof record.Id === 'string' && /^\d{1,30}$/.test(record.Id) && (!item.id || record.Id === String(item.id));
+    const wireEntity=item.entity==='CreditCardPayment'?'CreditCardPaymentTxn':item.entity;
+    const record = row[wireEntity], valid = entity === wireEntity && record && typeof record.Id === 'string' && /^\d{1,30}$/.test(record.Id) && (!item.id || record.Id === String(item.id));
     if (item.op === 'delete') return valid && record.Id === String(item.id || item.payload?.Id) && record.status === 'Deleted' ? { ref: item.ref, bId: item.bId, outcome: 'deleted', record } : { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'The exact deletion is not proved by this response.' } };
     if (!valid || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken)) return { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'The saved entity identity or version is incomplete.' } };
     if (item.op === 'void' && !matchesVoid(item, record)) return { ref: item.ref, bId: item.bId, outcome: 'unknown', next: { action: 'unresolved', reason: 'A newer zero-amount void response is required.' } };
-    return { ref: item.ref, bId: item.bId, outcome: entity === item.entity ? 'saved' : 'unknown', record: row[entity] || null, ...(entity === item.entity ? {} : { next: { action: 'unresolved', reason: 'The response carried another entity type.' } }) };
+    return { ref: item.ref, bId: item.bId, outcome: entity === wireEntity ? 'saved' : 'unknown', record: row[entity] || null, ...(entity === wireEntity ? {} : { next: { action: 'unresolved', reason: 'The response carried another entity type.' } }) };
   });
   return { lost: false, items };
 }
@@ -75,7 +76,13 @@ function blockedRefs(outcomes, resources, dependsOn) {
   const held = new Set(open.flatMap(ref => resources[ref] || []));
   return Object.keys(resources).filter(ref => !outcomes.some(row => row.ref === ref) && ((resources[ref] || []).some(key => held.has(key)) || (dependsOn[ref] || []).some(name => failed.has(name)))).sort();
 }
-module.exports = { itemOutcomes, blockedRefs, correlation, STALE, matchesRequest, matchesSavedRequest, voidedRecord, matchesVoid };
+function capturedMatchesSavedRequest(item, record) {
+  return require('./business-replay-evidence').captureFunction('general-write-recovery', 'matchesSavedRequest', matchesSavedRequest, [item, record]);
+}
+function capturedItemOutcomes(batch, response) {
+  return require('./business-replay-evidence').captureFunction('general-write-recovery', 'itemOutcomes', itemOutcomes, [batch, response]);
+}
+module.exports = { itemOutcomes: capturedItemOutcomes, blockedRefs, correlation, STALE, matchesRequest, matchesSavedRequest: capturedMatchesSavedRequest, voidedRecord, matchesVoid };
 
 // Recovery is read-only at QuickBooks: known saved records are never re-sent.
 const RECHECK_MS = 60000;
@@ -247,7 +254,7 @@ async function recheckGeneralHistory({ scope, access, models, now = () => Date.n
   const active = await require('./business-authority').readPublishedBusiness({ ...models, scope });
   const client = await access.resolveClient(scope, { signal });
   const copy = { read: async (s, entity, id) => {
-    await guard(); const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id, undefined, 0, 0, { signal }))?.[entity];
+    await guard(); const record = (await client.apiCall('GET', entity.toLowerCase() + '/' + id, undefined, 0, 0, { signal }))?.[entity==='CreditCardPayment'?'CreditCardPaymentTxn':entity];
     return record || null;
   } };
   const gate = require('./general-write-close-gate').createGeneralCloseGate({ models: allModels, copy, now });

@@ -20,7 +20,7 @@ const LIMITS = Object.freeze({ rows: 200, bytes: 30000, rowBytes: 8000, groups: 
 const DEFAULT_FIELDS = Object.freeze(['DocNumber', 'TxnDate', 'DueDate', 'DisplayName', 'Name', 'CustomerRef.name', 'VendorRef.name', 'EntityRef.name', 'TotalAmt', 'Balance', 'Active', 'TxnStatus']);
 // QBO LinkedTxn.TxnType values that name a mirrored entity differently.
 const LINK_TYPES = Object.freeze({ BillPaymentCheck: 'BillPayment', BillPaymentCreditCard: 'BillPayment', ReceivePayment: 'Payment', Check: 'Purchase', Expense: 'Purchase', CreditCardCharge: 'Purchase', CreditCardCredit: 'Purchase' });
-const TRANSACTIONS = Object.freeze(['Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity']);
+const TRANSACTIONS = Object.freeze(['Invoice', 'Bill', 'Payment', 'BillPayment', 'Estimate', 'PurchaseOrder', 'SalesReceipt', 'CreditMemo', 'VendorCredit', 'RefundReceipt', 'Purchase', 'Deposit', 'Transfer', 'CreditCardPayment', 'TaxPayment', 'JournalEntry', 'TimeActivity']);
 
 const problem = (message, status = 400) => Object.assign(new Error(message), { status, code: 'BUSINESS_QUERY_REJECTED' });
 const own = (value, key) => value !== null && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, key);

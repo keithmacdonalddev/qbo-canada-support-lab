@@ -70,7 +70,7 @@ test('PO receipt quantities use Bill line links, not closed status or mere PO ex
 });
 test('owner setting and missing tool requirements remain distinct',()=>{
   const s=snapshot();assert.equal(get(s,'Bill.foreign-currency').reachability,'needs-owner-setting');
-  s.records[0].record.CurrencyPrefs.MultiCurrencyEnabled=true;assert.equal(get(s,'Bill.foreign-currency').reachability,'needs-tool');
+  s.records[0].record.CurrencyPrefs.MultiCurrencyEnabled=true;assert.equal(get(s,'Bill.foreign-currency').reachability,'reachable-now');
   assert.equal(get(s,'Invoice.recorded').reachability,'reachable-now');
 });
 test('weekly requires actual activity for every active class/location and deduplicates line uses',()=>{

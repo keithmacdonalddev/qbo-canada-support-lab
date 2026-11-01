@@ -6,7 +6,7 @@ description: Multicurrency for this CAD company: the irreversible owner/UI enabl
 # Multicurrency
 
 ## Current state
-- The company is single-currency CAD. Multicurrency is **not enabled** and no tool in this app creates foreign-currency activity.
+- Synced Preferences 1 already has MultiCurrencyEnabled:true with CAD home currency (replayed 2026-11-01). Re-read current preferences; never ask to enable it again while enabled. Foreign Invoice/Bill/Payment/BillPayment/Deposit/Transfer and non-inventory Purchase are supported through manageQboRecord with governed currency and posting checks.
 - **Turning multicurrency on is irreversible** and changes many screens and reports. It is an owner decision made in the QuickBooks UI (Account and settings → Advanced → Currency); this app never does it and never asks repeatedly. If the business needs it, record one owner decision (`recordBusinessDecision` with `requiresOwner`) explaining the business reason, and file `requestCapability` for the tools.
 
 ## How it works once enabled
@@ -23,5 +23,9 @@ description: Multicurrency for this CAD company: the irreversible owner/UI enabl
 - Month-end revaluation of open USD receivables.
 
 ## Checklist
-- [ ] Never describe foreign-currency activity as present.
+- [ ] Measure actual foreign activity from the synced copy; names and enabled settings do not prove activity.
 - [ ] One owner decision and one capability request at most; do not repeat.
+
+## Existing foreign accounts
+
+Plan weekly activity for Chequing USD (USD), checking (CNY) and Cash on hand AUD (AUD); use IDs from the synced copy and coverage. USD supplier BillPayment needs a same-currency vendor/bill and proven USD AP account. Transfer home -> foreign or foreign -> home is supported with Amount in CurrencyRef; never use a second foreign currency. Deposit destination must share CurrencyRef. Purchase PaymentType Cash/Check/CreditCard uses a payment account in the transaction currency and non-inventory lines. Omit ExchangeRate on a new transaction to let the server supply a freshly observed dated Exchangerate; an explicit rate must match. Never invent or reuse an old rate as current evidence. Currency/account/party mismatches and unsupported foreign inventory remain held.

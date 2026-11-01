@@ -56,7 +56,7 @@ function createRuntime({ root, data, run, at, transform, features = {} }) {
    const local=new Module(filename); cache.set(filename,local); local.filename=filename; local.paths=Module._nodeModulePaths(path.dirname(filename));
    local.require = spec => {
      if(spec==='replay:clock')return class ReplayDate extends Date {constructor(...args){super(...(args.length?args:[clock()]));}static now(){return clock();}};
-     if(spec==='mongoose')throw missing('DATABASE_ACCESS_FORBIDDEN');
+     if(spec==='mongoose')return Object.freeze({ mongo: Object.freeze({ MongoError: native('mongoose').mongo.MongoError, BSON: Object.freeze({ calculateObjectSize: native('mongoose').mongo.BSON.calculateObjectSize }) }) });
      const resolved=Module._resolveFilename(spec,local);
      if(typeof resolved==='string' && /[\\/]backend[\\/]src[\\/]/.test(resolved)) {
        if(/[\\/]modules[\\/]qbo-client\.js$/.test(resolved))return fakeClient;

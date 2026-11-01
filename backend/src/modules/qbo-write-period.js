@@ -2,7 +2,7 @@
 const { hash, canonical, date } = require('./business-calendar');
 const { runWithCaller } = require('./qbo-request-meter');
 const { scoped, denied } = require('./qbo-write-contract');
-const TRANSACTIONS = new Map(['Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate', 'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder', 'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment', 'TaxPayment'].map(name => [name.toLowerCase(), name]));
+const TRANSACTIONS = new Map(['Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate', 'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder', 'Deposit', 'Transfer', 'CreditCardPayment', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment', 'TaxPayment'].map(name => [name.toLowerCase(), name]));
 const LISTS = new Map(['Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term', 'TaxCode', 'TaxRate', 'PaymentMethod'].map(name => [name.toLowerCase(), name]));
 const ID = /^\d{1,30}$/, HASH = /^[a-f0-9]{64}$/;
 const CREDIT_SOURCE_PROTECTED_CODE = 'BUSINESS_CREDIT_SOURCE_PROTECTED';

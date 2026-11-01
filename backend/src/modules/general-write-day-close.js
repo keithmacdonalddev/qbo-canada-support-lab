@@ -18,6 +18,7 @@ const LABELS = Object.freeze({
   'Invoice': 'Invoice', 'Payment': 'Payment', 'Credit Memo': 'CreditMemo', 'Sales Receipt': 'SalesReceipt', 'Refund': 'RefundReceipt', 'Refund Receipt': 'RefundReceipt',
   'Bill': 'Bill', 'Bill Payment (Cheque)': 'BillPayment', 'Bill Payment (Check)': 'BillPayment', 'Bill Payment (Credit Card)': 'BillPayment', 'Supplier Credit': 'VendorCredit', 'Vendor Credit': 'VendorCredit',
   'Expense': 'Purchase', 'Cheque Expense': 'Purchase', 'Check': 'Purchase', 'Cheque': 'Purchase', 'Cash Expense': 'Purchase', 'Credit Card Expense': 'Purchase', 'Credit Card Credit': 'Purchase',
+  'Credit Card Payment': 'CreditCardPayment', 'CreditCardPayment': 'CreditCardPayment', 'Credit Card Pmt': 'CreditCardPayment',
   'Deposit': 'Deposit', 'Transfer': 'Transfer', 'Journal Entry': 'JournalEntry',
 });
 const URL_COLUMNS = 'tx_date,txn_type,doc_num,name,memo,split_acc,debt_amt,credit_amt';
@@ -141,7 +142,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
 // ledger, movements for the period assertion, and dirty ranges through the cursor.
 // Ledger rows of transactions that are not general records belong to the fixed
 // workflows' own period proof and are returned for it, never silently accepted.
-async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
+async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
   if (records.some(row => [row.current, row.before].some(record => record?.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD')) && ledgerReport?.Header?.Currency !== 'CAD') fail('Foreign records require a General Ledger explicitly expressed in CAD.');
   const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, new Set(row.targets)]));
@@ -150,5 +151,8 @@ async function closeGeneralDay({ Runs, scope, day, through = day, copy, ledgerRe
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();
   if (ledger.unknown.length) evaluation.failures.push({ key: null, reason: ledger.unknown.length + ' General Ledger rows name a transaction type the close cannot attribute.', rows: ledger.unknown });
   return { ok: evaluation.failures.length === 0, day, through, records: evaluation.results, movements: evaluation.movements, failures: evaluation.failures, fixedWorkflowKeys: others, reverify: dirtyRange({ markers: dirty, verifiedThrough, openingDate }) };
+}
+function closeGeneralDay(input) {
+  return require('./business-replay-evidence').captureFunction('general-write-day-close', 'closeGeneralDay', closeGeneralDayImplementation, [input]);
 }
 module.exports = { ledgerEndpoint, parseLedger, generalRecordsFor, readGeneralRuns, closeGeneralDay, LABELS, settlementLinks, SETTLEMENT_ENTITIES };

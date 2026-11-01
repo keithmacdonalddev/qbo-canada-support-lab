@@ -59,7 +59,7 @@ const LIST_SOURCES = {
 const TXN_SOURCES = [
   'Invoice', 'Payment', 'CreditMemo', 'SalesReceipt', 'RefundReceipt', 'Estimate',
   'Bill', 'BillPayment', 'VendorCredit', 'Purchase', 'PurchaseOrder',
-  'Deposit', 'Transfer', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment',
+  'Deposit', 'Transfer', 'CreditCardPayment', 'JournalEntry', 'TimeActivity', 'InventoryAdjustment',
 ];
 
 // ---------------------------------------------------------------------------
@@ -184,6 +184,7 @@ const AREA_SIGNALS = {
     activity('card-credits', 'Credit card refunds', 'Purchase', (p) => p.PaymentType === 'CreditCard' && p.Credit === true, { freshDays: 180 }),
   ],
   'banking.cash-and-clearing': [
+    activity('native-card-payments', 'Credit card payments from bank accounts', 'CreditCardPayment', null, { freshDays: 180, fill: 'quickbooks' }),
     activity('deposits', 'Bank deposits', 'Deposit'),
     activity('grouped-deposits', 'Deposits that combine customer payments', 'Deposit', linkedTo('Payment'), { freshDays: 60 }),
     activity('transfers', 'Transfers between accounts', 'Transfer', null, { freshDays: 90 }),
@@ -206,8 +207,9 @@ const AREA_SIGNALS = {
     pref('books-closed', 'Books closed through a date', (p) => p.AccountingInfoPrefs?.BookCloseDate),
   ],
   'accounting.reconciliation': [
-    manual('bank-reconciled', 'Bank account reconciled', 'Reconcile in Settings > Reconcile. Apps cannot read or record reconciliations.'),
-    manual('card-reconciled', 'Credit card reconciled', 'Reconcile the card account in Settings > Reconcile.'),
+    manual('bank-reconciled', 'Bank account reconciled', 'Retain each completed monthly reconciliation report and statement. Individual cleared/reconciled marks are not completion evidence; existing owner marks are feature tests.'),
+    manual('cash-counted', 'Cash on hand counted', 'Retain a dated cash count and cashbook for every CashOnHand account and month, including quiet months.'),
+    manual('card-reconciled', 'Credit card reconciled', 'Retain each completed monthly card reconciliation report and statement; register marks alone do not complete a business reconciliation.'),
   ],
   'accounting.budgets': [
     setup('budgets', 'A budget', 'budgets', null, { fill: 'quickbooks' }),
@@ -305,7 +307,9 @@ async function readSource(qbo, name, since, budget = { pages: MAX_PAGES, records
       budget.records -= MAX_RESULTS; // Reserve before the asynchronous request.
       const result = await qbo.query(queryFor(name, since, page * MAX_RESULTS + 1));
       if (!result?.QueryResponse || typeof result.QueryResponse !== 'object') throw new Error('QuickBooks returned no query response');
-      const rows = result.QueryResponse[entity] || [];
+      const response = result.QueryResponse;
+      if (entity === 'CreditCardPayment' && response.CreditCardPayment && response.CreditCardPaymentTxn) throw new Error('QuickBooks repeated the credit card payment response');
+      const rows = response[entity] || (entity === 'CreditCardPayment' ? response.CreditCardPaymentTxn : undefined) || [];
       if (!Array.isArray(rows) || rows.length > MAX_RESULTS) throw new Error('QuickBooks returned an invalid record list');
       budget.records += MAX_RESULTS - rows.length;
       let repeated = false;

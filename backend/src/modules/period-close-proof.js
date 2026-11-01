@@ -15,6 +15,7 @@ function validatePeriodDecision(row,scope,ownerId){
     if(request.previousControlHash!==before.contentHash || source.accounts!==null)C.fail('The original reopening control or preference-only scope changed.');
     for(const key of ['closedThrough','reconciledThrough'])after[key]=request[key];
   }else{
+    if(request.version === 2 && request.bankChecks.some(row => row.currencyEvidence.homeCurrency !== source.preferences.homeCurrency)) C.fail('Retained account evidence differs from the observed company home currency.');
     if(source.accountInventoryHash!==request.accountInventoryHash || !C.same(C.bankResults(request,eligible(source.accounts)),r.bankResults) || !Array.isArray(r.reportChecks) || !C.same(r.reportChecks.map(value=>({key:value.key,id:value.id,evidenceHash:value.evidenceHash})),request.reportChecks))C.fail('The retained manual account or report selection differs from its original review.');
     if(request.mode==='close'){after.closedThrough=request.period.throughDate;if(request.advanceReconciled)after.reconciledThrough=request.period.throughDate;}
   }

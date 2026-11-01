@@ -58,7 +58,7 @@ function effectiveRecord(op, existing, payload) {
 // Net of the record's lines (journal: debits; Payment/BillPayment/Transfer: their amount).
 function netCents(entity, record) {
   if (!record) return 0;
-  if (entity === 'Transfer') return cents(record.Amount) || 0;
+  if (['Transfer','CreditCardPayment'].includes(entity)) return cents(record.Amount) || 0;
   // Fee offsets must not hide gross money moved from the amount caps.
   if (entity === 'Deposit') return (record.Line || []).reduce((sum, line) => sum + Math.abs(cents(line.Amount) || 0), 0);
   if (['Payment', 'BillPayment'].includes(entity)) return cents(record.TotalAmt) || 0;
@@ -106,7 +106,7 @@ function inventoryTouch(entity, record, local, byRef = new Map()) {
   }
   return stockItem;
 }
-function checkGeneralWrite({ proposal, local, context }) {
+function checkGeneralWriteImplementation({ proposal, local, context }) {
   const problems = [], caps = { ...DEFAULT_CAPS, ...(context?.caps || {}) };
   const say = (ref, message) => problems.push({ ref: ref ?? null, message });
   if (!plain(proposal) || !Array.isArray(proposal.operations)) return { ok: false, problems: [{ ref: null, message: 'Send { decisionKey, purpose, operations: [...] }.' }], plan: null };
@@ -197,6 +197,19 @@ function checkGeneralWrite({ proposal, local, context }) {
       if (type === 'JournalEntryLineDetail' && amount > caps.journalLine) say(ref, 'Each journal line is at most $' + caps.journalLine / 100 + '.');
       // QuickBooks computes tax from the published codes; no tax overrides.
       if (line?.[type]?.TaxInclusiveAmt !== undefined || line?.[type]?.TaxAmount !== undefined) say(ref, 'Leave tax amounts out; QuickBooks computes tax from the TaxCodeRef.');
+    }
+    if (op.entity === 'CreditCardPayment' && after) {
+      if (accountFor(after.BankAccountRef)?.AccountType!=='Bank' || accountFor(after.CreditCardAccountRef)?.AccountType!=='Credit Card') say(ref,'CreditCardPayment requires a Bank source and Credit Card destination.');
+      if (cents(after.Amount)===null || cents(after.Amount)<=0) say(ref,'CreditCardPayment Amount must be positive exact cents.');
+      if (after.Line!==undefined) say(ref,'CreditCardPayment has no Line payload.');
+    }
+    if (op.entity === 'Purchase' && after) {
+      const account=accountFor(after.AccountRef);
+      if (!['Cash','Check','CreditCard'].includes(after.PaymentType)) say(ref, 'Purchase PaymentType must be Cash, Check or CreditCard.');
+      const expected=after.PaymentType==='CreditCard'?'Credit Card':'Bank';
+      if (!account || account.AccountType!==expected) say(ref, 'Purchase '+after.PaymentType+' requires a '+expected+' payment account.');
+      if (after.Credit!==undefined && typeof after.Credit!=='boolean') say(ref, 'Purchase Credit must be a boolean.');
+      if (after.Credit===true && after.PaymentType!=='CreditCard') say(ref, 'Purchase Credit:true is supported only for a credit-card refund.');
     }
     if (op.entity === 'Deposit' && after) {
       const lines = Array.isArray(after.Line) ? after.Line : [];
@@ -329,5 +342,8 @@ function checkGeneralWrite({ proposal, local, context }) {
   if (!problems.length) layers = require('./general-write-scheduler').scheduleBatches(entries.map(entry => ({ ref: entry.ref, op: entry.op, entity: entry.entity, ...(entry.id ? { id: entry.id } : {}), payload: entry.payload, before: entry.before || null, dependsOn: [...entry.dependsOn] })), local).batches;
   const ok = problems.length === 0;
   return { ok, problems, plan: ok ? { contract: 'general-write-v1', ...(context.currency ? { currencyEvidence: context.currency } : {}), operations: entries.map(({ ref, op, entity, id, payload, order, dependsOn, before, targetVersion, reason }) => ({ ref, op, entity, ...(id ? { id, targetVersion, before } : {}), payload, order, dependsOn: [...dependsOn].sort(), ...(reason ? { reason } : {}) })), layers, reverifyDates: [...reverify].sort(), externalEdits: external, exposureCents: exposure } : null };
+}
+function checkGeneralWrite(input) {
+  return require('./business-replay-evidence').captureFunction('general-write-guards', 'checkGeneralWrite', checkGeneralWriteImplementation, [input]);
 }
 module.exports = { checkGeneralWrite, refsIn, effectiveRecord, grossCents, DEFAULT_CAPS };

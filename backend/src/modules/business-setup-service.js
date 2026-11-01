@@ -60,7 +60,7 @@ function createBusinessSetupService(dependencies = {}) {
     return (dependencies.applySetup || setup.applySetup)(connection.db, connection.getClient(), bound.target, bound.scope.environment, input.planHash, PROFILE);
   }
   function storageInput(input, applying = false) {
-    if (!input || Object.keys(input).sort().join(',') !== (applying ? 'planHash,profile' : 'profile') || input.profile !== 'general-writes' || (applying && (typeof input.planHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.planHash)))) fail('Choose the general-writes profile and apply only its exact reviewed storage preview.', 400);
+    if (!input || Object.keys(input).sort().join(',') !== (applying ? 'planHash,profile' : 'profile') || !['general-writes', 'replay-evidence'].includes(input.profile) || (applying && (typeof input.planHash !== 'string' || !/^[a-f0-9]{64}$/.test(input.planHash)))) fail('Choose the general-writes or replay-evidence profile and apply only its exact reviewed storage preview.', 400);
   }
   async function previewStorage(user, input) {
     storageInput(input);

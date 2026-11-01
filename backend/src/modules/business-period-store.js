@@ -76,7 +76,7 @@ function validatePeriodProof(run, proof, now = Date.now()) {
 
 // Internal persistence boundary; intentionally no default authorization/evidence adapters.
 // No public route may pass client-supplied verification claims into loadProof.
-function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authorize, writeAudit, assertReady, transaction, now = () => Date.now() }) {
+function createBusinessPeriodStoreImplementation({ Calendars, Runs, Writer, loadProof, authorize, writeAudit, assertReady, transaction, now = () => Date.now() }) {
   for (const fn of [loadProof, authorize, writeAudit, assertReady, transaction, now]) if (typeof fn !== 'function') throw new TypeError('Business period store requires trusted adapters');
   if (!Writer || ['reserve', 'assertSettled', 'release'].some(key => typeof Writer[key] !== 'function')) throw new TypeError('Business period storage requires a company-writer coordinator');
   const calendarId = scope => scope.environment + ':' + scope.realmId;
@@ -192,5 +192,8 @@ function createBusinessPeriodStore({ Calendars, Runs, Writer, loadProof, authori
     return stopped;
   }
   return { reserve, finish, repair, requestStop };
+}
+function createBusinessPeriodStore(config) {
+  return require('./business-replay-evidence').captureFactory('business-period-store', 'createBusinessPeriodStore', createBusinessPeriodStoreImplementation, { now: () => Date.now(), ...config }, ['finish']);
 }
 module.exports = { createBusinessPeriodStore, validatePeriodProof, assertRun, assertRunApproval };

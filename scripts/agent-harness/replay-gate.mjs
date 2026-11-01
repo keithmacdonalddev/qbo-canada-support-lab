@@ -65,7 +65,7 @@ async function main() {
  try {
    options=parseArgs(process.argv.slice(2));
    if(options.help) {
-     console.log('Read-only stored-operation gate: --days N (default 3), --since YYYY-MM-DD or UTC timestamp, --ops id,id, --json. Missing evidence fails closed.');return;
+     console.log('Read-only stored-operation gate: --days N (default 3), --since YYYY-MM-DD or UTC timestamp, --ops id,id, --json. Missing evidence is listed separately; captured decision mismatches fail.');return;
    }
    const bundle=await loadStored({root,...options,deadline:started+510000});
    const sourceCapture=await captureCode();bundle.data.__replaySources=sourceCapture.sources;

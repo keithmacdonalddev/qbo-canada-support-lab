@@ -2,10 +2,12 @@
 const { createHash } = require('node:crypto');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const COLLECTIONS = ['operationruns','operationsteps','operationplans','operationintents','operationevidences',
-  'generalwriteruns','qbowritereceipts','companysyncrecords','businessauthorities','blueprintversions',
+  'businessreplayevidences','generalwriteruns','qbowritereceipts','companysyncrecords','businessauthorities','blueprintversions',
   'businesscandidates','businesscalendars','companywritepolicies','businessagents','businessbaselines','generaldaycloses','auditlogs'];
 const MAX_ROWS = 20000, MAX_BYTES = 192 * 1024 * 1024;
 function normalize(value) {
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (value?._bsontype === 'Binary') return Buffer.from(value.value());
   if (value?._bsontype === 'ObjectId') return value.toHexString();
   if (value instanceof Date) return value;
   if (Array.isArray(value)) return value.map(normalize);
@@ -56,7 +58,7 @@ async function loadStored({ root, since, ops = [], deadline = Date.now() + 51000
       while (next < names.length) {
         const name = names[next++];
         const projection = name === 'businessagents' ? { environment:1,realmId:1,connectionId:1,sync:1,grant:1,ownerId:1,cadence:1,createdAt:1,updatedAt:1 } : undefined;
-        data[name] = await read(name, filter, projection);
+        data[name] = await read(name, name === 'businessreplayevidences' ? { ...filter, operationIds: { $in: selected } } : filter, projection);
       }
     }));
     const auditIds = new Set();

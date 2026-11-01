@@ -1,7 +1,7 @@
 'use strict';
 // Versioned support situations seeded by discovery keys. A field/state is not posting proof.
 const discovery = require('../../../docs/discovery/catalog.v1.json');
-const VERSION = 1;
+const VERSION = 2;
 const AREA_NAMES = Object.fromEntries(discovery.capabilities.map(c => [c.key,c.name]));
 const rows = [], line = r => Array.isArray(r.Line) ? r.Line : [];
 const details = r => line(r).flatMap(l => Object.entries(l).filter(([k,v]) => k.endsWith('Detail') && v && typeof v === 'object').map(([,v]) => v));
@@ -24,7 +24,7 @@ const settingText = {classes:'Enable class tracking',locations:'Enable location 
 const entityArea = {
   Invoice:'sales.receivables-lifecycle',Payment:'sales.receivables-lifecycle',Estimate:'sales.receivables-lifecycle',SalesReceipt:'sales.receivables-lifecycle',CreditMemo:'sales.receivables-lifecycle',RefundReceipt:'sales.receivables-lifecycle',
   Bill:'expenses.payables-lifecycle',BillPayment:'expenses.payables-lifecycle',PurchaseOrder:'expenses.payables-lifecycle',VendorCredit:'expenses.payables-lifecycle',Purchase:'expenses.payables-lifecycle',
-  Deposit:'banking.cash-and-clearing',Transfer:'banking.cash-and-clearing',JournalEntry:'accounting.journals-and-close',TimeActivity:'expenses.time-activity',InventoryAdjustment:'inventory.items',
+  CreditCardPayment:'banking.cash-and-clearing',Deposit:'banking.cash-and-clearing',Transfer:'banking.cash-and-clearing',JournalEntry:'accounting.journals-and-close',TimeActivity:'expenses.time-activity',InventoryAdjustment:'inventory.items',
   Item:'inventory.items',Customer:'sales.customers',Vendor:'expenses.vendors',Employee:'expenses.time-activity',Account:'accounting.chart-of-accounts',Class:'company.dimensions',Department:'company.dimensions',Term:'expenses.vendors',PaymentMethod:'banking.cash-and-clearing',
   Preferences:'company.preferences',Budget:'accounting.budgets',RecurringTransaction:'accounting.recurring-transactions',Attachable:'administration.attachments',TaxPayment:'tax.canadian-sales-tax',
 };
@@ -38,7 +38,7 @@ for (const entity of Object.keys(entityArea).filter(e => !lists.has(e))) {
   add(entity,'recorded','Recorded',r => !voided(r));
   add(entity,'deleted','Deleted record retained in mirror',()=>true,{tombstone:true,historyLimited:true,need:'Retain deletion tombstones; absence cannot establish that no deletion ever occurred.'});
   add(entity,'backdated','Dated before its creation day',r => r.TxnDate && r.MetaData?.CreateTime && r.TxnDate < r.MetaData.CreateTime.slice(0,10),{tool:'Historical creation is held; use retained history or request governed dated-history tooling.'});
-  if (!['TimeActivity','InventoryAdjustment','TaxPayment'].includes(entity)) add(entity,'foreign-currency','Foreign currency',(r,c) => r.CurrencyRef?.value && r.CurrencyRef.value!==c.homeCurrency,{setting:'multicurrency',tool:'Add governed non-CAD writes and exchange-rate verification.',dependencies:['Preferences']});
+  if (!['TimeActivity','InventoryAdjustment','TaxPayment'].includes(entity)) add(entity,'foreign-currency','Foreign currency',(r,c) => r.CurrencyRef?.value && r.CurrencyRef.value!==c.homeCurrency,{setting:'multicurrency',...(['Invoice','Bill','Payment','BillPayment','Deposit','Transfer','Purchase'].includes(entity)?{need:'Use governed foreign writes with current multicurrency preferences, same-currency accounts/parties and dated observed exchange-rate evidence.'}:{tool:'Add governed non-CAD writes and exchange-rate verification.'}),dependencies:['Preferences']});
 }
 for (const entity of ['Invoice','Payment','BillPayment','SalesReceipt']) add(entity,'voided','Voided with explicit void evidence',voided);
 for (const entity of ['Invoice','Bill']) {
@@ -186,4 +186,46 @@ add('Customer','shipping-address','Separate shipping address',r=>!!r.ShipAddr?.L
 add('Vendor','account-number','Supplier account number',r=>!!r.AcctNum);
 
 for(const def of rows) if(['multi-tax','zero-rated','exempt','out-of-scope'].includes(def.key.split('.').at(-1)) && !['Invoice','SalesReceipt'].includes(def.entity)) def.tool='Extend the governed alternate tax-code policy for this entity and retain dated tax proof.';
-module.exports={VERSION,SITUATIONS:Object.freeze(rows),AREA_NAMES,entityArea,settings,settingText,helpers:{line,details,links,refs,voided,deleted,finite}};
+// Instantiate these definitions for every mirrored bank/card/cash account; names are never hard-coded.
+function accountSituations(accounts,homeCurrency='CAD') {
+  const {TRANSACTIONS,accountIds,reconciliationChecklist,hasMovement}=require('./business-account-coverage');
+  const out=[];
+  for(const a of accounts) {
+    const id=a.id,card=a.type==='Credit Card',cash=a.subtype==='CashOnHand';
+    const put=(key,label,entities,match,extra={})=>out.push({key:'Account.'+id+'.'+key,entity:'Account',accountId:id,label:a.name+' — '+label,area:'banking.cash-and-clearing',group:'Account: '+a.name,kind:'activity',entities,dependencies:['Account'],match:(r,c,row)=>(extra.kind==='setup'||!voided(r)&&hasMovement(r))&&match(r,c,row),...extra});
+    const uses=r=>accountIds(r).has(id);
+    const detailAccount=(r,c,re)=>details(r).some(d=>re.test(c.byId.get('Account:'+d.AccountRef?.value)?.Name||''));
+    const purchase=r=>String(r.AccountRef?.value)===id&&r.Credit!==true;
+    const funding=r=>String(r.ToAccountRef?.value)===id;
+    const outgoing=r=>String(r.FromAccountRef?.value)===id;
+    if(a.active) {
+      put('weekly-use','Used in the last seven days',TRANSACTIONS,uses);
+      put('transfer-in','Transfer in',['Transfer'],funding);
+      put('transfer-out','Transfer out',['Transfer'],outgoing);
+      if(card) {
+        put('card-charge','Card purchase/charge',['Purchase','BillPayment'],(r,c,row)=>row.entity==='Purchase'?purchase(r)&&r.PaymentType==='CreditCard':String(r.CreditCardPayment?.CCAccountRef?.value)===id);
+        put('card-credit','Card refund/credit',['Purchase'],r=>String(r.AccountRef?.value)===id&&r.PaymentType==='CreditCard'&&r.Credit===true);
+        put('card-payment','Payment from a bank',['Transfer','CreditCardPayment'],(r,c,row)=>row.entity==='CreditCardPayment'?String(r.CreditCardAccountRef?.value)===id&&c.byId.get('Account:'+r.BankAccountRef?.value)?.AccountType==='Bank':funding(r)&&c.byId.get('Account:'+r.FromAccountRef?.value)?.AccountType==='Bank',{freshDays:35});
+      } else {
+        put('deposit','Deposit into account',['Deposit'],r=>String(r.DepositToAccountRef?.value)===id);
+        put('withdrawal','Withdrawal / cash expense',['Purchase','BillPayment','RefundReceipt'],(r,c,row)=>row.entity==='Purchase'?purchase(r):row.entity==='BillPayment'?String(r.CheckPayment?.BankAccountRef?.value)===id:String(r.DepositToAccountRef?.value)===id);
+        if(!cash) put('cheque','Cheque expense',['Purchase','BillPayment'],r=>purchase(r)&&r.PaymentType==='Check'||r.PayType==='Check'&&String(r.CheckPayment?.BankAccountRef?.value)===id);
+        put('bank-fee','Bank fee expense',['Purchase'],(r,c)=>purchase(r)&&detailAccount(r,c,/bank.*(fee|charge)|service charge/i));
+        put('interest','Interest received',['Deposit'],(r,c)=>String(r.DepositToAccountRef?.value)===id&&detailAccount(r,c,/interest/i),{freshDays:35});
+        if(/square|merchant/i.test(a.name)) put('merchant-net','Merchant deposit net of fees',['Deposit'],r=>String(r.DepositToAccountRef?.value)===id&&line(r).some(l=>Number(l.Amount)<0)&&line(r).some(l=>Number(l.Amount)>0&&(l.LinkedTxn||[]).length));
+        if(cash) {
+          put('petty-cash','Petty-cash spending',['Purchase'],r=>purchase(r)&&r.PaymentType==='Cash');
+          put('tips-received','Tips received into cash',['Deposit'],(r,c)=>String(r.DepositToAccountRef?.value)===id&&detailAccount(r,c,/tip|gratuity/i));
+          put('tips-payout','Tips paid out',['Purchase'],(r,c)=>purchase(r)&&r.PaymentType==='Cash'&&detailAccount(r,c,/tip|gratuity/i));
+        }
+      }
+      if(a.currency!==homeCurrency) put('foreign-rate','Foreign activity with an exchange rate',['Transfer','Deposit','BillPayment','Purchase'],r=>uses(r)&&r.CurrencyRef?.value===a.currency&&positive(r.ExchangeRate),{setting:'multicurrency'});
+    }
+    put('zero-balance','Zero balance', ['Account'],r=>String(r.Id)===id&&zero(r.CurrentBalance),{kind:'setup'});
+    put('inactive','Inactive account retained',['Account'],r=>String(r.Id)===id&&r.Active===false,{kind:'setup',owner:'Keep active accounts available for weekly use; retain native inactive accounts for support without deactivating operating accounts merely to fill a gap.'});
+    put('opening','Opening balance evidence',['JournalEntry','Deposit'],(r,c)=>uses(r)&&detailAccount(r,c,/opening balance equity/i),{kind:'setup',need:'Existing explicit opening-equity counterpart only; never manufacture an opening balance from an account current balance.'});
+    for(const state of ['uncleared','cleared','reconciled','incomplete-reconciliation','statement-discrepancy']) put(state,state.replace(/-/g,' '),[],()=>false,{kind:'manual',area:'accounting.reconciliation',observable:false,owner:'Needs owner in QuickBooks UI. Reconciliation/cleared status and Reconcile actions have no supported Accounting API path; follow the account checklist.',checklist:(today)=>reconciliationChecklist(a,today)});
+  }
+  return out;
+}
+module.exports={accountSituations,VERSION,SITUATIONS:Object.freeze(rows),AREA_NAMES,entityArea,settings,settingText,helpers:{line,details,links,refs,voided,deleted,finite}};
