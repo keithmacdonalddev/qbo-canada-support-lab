@@ -8,6 +8,8 @@ const schema = new mongoose.Schema({
   realmId: { type: String, required: true, immutable: true },
   connectionId: { type: mongoose.Schema.Types.ObjectId, required: true },
   revision: { type: Number, min: 0, required: true },
+  // Disjoint non-posting claims do not invalidate the fixed writer's observations.
+  resourceRevision: { type: Number, min: 0, default: 0 },
   operationId: { type: mongoose.Schema.Types.ObjectId, default: null },
   planHash: { type: String, default: null },
   workflowKind: { type: String, enum: ['master-preparation', null], default: null },

@@ -148,7 +148,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       let batch = run.batches.find(row => row.state !== 'answered');
       if (!batch) {
         const remaining = run.plan.operations.filter(op => !done.has(op.ref));
-        if (!remaining.length) { run = await save(run, { status: 'complete', lastError: null }); return report(run); }
+        if (!remaining.length) { run = await save(run, { status: 'complete', lastError: null, errorDetail: null, errorHistory: [] }); return report(run); }
         const operations = remaining.map(op => ({ ref: op.ref, op: op.op, entity: op.entity, ...(op.id ? { id: op.id } : {}), payload: resolve(op.payload, saved), ...(op.reason ? { reason: op.reason } : {}) }));
         // Earlier saved records count for references; their ids are now real ids.
         const extras = Object.values(run.items).filter(item => item.outcome === 'saved' && item.record).map(item => ({ entity: item.entity, record: item.record }));
@@ -186,7 +186,17 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
         // spending a transport attempt; long writer contention must never exhaust replay safety.
         if(error?.qboStage==='write_admission'&&error.outcomeUnknown!==true&&error.lost!==true){
           run=await refreshSettlement(run,batch);
-          if(!run.batches.find(row=>row.index===batch.index)?.transport?.receiptId)run=await save(run,{status:'prepared',batches:run.batches.map(row=>row.index===batch.index?{...row,sends:Math.max(0,(row.sends||0)-1)}:row)});
+          run=await save(run,{...(!run.batches.find(row=>row.index===batch.index)?.transport?.receiptId?{status:'prepared'}:{}),batches:run.batches.map(row=>row.index===batch.index?{...row,sends:Math.max(0,(row.sends||0)-1)}:row)});
+        }
+        if (error?.code === 'QBO_RESOURCE_BUSY' && error.qboStage === 'write_admission' && error.outcomeUnknown === false && error.lost !== true) {
+          const previous = run.batches.find(row => row.index === batch.index)?.waiting;
+          const oldContention = (run.errorHistory || []).filter(row => row.errorDetail?.code === 'QBO_RESOURCE_BUSY' || row.errorDetail?.code === 'QBO_WRITE_ADMISSION_DENIED' && /^(Another operation owns this company writer|Another operation or unresolved request owns this company[.])/.test(row.errorDetail.message || '')).map(row => row.firstAt).filter(at => Number.isFinite(Date.parse(at))).sort()[0];
+          const since = previous?.since || oldContention || new Date(now()).toISOString();
+          const waiting = { since, retryAt: new Date(now() + 60000).toISOString() };
+          const prolonged = now() - Date.parse(since) > 15 * 60000;
+          run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, waiting } : row), lastError: null,
+            ...(prolonged ? failureFields(run, error, { operationId: String(run._id), detail: { batch: batch.index, waitingSince: since } }, now()) : { errorDetail: null, errorHistory: [], progressAt: new Date(since) }) });
+          return { ...report(run), waiting };
         }
         if (error?.lost !== true) { attachBusinessError(error, { operationId: String(run._id), detail: { batch: batch.index } }); run = await save(run, failureFields(run, error, {}, now())); throw error; }
         run = await refreshSettlement(run, batch);
@@ -217,7 +227,7 @@ function createGeneralWriteService({ models, copy, contextFor, transport = null,
       }
       const open = Object.values(items).filter(item => !['saved', 'deleted'].includes(item.outcome));
       const status = open.some(item => ['unknown', 'mismatch'].includes(item.outcome)) ? 'unknown' : open.length ? 'needs-correction' : 'sending';
-      run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, state: 'answered', answeredAt: new Date(now()).toISOString() } : row), items, owned, status, lastError: open.length ? open.map(item => item.entity + ' (' + item.outcome + ')' + (item.fault ? ': ' + item.fault.map(row => row.code + ' ' + row.message).join('; ') : '')).join(' | ') : null });
+      run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, waiting: null, state: 'answered', answeredAt: new Date(now()).toISOString() } : row), items, owned, status, lastError: open.length ? open.map(item => item.entity + ' (' + item.outcome + ')' + (item.fault ? ': ' + item.fault.map(row => row.code + ' ' + row.message).join('; ') : '')).join(' | ') : null });
       if (status !== 'sending') return report(run);
       if (run.batches.length >= MAX_ATTEMPTS * Math.max(1, run.plan.layers.length)) fail('This general write used its attempt budget.');
     }

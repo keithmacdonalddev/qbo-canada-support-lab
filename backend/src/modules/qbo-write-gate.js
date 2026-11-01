@@ -7,15 +7,16 @@ const { denied, scoped, classifyWriteResponse, responsePayload } = require('./qb
 const { normalizePermissions } = require('./rebuild-permissions');
 const { readWritePeriodEvidence, assertWritePeriod, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
 const { normalizeWorkflow } = require('./qbo-write-workflow');
-const { createCompanyResourceClaims, resourcesForBatch, claimsOf, writerForRequest, claimsPointer, unscopedBarrier, trackResourceAttempt } = require('./business-writer-fence');
+const { createCompanyResourceClaims, resourcesForBatch, claimsOf, writerForRequest, claimsPointer, unscopedBarrier, trackResourceAttempt, resourceRevisionChange } = require('./business-writer-fence');
 const ID = /^[a-f0-9]{24}$/i, HASH = /^[a-f0-9]{64}$/;
 const same = (a, b) => String(a) === String(b);
 const fresh = (stamp, clock) => { const value = typeof stamp === 'string' ? Date.parse(stamp) : NaN; return Number.isFinite(value) && new Date(value).toISOString() === stamp && value <= clock && clock - value <= 300000; };
 const validRevision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
-function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, caseAdmission, now = () => Date.now(), nonce = randomUUID }) {
+function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Plans, Calendars, Steps, Users, Agents, transaction, assertReady, assertBusinessAuthority, masterTransport, linkRepairTransport, populationTransport, populationRepairTransport, generalTransport, caseAdmission, now = () => Date.now(), nonce = randomUUID }) {
   if ([Policies, Writers, Receipts, Audits, Connections, Memberships, Runs, Calendars, Steps].some(value => !value) || [transaction, assertReady, now, nonce].some(value => typeof value !== 'function')) throw new TypeError('Write admission needs explicit storage adapters');
   if([populationTransport,populationRepairTransport,generalTransport].filter(Boolean).length>1)throw new TypeError('Install one exact batch transport per coordinated client.');
-  const resourceClaims = createCompanyResourceClaims({ Writers, transaction, now });
+  const allowsCompanyOwner = async (writer, scope, session) => require('./business-writer-compatibility').allowsFixedWriter({ writer, scope, batch: await generalTransport.savedBatch(session), Runs, Plans, session, now: now() });
+  const resourceClaims = createCompanyResourceClaims({ Writers, transaction, now, allowsCompanyOwner });
   async function resourceSpec(request, session) {
     const batch = await generalTransport.savedBatch(session);
     if (require('./general-write-transport').buildGeneralBatch(request.scope, batch).requestHash !== request.requestHash) throw denied('The general batch request differs from its saved identity.');
@@ -90,9 +91,11 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       }
       const storageWriter = state.writer, policy = state.policy;
       const handle = periodEvidence?.coordination?.resourceClaim;
-      const resourceScoped = general && scopedGeneral(request) && !unscopedBarrier(storageWriter);
+      const resourceScoped = general && scopedGeneral(request) && Boolean(handle);
+      if (resourceScoped && storageWriter.operationId && !(await allowsCompanyOwner(storageWriter, scope, session))) throw Object.assign(denied('Waiting for an operation using the same company resources.'), { code: 'QBO_RESOURCE_BUSY' });
       const claim = resourceScoped ? resourceClaims.assertClaim(storageWriter, handle) : null;
-      if (!resourceScoped && claimsOf(storageWriter).length) throw denied('Another operation owns this company resource.');
+      const compatibleFixedClaims = Boolean(permit && same(storageWriter.operationId, permit.operationId) && claimsOf(storageWriter).every(row => row.companyOperationId === permit.operationId));
+      if (!resourceScoped && claimsOf(storageWriter).length && !compatibleFixedClaims) throw denied('Another operation owns this company resource.');
       if (claim && hash(await resourceSpec(request, session)) !== hash({ resources: claim.resources, reads: claim.reads || [], uncertainty: claim.uncertainty, exclusive: claim.exclusive })) throw denied('The reserved batch resources changed.');
       const writer = resourceScoped ? writerForRequest(storageWriter, request) : storageWriter;
       if (resourceScoped) {
@@ -157,9 +160,9 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
         if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) throw denied('Another operation or unresolved request owns this company.');
         unresolved = { key: dispatchKey, requestHash: request.requestHash, actorId, entity: request.entity, kind: 'legacy', transportConsumed: { receiptId, consumedAt: new Date(now()).toISOString() } };
       }
-      const policyTouched = await Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision }, { $inc: { revision: resourceScoped ? 0 : 1 } }, { new: true, session }).lean();
+      const policyTouched = await Policies.findOneAndUpdate({ _id: policy._id, ...scope, state: 'active', revision: policy.revision }, { $inc: { revision: resourceScoped || compatibleFixedClaims && claimsOf(storageWriter).length ? 0 : 1 } }, { new: true, session }).lean();
       const admittedClaims = resourceScoped ? claimsOf(storageWriter).map(row => row.id === claim.id ? { ...row, state: 'admitted', barrier: unresolved, replayToken: null, replayExpiresAt: null } : row) : null;
-      const writerTouched = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: writer.revision, operationId: writer.operationId, planHash: writer.planHash }, { $set: resourceScoped ? { resourceClaims: admittedClaims, unresolved: claimsPointer(admittedClaims, storageWriter) } : { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const writerTouched = await Writers.findOneAndUpdate({ _id: writer._id, ...scope, revision: storageWriter.revision, operationId: storageWriter.operationId, planHash: storageWriter.planHash }, { $set: resourceScoped ? { resourceClaims: admittedClaims, unresolved: claimsPointer(admittedClaims, storageWriter) } : { unresolved }, $inc: resourceScoped ? resourceRevisionChange(storageWriter) : { revision: 1 } }, { new: true, session }).lean();
       if (!policyTouched || !writerTouched) throw denied('Company write admission changed.');
       await Receipts.create([{ _id: receiptId, contractVersion: 1, ...scope, ownerId, actorId, kind: ticket.kind, ...(workflow ? { workflow } : {}), ...(permit ? { operationId: permit.operationId, logicalKey: permit.logicalKey } : master ? { operationId: workflow.runId } : population ? { operationId: workflow.jobId } : general ? { operationId: workflow.runId } : {}), dispatchKey, requestHash: request.requestHash, periodProof, ...(population || (populationRepair&&request.entity==='batch') ? { population: await (population?populationTransport:populationRepairTransport).receiptEvidence({ workflow, request, session }) } : {}), ...(general ? { general: await generalTransport.receiptEvidence({ workflow, request, session }) } : {}), entity: request.entity, operation: request.operation, state: 'possibly-sent', observed: null, sentAt: new Date(now()), startAuditId }], { session });
       await audit(startAuditId, { ...ticket, scope }, 'started', { state: 'possibly-sent', receiptId }, session);
@@ -241,7 +244,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
       }
       const unresolved = (['legacy', 'business-population', 'general-write'].includes(stored.kind) && ['saved', 'rejected'].includes(observed.outcome)) || observed.outcome === 'rejected' ? null : { ...writer.unresolved, responseReceiptId: ticket.receiptId };
       const remaining = heldClaim ? claimsOf(storageWriter).flatMap(row => row.id !== heldClaim.id ? [row] : unresolved ? [{ ...row, state: 'unknown', barrier: unresolved }] : []) : null;
-      const updated = await Writers.findOneAndUpdate({ _id: writer._id, ...ticket.scope, revision: writer.revision, ...(!heldClaim ? { 'unresolved.key': ticket.dispatchKey } : {}) }, { $set: heldClaim ? { resourceClaims: remaining, unresolved: claimsPointer(remaining, storageWriter) } : { unresolved }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const updated = await Writers.findOneAndUpdate({ _id: writer._id, ...ticket.scope, revision: writer.revision, ...(!heldClaim ? { 'unresolved.key': ticket.dispatchKey } : {}) }, { $set: heldClaim ? { resourceClaims: remaining, unresolved: claimsPointer(remaining, storageWriter) } : { unresolved }, $inc: heldClaim ? resourceRevisionChange(storageWriter) : { revision: 1 } }, { new: true, session }).lean();
       if (!updated) throw denied('The company request changed while saving its response.', true);
       await audit(resultAuditId, ticket, observed.outcome, { state: observed.outcome, receiptId: ticket.receiptId, ...observed }, session);
       if (terminal) await Audits.create([{ _id: terminalAuditId, userId: stored.ownerId, actorUserId: same(stored.ownerId, stored.actorId) ? undefined : stored.actorId, realmId: stored.realmId, action: 'QuickBooks write attempt ended without a confirmed outcome', actionType: 'manual', outcome: 'partial', afterState: { ...terminal, contentHash: terminalHash } }], { session });
@@ -309,7 +312,7 @@ function createQboWriteGate({ Policies, Writers, Receipts, Audits, Connections, 
     if (!state || state.policy.state !== 'active' || !state.policy.periodControl) throw denied('Complete explicit write coordination setup and record protected-period choices on the Company page before writing.');
     let handle;
     try {
-      if (scopedGeneral(request) && !unscopedBarrier(state.writer)) handle = await resourceClaims.acquire(scoped(request.scope), request.requestHash, await resourceSpec(request));
+      if (scopedGeneral(request) && (state.writer.operationId || !unscopedBarrier(state.writer))) handle = await resourceClaims.acquire(scoped(request.scope), request.requestHash, await resourceSpec(request));
       // Waiting operations read their period and balance evidence only AFTER grant.
       const selected = handle ? await policyState(scoped(request.scope)) : state;
       const sharedItems = [];
@@ -383,7 +386,7 @@ function createCoordinatedGate(transports) { return createQboWriteGate({ ...gate
 function gateParts() {
   if (defaultParts) return defaultParts;
   const mongoose = require('mongoose');
-  const models = { Users: require('../models/User'), Policies: require('../models/CompanyWritePolicy'), Writers: require('../models/CompanyWriter'), Receipts: require('../models/QboWriteReceipt'), Audits: require('../models/AuditLog'), Connections: require('../models/Connection'), Memberships: require('../models/CompanyMembership'), Runs: require('../models/OperationRun'), Calendars: require('../models/BusinessCalendar'), Steps: require('../models/OperationStep') };
+  const models = { Users: require('../models/User'), Policies: require('../models/CompanyWritePolicy'), Writers: require('../models/CompanyWriter'), Receipts: require('../models/QboWriteReceipt'), Audits: require('../models/AuditLog'), Connections: require('../models/Connection'), Memberships: require('../models/CompanyMembership'), Runs: require('../models/OperationRun'), Plans: require('../models/OperationPlan'), Calendars: require('../models/BusinessCalendar'), Steps: require('../models/OperationStep') };
   const { createBusinessTransaction } = require('./business-transaction');
   const assertReady = async () => {
     if (mongoose.connection.readyState !== 1) throw denied('Write coordination storage is unavailable.');

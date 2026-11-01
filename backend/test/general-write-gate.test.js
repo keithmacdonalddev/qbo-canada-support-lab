@@ -372,3 +372,123 @@ test('historical dirty markers commit with admission before a provider send can 
  const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
  const ticket=await h.begin(gate);assert.ok(ticket.receiptId);assert.equal(h.writer().unresolved.kind,'general-write');assert.deepEqual(h.run().dirty.map(row=>row.date),['2026-11-20']);assert.equal(h.run().dirty[0].runId,runId);
 });
+
+// Job P: the retained fixed workflow shares ledger proof, not unrelated new lists/quotes.
+function fixedOwner(h) {
+  const { hash } = require('../src/modules/business-calendar');
+  const { makeActivityBatch, buildBatchActivity } = require('../src/modules/business-activity-batch');
+  const activityBatch = makeActivityBatch({ scope, businessKey: 'harbour-pine-v2', day: '2026-12-02', choices: { decisionKey: 'parallel-fixed-sale', purpose: 'Complete a same-day service sale.', activities: [{ type: 'settled-service-sale', customerKey: 'field-client-001', itemKey: 'field-service-hour', quantity: 1, unitPriceCents: 12500, purpose: 'A completed service visit.' }] } });
+  const activity = buildBatchActivity(activityBatch, scope, 'harbour-pine-v2');
+  const id = '9'.repeat(24), planId = '8'.repeat(24);
+  const manifest = { activityBatch, records: activity.events.map(row => ({ entity: row.entity, kind: 'create' })) };
+  const planHash = hash(manifest);
+  h.data.Plans = [{ _id: planId, ...scope, operationId: id, planHash, manifest }];
+  h.models.Plans = { findOne(filter) { const q = { session() { return q; }, maxTimeMS() { return q; }, lean: async () => clone(h.data.Plans.find(row => matches(row, filter)) || null) }; return q; } };
+  const run = { _id: id, ...scope, contractVersion: 1, businessKey: 'harbour-pine-v2', planId, planHash, blueprintHash: hash('blueprint'), baselineHash: hash('baseline'), expectedRecordSetHash: hash('set'), fromDate: activityBatch.day, throughDate: activityBatch.day, expectedCursor: '2026-12-01', expectedRevision: 1, activityBatch, recordCount: activity.events.length + activity.prerequisites.length, status: 'running', requiredAssertions: [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }], approval: { actorId: ownerId, planHash, fenceHash: hash('approval'), auditId: 'fixed-approval', approvedAt: new Date(h.clock).toISOString() } };
+  h.data.Runs.push(run); Object.assign(h.writer(), { operationId: id, planHash });
+  return run;
+}
+function listAlongside(h, index) {
+  const b = resourceBatch(h, index);
+  b.batch.items = [{ bId: '1', ref: 'supplier-' + index, op: 'create', operation: 'create', entity: 'Vendor', payload: { DisplayName: 'Independent supplier ' + index, CurrencyRef: { value: 'CAD' } } }];
+  const request = buildGeneralBatch(scope, b.batch);
+  const begin = async () => b.gate.begin({ request, ownerId, actorId: ownerId, workflow: { version: 1, kind: 'general-write', runId, batchIndex: index, sends: 1 }, periodEvidence: await b.gate.preflight({ request, client: b.client }) });
+  const finish = ticket => b.gate.complete(ticket, request, { status: 200, json: { BatchItemResponse: [{ bId: '1', Vendor: { ...b.batch.items[0].payload, Id: String(700 + index), SyncToken: '0' } }] } });
+  return { ...b, request, begin, finish };
+}
+for (const count of [2, 3]) test(count + ' independent batches admit beside a running fixed operation without changing its barrier/revision', async () => {
+  const h = harness(); fixedOwner(h);
+  const { hash } = require('../src/modules/business-calendar');
+  const barrier = { kind: 'business', entity: 'Payment', key: hash('fixed-dispatch'), requestHash: hash('fixed-request'), transportConsumed: { receiptId: hash('fixed-receipt') } };
+  h.writer().unresolved = clone(barrier); const revision = h.writer().revision;
+  const batches = Array.from({ length: count }, (_, i) => listAlongside(h, i + 1));
+  const tickets = await Promise.all(batches.map(b => b.begin()));
+  assert.equal(h.data.Receipts.length, count); assert.equal(h.writer().resourceClaims.length, count);
+  assert.deepEqual(h.writer().unresolved, barrier); assert.equal(h.writer().revision, revision);
+  await Promise.all(batches.map((b, i) => b.finish(tickets[i])));
+  assert.deepEqual(h.writer().unresolved, barrier); assert.equal(h.writer().revision, revision);
+  assert.deepEqual(h.writer().resourceClaims, []);
+});
+test('fixed ledger proof, closes, unrecognized owners and same-name fixed list creation stay fenced', async () => {
+  const { hash } = require('../src/modules/business-calendar');
+  for (const kind of ['ledger', 'close', 'unknown-owner', 'same-list']) {
+    const h = harness(), fixed = fixedOwner(h);
+    const batch = kind === 'ledger' ? resourceBatch(h, 1) : listAlongside(h, 1);
+    if (kind === 'close') delete fixed.activityBatch;
+    if (kind === 'unknown-owner') h.data.Runs = [];
+    if (kind === 'same-list') { const plan = h.data.Plans[0]; plan.manifest.records[0] = { entity: 'Vendor', kind: 'create' }; plan.planHash = hash(plan.manifest); fixed.planHash = plan.planHash; fixed.approval.planHash = plan.planHash; h.writer().planHash = plan.planHash; }
+    await assert.rejects(batch.begin(), error => error.code === 'QBO_RESOURCE_BUSY' || /invalid|Additional activity/.test(error.message));
+    assert.equal(h.data.Receipts.length, 0); assert.equal(h.writer().operationId, fixed._id);
+  }
+});
+test('writer contention waits quietly, retains exact identity and sends, and becomes visible only after fifteen minutes', async () => {
+  const h = harness(), before = clone(h.run().batches[0]); h.run().batches[0].sends = 0;
+  const transport = { sendBatch: async () => { throw Object.assign(Error('Waiting for shared resources'), { code: 'QBO_RESOURCE_BUSY', qboStage: 'write_admission', outcomeUnknown: false }); } };
+  const service = createGeneralWriteService({ models: h.models, copy: h.copy, contextFor: async () => h.context, transport, dispatchEnabled: () => true, now: () => h.clock });
+  const bound = { scope, ownerId, actorId: ownerId };
+  const first = await service.execute(bound, runId); assert.ok(first.waiting); assert.equal(first.errorDetail, undefined); assert.equal(h.run().batches[0].sends, 0);
+  const { collectBusinessBlockers } = require('../src/modules/business-error-detail');
+  assert.deepEqual(collectBusinessBlockers({ generalRuns: [h.run()], now: h.clock }), []);
+  h.clock += 15 * 60000; const edge = await service.execute(bound, runId); assert.equal(edge.errorDetail, undefined);
+  h.clock++; const overdue = await service.execute(bound, runId); assert.equal(overdue.errorDetail.code, 'QBO_RESOURCE_BUSY');
+  assert.equal(overdue.waiting.since, first.waiting.since); assert.equal(h.run().batches[0].requestId, before.requestId); assert.deepEqual(h.run().batches[0].items, before.items); assert.equal(h.run().batches[0].sends, 0);
+});
+test('busy handling does not hide guard refusal or unknown outcomes', async () => {
+  for (const lost of [false, true]) {
+    const h = harness(), error = Object.assign(Error('A real failure'), lost ? { lost: true } : { code: 'QBO_WRITE_ADMISSION_DENIED', qboStage: 'write_admission', outcomeUnknown: false });
+    const service = createGeneralWriteService({ models: h.models, copy: h.copy, contextFor: async () => h.context, transport: { sendBatch: async () => { throw error; } }, dispatchEnabled: () => true, now: () => h.clock });
+    if (lost) { const result = await service.execute({ scope, ownerId, actorId: ownerId }, runId); assert.equal(result.status, 'unknown'); assert.equal(h.run().batches[0].sends, 2); }
+    else { await assert.rejects(service.execute({ scope, ownerId, actorId: ownerId }, runId), /A real failure/); assert.ok(h.run().errorDetail); }
+  }
+});
+
+test('an exact replay quietly yielding for full slots can retry immediately without losing its unknown receipt', async () => {
+  const h=harness(), original=resourceBatch(h,1), first=await original.begin(); await original.gate.failTransport(first,original.request,{});
+  const others=[2,3,4,5].map(n=>resourceBatch(h,n)), tickets=await Promise.all(others.map(b=>b.begin()));
+  await assert.rejects(original.preflight(),error=>error.code==='QBO_RESOURCE_BUSY');
+  const unknown=h.writer().resourceClaims.find(row=>row.state==='unknown');
+  assert.equal(unknown.barrier.transportConsumed.receiptId,first.receiptId); assert.equal(unknown.replayToken,undefined);
+  await others[0].finish(tickets[0]);const proof=await original.preflight();
+  const replay=await original.gate.begin({request:original.request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:1,sends:2},periodEvidence:proof});
+  await original.finish(replay);await Promise.all(others.slice(1).map((b,i)=>b.finish(tickets[i+1])));
+});
+
+test('fixed unknown outcomes and cross-type party creation keep native identity exclusions', async () => {
+  const { hash } = require('../src/modules/business-calendar');
+  for (const kind of ['unknown-estimate','unknown-entity','party-namespace']) {
+    const h=harness(),fixed=fixedOwner(h),batch=listAlongside(h,1);
+    if (kind==='unknown-estimate') {
+      batch.batch.items=[{bId:'1',ref:'quote',op:'create',operation:'create',entity:'Estimate',payload:{TxnDate:'2026-12-02',CustomerRef:{value:'11'},Line:[]}}];
+      h.writer().unresolved={entity:'Estimate',key:hash('fixed')};
+    } else if (kind==='unknown-entity') h.writer().unresolved={key:hash('unidentified')};
+    else {const plan=h.data.Plans[0];plan.manifest.records[0]={entity:'Customer',kind:'create'};plan.planHash=hash(plan.manifest);fixed.planHash=plan.planHash;fixed.approval.planHash=plan.planHash;h.writer().planHash=plan.planHash;h.writer().unresolved={entity:'Customer',key:hash('party')};}
+    const request=buildGeneralBatch(scope,batch.batch);
+    await assert.rejects(batch.gate.preflight({request,client:batch.client}),error=>error.code==='QBO_RESOURCE_BUSY');
+    assert.equal(h.data.Receipts.length,0);
+  }
+});
+
+test('service replay slot waits refund sends even with an earlier unknown transport receipt', async () => {
+  const h=harness(),gate=h.gateFor(),ticket=await h.begin(gate);await gate.failTransport(ticket,h.request(),{});
+  h.run().status='unknown';h.run().batches[0].sends=9;
+  const others=[1,2,3,4].map(n=>resourceBatch(h,n)),tickets=await Promise.all(others.map(b=>b.begin()));
+  const receipt=h.run().batches[0].transport.receiptId;let sdkCalls=0;
+  const transport={sendBatch:async()=>{const g=h.gateFor();await h.begin(g,10);sdkCalls++;throw Error('must stay queued');}};
+  const service=createGeneralWriteService({models:h.models,copy:h.copy,contextFor:async()=>h.context,transport,dispatchEnabled:()=>true,now:()=>h.clock});
+  for(let n=0;n<3;n++){const result=await service.execute({scope,ownerId,actorId:ownerId},runId);assert.ok(result.waiting);assert.equal(result.status,'unknown');assert.equal(h.run().batches[0].sends,9);assert.equal(h.run().batches[0].transport.receiptId,receipt);}
+  assert.equal(sdkCalls,0);assert.equal(h.writer().resourceClaims.filter(row=>row.state==='unknown').length,1);
+  await Promise.all(others.map((b,i)=>b.finish(tickets[i])));
+});
+test('real fixed fence observation and completion preserve a concurrent general receipt', async () => {
+ const h=harness(),run=fixedOwner(h);run.writerRevision=0;run.evidenceRevision=0;
+ h.data.Calendars.push({_id:'sandbox:123',contractVersion:1,...scope,currentOperationId:run._id,businessKey:run.businessKey,blueprintId:run.blueprintId,blueprintHash:run.blueprintHash,baseline:{status:'verified',evidenceHash:run.baselineHash},revision:run.expectedRevision,verifiedThrough:run.expectedCursor,writerRevision:0,pendingCommit:null,stopRequested:false});
+ const {createBusinessWriterFence}=require('../src/modules/business-writer-fence'),{hash}=require('../src/modules/business-calendar');
+ const fence=createBusinessWriterFence({...h.models,now:()=>h.clock,assertIntegration:async()=>{}});
+ const snapshot=expected=>h.transaction(session=>fence.graphSnapshot({scope,intent:{operationId:run._id,planHash:run.planHash},expected,session}));
+ const before=await snapshot(),batch=listAlongside(h,1),ticket=await batch.begin();await snapshot(before);
+ await h.transaction(session=>fence.fenceStep({scope,intent:{operationId:run._id,planHash:run.planHash,logicalKey:hash('step'),fingerprint:hash('intent')},actorId:ownerId,phase:'claim',session}));
+ const fixed=h.data.Runs[0];fixed.status='awaiting-evidence';await h.transaction(session=>fence.assertSettled(fixed,scope,session));
+ fixed.status='verified';fixed.verification={evidenceHash:hash('verified')};fixed.verificationCandidateHash=fixed.verification.evidenceHash;const calendar=h.data.Calendars[0];calendar.pendingCommit={operationId:fixed._id,planHash:fixed.planHash,evidenceHash:fixed.verification.evidenceHash};calendar.revision++;
+ await h.transaction(session=>fence.release(fixed,scope,session));assert.equal(h.writer().operationId,null);assert.equal(h.writer().unresolved.transportConsumed.receiptId,ticket.receiptId);
+ await batch.finish(ticket);assert.equal(h.writer().unresolved,null);assert.deepEqual(h.writer().resourceClaims,[]);
+});

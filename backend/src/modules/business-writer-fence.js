@@ -60,14 +60,14 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, assertInte
   }
   async function assertSettled(run, scope, session) {
     const state = await snapshot(run, scope, session); owner(state);
-    if (liveClaims(state.writer, now()).length || state.run.status !== 'awaiting-evidence' || state.run.deferredSteps?.length || state.calendar.stopRequested || state.writer.unresolved !== null) fail('An unresolved or stopped company writer cannot complete a period');
+    if (liveClaims(state.writer, now()).some(row => row.companyOperationId !== String(state.run._id)) || state.run.status !== 'awaiting-evidence' || state.run.deferredSteps?.length || state.calendar.stopRequested || state.writer.unresolved !== null) fail('An unresolved or stopped company writer cannot complete a period');
     return touch(state, scope, session);
   }
   async function release(run, scope, session) {
     const state = await snapshot(run, scope, session, true); owner(state);
     if (state.run.status !== 'verified' || state.writer.unresolved !== null || state.run.verification?.evidenceHash !== state.calendar.pendingCommit.evidenceHash) fail('Only the exact verified completion receipt may release the writer');
     // Caller clears Calendar.pendingCommit/currentOperationId in this SAME transaction.
-    return touch(state, scope, session, { operationId: null, planHash: null, lastReleasedOperationId: state.run._id });
+    return touch(state, scope, session, { operationId: null, planHash: null, unresolved: claimsPointer(claimsOf(state.writer), { ...state.writer, operationId: null }), lastReleasedOperationId: state.run._id });
   }
   async function fenceStep({ scope, intent, actorId, phase, dispatch, receipt = null, step = null, runLeaseToken, session }) {
     if (!intent || !validHash(intent.logicalKey) || !validHash(intent.fingerprint) || typeof actorId !== 'string' || !actorId || actorId.length > 100 || !['claim', 'dispatch', 'unknown', 'saved', 'recover', 'verification-start', 'verify'].includes(phase)) fail('A valid step transition is required');
@@ -168,6 +168,8 @@ function claimsOf(writer) {
   if (writer.resourceClaims !== undefined && !Array.isArray(writer.resourceClaims)) fail('Company resource claims need recovery');
   return writer.resourceClaims || [];
 }
+function resourceRevisionChange(writer) { return writer.operationId ? { resourceRevision: 1 } : { revision: 1 }; }
+function resourceBusy(message) { throw Object.assign(new Error(message), { status: 409, code: 'QBO_RESOURCE_BUSY', qboStage: 'write_admission', outcomeUnknown: false }); }
 function unscopedBarrier(writer) {
   const barrier = writer?.unresolved;
   return Boolean(barrier && !claimsOf(writer).some(row => row.barrier?.key === barrier.key && row.barrier?.requestHash === barrier.requestHash && row.barrier?.transportConsumed?.receiptId === barrier.transportConsumed?.receiptId));
@@ -175,10 +177,10 @@ function unscopedBarrier(writer) {
 function writerForRequest(writer, request) {
   if (!writer) return writer;
   const claim = claimsOf(writer).find(row => row.requestHash === request.requestHash);
-  return { ...writer, unresolved: claim?.barrier || (writer.unresolved?.kind === 'general-write' && !unscopedBarrier(writer) ? null : writer.unresolved) };
+  return { ...writer, ...(claim ? { operationId: null, planHash: null } : {}), unresolved: claim ? claim.barrier || null : (writer.unresolved?.kind === 'general-write' && !unscopedBarrier(writer) ? null : writer.unresolved) };
 }
 function claimsPointer(claims, writer) {
-  return unscopedBarrier(writer) ? writer.unresolved : claims.find(row => row.barrier)?.barrier || null;
+  return writer.operationId || unscopedBarrier(writer) ? writer.unresolved : claims.find(row => row.barrier)?.barrier || null;
 }
 function resourceConflict(a, b) {
   if (a.exclusive || b.exclusive) return true;
@@ -191,7 +193,7 @@ function resourceConflict(a, b) {
     (a.state === 'unknown' && a.uncertainty.some(key => b.uncertainty.includes(key))) ||
     (b.state === 'unknown' && b.uncertainty.some(key => a.uncertainty.includes(key)));
 }
-function createCompanyResourceClaims({ Writers, transaction, now = () => Date.now(), token = randomUUID, delay = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+function createCompanyResourceClaims({ Writers, transaction, allowsCompanyOwner = async () => false, now = () => Date.now(), token = randomUUID, delay = ms => new Promise(resolve => setTimeout(resolve, ms)), waitMs = 1000 }) {
   const read = (scope, session) => Writers.findOne({ ...scopeFilter(scope) }).session(session).maxTimeMS(3000).lean();
   const pending = writer => {
     if (writer.resourceQueue !== undefined && !Array.isArray(writer.resourceQueue)) fail('Company resource queue needs recovery');
@@ -199,15 +201,17 @@ function createCompanyResourceClaims({ Writers, transaction, now = () => Date.no
   };
   const active = writer => claimsOf(writer).filter(row => row.state !== 'reserved' || row.expiresAt > now());
   async function save(writer, scope, session, claims, queue) {
-    const result = await Writers.findOneAndUpdate({ _id: writer._id, ...scopeFilter(scope), revision: writer.revision }, { $set: { resourceClaims: claims, resourceQueue: queue, unresolved: claimsPointer(claims, writer) }, $inc: { revision: 1 } }, { new: true, session }).lean();
+    const result = await Writers.findOneAndUpdate({ _id: writer._id, ...scopeFilter(scope), revision: writer.revision }, { $set: { resourceClaims: claims, resourceQueue: queue, unresolved: claimsPointer(claims, writer) }, $inc: resourceRevisionChange(writer) }, { new: true, session }).lean();
     if (!result) fail('Company resource ownership changed');
     return result;
   }
   async function acquire(scope, requestHash, spec) {
-    const id = token();
+    let id = token();
+    const started = Date.now();
     await transaction(async session => {
       const writer = await read(scope, session);
-      if (!writer || writer.contractVersion !== 1 || !revision(writer.revision) || writer.populationDelegation || writer.operationId !== null || writer.planHash !== null || unscopedBarrier(writer)) fail('Another operation owns this company writer');
+      if (!writer || writer.contractVersion !== 1 || !revision(writer.revision)) fail('Company writer needs recovery');
+      if (!writer.operationId && unscopedBarrier(writer)) fail('Another operation owns this company writer');
       const claims = active(writer), queue = pending(writer), existing = claims.find(row => row.requestHash === requestHash);
       if (existing) {
         if (liveResourceAttempts.has(existing.barrier?.transportConsumed?.receiptId)) fail('An in-flight request already owns this company resource');
@@ -221,7 +225,11 @@ function createCompanyResourceClaims({ Writers, transaction, now = () => Date.no
       } else {
         if (claims.some(row => row.state === 'unknown' && resourceConflict(spec, row))) fail('An unknown request owns this company resource; recover its exact receipt first');
         if (queue.length >= 1000) fail('Company resource queue is full');
-        queue.push({ id, requestHash, ...spec, expiresAt: now() + CLAIM_TTL });
+        const waiting = queue.find(row => row.requestHash === requestHash);
+        if (waiting) {
+          if (canonical(spec) !== canonical({ resources: waiting.resources, reads: waiting.reads || [], uncertainty: waiting.uncertainty, exclusive: waiting.exclusive })) fail('Queued request resources changed');
+          id = waiting.id; waiting.expiresAt = now() + CLAIM_TTL;
+        } else queue.push({ id, requestHash, ...spec, expiresAt: now() + CLAIM_TTL });
       }
       await save(writer, scope, session, claims, queue);
     });
@@ -237,18 +245,30 @@ function createCompanyResourceClaims({ Writers, transaction, now = () => Date.no
         }
         const index = queue.findIndex(row => row.id === id), own = queue[index];
         if (!own) fail('The unsent resource reservation expired');
-        if (writer.operationId !== null || writer.planHash !== null || writer.populationDelegation || writer.unresolved && writer.unresolved.kind !== 'general-write') fail('An exclusive operation owns this company writer');
+        const companyOwner = writer.operationId !== null || writer.planHash !== null || writer.populationDelegation;
+        if (companyOwner && !(await allowsCompanyOwner(writer, scope, session))) return null;
+        if (!companyOwner && unscopedBarrier(writer)) fail('An exclusive operation owns this company writer');
         if (claims.some(row => row.state === 'unknown' && resourceConflict(own, row))) {
           await save(writer, scope, session, claims, queue.filter(row => row.id !== id));
           return { blocked: true };
         }
         if (claims.filter(row => row.state !== 'unknown' || row.replayGranted && row.replayExpiresAt > now()).length >= MAX_COMPANY_REQUESTS || claims.some(row => resourceConflict(own, row)) || queue.slice(0, index).some(row => resourceConflict(own, row))) return null;
-        claims.push({ ...own, state: 'reserved' });
+        claims.push({ ...own, state: 'reserved', ...(companyOwner ? { companyOperationId: String(writer.operationId) } : {}) });
         await save(writer, scope, session, claims, queue.filter(row => row.id !== id));
         return { id, token: id, requestHash };
       });
       if (granted?.blocked) fail('An unknown request owns this company resource; recover its exact receipt first');
       if (granted) return granted;
+      if (Date.now() - started >= waitMs) {
+        // No handle escaped. Release only this ungranted replay reservation; the
+        // unknown claim and its exact receipt must survive a quiet slot wait.
+        await transaction(async session => {
+          const writer = await read(scope, session), claims = active(writer);
+          const replay = claims.find(row => row.requestHash === requestHash && row.replayToken === id && !row.replayGranted);
+          if (replay) { delete replay.replayToken; delete replay.replayExpiresAt; delete replay.replayGranted; await save(writer, scope, session, claims, pending(writer)); }
+        });
+        resourceBusy('Another operation owns this company writer; waiting for its resources.');
+      }
       await delay(20);
     }
   }
@@ -297,3 +317,5 @@ async function withCompanyRequestSlot(scope, work) {
 module.exports.withCompanyRequestSlot = withCompanyRequestSlot;
 
 module.exports.trackResourceAttempt = trackResourceAttempt;
+
+module.exports.resourceRevisionChange = resourceRevisionChange;
