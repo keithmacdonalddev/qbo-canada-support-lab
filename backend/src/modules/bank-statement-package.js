@@ -1,5 +1,6 @@
 'use strict';
 const C = require('./bank-settlement-contract');
+const {validateBankStatementEvidence} = require('./bank-statement-evidence');
 const {generateBankFeedCsv,eventDate,sha256,CSV_PROFILE} = require('./bank-feed-csv');
 const {generateBankStatementPdf} = require('./bank-statement-pdf');
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -19,6 +20,8 @@ function freeze(value) { if (value && typeof value==='object' && !Buffer.isBuffe
  * openingBalances: [{accountId,period,amountMinor,evidenceRef,basis}]. Amounts
  * use bank balances or card debt. Without evidence, zero is an explicitly
  * provisional reconstruction baseline and every dependent package is blocked.
+ * balanceEvidence: buildBankStatementEvidence(history, retained).evidence; bound
+ * to the exact BF1 dataset, with native book/settled/outstanding balance checks.
  * previousPackages: prior BF2 results (or {packageId,manifest,envelope}), retained
  * unchanged. Repeating identical inputs is byte-for-byte stable; changed inputs
  * create a new revision and require later-period review after native use.
@@ -26,6 +29,8 @@ function freeze(value) { if (value && typeof value==='object' && !Buffer.isBuffe
 function generateBankStatementPackages(dataset, options={}) {
   if (dataset?.kind!==C.SETTLEMENT_CONTRACT.kind || dataset.contractVersion!==C.CONTRACT_VERSION || !/^[a-f0-9]{64}$/.test(dataset.sourceHash || '')) throw new TypeError('A versioned BF1 settlement dataset with a source fingerprint is required.');
   const scope=C.validateScope(dataset.scope), asOf=C.date(dataset.asOf), sourceSnapshotHash=C.hash(dataset);
+  const balanceEvidence=options.balanceEvidence ? validateBankStatementEvidence(dataset,options.balanceEvidence) : null;
+  if (balanceEvidence && options.openingBalances) throw new TypeError('Use the opening balances bound to the statement evidence.');
   const accounts=new Map(), events=new Map(), ranges=new Map(), packages=[], cashPeriods=[], openingMap=new Map();
   for(const a of dataset.accounts) {
     if (!/^[A-Za-z0-9_-]+$/.test(a.id || '') || accounts.has(a.id)) throw new TypeError('Distinct safe account ids are required.');
@@ -38,7 +43,7 @@ function generateBankStatementPackages(dataset, options={}) {
     if(e.status==='resolved') { const d=eventDate(e); if(e.statementPeriod!==d.slice(0,7)) throw new TypeError('Settlement period and posting date disagree.'); C.date(e.bookDate); }
     events.set(e.eventId,e);
   }
-  for(const o of options.openingBalances || []) {
+  for(const o of balanceEvidence?.openingBalances || options.openingBalances || []) {
     if(!accounts.has(o.accountId) || openingMap.has(o.accountId) || !o.evidenceRef || !o.basis) throw new TypeError('Opening evidence requires a unique account, period, reference and basis.');
     month(o.period); C.integer(o.amountMinor); openingMap.set(o.accountId,clone(o));
   }
@@ -61,7 +66,11 @@ function generateBankStatementPackages(dataset, options={}) {
   for(const [accountId,range] of [...ranges].sort(([a],[b])=>a.localeCompare(b))) {
     const account=accounts.get(accountId);
     if(account.evidenceType==='cash-count-or-cashbook') {
-      for(const period of range.periods) cashPeriods.push({accountId,accountCurrency:account.currency,period,evidenceType:account.evidenceType,uploadRequired:false,basis:range.basis});
+      for(const period of range.periods) {
+        const opening=openingMap.get(accountId), book=balanceEvidence?.periodBookBalances.find(b=>b.accountId===accountId && b.period===period);
+        cashPeriods.push({accountId,accountCurrency:account.currency,period,evidenceType:account.evidenceType,uploadRequired:false,basis:range.basis,
+          openingEvidence:opening || null,bookClosingMinor:book?.bookClosingMinor ?? null,balanceEvidenceHash:balanceEvidence?.evidenceHash || null});
+      }
       continue;
     }
     if(!['Bank','Credit Card'].includes(account.type) || !/^[A-Z]{3}$/.test(account.currency || '')) throw new TypeError('External statements require a proved account type and currency.');
@@ -89,11 +98,17 @@ function generateBankStatementPackages(dataset, options={}) {
       // Undeposited receipts are not assigned to an external bank by BF1. They
       // remain in the run-level schedule, never cloned into every bank statement.
       const openingMinor=balance, closingMinor=C.sum([openingMinor,...selected.map(e=>isCard?-e.amountMinor:e.amountMinor)]);
+      const book=balanceEvidence?.periodBookBalances.find(b=>b.accountId===accountId && b.period===period);
+      const reconstructedBookClosingMinor=C.sum([closingMinor,...outstandingItems.map(e=>isCard?-e.amountMinor:e.amountMinor)]);
+      if (balanceEvidence && (!book || book.bookClosingMinor!==reconstructedBookClosingMinor)) blockers.push('book-statement-balance-mismatch: retained book balance does not equal settled balance plus outstanding items');
+      const balanceCheck=balanceEvidence ? {bookClosingMinor:book?.bookClosingMinor ?? null,reconstructedBookClosingMinor,
+        differenceMinor:book ? C.sum([book.bookClosingMinor,-reconstructedBookClosingMinor]) : null,evidenceHash:balanceEvidence.evidenceHash} : null;
       const uniqueBlockers=[...new Set(blockers)].sort(), balanceConvention=isCard?'card-amount-owed':'bank-balance';
       const openingBasis=opening?.basis || 'Provisional zero before earliest retained activity; unverified';
       const core={scope,accountId,accountCurrency:account.currency,period,sourceSnapshotHash,policyVersion:dataset.policy.version,
         openingMinor,closingMinor,balanceConvention,events:clone(selected),outstandingItems:clone(outstandingItems),blockers:uniqueBlockers};
       const metadata={accountName:account.name || accountId,openingBasis,openingEvidence:opening || null,
+        ...(balanceEvidence ? {balanceCheck} : {}),
         csvProfile:{...CSV_PROFILE,maxRows:options.maxRows ?? CSV_PROFILE.maxRows,maxBytes:options.maxBytes ?? CSV_PROFILE.maxBytes},
         dueDate:options.cardDueDates?.[accountId]?.[period] || null,rangeBasis:range.basis || 'provisional',
         unresolvedEvents:clone(unresolved),excludedEvents:clone(own.filter(e=>e.resolution.action==='Exclude' && e.statementPeriod===period))};

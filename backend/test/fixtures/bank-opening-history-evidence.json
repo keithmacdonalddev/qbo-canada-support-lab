@@ -1,0 +1,430 @@
+{
+  "version": 1,
+  "scope": {
+    "environment": "production",
+    "realmId": "9130357222392856",
+    "connectionId": "6a18e43d0b392890a1303e03"
+  },
+  "asOf": "2026-10-31",
+  "ledgerRowsHash": "e14163c922a5ef107a575efcc9fd8df518f7f449a78480b72245571d9a7b6503",
+  "source": {
+    "ref": "artifacts/goal-realization/banking-research-20261101.json",
+    "sha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+    "observedAt": "2026-11-01T03:55:27.965Z"
+  },
+  "accounts": [
+    {
+      "accountId": "1150040005",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 12400,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040005",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040005",
+        "currency": "CAD",
+        "currentBalance": -124,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-05-18T07:01:54-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "fdb2f1237f315b49a20c4182fde392d18b47c7fc8c3d1829bcbdc9c34937d56a",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "6b8cbeabab08f74f3baa653be4593ae765616fd210820c49ca46d7372942e8ba",
+      "evidenceHash": "aa0b6c2a221e6b59026c5425f9c4171a8383f169402d7fae5921425d2dababbc"
+    },
+    {
+      "accountId": "1150040000",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040000",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040000",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2025-04-29T07:33:01-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "7bdb5370440fcdd60f778c5d1860f0bd3368506d0bdb1b19664e3551b3bb168c",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "6736c8b6c139b4c73e34a648989ae46d8a02faf053b4753eb63c3217309c07f4"
+    },
+    {
+      "accountId": "120",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/120",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "120",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-09-23T08:29:00-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "8b36cec5c1daa3bba17a9194957ed29c8ce214d153082baa5ecaa38b0030bf59",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "b1f06894f96bd91d5cf29772dadfbf201a650edfbcd3b87bf05ff949f099bbd4"
+    },
+    {
+      "accountId": "68",
+      "currency": "AUD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 500000,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/68",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "68",
+        "currency": "AUD",
+        "currentBalance": 5000,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-08-15T06:53:22-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "157d3da300b83fc70024c9c791dabddbc81c96cf298da7d088b68f698481b386",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "43dfc693ca0b6ca4add0ef6c1fd6b2078129d9401b7acc0d60a1f15cf0e56e52",
+      "evidenceHash": "ebfeec8b355715876c9295392eeefe34b05da133a546fcbd3445b939f19937c7"
+    },
+    {
+      "accountId": "1150040008",
+      "currency": "CNY",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040008",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040008",
+        "currency": "CNY",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-06-04T14:52:11-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "286fc7f69a2f09bfce3b6da3cd0f2621874c69398fe4b3e144cfccc964a7013e",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "9df9cb3efbc75cd57def098d2ab34a26b0b62b5b181d06c3b3f806cebf5b2640"
+    },
+    {
+      "accountId": "60",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 6729874,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/60",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "60",
+        "currency": "CAD",
+        "currentBalance": 67298.74,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-08-04T09:40:23-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "4d4ae9b693704e8b206b442fc3290ccfbd8123e29c5402d76d217f5928a82b47",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "cce69530c0dfe4722f4e5790a5b2bd97b1a057899bad795e697acddd9c012386",
+      "evidenceHash": "a63edc547e263c37d77e63c81907133656b2a426d13369ae4f651daa8f79ac73"
+    },
+    {
+      "accountId": "1150040002",
+      "currency": "USD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 3000,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040002",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040002",
+        "currency": "USD",
+        "currentBalance": 30,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-01-15T15:46:44-08:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "c8ce0158e23f68e677465cf101a8bde60bfd948c02a01b3e89e17d414cc92302",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "0a4b6d7b0ea4af4f9a48fb30bc0dded35f1e4c6efa2b9f7af5f15e411c98931f",
+      "evidenceHash": "8f74eecdcf2aadc114b9fb813e8a080bbf68d2421b9c014f2149014c86a8bbfa"
+    },
+    {
+      "accountId": "66",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 854414,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/66",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "66",
+        "currency": "CAD",
+        "currentBalance": 8544.14,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-08-10T09:34:50-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "41e397c47695d29f7e6f5103fad8d01a435205d48a24a2ea390a786ef505b81a",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "3380fd4988d249f9992370f76f9884899799aa7c228430163a7a0d020d1246e8",
+      "evidenceHash": "582b063cb20ce441aeb15ff4dd0ad89bec03b2c38edb7e70c7f438acefce38d1"
+    },
+    {
+      "accountId": "85",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 30565,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/85",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "85",
+        "currency": "CAD",
+        "currentBalance": -305.65,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-09-21T09:54:31-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "da2cc0d5714fe5e10721f04983e820d4ad1d0e663de39a78beea7f41196ef37a",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "67503c8a7d9f1511337cfa219c1530eb3f69eff25573c3bf1432e31433585f57",
+      "evidenceHash": "edce5fc1307e476018283319819a061ba88c4c3923e851af1c594f0dea0e3e2f"
+    },
+    {
+      "accountId": "123",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 129956373,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/123",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "123",
+        "currency": "CAD",
+        "currentBalance": 1300690.05,
+        "observedAt": "2026-11-01T04:40:22.401Z",
+        "createdAt": "2026-10-16T10:17:30-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "ddf924e453b9733c3077ae39be4f72f0db7e1615d234dc65a4586e4d15727878",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "5adf8cd3dc9004572d1d77d509c516e83e6778063b251233e9df11c92b11e44e",
+      "evidenceHash": "0d66ed16f593167f85ad9a819a33c62c65a78a6d00d036b22996a40f61bb1922"
+    },
+    {
+      "accountId": "1150040011",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040011",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040011",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-10-07T12:21:55-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "de72eaf3649aaba088058032a1f0cdf0cbdaa7d6702b5404e72c886623722771",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "acd8eeb0fdd894d41b68ddf94e62fde10530be5f8644db0ad8fd20c4d10188a2"
+    },
+    {
+      "accountId": "1150040007",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 100000,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040007",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040007",
+        "currency": "CAD",
+        "currentBalance": 1000,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-06-04T12:50:33-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "2e31c7b7659a01c28c4d746ebd2e3ed7f5f8d24c1b65c48300028ba8f180acc7",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "61adee9cae71d8ee195205ab10dd5034b7f4e8f2993bae68aabbd3d207c96ce3",
+      "evidenceHash": "52b305bd4c5dc344a2c237e6a9c72cf2488c5c4d329d0d8336b4aad716c20162"
+    },
+    {
+      "accountId": "121",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/121",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "121",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-09-23T08:29:01-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "8f2e8029bef324d44b83bbbeb4c16069be9024bd28f34b0cd5c4b74a7ca03f49",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "7c1c273c3a2e6951ad9111916330c79358c07abc34393e49c22b61e3f729a610"
+    },
+    {
+      "accountId": "1150040006",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": -10000,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/1150040006",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "1150040006",
+        "currency": "CAD",
+        "currentBalance": -100,
+        "observedAt": "2026-10-23T15:57:20.630Z",
+        "createdAt": "2026-05-18T07:02:56-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "5874cf7d5ae9c3775309cdad73f66c624f5fbdca23a49b2f58f646075471292d",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "7ccf4bf915d214a62dfdf697da33d5d4f59efb903e2d016295735f308e5acfd4",
+      "evidenceHash": "ca14cbcd197404644b4118a699adf5b12e1dc437b71881304ed19996905c97de"
+    },
+    {
+      "accountId": "90",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/90",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "90",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-11-15T10:08:36-08:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "764696a3e600b3ce8041c4ae8ca619b395910e5e409af82fb6a05e7c7e49aa6f",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "ea04bbc409441a71d24afc6f1d85846aaf8a8058e53588b1aa2ef1f86303813b"
+    },
+    {
+      "accountId": "53",
+      "currency": "CAD",
+      "asOf": "2026-10-31",
+      "storedNativeBookBalanceMinor": 0,
+      "sourceRef": "artifacts/goal-realization/banking-research-20261101.json#accounts/53",
+      "sourceSha256": "80d14fb4b16ca4107e73abcce40a675227dbfeb8ebc032429613864bf6daecc5",
+      "mirror": {
+        "id": "53",
+        "currency": "CAD",
+        "currentBalance": 0,
+        "observedAt": "2026-10-23T15:56:45.148Z",
+        "createdAt": "2023-08-03T12:57:01-07:00",
+        "openingBalance": null,
+        "openingBalanceDate": null
+      },
+      "mirrorHash": "f1e4a60cbbf0323cf4b9cba07225ef13032d585c62739d49220ecf42b9bf1e84",
+      "openingJournalIds": [],
+      "ledgerRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "evidenceHash": "05eb7745ef5bca1b444930eef6f743d8735f348ec4d9f80e19b313134a48c3f4"
+    }
+  ],
+  "adjustments": [
+    {
+      "entity": "TaxAdjustment",
+      "id": "93",
+      "accountId": "60",
+      "currency": "CAD",
+      "date": "2020-09-30",
+      "amountMinor": 50000,
+      "rowHash": "49ba33a053688aea8bef809eb42ce2ecdb0d732edd9b480b89389a8ed3ee5c13",
+      "decision": "simulated-bank-line",
+      "counterpartAccountIds": null,
+      "nativeInspectionRequired": true,
+      "reason": "Retained Sales Tax Adjustment posts a nonzero native movement to bank account 60. Its counterpart postings and source transaction are absent from the retained evidence and entity mirror. Reconstruct one explicit simulated bank line for that posted amount; do not create an additional QBO posting. Native classification/matching requires inspection.",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#ledger/TaxAdjustment/93",
+      "evidenceHash": "9a28f196ec49b5d29b7398b3b9c2bc32ffc40182de209682c531569d1a5c3208"
+    },
+    {
+      "entity": "TaxAdjustment",
+      "id": "91",
+      "accountId": "60",
+      "currency": "CAD",
+      "date": "2020-09-30",
+      "amountMinor": 50000,
+      "rowHash": "bd1c5e8f88d3c53c9660870e9a6e58d75b6e2bf871afda41473e9dc3b45ad3e8",
+      "decision": "simulated-bank-line",
+      "counterpartAccountIds": null,
+      "nativeInspectionRequired": true,
+      "reason": "Retained Sales Tax Adjustment posts a nonzero native movement to bank account 60. Its counterpart postings and source transaction are absent from the retained evidence and entity mirror. Reconstruct one explicit simulated bank line for that posted amount; do not create an additional QBO posting. Native classification/matching requires inspection.",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#ledger/TaxAdjustment/91",
+      "evidenceHash": "c6a2e3243c2a96bf9eb7dafa1a5ef82b8fe89f68d69c7b884acc48e87aa41f4c"
+    },
+    {
+      "entity": "TaxAdjustment",
+      "id": "94",
+      "accountId": "60",
+      "currency": "CAD",
+      "date": "2020-09-30",
+      "amountMinor": 200000,
+      "rowHash": "4564503022c7945ee30648bec14cf4600b29f904cb2198cb3f8feddb53905d0f",
+      "decision": "simulated-bank-line",
+      "counterpartAccountIds": null,
+      "nativeInspectionRequired": true,
+      "reason": "Retained Sales Tax Adjustment posts a nonzero native movement to bank account 60. Its counterpart postings and source transaction are absent from the retained evidence and entity mirror. Reconstruct one explicit simulated bank line for that posted amount; do not create an additional QBO posting. Native classification/matching requires inspection.",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#ledger/TaxAdjustment/94",
+      "evidenceHash": "1dff96d84a8500867851d8b1cea926c912dc51576cad0bff05cb750bc179afb4"
+    },
+    {
+      "entity": "TaxAdjustment",
+      "id": "98",
+      "accountId": "60",
+      "currency": "CAD",
+      "date": "2020-12-31",
+      "amountMinor": -5000,
+      "rowHash": "5d361abac02ba928ee4d747f899f367a5b28191969c4fd2645f323ea8adcb16b",
+      "decision": "simulated-bank-line",
+      "counterpartAccountIds": null,
+      "nativeInspectionRequired": true,
+      "reason": "Retained Sales Tax Adjustment posts a nonzero native movement to bank account 60. Its counterpart postings and source transaction are absent from the retained evidence and entity mirror. Reconstruct one explicit simulated bank line for that posted amount; do not create an additional QBO posting. Native classification/matching requires inspection.",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#ledger/TaxAdjustment/98",
+      "evidenceHash": "e4cbb00aa5790571e3d5f8cabc55a511dcef2cd4d51997bfde5f99b14b4b9acb"
+    },
+    {
+      "entity": "TaxAdjustment",
+      "id": "97",
+      "accountId": "60",
+      "currency": "CAD",
+      "date": "2020-12-31",
+      "amountMinor": 10000,
+      "rowHash": "759253039b2674221f9feb509d520eccee564cd53a8fc04e87f12efd1fbec54f",
+      "decision": "simulated-bank-line",
+      "counterpartAccountIds": null,
+      "nativeInspectionRequired": true,
+      "reason": "Retained Sales Tax Adjustment posts a nonzero native movement to bank account 60. Its counterpart postings and source transaction are absent from the retained evidence and entity mirror. Reconstruct one explicit simulated bank line for that posted amount; do not create an additional QBO posting. Native classification/matching requires inspection.",
+      "evidenceRef": "artifacts/goal-realization/banking-research-20261101.json#ledger/TaxAdjustment/97",
+      "evidenceHash": "80f1b5d2dde0e5e6d9a3796d50ce22c5ef2caa57c1fc0a28713b54e69d1e2c7e"
+    }
+  ]
+}
