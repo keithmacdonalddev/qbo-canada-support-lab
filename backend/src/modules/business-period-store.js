@@ -32,7 +32,7 @@ function assertRunApproval(run) {
   // A historical approval/report snapshot is audit evidence, not that authority.
   if (run?.agentAuthority) {
     const origin = require('./business-agent-authority').agentAuthority(run.agentAuthority);
-    scopeFilter(run);
+    scopeFilter({ ...run, connectionId: String(run.connectionId) });
     if (String(run.createdBy) !== origin.ownerId) throw problem('Accountant work belongs to a different owner');
     return;
   }

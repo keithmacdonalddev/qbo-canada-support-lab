@@ -250,3 +250,15 @@ test('current relationship identity survives later parent versions while wrong i
   child.relationships[0].qboId='999';data.run.verificationCandidateHash=hash(data.proof);
   assert.throws(()=>validatePeriodProof(data.run,data.proof,Date.parse(timestamp)),/current record identities/);
 });
+
+test('retained agent approval accepts MongoDB connection ID without relaxing caller scope or owner checks',()=>{
+ const {assertRunApproval}=require('../src/modules/business-period-store'),{Types}=require('mongoose'),{run}=fixture();
+ run.connectionId=new Types.ObjectId(scope.connectionId);run.createdBy='b'.repeat(24);
+ run.agentAuthority={version:1,agentId:'a'.repeat(24),ownerId:run.createdBy,grantId:hash('grant'),authorityHash:hash('authority')};
+ assert.doesNotThrow(()=>assertRunApproval(run));
+ assert.throws(()=>assertRun(run,{...scope,connectionId:new Types.ObjectId(scope.connectionId)}),/Exact connected company scope/);
+ assert.throws(()=>assertRunApproval({...run,createdBy:'c'.repeat(24)}),/different owner/);
+ for(const connectionId of [null,undefined,42,{},'not-an-id'])assert.throws(()=>assertRunApproval({...run,connectionId}),/Exact connected company scope/);
+ assert.throws(()=>assertRunApproval({...run,environment:'other'}),/Exact connected company scope/);
+ assert.throws(()=>assertRunApproval({...run,realmId:'other'}),/Exact connected company scope/);
+});

@@ -2,6 +2,8 @@
 
 ## Current task tracking
 
+2026-11-01T20:50UTC: A08 activity discovery is directly restored (same GET now200, choicesAvailable:true,40 customers/4 services). Stored run ObjectId normalization fixes the approval/history read; external scope remains strict.69 installed checks and both reviews pass. A02 is pushed as10ceec4. Next evidence is actual accountant output; daily baseline was125 at20:43.
+
 2026-11-01T20:47:57.921Z owner clarification: deliver the [simulated online bank and continuously current feeds/reconciliation](../plans/simulated-online-bank-and-reconciliation-2026-11-01.md), now tracked as SB01–SB07 alongside historical D01–D04. This means a bank-style account workspace with its own persistent settlement ledger, downloadable CSVs/statements, complete historical QBO banking catch-up and automatic future operation through each latest due cycle. Existing artifacts are a foundation, not proof of that whole outcome. Start independent ledger/file-automation and ready historical work without waiting for unrelated A01/A02 repairs; preserve accepted records and unknown-native-outcome barriers. This is a task/intent update only, with no new live authorization.
 
 2026-11-01T20:46UTC: A02 fresh-graph admission fix is installed (337 affected /80 saved-source checks passed; both reviews clear); actual deposits still await observed governed execution. A08 now takes priority: live activity/options returns400 BUSINESS_PLAN_UNVERIFIED (exact company scope required), while saved activity remains125 after16 idle reviews. Essential investigation starts20:46, next direct-proof checkpoint21:01. Repair this read-only discovery path before optional UI/catalogue work.
