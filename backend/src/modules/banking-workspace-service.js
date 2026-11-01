@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { description: bankTransactionDescription } = require('./bank-feed-csv');
 const STRENGTHS = Object.freeze(['operator attested', 'screen observed', 'synced record observed', 'native report retained']);
 const SCOPE_KEYS = ['environment', 'realmId', 'connectionId'];
 const HASH = /^[a-f0-9]{64}$/;
@@ -426,7 +427,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       balance = amountSum([balance, balanceMovementMinor]);
       return { eventId: event.eventId, eventRevision: event.revision, rowId: spec.rowId, fileId: spec.fileId, rowNumber: spec.rowNumber,
         postingDate: event.actualPostingDate || event.expectedPostingDate, postingBasis: event.postingBasis || (event.actualPostingDate ? 'retained-posting-evidence' : 'simulated-policy'),
-        status: event.expectedResolution === 'exclude' ? 'excluded' : 'posted', description: event.description || event.kind || [event.source?.entity, event.source?.id].filter(Boolean).join(' '),
+        status: event.expectedResolution === 'exclude' ? 'excluded' : 'posted', description: bankTransactionDescription(event),
         amountMinor: event.amountMinor, balanceMovementMinor, runningBalanceMinor: balance,
         source: { entity: event.source?.entity || null, id: event.source?.id || null, sourceHash: event.sourceHash || event.source?.sourceHash || null },
         qboRefs: clone(event.resolution?.linkedQboIds || []) };

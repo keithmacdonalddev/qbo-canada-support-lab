@@ -296,3 +296,14 @@ test('bank account view exposes missing opening provenance and fails closed on i
   h.packages.get(row.id).snapshot.closingMinor++;
   await assert.rejects(h.service.accountDetail(user, '60'), /movements/);
 });
+
+
+test('account transaction labels reuse the human-readable bank CSV descriptions', async () => {
+  for (const [entity, kind, expected] of [['SalesReceipt','direct-receipt','Sales receipt'], ['BillPayment','bill-payment','Supplier payment'], ['Transfer','transfer-in','Bank transfer']]) {
+    const h = fixture(), input = h.input();
+    Object.assign(input.events[0], { kind, source: { entity, id: '486' } });
+    await h.service.register(user, input);
+    const detail = await h.service.accountDetail(user, '60');
+    assert.equal(detail.transactions[0].description, expected);
+  }
+});
