@@ -1,4 +1,5 @@
 'use strict';
+const { ownsAgentWork } = require('./business-agent-authority');
 // When the accountant reviews the business, and how much same-day activity a
 // business day should carry. Pure: every answer comes from saved state passed in,
 // so a restart resumes the same slot, backoff and review ceiling.
@@ -263,8 +264,8 @@ function progressSignature(business, today, owned = [], obligations = null) {
 // A run's disposition (store.unfinishedRuns); without one, executing work is active and the rest continues.
 const dispositionOf = run => run.disposition || (isActive(run) ? 'active' : 'continue');
 function ownRetained(operation, agent) {
-  const origin = operation?.agentAuthority, grant = agent?.grant;
-  return Boolean(origin && grant && origin.agentId === agent.id && origin.grantId === grant.id && origin.authorityHash === grant.authorityHash);
+  const origin = operation?.agentAuthority;
+  return ownsAgentWork(origin,agent);
 }
 // The next uninterrupted period to close: never across a month-end, at most 31 days, through yesterday.
 function nextClose(business, todayDay) {

@@ -1,4 +1,5 @@
 'use strict';
+const { ownsAgentWork } = require('./business-agent-authority');
 // One list of everything the business needs, split by who must do it. The
 // accountant owns everything it can do through governed tools; the owner sees
 // only work that genuinely needs a person (consent, a QuickBooks screen, a
@@ -50,8 +51,8 @@ function dutyFacts(key,facts){
 const IN_PROGRESS=new Set(['running','committing']);
 const operationActive=operation=>Boolean(operation&&(IN_PROGRESS.has(operation.status)||operation.executionPending===true));
 function ownOperation(operation,agent){
-  const origin=operation?.agentAuthority,grant=agent.grant;
-  return Boolean(origin&&grant&&origin.agentId===agent.id&&origin.grantId===grant.id&&origin.authorityHash===grant.authorityHash&&RESUMABLE.has(operation.status));
+  const origin=operation?.agentAuthority;
+  return ownsAgentWork(origin,agent)&&RESUMABLE.has(operation.status);
 }
 
 // "Today (Fri Oct 30): 20 planned · 7 in QuickBooks · 3 in progress" from counted native create receipts.
@@ -83,22 +84,19 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   for(const blocker of business.errorBlockers||[])items.push(require('./business-error-detail').blockerWork(blocker));
   const add=item=>items.push({detail:'',next:'',...item});
   const operation=business.currentOperation,grant=agent.grant,published=!codes.has('not-published');
-  // Only a changed published business needs the owner again; new accountant
-  // workflows are covered by the standing grant (owner direction 2026-10-29).
-  const stale=grant&&business.authorityHash&&grant.authorityHash!==business.authorityHash;
+  // Current business policy governs new work under the standing owner grant.
 
   if(usage?.pause)add({key:'ai-usage-limit',owner:OWNER,state:'needs-owner',title:usage.pause.title,detail:usage.pause.detail+(usage.pause.resetAt?' Reset: '+usage.pause.resetAt+'.':''),action:{kind:'link',href:'/company#ai-usage',label:'View AI usage & limits'}});
   // Things only the owner can do.
   if(!settings.monitoring)add({key:'enable-monitoring',owner:OWNER,state:'needs-owner',title:'Turn on company monitoring',detail:'The app keeps a live copy of the company so the accountant can see what is happening.',action:{kind:'enable-monitoring',label:'Start monitoring'}});
   if(!published)add({key:'publish-business',owner:OWNER,state:'needs-owner',title:'Choose and publish the business',detail:'The accountant needs a published business definition before it can run anything.',action:{kind:'link',href:'/company/manage',label:'Open business setup'}});
   else if(settings.monitoring&&!grant)add({key:'grant-authority',owner:OWNER,state:'needs-owner',title:'Let the accountant run the business',detail:'This is a one-time approval to create accounting records in this company under the published business rules. After this it keeps running on its own, around the clock.',action:{kind:'enable-autonomy',label:'Give authority'}});
-  else if(settings.monitoring&&stale)add({key:'renew-authority',owner:OWNER,state:'needs-owner',title:'Approve the accountant’s updated business rules',detail:'The business definition or the kinds of work the accountant can do changed since you approved it. It needs your one-time approval for the new version.',action:{kind:'enable-autonomy',label:'Approve'}});
   else if(settings.monitoring&&!settings.autonomous)add({key:'resume',owner:OWNER,state:'needs-owner',title:'You paused the accountant',detail:'Nothing new happens in the business until you resume it.',action:{kind:'resume',label:'Resume'}});
   if(codes.has('calendar-stopped'))add({key:'calendar-stopped',owner:OWNER,state:'needs-owner',title:'You stopped business activity',detail:'A saved Stop request is holding all accounting work.',action:{kind:'link',href:'/company/manage',label:'Review the stop'}});
   if(AI_ERROR.test(agent.lastError||''))add({key:'ai-connection',owner:OWNER,state:'needs-owner',title:'Fix the AI connection',detail:'The accountant could not reach its AI model on its last review.',action:{kind:'link',href:'/settings',label:'Open settings'}});
 
   // The accountant's own work.
-  const running=Boolean(settings.monitoring&&settings.autonomous&&grant&&!stale&&!usage?.pause);
+  const running=Boolean(settings.monitoring&&settings.autonomous&&grant&&!usage?.pause);
   // The only spinner states: sync not yet current, or an operation that is executing. A review in
   // progress is shown by rightNow() above this list. Enabled duties are 'on-duty' (no animation).
   if(settings.monitoring&&sync.status&&sync.status!=='current')add({key:'catch-up',owner:ACCOUNTANT,state:'working',title:'Catching up with QuickBooks',detail:'Reading the latest company changes. Accounting work waits until every record type is current.',next:'Continues automatically.'});
@@ -121,14 +119,14 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
   const doingNow=types=>running&&active&&(operation?.activityBatch?.types||[]).some(type=>types.includes(type));
   const duty=(key,types,item,idle)=>{
     const now=doingNow(types),summary=dutyFacts(key,facts);
-    add({key,owner:ACCOUNTANT,state:stale||!running?'waiting':now?'working':'on-duty',...item,next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':now?'Doing this now in the current operation.':idle,...(summary?{facts:summary}:{})});
+    add({key,owner:ACCOUNTANT,state:!running?'waiting':now?'working':'on-duty',...item,next:!running?'Starts once the accountant is running.':now?'Doing this now in the current operation.':idle,...(summary?{facts:summary}:{})});
   };
   if(published)duty('receive-purchase-orders',['receive-purchase-order'],{title:'Receive open purchase orders into supplier bills',detail:'Receives wholly unreceived purchase orders created by its own workflows or adopted import, in full at their original inventory cost. Partially received orders are unavailable.',capability:'purchase-order-receiving'},'Looks for open orders to receive at each business review.');
   if(published)duty('own-receivables-payables',['invoice-on-terms','collect-own-invoice','bill-on-terms','pay-own-bill','send-estimate','convert-own-estimate','order-stock'],{title:'Run sales and purchases over time',detail:'Invoices customers and records supplier bills on payment terms, leaves them open until they fall due, and later collects or pays them in full or in part. Sends estimates and converts accepted ones into invoices, and orders stock for later receiving.'},'Raises, collects and pays open invoices and bills at each business review.');
   if(published)duty('correct-own-records',['correct-own-record'],{title:'Correct its own mistakes',detail:'Reverses its own earlier records dated today when they were wrong: a full credit applied to an unpaid service invoice, a refund of a fully collected service sale, a supplier credit applied to an unpaid operating bill, or the exact reverse of a journal entry, at the original tax rate. Originals are never edited, and each record is corrected at most once.'},'Checks its recent records for mistakes at each business review.');
   // Approved work that holds no calendar slot (for example, approval saved but queueing failed).
   // Unsent work outside the slot is retired automatically and is not shown.
-  const pending=(Array.isArray(owned)?owned:[]).filter(run=>run&&run.disposition!=='unsent'&&run.operationId!==operation?.operationId&&grant&&run.agentAuthority?.agentId===agent.id&&run.agentAuthority?.grantId===grant.id);
+  const pending=(Array.isArray(owned)?owned:[]).filter(run=>run&&run.disposition!=='unsent'&&run.operationId!==operation?.operationId&&ownsAgentWork(run.agentAuthority,agent));
   const stranded=pending.some(run=>run.disposition==='stranded');
   if(pending.length)add({key:'finish-approved',owner:ACCOUNTANT,state:stranded?'blocked':!running?'waiting':pending.some(run=>run.executionPending||IN_PROGRESS.has(run.status))?'working':'waiting',title:'Finish approved accounting work',
     detail:plural(pending.length,'unfinished operation')+' ('+pending.slice(0,3).map(run=>run.status+(run.day?' for '+shortDate(run.day):'')).join(', ')+'). Calendar closes wait for their dependencies. Independent batches continue within the three-operation, hourly and daily limits.',
@@ -152,8 +150,8 @@ function businessWork({settings,agent,business,sync,coverage=null,activityPolicy
       :today.remaining===0?'Today’s target is met.'
       :today.hourResetAt?'Paused: the hourly limit of '+today.hourCap+' new records is reached. Work continues at '+halifaxTime(today.hourResetAt)+'.'
       :today.nextSlotAt?'On schedule. More work is due at '+halifaxTime(today.nextSlotAt)+'.':'Today’s schedule is complete; any shortfall is not replayed.';
-    add({key:'todays-activity',owner:ACCOUNTANT,state:stale||!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
-      next:stale?'Starts after you approve the accountant’s updated business rules.':!running?'Starts once the accountant is running.':CONTINUOUS.has(cadence?.kind)?'Working continuously'+(cadence?.reason?' ('+cadence.reason+')':'')+'.':nextAt?'Paused until '+nextAt+(cadence?.reason?': '+cadence.reason:'')+'.':'Works through the day in small batches.'});
+    add({key:'todays-activity',owner:ACCOUNTANT,state:!running?'waiting':doingNow(['settled-service-sale','paid-operating-expense','paid-cash-expense','supplier-credit','customer-credit','customer-refund','bank-transfer','journal-entry'])?'working':'on-duty',title:'Run today’s business activity',...(line?{facts:line}:{}),detail,
+      next:!running?'Starts once the accountant is running.':CONTINUOUS.has(cadence?.kind)?'Working continuously'+(cadence?.reason?' ('+cadence.reason+')':'')+'.':nextAt?'Paused until '+nextAt+(cadence?.reason?': '+cadence.reason:'')+'.':'Works through the day in small batches.'});
   }
   for(const update of currentStateUpdates(business))add({key:update.key,owner:ACCOUNTANT,state:running?'on-duty':'waiting',title:'Previously held collections are eligible now',detail:update.message,next:running?update.next:'Starts once the accountant is running. '+update.next});
   if(business.adoptedThrough)duty('inherited-obligations',['collect-adopted-invoice','pay-adopted-bill'],{title:'Settle invoices and bills left open by the imported history',detail:'History through '+business.adoptedThrough+' was adopted from an import. The calendar does not collect or pay its open customer invoices and supplier bills; the accountant settles them as part of daily activity.',capability:'adopted-obligations'},'Collects and pays them at business reviews as customers pay and bills fall due.');

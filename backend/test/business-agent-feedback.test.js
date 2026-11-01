@@ -61,3 +61,13 @@ test('an interrupted QBO-id chunk cannot mark a pending decision reconciled',asy
  const events=[],store={models:{Runs:{find:()=>query([])},GeneralWriteRuns:{find:()=>query([{_id:'run',status:'complete',items:Object.fromEntries(Array.from({length:101},(_,i)=>['ref'+i,{qboId:String(i+1),entity:'Invoice',outcome:'saved'}]))}])}},event:async(r,kind,title,detail,data)=>{if(kind==='accountant-write-outcome'&&data.offset===100)throw new Error('storage temporarily unavailable');events.push({kind,data})}};
  await assert.rejects(accountability.retainOutcome({store,row,scope,decision:{id:'pending',decisionKey:'original-key',reason:'Real sale'}}),/storage/);assert.ok(!events.some(e=>e.kind==='accountant-write-outcome-complete'));
 });
+
+test('unfinished discovery retains renewed grants and excludes foreign owners and company scope before limiting',async()=>{
+ const {model}=require('./replay/memory.cjs'),{createBusinessAgentStore}=require('../src/modules/business-agent-store');
+ const origin={version:1,agentId:String(row._id),ownerId:row.ownerId,grantId:'1'.repeat(64),authorityHash:'2'.repeat(64)};
+ const fixed={_id:'1'.repeat(24),...scope,createdBy:row.ownerId,status:'approved',agentAuthority:origin};
+ const general={_id:'2'.repeat(24),...scope,ownerId:row.ownerId,contract:'general-write-v1',status:'held',agentAuthority:origin,plan:{operations:[]},batches:[],items:{}};
+ const models={Agents:{},Events:{},Runs:model([fixed,{...fixed,_id:'3'.repeat(24),createdBy:'9'.repeat(24)},{...fixed,_id:'4'.repeat(24),realmId:'other'},{...fixed,_id:'5'.repeat(24),agentAuthority:{...origin,ownerId:'9'.repeat(24)}}]),GeneralWriteRuns:model([general,{...general,_id:'6'.repeat(24),ownerId:'9'.repeat(24)}]),Calendars:model([]),Writers:model([])};
+ const store=createBusinessAgentStore({models,connection:{},transaction:async fn=>fn(null),now:()=>Date.parse('2026-11-01T12:00:00Z')});
+ const open=await store.unfinishedRuns(scope,String(row._id),{ownerId:row.ownerId});assert.deepEqual(open.map(r=>r.operationId),[fixed._id,general._id]);assert.equal(open[0].agentAuthority.grantId,origin.grantId);
+});

@@ -433,7 +433,7 @@ test('automatic general continuation respects every global hold before refreshin
  for(const code of ['calendar-stopped','completion-pending','not-published','population-owned','history-uncommitted','coordination-paused']){
   const h=fixture();moveTo(h,'2026-10-24T02:00:00Z');h.row.nextSyncAt=new Date(h.clock+30000);h.business.blockers=[{code}];
   h.row.syncView.sources[0]={...h.row.syncView.sources[0],mode:'cdc',lastSuccessAt:new Date(h.clock-180000).toISOString()};
-  h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
+  h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{version:1,agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
   const module=require('../src/modules/general-write-service'),original=module.createDefaultGeneralWrite;let executed=0;module.createDefaultGeneralWrite=()=>({execute:async()=>{executed++;return {status:'complete'};}});
   try{await h.service._worker(agentId,new AbortController());assert.equal(executed,0,code);assert.equal(h.syncCalls,0,'no write freshness read under '+code);}finally{module.createDefaultGeneralWrite=original;h.service.close();}
  }
@@ -445,7 +445,7 @@ test('a general batch refused by a busy writer resumes its saved sending identit
  const Runs={findOne:filter=>query(rows.get(filter._id)||null),create:async([row])=>rows.set(row._id,{revision:0,batches:[],items:{},owned:[],dirty:[],...copy(row)}),findOneAndUpdate:(filter,update)=>{const row=rows.get(filter._id);if(!row||row.revision!==filter.revision)return query(null);Object.assign(row,copy(update.$set));row.revision++;return query(row);}};
  let attempts=0;const identities=[];
  const api=module.createGeneralWriteService({dispatchEnabled:()=>true,models:{GeneralWriteRuns:Runs,Steps:{findOne:()=>query(null)}},copy:{read:async()=>null},contextFor:async()=>({day:'2026-10-23',verifiedThrough:'2026-10-22',protectedThrough:null,taxCodes:{sales:[],purchases:[]},taxPercent:{}}),retain:async()=>true,transport:{sendBatch:async(scope,{batch})=>{identities.push(batch.requestId);if(++attempts<=12)throw Object.assign(new Error('writer busy'),{qboStage:'write_admission'});return batch.items.map(item=>({bId:item.bId,Customer:{...item.payload,Id:'100',SyncToken:'0'}}));}}});
- const origin={agentId,grantId:h.row.grant.id,authorityHash,ownerId};const prepared=await api.prepare({scope,ownerId,actorId:ownerId,agentAuthority:origin},{decisionKey:'busy-writer-customer',purpose:'Add the new customer that signed a service agreement.',operations:[{ref:'customer',op:'create',entity:'Customer',payload:{DisplayName:'Isolated customer'}}]});assert.equal(prepared.status,'prepared');
+ const origin={version:1,agentId,grantId:h.row.grant.id,authorityHash,ownerId};const prepared=await api.prepare({scope,ownerId,actorId:ownerId,agentAuthority:origin},{decisionKey:'busy-writer-customer',purpose:'Add the new customer that signed a service agreement.',operations:[{ref:'customer',op:'create',entity:'Customer',payload:{DisplayName:'Isolated customer'}}]});assert.equal(prepared.status,'prepared');
  h.store.unfinishedRuns=async()=>[...rows.values()].filter(row=>row.status!=='complete').map(row=>({operationId:row._id,contract:'general-write-v1',status:row.status,createCount:1,agentAuthority:origin,disposition:'prepared',admitted:false}));
  module.createDefaultGeneralWrite=()=>api;
  try{await h.service._worker(agentId,new AbortController());assert.equal(rows.get(prepared.runId).status,'prepared');rows.get(prepared.runId).status='sending';for(let i=0;i<12;i++)await h.service._worker(agentId,new AbortController());assert.equal(rows.get(prepared.runId).status,'complete');assert.equal(attempts,13);assert.ok(identities.every(id=>id===identities[0]));assert.equal(identities[0],identities[1],'the exact saved request is reused');assert.equal(rows.size,1,'no replacement plan');}finally{module.createDefaultGeneralWrite=original;h.service.close();}
@@ -481,7 +481,7 @@ test('failure to refresh a touched party yields before approval; unrelated sourc
 test('a recovery source-refresh yield does not cancel an independent review',async()=>{
  const h=fixture();moveTo(h,'2026-10-31T17:00:00Z');h.business.verifiedThrough='2026-10-30';h.row.nextSyncAt=new Date(h.clock+30000);h.row.cadence={day:'2026-10-31',lastKind:'recovery',lastReviewAt:new Date(h.clock-60000).toISOString()};
  h.row.syncView.sources[0]={...h.row.syncView.sources[0],mode:'cdc',lastSuccessAt:new Date(h.clock-180000).toISOString()};
- h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
+ h.owned=[{operationId:'general-held',contract:'general-write-v1',status:'held',createCount:1,agentAuthority:{version:1,agentId,grantId:h.row.grant.id,authorityHash,ownerId},disposition:'prepared'}];
  const controller=new AbortController();h.onRun=async input=>{await input.execute('rememberBusinessContext',{memory:'Keep independent activity moving.'});};
  await h.service._worker(agentId,controller);assert.equal(h.engineCalls,1);assert.equal(controller.signal.aborted,false);assert.equal(h.row.lastError,null);assert.ok(h.events.some(event=>event.kind==='review-completed'));h.service.close();
 });
@@ -575,4 +575,18 @@ test('V2 first-record start preserves batching and review capacity during an all
  assert.ok(receipts.length>=215&&receipts.length<=220,'sustains the weighted daily target');
  assert.ok(slices<55,'later activity still batches');assert.ok(state.reviews<400,'close retries leave daily review capacity');
  console.log('V2 day replay: '+receipts.length+' saved records, '+slices+' slices, '+closes+' close retries, '+state.reviews+' reviews; first work '+((first-start)/60000)+' minutes after midnight.');
+});
+
+test('renewed standing grant executes and recovers original fixed work without replacing its origin',async()=>{
+ const h=writeFixture(),original=copy(h.run.agentAuthority);h.row.grant={...h.row.grant,id:'2'.repeat(64),authorityHash:'3'.repeat(64)};h.business.authorityHash='4'.repeat(64);
+ h.onRun=async input=>{await h.write(input);};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.approved,1);assert.equal(h.requested,1);assert.deepEqual(h.run.agentAuthority,original);h.service.close();
+ const recovery=fixture();recovery.row.nextDecisionAt=new Date(recovery.clock+3600000);recovery.owned=[heldRun(recovery)];const old=copy(recovery.owned[0].agentAuthority);recovery.row.grant={...recovery.row.grant,id:'2'.repeat(64),authorityHash:'3'.repeat(64)};recovery.governance={automaticRecoveryPending:async()=>({pending:true,at:123})};
+ await recovery.service._worker(agentId,new AbortController());assert.equal(recovery.requested,1);assert.deepEqual(recovery.owned[0].agentAuthority,old);assert.ok(recovery.events.some(e=>e.kind==='accountant-write-decision'));recovery.service.close();
+});
+test('publication drift needs no renewal prompt and resume retains owner controls',async()=>{
+ const h=fixture();h.business.authorityHash='2'.repeat(64);const view=await h.service.status({id:ownerId});assert.equal(view.work.items.some(i=>i.key==='renew-authority'),false);
+ const input={command:'resume'},business={scope,authorityHash:'2'.repeat(64)};
+ assert.equal(reduceControl(h.row,input,business,h.clock,ownerId).settings.autonomous,true);
+ assert.throws(()=>reduceControl({...h.row,grant:{...h.row.grant,ownerId:'9'.repeat(24)}},input,business,h.clock,ownerId));h.service.close();
 });

@@ -16,9 +16,10 @@ test('strict nested contracts reject authority injection and malformed values',(
 test('retained population and calendar blockers prevent historical regeneration',async()=>{
  const h=fixture();h.business.blockers=[{detail:'Verify original populated history; do not rebuild.'}];await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-23'}),/do not rebuild/);assert.equal(h.prepared,0);
 });
-test('exact grant-owned plan approval retains agent decision before queuing work',async()=>{
+test('same-owner plan approval retains agent decision before queuing work',async()=>{
  const h=fixture();await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'The due published work is ready.'});assert.equal(h.approved,1);assert.equal(h.queued,1);assert.ok(h.events.some(e=>e[1]==='plan-decision'));assert.equal(h.events[0][1],'accountant-write-decision');assert.equal(h.events.find(e=>e[1]==='plan-decision')[4].approvalSource,'standing-owner-grant');
- h.run.agentAuthority.grantId='0'.repeat(64);await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Try another grant'}),/belonging/);assert.equal(h.queued,1);
+ h.run.agentAuthority.grantId='0'.repeat(64);h.run.agentAuthority.authorityHash='1'.repeat(64);await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Continue under the renewed standing grant'});assert.equal(h.queued,2);
+ h.run.agentAuthority.ownerId='9'.repeat(24);await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'A foreign owner is refused'}),/belonging/);assert.equal(h.queued,2);
 });
 test('pause and specialist role prevent accounting dispatch',async()=>{
  const h=fixture();h.paused=true;await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'due'}),/paused/);assert.equal(h.queued,0);
@@ -31,7 +32,8 @@ test('specialist findings report to the main accountant and operating memory is 
 
 test('resume uses the exact existing recovery review before queueing original work',async()=>{
  const h=fixture();h.run.status='stopped';h.run.executionRevision=7;await h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Resume the exact original work after the owner enabled business operation.'});assert.equal(h.resumed,1);assert.equal(h.queued,1);assert.ok(h.events.some(e=>e[1]==='plan-decision'));assert.equal(h.events[0][1],'accountant-write-decision');
- h.run.agentAuthority.grantId='0'.repeat(64);await assert.rejects(h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Do not permit another grant to resume retained work.'}),/standing grant/);assert.equal(h.resumed,1);
+ h.run.agentAuthority.grantId='0'.repeat(64);h.run.agentAuthority.authorityHash='1'.repeat(64);await h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Resume retained work under renewed scoped standing authority.'});assert.equal(h.resumed,2);
+ h.run.agentAuthority.agentId='9'.repeat(24);await assert.rejects(h.tools.execute('resumeBusinessOperation',{operationId,planHash,reason:'Do not permit another accountant to resume retained work.'}),/belonging/);assert.equal(h.resumed,2);
 });
 
 test('financial report tools enforce reports permission before any SDK request',async()=>{
@@ -63,8 +65,8 @@ function slotFixture({now=NOON,verifiedThrough='2026-10-29'}={}){
  const h={events:[],prepared:[],periods:[],approved:0,queued:0,forgets:0,owned:[],todayCalls:[],leases:[],today:cadence.summarizeToday({rhythm:cadence.dayRhythm(cadence.localParts(now).date),now})};
  h.run={_id:operationId,createdBy:ownerId,planHash,status:'previewed',recordCount:5,activityBatch:{day:'2026-10-30',activities:[{type:'settled-service-sale'}]},agentAuthority:{version:1,agentId,grantId,authorityHash,ownerId}};
  h.tools=createBusinessAgentTools({row:{_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},passId:'slot-pass',scope,user:{id:ownerId},signal:new AbortController().signal,now:()=>now,
-  store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough,blockers:[]}),run:async()=>h.run,event:async(...args)=>{h.events.push(args);return {id:'2'.repeat(24)};},forgetToday:()=>{h.forgets++;},unfinishedRuns:async(scope,agent,grant)=>{h.unfinishedQuery=grant;return h.owned;}},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
-  governanceFor:(origin,lease)=>{h.leases.push(lease);return {prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},prepare:async(user,input)=>{h.periods.push(input.throughDate);return {operationId,planHash};},approve:async()=>{h.approved++;}};},lease:{token:'worker-lease-token',now:()=>now},
+  store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough,authorityHash:h.businessAuthorityHash||authorityHash,blockers:[]}),run:async()=>h.run,event:async(...args)=>{h.events.push(args);return {id:'2'.repeat(24)};},forgetToday:()=>{h.forgets++;},unfinishedRuns:async(scope,agent,grant)=>{h.unfinishedQuery=grant;return h.owned;}},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
+  governanceFor:(origin,lease)=>{h.origin=origin;h.leases.push(lease);return {prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},prepare:async(user,input)=>{h.periods.push(input.throughDate);return {operationId,planHash};},approve:async()=>{h.approved++;}};},lease:{token:'worker-lease-token',now:()=>now},
   execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async options=>{h.todayCalls.push(options||{});return h.today;}});
  return h;
 }
@@ -107,7 +109,8 @@ test('an unfinished approved operation is recovered before any new period or bat
  await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Approve another batch.'}),/Finish your unfinished operation/);
  assert.deepEqual([h.periods.length,h.prepared.length,h.approved],[0,0,0]);
  h.owned=[{...h.owned[0],agentAuthority:{...h.owned[0].agentAuthority,grantId:'0'.repeat(64)}}];
- await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.deepEqual(h.periods,['2026-10-30'],'work under another grant does not block this lineage');
+ await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/Finish your unfinished operation/);
+  h.owned[0].agentAuthority.ownerId='9'.repeat(24);await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.deepEqual(h.periods,['2026-10-30'],'another owner is outside this lineage');
 });
 test('slice admission reads fresh counts and drops cached counts after preparing and queueing',async()=>{
  const h=slotFixture();
@@ -139,10 +142,10 @@ test('only continuable or stranded work blocks new work; unsent work outside the
  await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation/);
  assert.equal(h.periods.length,1);
 });
-test('the unfinished-work query is filtered to the current grant, and governed calls carry the worker lease',async()=>{
+test('the unfinished-work query is filtered to the current owner, and governed calls carry the worker lease',async()=>{
  const h=slotFixture();
  await h.tools.execute('prepareBusinessActivity',sale);
- assert.deepEqual(h.unfinishedQuery,{id:grantId,authorityHash},'older grants cannot crowd current work out of a limited query');
+ assert.deepEqual(h.unfinishedQuery,{ownerId},'same-owner lineage is filtered before the limited query');
  await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute today\u2019s slot batch.'});
  assert.deepEqual(h.leases.filter(Boolean).map(lease=>lease.token),['worker-lease-token','worker-lease-token'],'preparation and approval are fenced to the exact worker lease');
 });
@@ -197,4 +200,47 @@ test('an unsent general credit plan does not block independent activity, but sti
  h.owned.push({operationId:'8'.repeat(24),status:'approved',day:'2026-10-30',disposition:'continue',agentAuthority:h.run.agentAuthority});
  await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation 8{24}/);
  assert.equal(h.prepared.length,1,'specialized operations keep their original calendar fence');
+});
+
+// Stage 2A: current standing authority governs admission; historical hashes are evidence.
+const authority=require('../src/modules/business-agent-authority');
+const {matches}=require('./replay/memory.cjs');
+function authorityFixture(){
+ const origin={version:1,agentId,ownerId,grantId,authorityHash};
+ const row={_id:agentId,...scope,ownerId,settings:{monitoring:true,autonomous:true},grant:{id:'1'.repeat(64),authorityHash:'2'.repeat(64),ownerId},leaseToken:'live-lease',leaseExpiresAt:new Date('2026-11-01T12:01:00Z')};
+ const h={origin,row,queries:[],touches:0};
+ h.args={authority:origin,run:{...scope,createdBy:ownerId,authorityHash:'3'.repeat(64),agentAuthority:origin},scope,ownerId,actorId:ownerId,session:{inTransaction:()=>true},lease:{token:'live-lease',now:()=>Date.parse('2026-11-01T12:00:00Z')},Agents:{findOneAndUpdate:(q,u,o)=>{h.queries.push(q);assert.equal(o.session,h.args.session);assert.deepEqual(u,{$inc:{dispatchRevision:1}});return {lean:async()=>{if(!matches(row,q))return null;h.touches++;return structuredClone(row);}};}}};return h;
+}
+test('renewed grant and publication preserve lineage, approval and transactional admission',async()=>{
+ const h=authorityFixture(),original=structuredClone(h.args.run);
+ assert.equal(authority.sameAuthority(h.origin,{...h.origin,grantId:h.row.grant.id,authorityHash:h.row.grant.authorityHash}),true);
+ authority.assertAgentApproval({...h.args.run,environment:'production',approval:{agentAuthority:{...h.origin,grantId:h.row.grant.id,authorityHash:h.row.grant.authorityHash},decisionSource:'agent-standing-authority',productionConsent:{source:'agent-standing-authority'}}});
+ const current=await authority.fenceAgentAuthority(h.args);assert.equal(current.grantId,h.row.grant.id);assert.equal(h.touches,1);assert.deepEqual(h.args.run,original,'original evidence is never rewritten');
+ assert.equal(h.queries[0]['grant.id'],undefined);assert.equal(h.queries[0]['grant.authorityHash'],undefined);
+});
+test('standing admission refuses revoked grants, foreign scope, owners, agents and lost leases',async()=>{
+ for(const mutate of [h=>h.row.settings.autonomous=false,h=>h.row.settings.monitoring=false,h=>h.row.grant=null,h=>h.row.grant.ownerId='9'.repeat(24),h=>h.row.ownerId='9'.repeat(24),h=>h.row._id='9'.repeat(24),h=>h.row.environment='sandbox',h=>h.row.realmId='other',h=>h.row.connectionId='9'.repeat(24),h=>h.row.leaseToken='replacement',h=>h.row.leaseExpiresAt=new Date('2026-11-01T12:00:00Z'),h=>h.args.actorId='9'.repeat(24),h=>h.args.run.realmId='other',h=>h.args.session={inTransaction:()=>false}]){
+  const h=authorityFixture();mutate(h);await assert.rejects(authority.fenceAgentAuthority(h.args),{code:'BUSINESS_AGENT_AUTHORITY_REQUIRED'});
+ }
+});
+test('approval lineage never adopts owner-created or foreign-accountant operations',()=>{
+ const h=authorityFixture(),approval={agentAuthority:h.origin,decisionSource:'agent-standing-authority'};
+ assert.throws(()=>authority.assertAgentApproval({createdBy:ownerId,approval}),{code:'BUSINESS_AGENT_AUTHORITY_REQUIRED'});
+ for(const field of ['agentId','ownerId'])assert.throws(()=>authority.assertAgentApproval({...h.args.run,approval:{...approval,agentAuthority:{...h.origin,[field]:'9'.repeat(24)}}}),{code:'BUSINESS_AGENT_AUTHORITY_REQUIRED'});
+});
+
+test('renewed-grant retained calendar slot allows independent activity under the same owner',async()=>{
+ const h=slotFixture();h.run.status='blocked';h.run.agentAuthority.grantId='1'.repeat(64);h.run.agentAuthority.authorityHash='2'.repeat(64);
+ // Capacity is shared with the tools' current company view, as in the live path.
+ const row={_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{}};let prepared=0;
+ const tools=createBusinessAgentTools({row,scope,passId:'renewed-capacity',access:{authorize:async()=>{}},now:()=>Date.parse('2026-10-30T17:00:00Z'),store:{models:{},business:async()=>({scope,authorityHash,currentOperation:{...h.run,operationId},blockers:[{code:'current-operation'}]}),event:async()=>({id:'2'.repeat(24)}),unfinishedRuns:async()=>[]},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},user:{id:ownerId},governanceFor:origin=>({prepareActivityBatch:async()=>{assert.equal(origin.authorityHash,authorityHash);prepared++;return {operationId,planHash};}})});
+ const general=require('../src/modules/general-write-service'),original=general.createDefaultGeneralWrite;
+ general.createDefaultGeneralWrite=()=>({prepare:async()=>{prepared++;return {runId:operationId,status:'refused',problems:[]};}});
+ try{const result=await tools.execute('manageQboRecord',{decisionKey:'renewed-calendar-slot',purpose:'Independent customer work while the original slot recovers.',operations:[{ref:'customer',op:'create',entity:'Customer',payload:{DisplayName:'Scratch example'}}]});assert.equal(result.refused,true);assert.equal(prepared,1);}finally{general.createDefaultGeneralWrite=original;}
+});
+
+test('fresh activity and period preparation use current published meaning after a policy change',async()=>{
+ const h=slotFixture({now:Date.parse('2026-10-31T12:00:00Z'),verifiedThrough:'2026-10-29'});h.businessAuthorityHash='2'.repeat(64);
+ await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.origin.authorityHash,h.businessAuthorityHash);assert.equal(h.origin.grantId,grantId);
+ await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.equal(h.origin.authorityHash,h.businessAuthorityHash);assert.equal(h.origin.ownerId,ownerId);
 });

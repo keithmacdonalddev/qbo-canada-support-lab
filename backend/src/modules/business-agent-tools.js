@@ -2,6 +2,7 @@
 const { hash, shift, date } = require('./business-calendar');
 const { businessDate } = require('./business-activity-preview');
 const { fail, ID } = require('./business-agent-policy');
+const { ownsAgentWork } = require('./business-agent-authority');
 const READ_NAMES = Object.freeze(['lookupCustomer','lookupInvoice','searchEntities','getEntityDetail','getTransactionChain','runReport']);
 const SPECIALIST_TYPES = Object.freeze({receivables:['Customer','Invoice','Payment','CreditMemo','Deposit','Estimate'],payables:['Vendor','Bill','BillPayment','VendorCredit','Purchase','PurchaseOrder'],inventory:['Item','PurchaseOrder','Bill','SalesReceipt','Invoice']});
 const schema=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
@@ -63,7 +64,7 @@ function validateArguments(value,definition,path='input') {
     default:fail(path+' has no supported contract.',400);
   }
 }
-function operationAllowed(run,row) {const origin=run?.agentAuthority;return Boolean(run&&String(run.createdBy)===String(row.ownerId)&&origin?.version===1&&origin.agentId===String(row._id)&&origin.grantId===row.grant?.id&&origin.authorityHash===row.grant?.authorityHash&&origin.ownerId===String(row.ownerId));}
+function operationAllowed(run,row) {return Boolean(run&&String(run.createdBy)===String(row.ownerId)&&ownsAgentWork(run.agentAuthority,row));}
 // Same-day activity limits (continuous-business plan v2 §3c). todayFor({fresh}) returns today's counted
 // activity (business-agent-cadence.summarizeToday) or {unavailable:true}; without it no limit applies.
 // Limits apply only to discretionary slices: obligations (adopted collections and payments,
@@ -80,14 +81,14 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
   const businessWithErrors=async()=>{const business=await store.business(scope);try{return {...business,errorBlockers:(await require('./business-error-detail').businessBlockersFor({models:store.models,scope,now:now()})).blockers};}catch{return {...business,diagnosticsUnavailable:true};}};
   const native=readTools||require('./ai-tools');
   const forgetToday=()=>{if(typeof store?.forgetToday==='function')store.forgetToday();};
-  // Unfinished operations of this grant, whether or not they hold the calendar slot. While one exists
+  // Unfinished operations of this accountant and owner, whether or not they hold the calendar slot. While one exists
   // no new period or batch is prepared or approved: it is recovered first, so a calendar close never
   // passes a date an approved plan still targets.
   // lease ({ token, now }) is fenced inside the governed prepare and approval transactions.
   const governed=origin=>governanceFor(origin,origin?lease:null);
   async function unfinished(){
     if(typeof store?.unfinishedRuns!=='function'||!row.grant)return [];
-    return (await store.unfinishedRuns(scope,String(row._id),{id:row.grant.id,authorityHash:row.grant.authorityHash})).filter(run=>run.agentAuthority?.grantId===row.grant?.id&&run.agentAuthority?.authorityHash===row.grant?.authorityHash);
+    return (await store.unfinishedRuns(scope,String(row._id),{ownerId:String(row.ownerId)})).filter(run=>ownsAgentWork(run.agentAuthority,row));
   }
   // Only work that can be continued, or that saved records outside the calendar slot, blocks new work.
   // Unsent work outside the slot is retired by the worker through the governed retirement.
@@ -105,7 +106,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
   // batches can prepare independently; the transport checks exact resource conflicts (Job D).
   async function requireActivityCapacity(business,decisionKey=null,except=null){
     const open=(await unfinished()).filter(run=>run.disposition!=='unsent');
-    const own=run=>run?.agentAuthority?.agentId===String(row._id)&&run.agentAuthority.grantId===row.grant?.id&&run.agentAuthority.authorityHash===row.grant?.authorityHash;
+    const own=run=>ownsAgentWork(run?.agentAuthority,row);
     const retained=business.currentOperation;
     const scopedHold=(!retained||own(retained))&&(retained||open.length);
     const blocker=(business.blockers||[]).find(item=>!scopedHold||!['current-operation','uncertain-write'].includes(item.code));
@@ -177,7 +178,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       result={success:true,data:await event(row,'capability-review',value.title,value.detail,value.data,null,value.key,role)};
     }
     else if(name==='getBusinessDecision')result={success:true,data:await store.decision(row,input.decisionId)};
-    else if(name==='getBusinessWork'){const business=await businessWithErrors();result={success:true,data:require('./business-agent-work').businessWork({usage:await usageFor(),settings:row.settings,agent:{id:String(row._id),grant:row.grant||null,lastError:row.lastError||null},business,sync:require('./business-agent-service').publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};}
+    else if(name==='getBusinessWork'){const business=await businessWithErrors();result={success:true,data:require('./business-agent-work').businessWork({usage:await usageFor(),settings:row.settings,agent:{id:String(row._id),ownerId:String(row.ownerId),grant:row.grant||null,lastError:row.lastError||null},business,sync:require('./business-agent-service').publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH})};}
     else if(name==='getBusinessState'){const business=await businessWithErrors();result={success:true,data:{usage:await usageFor(),business,unfinishedOperations:(await unfinished()).filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),...(typeof store.dueObligations==='function'?{dueObligations:await store.dueObligations(scope,businessDate(new Date(now())))}:{}),...(typeof todayFor==='function'?{today:await todayFor(),calendarClose:cadence.nextClose(business,businessDate(new Date(now())))}:{}),sync:row.syncView,ownerInstructions:row.settings.instructions,decisions:await store.decisions(row),capabilities:businessAgentCapabilities(),management:await managementBrief()}};}
     else if(name==='getManagementReview'){const value=typeof managementFor==='function'?await managementFor():null;result=value?{success:true,data:value}:{success:false,error:'The management review is unavailable in this review. Use getBusinessState (management) for today’s plan and the open build-request keys.'};}
     else if(name==='queryCompanyData'){
@@ -206,7 +207,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       const business=await store.business(scope);
       await access.authorize(scope,'operations.preview',{signal});
       const general=require('./general-write-service').createDefaultGeneralWrite({now,access});
-      const bound={scope,ownerId:String(row.ownerId),actorId:String(user.actorId||user.id),agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)}};
+      const bound={scope,ownerId:String(row.ownerId),actorId:String(user.actorId||user.id),agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)}};
       const capacity=await requireActivityCapacity(business,input.decisionKey);
       // Reserve only work that fits before a NEW general plan is saved. Existing identities retain
       // their original payload and are checked again below unless already admitted by the transport.
@@ -255,7 +256,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
         }
       }
       if(writeDecision&&writeDecision.decisionKey!==input.decisionKey){await event(row,'accountant-write-key','Effective governed decision identity',writeDecision.reason,{decisionId:writeDecision.id,decisionKey:input.decisionKey},null,hash({decisionId:writeDecision.id,decisionKey:input.decisionKey}),role);writeDecision={...writeDecision,decisionKey:input.decisionKey};}
-      await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)};
+      await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)};
       try{result={success:true,data:await governed(origin).prepareActivityBatch(user,input,{signal})};}finally{forgetToday();}
     }else if(name==='prepareBusinessPeriod'){
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
@@ -264,10 +265,10 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       if(!from||input.throughDate<from||input.throughDate>=businessDate(new Date(now()))||date(input.throughDate)-date(from)>30*86400000)fail('Choose the next uninterrupted period through yesterday, at most 31 days; keep today open for same-day activity.');
       // Financial proof covers one calendar month: never prepare across a month-end.
       if(input.throughDate.slice(0,7)!==from.slice(0,7))fail('Close one calendar month at a time: prepare through '+cadence.monthEnd(from)+' first, then continue with the next month.');
-      await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:row.grant.authorityHash,ownerId:String(row.ownerId)};
+      await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)};
       result={success:true,data:await governed(origin).prepare(user,{requestKey:hash({agentId:row._id,grantId:row.grant.id,passId,throughDate:input.throughDate}),throughDate:input.throughDate},{signal})};
     }else if(name==='executeBusinessPeriod'){
-      await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only exact retained plans belonging to this agent grant can be executed.');
+      await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only retained plans belonging to this accountant and owner can be executed.');
       if(run.status==='previewed'){await requireNoUnfinished(String(run._id),{allowGeneral:Boolean(run.activityBatch)});await requireActivityCapacity(await store.business(scope),null,String(run._id));}
       // Capacity admission for a new same-day slice: fresh counts (no cache), checked immediately
       // before approval. The agent's exclusive lease is the fence: guard(true) re-verifies it before
@@ -291,7 +292,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       await guard(true);await governed(origin).approve(user,input.operationId,{planHash:input.planHash,...(scope.environment==='production'?{confirmProduction:true}:{})});
       await guard(true);try{result={success:true,data:await execution.request(user,input.operationId,{planHash:input.planHash,requestKey:hash({passId,operationId:input.operationId,phase:'execute'})})};}finally{forgetToday();}
     }else if(name==='resumeBusinessOperation'){
-      await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only the exact retained operation belonging to this standing grant can resume.');
+      await guard(true);const run=await store.run(scope,input.operationId);if(!operationAllowed(run,row)||run.planHash!==input.planHash)fail('Only the retained operation belonging to this accountant and owner can resume.');
       if(input.reason.trim().length<20||input.reason.length>2000)fail('Record the exact recovery reason in 20–2000 characters.',400);
       const governor=governed(run.agentAuthority);
       // An uncertain create is resolved automatically first (attributed, or proved not created).
