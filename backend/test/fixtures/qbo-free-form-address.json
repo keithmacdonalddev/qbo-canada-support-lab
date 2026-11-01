@@ -1,0 +1,427 @@
+{
+  "provenance": {
+    "runId": "6338d798333be4b959c28520",
+    "receiptId": "06f0d891375f121107ea22bdc7bd1db43044d7c072c89b151a3ce1e4a873fdb5",
+    "savedAt": "2026-11-01T08:02:09.981Z",
+    "sanitization": "Accounting fields only; SyncToken retained. Names, addresses, notes and metadata removed.",
+    "fieldAudit": [
+      {
+        "entity": "SalesReceipt",
+        "total": 582,
+        "false": 569,
+        "true": 13,
+        "absent": 0,
+        "examples": [
+          {
+            "qboId": "10004",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "10034",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "10064",
+            "FreeFormAddress": false
+          }
+        ]
+      },
+      {
+        "entity": "Invoice",
+        "total": 2198,
+        "false": 2122,
+        "true": 76,
+        "absent": 0,
+        "examples": [
+          {
+            "qboId": "10",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "1000",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "10006",
+            "FreeFormAddress": false
+          }
+        ]
+      },
+      {
+        "entity": "CreditMemo",
+        "total": 6,
+        "false": 2,
+        "true": 4,
+        "absent": 0,
+        "examples": [
+          {
+            "qboId": "410",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "416",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "434",
+            "FreeFormAddress": true
+          }
+        ]
+      },
+      {
+        "entity": "RefundReceipt",
+        "total": 3,
+        "false": 3,
+        "true": 0,
+        "absent": 0,
+        "examples": [
+          {
+            "qboId": "319",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "330",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "544",
+            "FreeFormAddress": false
+          }
+        ]
+      },
+      {
+        "entity": "Estimate",
+        "total": 1181,
+        "false": 1166,
+        "true": 15,
+        "absent": 0,
+        "examples": [
+          {
+            "qboId": "100",
+            "FreeFormAddress": true
+          },
+          {
+            "qboId": "10001",
+            "FreeFormAddress": false
+          },
+          {
+            "qboId": "10013",
+            "FreeFormAddress": false
+          }
+        ]
+      }
+    ]
+  },
+  "records": [
+    {
+      "entity": "SalesReceipt",
+      "id": "11235",
+      "request": {
+        "TxnDate": "2026-11-01",
+        "CustomerRef": {
+          "value": "148"
+        },
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "Line": [
+          {
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "Qty": 1,
+              "UnitPrice": 125,
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          }
+        ]
+      },
+      "saved": {
+        "Id": "11235",
+        "TxnDate": "2026-11-01",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "ExchangeRate": 1,
+        "Line": [
+          {
+            "Id": "1",
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "UnitPrice": 125,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "124"
+              },
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          },
+          {
+            "Amount": 125,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 17.5,
+          "TaxLine": [
+            {
+              "Amount": 17.5,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "34"
+                },
+                "PercentBased": true,
+                "TaxPercent": 14,
+                "NetAmountTaxable": 125
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "148"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 142.5,
+        "HomeTotalAmt": 142.5,
+        "Balance": 0,
+        "HomeBalance": 0,
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "SyncToken": "0"
+      },
+      "current": {
+        "Id": "11235",
+        "TxnDate": "2026-11-01",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "ExchangeRate": 1,
+        "Line": [
+          {
+            "Id": "1",
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "UnitPrice": 125,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "124"
+              },
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          },
+          {
+            "Amount": 125,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 17.5,
+          "TaxLine": [
+            {
+              "Amount": 17.5,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "34"
+                },
+                "PercentBased": true,
+                "TaxPercent": 14,
+                "NetAmountTaxable": 125
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "148"
+        },
+        "FreeFormAddress": false,
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 142.5,
+        "HomeTotalAmt": 142.5,
+        "Balance": 0,
+        "HomeBalance": 0,
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "SyncToken": "0"
+      }
+    },
+    {
+      "entity": "SalesReceipt",
+      "id": "11236",
+      "request": {
+        "TxnDate": "2026-11-01",
+        "CustomerRef": {
+          "value": "147"
+        },
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "Line": [
+          {
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "Qty": 1,
+              "UnitPrice": 125,
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          }
+        ]
+      },
+      "saved": {
+        "Id": "11236",
+        "TxnDate": "2026-11-01",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "ExchangeRate": 1,
+        "Line": [
+          {
+            "Id": "1",
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "UnitPrice": 125,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "124"
+              },
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          },
+          {
+            "Amount": 125,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 17.5,
+          "TaxLine": [
+            {
+              "Amount": 17.5,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "34"
+                },
+                "PercentBased": true,
+                "TaxPercent": 14,
+                "NetAmountTaxable": 125
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "147"
+        },
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 142.5,
+        "HomeTotalAmt": 142.5,
+        "Balance": 0,
+        "HomeBalance": 0,
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "SyncToken": "0"
+      },
+      "current": {
+        "Id": "11236",
+        "TxnDate": "2026-11-01",
+        "CurrencyRef": {
+          "value": "CAD"
+        },
+        "ExchangeRate": 1,
+        "Line": [
+          {
+            "Id": "1",
+            "Amount": 125,
+            "DetailType": "SalesItemLineDetail",
+            "SalesItemLineDetail": {
+              "ItemRef": {
+                "value": "53"
+              },
+              "UnitPrice": 125,
+              "Qty": 1,
+              "ItemAccountRef": {
+                "value": "124"
+              },
+              "TaxCodeRef": {
+                "value": "16"
+              }
+            }
+          },
+          {
+            "Amount": 125,
+            "DetailType": "SubTotalLineDetail",
+            "SubTotalLineDetail": {}
+          }
+        ],
+        "TxnTaxDetail": {
+          "TotalTax": 17.5,
+          "TaxLine": [
+            {
+              "Amount": 17.5,
+              "DetailType": "TaxLineDetail",
+              "TaxLineDetail": {
+                "TaxRateRef": {
+                  "value": "34"
+                },
+                "PercentBased": true,
+                "TaxPercent": 14,
+                "NetAmountTaxable": 125
+              }
+            }
+          ]
+        },
+        "CustomerRef": {
+          "value": "147"
+        },
+        "FreeFormAddress": false,
+        "GlobalTaxCalculation": "TaxExcluded",
+        "TotalAmt": 142.5,
+        "HomeTotalAmt": 142.5,
+        "Balance": 0,
+        "HomeBalance": 0,
+        "DepositToAccountRef": {
+          "value": "123"
+        },
+        "SyncToken": "0"
+      }
+    }
+  ]
+}
