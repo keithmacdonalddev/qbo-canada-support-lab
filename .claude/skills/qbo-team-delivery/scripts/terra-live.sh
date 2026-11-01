@@ -137,8 +137,8 @@ LIMITS
   ;;
   chrome) cat <<LIMITS
 - Use the Codex Chrome plugin (the owner's real Chrome with their sign-ins; read the browser plugin docs it points to first). Do not use agent-browser.
-- Work only in a new tab you open; do not claim, read or change the owner's existing tabs unless the task names one. Do not mark tabs as deliverable or handoff.
-- Open one tab and reuse it with tab.goto(url) (opening a second tab timed out once, 2026-11-01). Close it with tab.close() when done. To save a screenshot, write the bytes from tab.screenshot() with node:fs to $out/ as .jpg; if writing is blocked, say so and describe what you saw.
+- For QuickBooks tasks: first list the open tabs and claim the owner's existing QuickBooks tab (URL starting https://qbo.intuit.com/app/) whose Company ID is 9130357222392856; never open a new tab for QuickBooks, because a new tab can load a different company or a sign-in screen. Leave that tab open at the end. If no open tab shows that Company ID, stop and report. For other sites: work only in a new tab you open; do not claim, read or change the owner's other tabs. Do not mark tabs as deliverable or handoff.
+- When you do open a tab (non-QuickBooks sites), open one and reuse it with tab.goto(url) (opening a second tab timed out once, 2026-11-01). Close it with tab.close() when done. To save a screenshot, write the bytes from tab.screenshot() with node:fs to $out/ as .jpg; if writing is blocked, say so and describe what you saw.
 - Signed-in sites outside Test Data Lab and the scoped QuickBooks company: read only. QuickBooks actions require the exact scope and task limits below.
 - For Test Data Lab, open http://localhost:5173/ (backend http://localhost:4000; do not use backend API shortcuts).
 - Test Data Lab messages persist and can instruct the accountant. Submit a message only when the task names its exact intended action and that action is allowed by the stop list; otherwise observe only.
