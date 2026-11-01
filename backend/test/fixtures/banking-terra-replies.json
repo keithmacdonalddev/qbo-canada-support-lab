@@ -1,0 +1,35 @@
+{
+  "preflight": {
+    "status": "completed",
+    "actionLedger": []
+  },
+  "upload": {
+    "status": "completed"
+  },
+  "review": {
+    "status": "completed"
+  },
+  "rules": {
+    "status": "completed"
+  },
+  "reconcile": {
+    "status": "completed",
+    "actionLedger": [
+      {
+        "action": "reconcile"
+      }
+    ]
+  },
+  "attach": {
+    "status": "completed",
+    "actionLedger": [
+      {
+        "action": "attach"
+      }
+    ],
+    "attachment": {
+      "confirmed": true,
+      "screenshot": "attachment.jpg"
+    }
+  }
+}

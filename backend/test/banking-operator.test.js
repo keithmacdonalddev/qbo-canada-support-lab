@@ -1,0 +1,153 @@
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const path=require('node:path');
+const fs=require('node:fs/promises');
+const os=require('node:os');
+const {EventEmitter}=require('node:events');
+const {PassThrough}=require('node:stream');
+const root=path.resolve(process.cwd(),'..');
+const modules=process.env.BF7_MODULE_ROOT || path.join(root,'backend/src/modules');
+const {createBankingOperator,buildBankingTask,parseTerraReply,createFileJournal}=require(path.join(modules,'banking-operator'));
+const {createTerraRunner,acquireOperatorLease}=require(path.join(modules,'banking-terra-runner'));
+const {createBankingWorkspaceService,hash}=require(path.join(root,'backend/src/modules/banking-workspace-service'));
+const {buildBankStatementEvidence}=require(path.join(root,'backend/src/modules/bank-statement-evidence'));
+const {generateBankStatementPackages}=require(path.join(root,'backend/src/modules/bank-statement-package'));
+const history=require(path.join(root,'backend/test/fixtures/bank-settlement-history.json'));
+const retained=require(path.join(root,'backend/test/fixtures/bank-opening-history-evidence.json'));
+const replies=require(path.join(__dirname,'fixtures/banking-terra-replies.json'));
+const clone=v=>structuredClone(v);
+const built=buildBankStatementEvidence(history,retained);
+const generated=generateBankStatementPackages(built.dataset,{balanceEvidence:built.evidence});
+const real=generated.packages.find(p=>p.envelope.events.some(e=>e.source.entity==='Payment' && e.source.id==='26'));
+const user={id:'2'.repeat(24),actorId:'3'.repeat(24),role:'supervisor'};
+const digest=b=>require('node:crypto').createHash('sha256').update(b).digest('hex');
+async function harness(input=real) {
+  const source=clone(input), scope=source.envelope.scope, accountId=source.envelope.accountId;
+  let clock=Date.parse('2026-11-01T06:00:00Z'), lost=false, denied=false, calls=0, leaseHeld=false;
+  const now=()=>new Date(clock).toISOString(), packages=new Map(), journals=[], artifacts=new Map(), records=[];
+  for(const a of source.artifacts) artifacts.set(a.path,Buffer.from(a.bytes));
+  const account={Id:accountId,Name:'Replay account '+accountId,AccountType:source.envelope.balanceConvention==='card-amount-owed'?'Credit Card':'Bank',CurrencyRef:{value:source.envelope.accountCurrency}};
+  const store={assertReady:async()=>{},transaction:async f=>f('session'),fenceAccount:async()=>{},putEvent:async()=>{},insert:async r=>packages.set(r._id,clone(r)),get:async(_s,id)=>clone(packages.get(id)),list:async(_s,filter={})=>[...packages.values()].filter(r=>Object.entries(filter).every(([k,v])=>r[k]===v)).map(clone),replace:async(_s,id,version,state)=>{const r=packages.get(id);if(r.stateVersion!==version)return false;r.state=clone(state);r.stateVersion++;return true;}};
+  const workspace=createBankingWorkspaceService({store,now,resolveContext:async()=>({environment:scope.environment,connection:{connected:true,realmId:scope.realmId,connectionId:scope.connectionId}}),authorize:async()=>{},getAccount:async()=>account,readArtifact:async a=>{const b=artifacts.get(a.path);assert.ok(b);assert.equal(digest(b),a.sha256);return b;},findSyncedRecord:async(_s,r)=>records.find(b=>b.entity===r.entity && b.qboId===r.id)});
+  let pkg=await workspace.register(user,source.envelope);
+  const journal={list:async()=>clone(journals),start:async j=>journals.push(clone(j)),finish:async j=>{journals[journals.findIndex(r=>r.runId===j.runId)]=clone(j);}};
+  const runner={retainInput:async file=>'C:/retained/'+file.path,retainEvidence:async(_run,name,{runId})=>{assert.ok(name);const p=hash(scope)+'/'+accountId+'/operator/'+runId+'/'+name,b=Buffer.from('FAKE SCREENSHOT '+name);artifacts.set(p,b);return {path:p,sha256:digest(b)};},run:async({task})=>{
+    calls++;clock+=1000;
+    if(lost)throw new Error('Lost Terra process connection');
+    const d=task.data,type=d.step.type;
+    const value={...clone(replies[type]),kind:'banking-operator-result',version:1,runId:d.runId,packageId:d.packageId,step:type,scope,accountId,accountCurrency:d.account.currency,period:d.period,companyVerified:{realmId:scope.realmId,name:'My Business'},screenshot:type+'.jpg'};
+    if(type==='upload') {const file=source.envelope.files.find(f=>f.fileId===d.step.fileId);value.upload={fileId:file.fileId,fileHash:file.sha256,observedCount:file.rowCount,nativeRows:source.envelope.rows.filter(r=>r.fileId===file.fileId).map(r=>({rowId:r.rowId,nativeRowId:'native-'+r.rowNumber})),confirmation:'Recorded fake native import confirmation'};value.actionLedger=[{action:'upload',fileId:file.fileId}];}
+    if(type==='review') {value.rows=d.rows.map(r=>({rowId:r.rowId,decision:r.action,qboRefs:r.qboRefs,reason:'Recorded exact fake row resolution',screenshot:'row-'+r.rowId+'.jpg'}));value.actionLedger=d.rows.map(r=>({action:r.action,rowId:r.rowId}));}
+    if(type==='reconcile')value.reconciliation={completed:true,openingMinor:d.openingMinor,closingMinor:d.closingMinor,differenceMinor:0,outstandingItems:d.outstandingItems,statementEndingDate:d.statementEndingDate,completion:'zero.jpg',report:'native-report.jpg'};
+    if(type==='attach'){const f=d.files.find(f=>f.kind==='statement');value.attachment.fileId=f.fileId;value.attachment.fileHash=f.sha256;Object.assign(value.actionLedger[0],{fileId:f.fileId,fileHash:f.sha256});}
+    if(type==='rules'){value.rules=d.rules.map((r,i)=>({...clone(r),ruleId:r.ruleId || 'fake-rule-'+i}));value.actionLedger=value.rules.map(r=>({action:r.action,name:r.name,ruleId:r.ruleId}));}
+    if(h.mutateReply)h.mutateReply(value,task);
+    return {exitCode:0,cleanupConfirmed:!h.badCleanup,model:'gpt-6.1-terra',reply:JSON.stringify(value),commandAudit:{shell:0,flagged:0},replyPath:'fake-reply.json'};
+  }};
+  const readVerification=async ({phase,rows=[]})=>({scope,complete:true,observedAt:now(),records:clone(records),settlementEvents:[],marks:h.withMarks ? rows.map(r=>{const row=source.envelope.rows.find(b=>b.rowId===r.rowId),e=source.envelope.events.find(e=>e.eventId===row.eventId);return {scope,artifact:{path:hash(scope)+'/'+accountId+'/fake-report.json',sha256:'a'.repeat(64)},rowId:r.rowId,accountId,accountCurrency:source.envelope.accountCurrency,amountMinor:e.amountMinor,date:e.actualPostingDate || e.expectedPostingDate,qboRefs:r.qboRefs,mark:'C',observedAt:phase==='after'?now():'2020-01-01T00:00:00Z'};}) : []});
+  const h={advance:ms=>clock+=ms,source,scope,account,workspace,store,packages,journal,journals,runner,records,artifacts,now,readVerification,get calls(){return calls;},get leaseHeld(){return leaseHeld;},lose:()=>lost=true,deny:()=>denied=true};
+  const deps={workspace,getAccount:async()=>account,journal,runner,now,readVerification,readReportArtifact:async()=>Buffer.from('recorded fake scoped report'),authorize:async()=>{if(denied)throw new Error('Write denied');},lease:async()=>{assert.equal(leaseHeld,false);leaseHeld=true;return async()=>{leaseHeld=false;};}};
+  h.deps=deps;h.operator=createBankingOperator(deps);h.pkg=pkg;
+  h.exec=async (type,options={})=>{const step=typeof type==='string'?{type}:type;const result=await h.operator.execute(user,{packageId:pkg.id,step,...options});h.pkg=result.package;return result;};
+  h.upload=async()=>{await h.exec('preflight');for(const f of source.envelope.files.filter(f=>f.kind==='csv'))await h.exec({type:'upload',fileId:f.fileId});};
+  return h;
+}
+test('real stored Payment26 package replays through BF2 -> BF4 -> BF7 production execute with fake Terra',async t=>{
+  const h=await harness();const e=h.source.envelope.events.find(e=>e.source.entity==='Payment' && e.source.id==='26');assert.equal(e.amountMinor,342349);assert.equal(real.envelope.period,'2023-08');
+  await h.upload();h.withMarks=true;const reviewed=await h.exec('review');assert.equal(reviewed.package.summary.matched,12);assert.equal(reviewed.verification.status,'observed');
+  await h.exec('reconcile');assert.equal(h.pkg.summary.reconciled,false);const done=await h.exec('attach');assert.equal(done.package.summary.reconciled,true);assert.equal(done.verification.status,'Terra-reported only');assert.equal(h.calls,5);assert.ok(h.journals.every(j=>j.status==='completed'));assert.equal(h.leaseHeld,false);
+  t.diagnostic('Real package '+real.packageId+' account 60 / 2023-08: 12 rows, Payment26 CAD3423.49; all native outcomes FAKE, no QBO/DB calls.');
+});
+test('task scopes CSV only, Company ID, existing Chrome tab and deliberate rule Auto-post',async()=>{
+  const h=await harness(), f=h.source.envelope.files.find(f=>f.kind==='csv');
+  const task=buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:h.account,step:{type:'upload',fileId:f.fileId},runId:'test',files:[f]});
+  for(const text of ['9130357222392856','My Business','claim the existing QuickBooks tab','NEVER open a new QuickBooks tab','Upload ONLY the named CSV','Never upload a PDF','security-verification error'])assert.ok(task.prompt.includes(text));
+  assert.throws(()=>buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:{...h.account,Id:'85'},step:{type:'preflight'},runId:'test'}),/account/);
+  assert.throws(()=>buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:h.account,step:{type:'reconcile',extra:true},runId:'test'}),/Unsupported/);
+  await h.upload();const rule={action:'create',name:'BF7 exact rule',accountId:h.account.Id,period:h.pkg.period,autoPost:false,conditions:[{field:'description',operator:'equals',value:'Simulated fee'}],categoryId:'7',taxTreatment:'out-of-scope'};
+  const rules=buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:h.account,step:{type:'rules'},runId:'r',rules:[rule]});assert.match(rules.prompt,/Auto-post defaults ON/);assert.equal(rules.data.rules[0].autoPost,false);
+});
+test('not-ready manifest and changed event evidence are refused before Terra',async()=>{
+  const h=await harness();const m=clone(h.source.manifest);m.readyForNativeWork=false;assert.throws(()=>buildBankingTask({pkg:h.pkg,manifest:m,account:h.account,step:{type:'preflight'}}),/ready/);
+  const p=clone(h.pkg);p.snapshot.events[0].amountMinor++;assert.throws(()=>buildBankingTask({pkg:p,manifest:h.source.manifest,account:h.account,step:{type:'preflight'}}),/event/);assert.equal(h.calls,0);
+});
+test('write permission and earlier unfinished account periods stop before launch',async()=>{
+  const h=await harness();h.deny();await assert.rejects(h.exec('preflight'),/Write denied/);assert.equal(h.calls,0);
+  const x=await harness(), list=x.workspace.list;x.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'older',period:'2023-07',summary:{reconciled:false}});return v;};await assert.rejects(x.exec('preflight'),/Earlier/);assert.equal(x.calls,0);
+});
+test('superseded earlier revision does not block its reconciled replacement',async()=>{
+  const h=await harness(), list=h.workspace.list;h.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'old',period:'2023-07',revision:1,summary:{reconciled:false}},{...v.packages[0],id:'new',period:'2023-07',revision:2,summary:{reconciled:true}});return v;};await h.exec('preflight');assert.equal(h.calls,1);
+});
+test('stopped at blocks account permanently; upload remains uncertain rather than retrying',async()=>{
+  const h=await harness();await h.exec('preflight');h.mutateReply=v=>{v.status='stopped';v.reason='confirmation policy';};await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/stopped at/);assert.equal(h.journals.at(-1).status,'blocked');const status=await h.operator.status(user,h.pkg.id);assert.equal(status.blocked,true);assert.match(status.reasons[0].reason,/confirmation policy/);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports[0].status,'started');const count=h.calls;await assert.rejects(h.exec('preflight'),/stopped, uncertain/);assert.equal(h.calls,count);
+});
+test('lost process keeps operator lease and durable blocked intent',async()=>{
+  const h=await harness();h.lose();await assert.rejects(h.exec('preflight'),/Lost Terra/);assert.equal(h.leaseHeld,true);assert.equal(h.journals[0].status,'blocked');
+});
+test('missing screenshot, unexpected action and false company each block completion',async()=>{
+  for(const mutate of [v=>v.screenshot=null,v=>v.actionLedger.push({action:'add',rowId:'unexpected'}),v=>v.companyVerified.realmId='99']){const h=await harness();h.mutateReply=mutate;await assert.rejects(h.exec('preflight'));assert.equal(h.journals.at(-1).status,'blocked');}
+});
+test('missing fresh report marks stays Terra-reported only, not observed',async()=>{
+  const h=await harness();await h.upload();const result=await h.exec('review');assert.equal(result.verification.status,'Terra-reported only');assert.equal(result.package.summary.matched,12);
+});
+test('BF3 Add cannot be substituted for a Match or use another account',async()=>{
+  const h=await harness();await h.upload();const p=clone(h.pkg),m=clone(h.source.manifest),event=p.snapshot.events[0];
+  event.source={...event.source,entity:'BankOrigin'};event.resolution={...event.resolution,action:'Add',designatedCreator:'native-add'};event.expectedResolution='add';event.creator='native-add';m.events=clone(p.snapshot.events);
+  const r={eventId:event.eventId,status:'native-task',scope:h.scope,sourceHash:event.source.sourceHash,nativeTask:{scope:h.scope,eventIds:[event.eventId],action:'Exclude',accountId:'wrong',accountCurrency:'CAD',amountMinor:event.amountMinor,postingDate:event.actualPostingDate || event.expectedPostingDate,creator:'native-add',createsBookkeeping:true}};
+  assert.throws(()=>buildBankingTask({pkg:p,manifest:m,account:h.account,step:{type:'review'},resolutions:[r]}),/differs/);
+});
+test('file journal preserves blocked state across restart and global lease refuses overlap',async t=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-journal-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const store=createFileJournal(path.join(dir,'journal')),value={runId:'run-one',scope:real.envelope.scope,accountId:'60',status:'started'};await store.start(value);await store.finish({...value,status:'blocked'});assert.equal((await createFileJournal(path.join(dir,'journal')).list(value.scope,'60'))[0].status,'blocked');const release=await acquireOperatorLease(path.join(dir,'lease'));await assert.rejects(acquireOperatorLease(path.join(dir,'lease')),/Another/);await release();
+});
+test('runner uses hidden explicit Chrome wrapper args, model section and retained evidence boundaries',async t=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-runner-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const runId='bf7-11111111-1111-1111-1111-111111111111',out='artifacts/terra-live/'+runId+'-20261101-000000';await fs.mkdir(path.join(dir,out),{recursive:true});await fs.writeFile(path.join(dir,out,'reply.txt'),'recorded fake');let captured;
+  const spawnProcess=(exe,args,opts)=>{captured={exe,args,opts};const c=new EventEmitter();c.pid=123;c.stdout=new PassThrough();c.stderr=new PassThrough();setImmediate(()=>{c.stdout.write('files in '+out+'/\n--- command audit: shell=0; flagged=0 ---\n--- Terra reply ---\n--- effective settings (thread fixture) ---\n"model":"gpt-6.1-terra"\n--- cleanup ---\nthis run\'s processes: none left\n');c.emit('close',0);});return c;};
+  const runner=createTerraRunner({root:dir,spawnProcess});const execution=await runner.run({task:{prompt:'fake'},runId});assert.equal(execution.cleanupConfirmed,true);assert.equal(execution.model,'gpt-6.1-terra');assert.deepEqual(execution.commandAudit,{shell:0,flagged:0});assert.ok(captured.args.includes('--chrome'));assert.equal(captured.opts.windowsHide,true);assert.equal(captured.opts.shell,false);
+  const png=Buffer.from([137,80,78,71,13,10,26,10,1]);await fs.writeFile(path.join(dir,out,'screen.png'),png);const a=await runner.retainEvidence(execution,'screen.png',{scope:real.envelope.scope,accountId:'60',runId});assert.equal(a.sha256,digest(png));await assert.rejects(runner.retainEvidence(execution,'../screen.png',{}),/inside/);
+});
+
+test('read-only preflight can refresh after five minutes and old UUID ordering is irrelevant',async()=>{
+ const h=await harness();await h.exec('preflight');h.advance(301000);await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/Fresh successful preflight/);await h.exec('preflight');h.journals.reverse();await h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId});assert.equal(h.pkg.summary.uploaded,true);
+});
+function nativeAddPackage(){
+ const {buildBankOriginEvents}=require(path.join(root,'backend/src/modules/bank-origin-events'));
+ const day='2026-10-20',event=buildBankOriginEvents({scope:history.scope,accounts:history.accounts,scenarios:[{scenarioId:'bf7-fee',kind:'bank-fee',accountId:'123',currency:'CAD',bookDate:day,postingDate:day,amountMinor:2500,creator:'native-add',counterpartAccountId:'19',taxTreatment:'out-of-scope',advice:{basis:'simulated',reference:'bf7-recorded-fake-advice'},window:{start:day,end:day,unreconciled:true,evidenceRef:'recorded-fake-unreconciled-window'}}]}).events[0];
+ const dataset={...clone(built.dataset),accounts:built.dataset.accounts.filter(a=>a.id==='123'),events:[event],unresolvedEvents:[],coverage:{issues:[]},provisionalRanges:[{accountId:'123',evidenceType:'bank-or-card-statement',provisionalStartMonth:'2026-10',provisionalEndMonth:'2026-10',periods:1}],asOf:'2026-10-31'};
+ return generateBankStatementPackages(dataset,{openingBalances:[{accountId:'123',period:'2026-10',amountMinor:0,evidenceRef:'explicit-fake-opening',basis:'isolated native Add test fixture'}]}).packages[0];
+}
+test('native Add uses real BF3 resolver and BF4 synced proof; missing sync blocks without repeating Add',async()=>{
+ const {prepareBankOriginResolution}=require(path.join(root,'backend/src/modules/bank-origin-resolution'));
+ for(const synced of [true,false]){
+  const h=await harness(nativeAddPackage()),event=h.source.envelope.events[0];
+  h.deps.resolveRows=async({before})=>[prepareBankOriginResolution({event,accounts:history.accounts,reservations:[{scope:h.scope,eventId:event.eventId,accountId:'123',period:event.statementPeriod,creator:'native-add'}],mirrorSnapshot:before,asOf:h.now()})];
+  h.operator=createBankingOperator(h.deps);await h.upload();h.mutateReply=(v,task)=>{if(task.data.step.type!=='review')return;v.rows[0].qboRefs=[{entity:'Purchase',id:'999999'}];if(synced)h.records.push({...h.scope,entity:'Purchase',qboId:'999999',deleted:false,lastObservedAt:h.now(),record:{Id:'999999',AccountRef:{value:'123'},CurrencyRef:{value:'CAD'},TotalAmt:25,TxnDate:event.actualPostingDate,MetaData:{CreateTime:h.now()}}});};
+  if(synced){const result=await h.exec('review');assert.equal(result.package.summary.added,1);assert.equal(result.verification.status,'observed');}
+  else {await assert.rejects(h.exec('review'),/not yet observed/);const calls=h.calls;await assert.rejects(h.exec('review'),/stopped, uncertain/);assert.equal(h.calls,calls);assert.equal(h.pkg.summary.added,0);}
+ }
+});
+test('cross-company or future nested report marks cannot become observed',async()=>{
+ for(const patch of [m=>m.scope={...m.scope,realmId:'99'},m=>m.observedAt='2099-01-01T00:00:00Z']){
+  const h=await harness();await h.upload();h.withMarks=true;const read=h.deps.readVerification;h.deps.readVerification=async args=>{const v=await read(args);if(args.phase==='after')v.marks.forEach(patch);return v;};h.operator=createBankingOperator(h.deps);assert.equal((await h.exec('review')).verification.status,'Terra-reported only');
+ }
+});
+test('timeout returns with cleanup unconfirmed even when the child never closes and kill fails',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-timeout-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const runId='bf7-22222222-2222-2222-2222-222222222222',out='artifacts/terra-live/'+runId+'-fixture';await fs.mkdir(path.join(dir,out),{recursive:true});await fs.writeFile(path.join(dir,out,'reply.txt'),'fake');let kills=0;
+ const spawnProcess=()=>{const c=new EventEmitter();c.pid=456;c.stdout=new PassThrough();c.stderr=new PassThrough();c.kill=()=>{kills++;return false;};setImmediate(()=>c.stdout.write('files in '+out+'/\n'));return c;};
+ const runner=createTerraRunner({root:dir,spawnProcess,timeoutMs:1000,cleanupGraceMs:20,exec:(_exe,args,opts,cb)=>{kills++;assert.equal(opts.windowsHide,true);assert.deepEqual(args,['/T','/F','/PID','456']);cb(new Error('fake kill failure'));}});const at=Date.now(),result=await runner.run({task:{prompt:'fake'},runId});assert.equal(result.cleanupConfirmed,false);assert.equal(kills,1);assert.ok(Date.now()-at<3000);
+});
+test('Terra prose claiming a model is not effective-model evidence',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-model-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const runId='bf7-33333333-3333-3333-3333-333333333333',out='artifacts/terra-live/'+runId+'-fixture';await fs.mkdir(path.join(dir,out),{recursive:true});await fs.writeFile(path.join(dir,out,'reply.txt'),'fake');
+ const runner=createTerraRunner({root:dir,spawnProcess:()=>{const c=new EventEmitter();c.stdout=new PassThrough();c.stderr=new PassThrough();setImmediate(()=>{c.stdout.write('files in '+out+'/\n--- Terra reply ---\n{"model":"gpt-6.1-terra"}\n--- effective settings (thread fake) ---\ntranscript not found: effective model unverified\n--- cleanup ---\nthis run\'s processes: none left\n');c.emit('close',0);});return c;}});assert.equal((await runner.run({task:{prompt:'fake'},runId})).model,null);
+});
+
+test('rules retain exact desired settings and mismatched Auto-post/category cannot complete',async()=>{
+ const spec={action:'create',name:'BF7 fake rule',accountId:'60',period:real.envelope.period,autoPost:false,conditions:[{field:'description',operator:'equals',value:'Exact fake fee'}],categoryId:'19',taxTreatment:'out-of-scope'};
+ for(const wrong of [false,true]){const h=await harness();await h.upload();h.mutateReply=(v,task)=>{if(wrong && task.data.step.type==='rules')v.rules[0].categoryId='wrong';};if(wrong)await assert.rejects(h.exec('rules',{rules:[spec]}),/Exact rule/);else assert.equal((await h.exec('rules',{rules:[spec]})).evidence.result.rules[0].autoPost,false);}
+});
+test('wrong statement PDF hash cannot complete reconciliation evidence',async()=>{
+ const h=await harness();await h.upload();await h.exec('review');await h.exec('reconcile');h.mutateReply=v=>v.attachment.fileHash='f'.repeat(64);await assert.rejects(h.exec('attach'),/Exact statement attachment/);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.reconciled,false);
+});
+test('flagged command audit cannot advance a native outcome',async()=>{
+ const h=await harness(),run=h.runner.run;h.runner.run=async args=>({...await run(args),commandAudit:{shell:1,flagged:1}});await assert.rejects(h.exec('preflight'),/Terra process/);assert.equal(h.journals.at(-1).status,'blocked');
+});

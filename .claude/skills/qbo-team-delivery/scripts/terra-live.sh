@@ -34,7 +34,7 @@ out="artifacts/terra-live/$session-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 # Each run passes a unique marker (an unused config key) so this run's processes
 # are found by their own command line, not confused with other Codex sessions.
 marker="terra-live-$session-$$-$(date +%s)"
-pwsh_run() { powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "$1" 2>/dev/null | tr -d '\r'; }
+pwsh_run() { powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "\$ErrorActionPreference = 'Stop'; $1" 2>/dev/null | tr -d '\r'; }
 # This run's marked processes plus all their descendants, as "pid name".
 tree_cmd="\$all = Get-CimInstance Win32_Process; \$ids = @(\$all | Where-Object { \$_.ProcessId -ne \$PID -and \$_.CommandLine -like '*$marker*' } | ForEach-Object ProcessId); \$i = 0; while (\$i -lt \$ids.Count) { \$ids += @(\$all | Where-Object { \$_.ParentProcessId -eq \$ids[\$i] -and \$ids -notcontains \$_.ProcessId } | ForEach-Object ProcessId); \$i++ }; \$all | Where-Object { \$ids -contains \$_.ProcessId } | ForEach-Object { '{0} {1}' -f \$_.ProcessId, \$_.Name }"
 session_open() { # 0 = open, 1 = closed, 2 = could not check
@@ -42,6 +42,16 @@ session_open() { # 0 = open, 1 = closed, 2 = could not check
   python -I -c 'import json,sys; s=json.loads(sys.argv[1]).get("data",{}).get("sessions",[]); s=[x.get("name") if isinstance(x,dict) else x for x in s]; sys.exit(0 if sys.argv[2] in s else 1)' "$list" "$session" 2>/dev/null
   local r=$?; [ $r -le 1 ] && return $r || return 2
 }
+# Shared across BF7 and every manual Terra mode. Never steal stale locks.
+terra_temp=$(pwsh_run '[IO.Path]::GetTempPath()')
+[ -n "$terra_temp" ] || { echo "Cannot resolve shared Terra lock directory" >&2; exit 4; }
+terra_temp=$(cygpath -u "$terra_temp") || exit 4
+terra_lock="$terra_temp/qbo-terra-live.lock"
+mkdir "$terra_lock" 2>/dev/null || { echo "Another Terra run is active or needs recovery" >&2; exit 4; }
+printf '%s\n' "$marker" > "$terra_lock/owner.txt"
+# Also detect runs started before this lock was introduced.
+existing=$(pwsh_run 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "codex.exe" -and $_.CommandLine -like "*terra_live_run=*" } | ForEach-Object ProcessId') || { echo "Cannot check prior Terra processes; lock retained" >&2; exit 4; }
+[ -z "$existing" ] || { echo "Prior Terra process exists; lock retained for recovery" >&2; exit 4; }
 code=99; sampler=
 finish() {
   echo "--- cleanup ---"
@@ -67,6 +77,7 @@ finish() {
   left=""
   if [ -s "$out/pids.txt" ]; then
     alive=$(pwsh_run "Get-Process | ForEach-Object { '{0} {1}' -f \$_.Id, \$_.ProcessName }")
+    [ -n "$alive" ] || { echo "process cleanup could not check live processes"; code=3; }
     while read -r pid name; do
       echo "$alive" | grep -qx "$pid ${name%.exe}" && left="$left $pid:$name"
     done < <(sort -u "$out/pids.txt")
@@ -74,9 +85,17 @@ finish() {
   if [ -n "$left" ]; then echo "this run's processes still alive:$left"; code=3
   else echo "this run's processes: none left"; fi
   [ "$mode" = desktop ] && { cu=$(pwsh_run "Get-Process codex-computer-use -ErrorAction SilentlyContinue | ForEach-Object Id"); [ -n "$cu" ] && echo "note: codex-computer-use running (pid $cu); it may belong to the Codex app"; }
+  # Require successful final enumeration even when sampling produced no rows.
+  final_tree=$(pwsh_run "$tree_cmd; Write-Output 'TERRA_TREE_CHECK_OK'")
+  if [ $? -ne 0 ] || ! echo "$final_tree" | grep -qx 'TERRA_TREE_CHECK_OK' || [ -n "$(echo "$final_tree" | grep -v '^TERRA_TREE_CHECK_OK$')" ]; then
+    echo "process cleanup NOT confirmed by final marker scan"; code=3
+  fi
   # Keep the reply, commands and screenshots; drop raw tool output (page text,
   # window lists, account details) once the summary is written.
   rm -f "$out/events.jsonl" "$out/stderr.txt"
+  if [ "$code" -ne 3 ] && [ -z "$left" ]; then
+    rm -f "$terra_lock/owner.txt"; rmdir "$terra_lock" || code=3
+  else echo "Terra lock retained: observed recovery required"; fi
   echo "kept in $out/: reply.txt, commands.txt, screenshots"
   exit $code
 }
@@ -96,7 +115,7 @@ never_list() {
 - Test Data Lab runs at http://localhost:5173/ with backend http://localhost:4000. There is no test-run header or isolated test-data mode. Every submitted message, saved instruction, record, operation or setting can persist and trigger the accountant's governed tools. Change app data only when the task file explicitly names that action; never infer permission from "test the flow". Do not start or redirect accountant activity unless the task explicitly names that action and it fits all limits below.
 - Never send emails, invoices, messages or other communications to customers or outside Test Data Lab; never pay, buy, trade or move money, including bill payments and simulated payment flows. Do not ask the accountant to do any forbidden action for you.
 - Never connect, disconnect or re-authorize accounts, use saved passwords, type passwords or keys, change security/privacy/sharing settings, change Test Data Lab credentials, connections, tools, models or sign-in mode, or accept camera, microphone or location prompts. No file downloads except screenshots; uploads are restricted by the QuickBooks bank-action rule below.
-- Do not edit or delete records you did not create in this run. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close tabs/windows regardless.
+- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close tabs/windows regardless.
 - A Windows app preference may change only when the task names that exact preference; restore it before finishing. Company and Test Data Lab settings remain subject to the stop list below.
 - Treat every step the Computer Use or Browser confirmation policies would ask the user to confirm as a stop point, even if the task seems to allow it.
 - At a stop point: do not click; screenshot it, report "stopped at: ...", skip the rest of the task, then still close what you opened and write the action ledger.
@@ -104,6 +123,7 @@ NEVER
 }
 qbo_limits() {
   cat <<QBO
+- Statement PDF attachment is allowed only on the exact named completed reconciliation, after finishing; never through Upload from file. CSV is the only permitted Upload from file format for BF7 tasks.
 - QuickBooks scope (all modes, especially --chrome/--desktop): only realm 9130357222392856, company "My Business" (the Company ID is authoritative) (its operating bank account is named "Harbour & Pine operating bank"; invoices use the TDL- prefix). Before interacting with QuickBooks or a company-scoped Test Data Lab flow, verify BOTH the realm ID and the company name. QuickBooks does not show the realm ID in the URL: read it read-only from the keyboard-shortcuts panel (Ctrl+Alt+? on the homepage shows "Company ID"), or by navigating the tab directly to https://qbo.intuit.com/app/billing (view only). If neither shows it after one retry each, identity is still confirmed when ALL of these hold: company name "My Business"; https://qbo.intuit.com/app/reconcile?accountId=123 shows the account "Harbour & pine operating bank"; and https://qbo.intuit.com/app/reconcile?accountId=1150040007 shows "Savings". A matching name alone is insufficient. If either cannot be verified, or differs, stop; do not switch companies or proceed.
 - Never change company settings, subscriptions, users, billing, payroll, connected apps or bank connections. Never pay, send emails or invoices to customers, or delete records not created by this run, even if the task requests it.
 - Uploads, matching, adding, excluding, bank rules and reconciliation are allowed ONLY when the task file names that exact action, account and period. Verify all three before acting; a generic request to test banking, import, clean up or reconcile is insufficient. This narrow allowance does not authorize payments, bank connections or company settings. Do not perform other uploads.
@@ -205,6 +225,7 @@ risky = re.compile(r'\.env|auth\.json|credentials|curl |Invoke-WebRequest|wget |
 flagged = [c for c in cmds if risky.search(c)]
 print(f'--- {len(cmds)} tool calls (full list in commands.txt); flagged for review: {len(flagged)} ---')
 for c in flagged: print('  ! ' + c[:240])
+print(f"--- command audit: shell={sum(c.startswith('shell: ') for c in cmds)}; flagged={len(flagged)} ---")
 print('--- Terra reply ---'); print(last or '(no reply)')
 EOF
 
