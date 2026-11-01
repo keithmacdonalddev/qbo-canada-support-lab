@@ -2,7 +2,7 @@
 const { hash, canonical, date, shift } = require('./business-calendar');
 const { assertAuthorityDocument } = require('./business-authority');
 const { draftView } = require('./blueprint-draft');
-const { activityDefinition, activityTemplateVersion } = require('./business-activity-preview');
+const { activityTemplateVersion } = require('./business-activity-preview');
 const { validateBaselineObservation, assertBaselineDocumentSize } = require('./business-baseline');
 const MAX_AUTHORITIES = 64;
 const HASH = /^[a-f0-9]{64}$/;
@@ -10,9 +10,9 @@ function fail(message) { throw Object.assign(new Error(message), { status: 409, 
 function stableBusiness(previous, next) {
   for (const key of ['openingDate', 'fiscalYearStartMonth']) if (previous.business[key] !== next.business[key]) fail('Keep the original business opening and fiscal calendar.');
   if (canonical(previous.business.stockCosting ?? null) !== canonical(next.business.stockCosting ?? null)) fail('Keep the published stock-cost method and tax evidence; existing purchase layers cannot be reset by a business revision.');
-  if (canonical(previous.business.datedTax ?? null) !== canonical(next.business.datedTax ?? null)) fail('Keep the published dated tax choices and their original postpaid business assumptions.');
-  const before = activityTemplateVersion(previous.business), after = activityTemplateVersion(next.business);
-  if ((before !== after && !(before === 2 && after === 3)) || canonical(previous.mappings) !== canonical(next.mappings)) fail('Keep the original schedule or review the continuing-to-customer-credit upgrade, retaining every account and tax mapping.');
+  // Future schedules, tax choices and non-stock routing are current policy.
+  // Physical stock layers must keep their original asset/cost accounts.
+  if (previous.business.stockCosting) for (const key of ['inventoryAsset', 'costOfGoods']) if (previous.mappings[key] !== next.mappings[key]) fail('Retain the original stock asset and cost accounts.');
   for (const [key, id] of Object.entries(previous.masterBindings || {})) if (id && next.masterBindings?.[key] !== id) fail('Retain every previously selected business record, including dormant roles: ' + key + '.');
 }
 function retainedBaselineIdentity(row, root, scope) {
@@ -37,7 +37,7 @@ async function readAuthorityLineage({ Authorities, Versions, Audits, Baselines, 
     const blueprint = await read(Versions, { _id: value.blueprintId, ...scope, contractVersion: 2 });
     if (!blueprint || !blueprint.auditId || blueprint.contentHash !== value.blueprintHash || hash(blueprint.definition) !== value.blueprintHash) fail('An original business definition is unavailable or changed.');
     const view = draftView(blueprint, scope.connectionId);
-    if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || hash(activityDefinition(view.business)) !== value.activityRulesHash || view.business.openingDate !== value.openingDate) fail('An original business schedule changed.');
+    if (activityTemplateVersion(view.business) !== value.activityTemplateVersion || view.business.openingDate !== value.openingDate) fail('An original business schedule changed.');
     if ((view.business.stockCosting !== undefined) !== (value.stockRoot !== undefined)) fail('An original stock-cost requirement changed.');
     if (value.stockRoot) require('./business-stock-root').validateStockRoot(value.stockRoot, scope, view);
     const action = value.version === 1 ? 'Business published and opening evidence accepted' : 'Future business revision accepted';

@@ -49,7 +49,7 @@ function prepareContinuingBusiness(active, scope, input, setup, masters, now) {
   if (Buffer.byteLength(canonical(payload)) > 8000000) fail('Combined business windows exceed the retained operation size budget.');
   return { ...payload, operationHash: hash(payload), preparedAt: now.toISOString(), readyToExecute: false, persisted: false,
     summary: { steps: steps.length, blockedSteps: steps.filter(step => step.status === 'blocked').length, unresolvedReferences: new Set(steps.flatMap(step => step.references.filter(ref => ref.status !== 'resolved').map(ref => ref.entity + ':' + ref.key))).size },
-    limitations: ['Each occurrence retains its approved original business definition. No existing record is adopted or rewritten.', 'The complete combined plan still requires owner approval and fresh saved-record/report verification.'] };
+    limitations: ['Each occurrence retains its approved original business definition. No existing record is adopted or rewritten.', 'Current company authority and fresh saved-record/report verification govern new work; occurrence origins remain retained.'] };
 }
 function validateOperationContinuity(value, candidate) {
   if (!exact(value, ['version', 'authorityHash', 'lineageHash', 'segments', 'origins']) || value.version !== 1 || !HASH.test(value.authorityHash || '') || value.authorityHash !== candidate.authorityHash || !HASH.test(value.lineageHash || '') || !Array.isArray(value.segments) || value.segments.length < 2 || value.segments.length > MAX_AUTHORITIES || hash(value.segments) !== value.lineageHash || !Array.isArray(value.origins) || value.origins.length > 500) fail('The operation needs its exact complete business revision history.');

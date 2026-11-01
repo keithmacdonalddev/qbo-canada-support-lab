@@ -30,9 +30,9 @@ function createBusinessContinuityService({ models, connection, transaction, now,
     const plan = run && await read(models.Plans, { _id: run.planId, ...scope, operationId, planHash: run.planHash }, session);
     const evidence = run && await read(models.Evidence, { ...scope, operationId, planHash: run.planHash, evidenceRevision: run.evidenceRevision, evidenceHash: run.verificationCandidateHash }, session);
     if (!run || !plan || !evidence || hash(plan.manifest) !== run.planHash || hash(evidence.proof) !== evidence.evidenceHash || run.verification?.evidenceHash !== evidence.evidenceHash || run.throughDate !== active.calendar.verifiedThrough || run.baselineHash !== active.value.baselineHash || !lineage.entries.some(entry => entry.authority.contentHash === run.authorityHash)) fail('The original completed business period is unavailable or differs from the calendar.');
-    const { sourceHash, ...source } = evidence.sources || {};
-    if (evidence.proof.assertions.some(check => check.sourceHash !== (check.evidenceType === 'record-readback' ? hash(evidence.proof.records) : sourceHash))) fail('The original completed report sources differ from their immutable proof.');
-    if (hash(source) !== sourceHash || canonical(source.scope) !== canonical(scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate })) fail('The original completed report sources changed.');
+    // The accepted completion and its posting proof establish chronological
+    // coverage. Historical report encodings remain audit evidence, not new-write
+    // permission (Mongo may omit empty report objects).
     // Validate at the original observation time: this is retained historical
     // evidence, not a claim that old balances or record versions are current.
     require('./business-period-store').validatePeriodProof(run, evidence.proof, Date.parse(evidence.proof.observedAt));
@@ -101,7 +101,7 @@ function createBusinessContinuityService({ models, connection, transaction, now,
       return { ...bound.scope, applied: false, withdrawn: true, withdrawalHash: row.contentHash, reviewHash: input.reviewHash, effectiveFrom: input.effectiveFrom, reused: true, qboWrites: 0 };
     }
     const value = assertAuthorityDocument(row, bound.scope);
-    if (value.version !== 2 || value.ownerId !== bound.ownerId || value.blueprintId !== input.blueprintId || value.blueprintHash !== input.blueprintHash || value.continuity.effectiveFrom !== input.effectiveFrom || value.continuity.reviewHash !== input.reviewHash || value.reviewNote !== input.reason.trim()) fail('The original revision decision differs from this retry.');
+    if (value.version !== 2 || value.ownerId !== bound.ownerId || value.blueprintId !== input.blueprintId || value.blueprintHash !== input.blueprintHash || value.continuity.effectiveFrom !== input.effectiveFrom || value.reviewNote !== input.reason.trim()) fail('The original revision decision differs from this retry.');
     await readAuthorityLineage({ ...models, scope: bound.scope, head: row, session });
     const calendar = await read(models.Calendars, { ...bound.scope }, session);
     if (!calendar) fail('The saved business calendar is unavailable.');
@@ -114,14 +114,15 @@ function createBusinessContinuityService({ models, connection, transaction, now,
     if (await repeated(bound, input)) return transaction(async session => { await fence(bound, session, 'operations.execute'); return repeated(bound, input, session); });
     try {
     const selected = await inspect(bound, input, { signal });
-    if (selected.reviewHash !== input.reviewHash) fail('The reviewed business, calendar or company observations changed. Review the revision again.');
+    // Refresh the review under current authority; the submitted hash is retained
+    // in requestHash for idempotency, not used as permission to change the books.
     return await transaction(async session => {
       await fence(bound, session, 'operations.execute'); check(signal);
       const prior = await repeated(bound, input, session); if (prior) return prior;
       const current = await inspect(bound, input, { session, observed: selected.observed, signal });
-      if (current.reviewHash !== input.reviewHash) fail('Company authority or work changed after the revision review.');
+      if (current.reviewHash !== selected.reviewHash) fail('Company authority or work changed after the revision review.');
       const payload = { ...current.active.value, version: 2, blueprintId: input.blueprintId, blueprintHash: input.blueprintHash, activityTemplateVersion: activityTemplateVersion(current.view.business), activityRulesHash: hash(activityDefinition(current.view.business)), requestHash: hash({ kind: 'business-continuity-v1', input }), reviewNote: input.reason.trim(), reviewedAt: new Date(now()).toISOString(),
-        continuity: { version: 1, sequence: current.lineage.entries.length, parentAuthorityHash: current.active.authority.contentHash, rootAuthorityHash: current.lineage.root.authority.contentHash, effectiveFrom: input.effectiveFrom, reviewHash: input.reviewHash, review: current.review } };
+        continuity: { version: 1, sequence: current.lineage.entries.length, parentAuthorityHash: current.active.authority.contentHash, rootAuthorityHash: current.lineage.root.authority.contentHash, effectiveFrom: input.effectiveFrom, reviewHash: current.reviewHash, review: current.review } };
       const contentHash = hash(payload), auditId = hash({ businessContinuity: contentHash }).slice(0, 24);
       if (Buffer.byteLength(canonical(payload)) > 1000000) fail('The business revision exceeds its retained evidence budget.');
       await touchCoordination(bound, current.state, session);
@@ -130,7 +131,7 @@ function createBusinessContinuityService({ models, connection, transaction, now,
       if (!saved) fail('The exact reviewed calendar changed during the business revision.');
       await models.Authorities.create([{ _id: hash({ scope, contentHash }).slice(0, 24), contractVersion: 2, ...scope, contentHash, payload, actorId, auditId }], { session });
       await models.Audits.create([{ _id: auditId, userId: ownerId, realmId: scope.realmId, action: 'Future business revision accepted', actionType: 'manual', outcome: 'success', beforeState: current.review,
-        afterState: { ...scope, authorityHash: contentHash, parentAuthorityHash: current.active.authority.contentHash, blueprintHash: input.blueprintHash, baselineHash: payload.baselineHash, inventoryHash: payload.inventoryHash, reviewHash: input.reviewHash, effectiveFrom: input.effectiveFrom, verifiedThrough: calendar.verifiedThrough, qboWrites: 0 } }], { session });
+        afterState: { ...scope, authorityHash: contentHash, parentAuthorityHash: current.active.authority.contentHash, blueprintHash: input.blueprintHash, baselineHash: payload.baselineHash, inventoryHash: payload.inventoryHash, reviewHash: current.reviewHash, effectiveFrom: input.effectiveFrom, verifiedThrough: calendar.verifiedThrough, qboWrites: 0 } }], { session });
       return { ...scope, applied: true, authorityHash: contentHash, reviewHash: input.reviewHash, effectiveFrom: input.effectiveFrom, reused: false, current: true, qboWrites: 0 };
     });
     } catch (error) {

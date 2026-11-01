@@ -52,11 +52,11 @@ test('verification refusal and audit failure retain the accepted ID and company 
     await assert.rejects(h.store.verify(String(run._id), 0, run.leaseToken, record)); assert.equal(h.run().records[0].qboId, '100'); assert.equal(h.run().records[0].state, 'saved'); assert.ok(h.writer().unresolved);
   }
 });
-test('new draft and changed prerequisites cannot approve stale choices or reserve later records', async () => {
+test('unrelated draft and observation hashes do not block the retained master plan', async () => {
   const h = scenario(); await h.propose(); const current = prepareMasterPlan(h.source); const { planHash, ...content } = current; content.evidence.setupHash = hash('new setup'); const changed = { ...content, planHash: hash(content) };
-  await assert.rejects(h.store.approve(String(h.run()._id), h.run().planHash, true, changed)); assert.equal(h.run().approval, null);
+  await h.store.approve(String(h.run()._id), h.run().planHash, true, changed); assert.ok(h.run().approval);
   await h.approve(); await h.claim(); h.data.Versions.push({ ...clone(h.data.Versions[0]), _id: '000000000000000000000099', version: 2 }); h.data.Sequences[0].value = 2;
-  await assert.rejects(h.prepare(0)); assert.equal(h.run().records[0].attempts.length, 0); assert.equal(h.sent.length, 0);
+  await h.prepare(0); assert.equal(h.run().records[0].attempts.length, 1); assert.equal(h.sent.length, 0);
 });
 test('private worker settlement after revocation retains all receipt and writer evidence', async () => {
   const h = scenario(); await h.propose(); await h.approve(); await h.claim(); await h.prepare(0); h.onSDK = async () => { throw Object.assign(new Error('fixture failed'), { code: '500' }); }; await assert.rejects(h.send());
@@ -78,4 +78,11 @@ test('transactional proposal reuse cannot substitute full and supplier-only scop
  await assert.rejects(h.store.propose(supplier,key),/different business choices/);
  await assert.rejects(h.store.propose(supplier,'40000000-0000-0000-0000-000000000002'),/different records/);
  assert.equal(h.data.MasterRuns.length,1);assert.equal(h.sent.length,0);
+});
+
+test('master service refreshes the current draft for approval and view keeps compatible work executable',async()=>{
+ const h=scenario();await h.propose();const originalPlan=clone(h.run().plan),d=clone(h.data.Versions[0]);d._id='000000000000000000000099';d.version=2;d.definition.publicSafeIdentity.displayName='Current display name';d.contentHash=hash(d.definition);h.data.Versions.push(d);h.data.Sequences[0].value=2;
+ const {draftView}=require('../src/modules/blueprint-draft'),{createMasterService}=require('../src/modules/business-master-service');let requested;const current=prepareMasterPlan({...h.source,view:{...scope,draft:draftView(d,scope.connectionId)},input:{...h.source.input,baseHash:d.contentHash}});
+ const service=createMasterService({models:h.models,connection:{db:h.db},resolveContext:async()=>({connection:{connected:true,...scope},environment:scope.environment}),accessFor:()=>h.access,runtimeFor:()=>({store:h.store,assertReady:async()=>{},prepare:async input=>{requested=input;return current;}})});
+ const result=await service.approve({id:ownerId},String(h.run()._id),{planHash:h.run().planHash,productionConfirmed:true});assert.equal(requested.baseHash,d.contentHash);assert.equal(result.run.sourceMatchesCurrentDraft,false);assert.equal(result.run.actions.execute,true);assert.deepEqual(h.run().plan,originalPlan);assert.equal(h.sent.length,0);
 });

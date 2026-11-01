@@ -49,7 +49,6 @@ for (const [label, change] of [
   ['paused company policy', h => { h.data.Policies[0].state = 'preparing'; }],
   ['other company writer', h => { h.writer().operationId = '000000000000000000000099'; }],
   ['missing master storage', h => { h.notMasterReady = true; }],
-  ['new draft version', h => { h.data.Versions.push({ ...clone(h.data.Versions[0]), _id: '000000000000000000000098', version: 2 }); h.data.Sequences[0].value = 2; }],
   ['changed draft content', h => { h.data.Versions[0].definition.volumeProfile = 'flagship'; }],
   ['draft save conflict', h => { h.conflictModel = 'Sequences'; }],
   ['master compare-and-swap conflict', h => { h.conflictModel = 'MasterRuns'; }],
@@ -116,4 +115,28 @@ test('a reviewed rejection retry needs the exact prior definite refusal, retaini
     if (changed) { await assert.rejects(h.send()); assert.equal(h.sent.length, 1); }
     else { await h.send(); assert.equal(h.sent.length, 2); assert.equal(h.data.Receipts.length, 2); assert.notEqual(h.data.Receipts[1].dispatchKey, originalDispatchKey); assert.equal(h.run().records[0].attempts[0].state, 'rejected'); assert.equal(h.run().records[0].attempts[1].qboId, '100'); }
   }
+});
+
+test('a compatible current draft admits identical retained master bytes and preserves the historical plan', async () => {
+ const h=harness(),before=clone(h.run()),draft=clone(h.data.Versions[0]);
+ draft._id='000000000000000000000098';draft.version=2;draft.definition.publicSafeIdentity.displayName='Current business name';draft.definition.volumeProfile='flagship';draft.contentHash=hash(draft.definition);h.data.Versions.push(draft);h.data.Sequences[0].value=2;
+ await h.send();assert.equal(h.sent.length,1);assert.equal(h.sent[0].body,JSON.stringify(before.records[0].attempts[0].payload));assert.deepEqual(h.run().plan,before.plan);assert.equal(h.run().planHash,before.planHash);assert.equal(h.run().records[0].attempts[0].dispatchKey,before.records[0].attempts[0].dispatchKey);assert.equal(h.run().records[0].qboId,'100');
+});
+test('current role assignments and business opening changes remain record safety boundaries', async () => {
+ for(const change of [d=>{d.calendar.openingDate='2023-10-02';},d=>{d.mappings.operatingBank='999';}]) {
+  const h=harness(),d=h.data.Versions[0];change(d.definition);d.contentHash=hash(d.definition);await assert.rejects(h.send());assert.equal(h.sent.length,0);
+ }
+});
+test('later drafts never replace an admitted unknown master or its mandatory receipt', async () => {
+ const h=harness();h.onSDK=async()=>{throw Object.assign(new Error('unknown'),{code:'500'});};await assert.rejects(h.send());
+ const retained=clone({run:h.run(),receipt:h.data.Receipts[0],barrier:h.writer().unresolved});
+ const d=clone(h.data.Versions[0]);d._id='000000000000000000000098';d.version=2;d.definition.publicSafeIdentity.displayName='Later';d.contentHash=hash(d.definition);h.data.Versions.push(d);h.data.Sequences[0].value=2;
+ await assert.rejects(h.send());assert.equal(h.sent.length,1);assert.deepEqual({run:h.run(),receipt:h.data.Receipts[0],barrier:h.writer().unresolved},retained);
+});
+
+test('changed current dated-tax intent holds an unsent Item without changing retained bytes',()=>{
+ const datedTax={version:1,regime:'CA-NS-2025-postpaid',salesTax:'12',purchaseTax:'12'},h=harness({datedTax}),{assertMasterSource}=require('../src/modules/business-master-preparation-transport');
+ const run=h.run(),view=structuredClone(run.plan.source);view.connectionMatches=true;view.business.datedTax.salesTax='16';view.business.datedTax.purchaseTax='16';
+ // Current account parents remain unselected in this unsent fixture.
+ const before=clone(run);assert.throws(()=>assertMasterSource(run,view,h.clock),/tax choices/);assert.deepEqual(run,before);assert.equal(h.sent.length,0);
 });

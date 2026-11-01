@@ -4,7 +4,7 @@ const { hash, canonical } = require('./business-calendar');
 const { denied, scoped, freezeWriteRequest } = require('./qbo-write-contract');
 const { assertPeriodControl } = require('./qbo-write-period');
 const { assertMasterPlan, compileMasterEntry, verifyMasterReadback } = require('./business-master-preparation-plan');
-const { assertMasterRun, assertMasterApproval, verifiedParents, dispatchKeyFor } = require('./business-master-preparation-transport');
+const { assertMasterRun, assertMasterApproval, assertMasterSource, verifiedParents, dispatchKeyFor } = require('./business-master-preparation-transport');
 const { assertMasterDispatchEvidence } = require('./business-master-dispatch-evidence');
 const { fenceBusinessOwner } = require('./business-owner-fence');
 const { assertMasterFailure } = require('./business-master-preparation-failure');
@@ -81,8 +81,8 @@ function createMasterPreparationStore({ models, scope, ownerId, actorId, access,
       if (run.approval) { assertMasterApproval(run); return run; }
       if (run.state !== 'proposed' || run.claim !== 'open') throw denied('Only the open proposed master plan may be approved.');
       assertFreshPlan(currentPlan);
-      const comparable = value => { const { planHash: ignoredHash, observedAt: ignoredTime, ...content } = value; void ignoredHash; void ignoredTime; return content; };
-      if (canonical(comparable(currentPlan)) !== canonical(comparable(run.plan))) throw denied('Master prerequisites changed after review. Close the unsent proposal and prepare it again.');
+      if (canonical(currentPlan.scope) !== canonical(scope) || currentPlan.ownerId !== ownerId || currentPlan.inventoryStartDate !== run.plan.inventoryStartDate || currentPlan.recordScope !== run.plan.recordScope) throw denied('The current master preparation belongs to different company or inventory choices.');
+      assertMasterSource(run, { ...currentPlan.source, connectionMatches: true }, now());
       const { policy, writer } = await coordination(session, true);
       if (writer.operationId !== null || writer.planHash !== null || writer.unresolved !== null) throw denied('Another company operation must settle before master approval.');
       await touchPolicy(policy, session); await assertQuiescent({ scope, session }); await transport.fenceSource(run, session);

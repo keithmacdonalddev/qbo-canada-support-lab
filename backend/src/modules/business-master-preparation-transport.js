@@ -46,14 +46,41 @@ function assertMasterApproval(run) {
   if (!approval || source.version !== 1 || canonical(source.scope) !== canonical(storedScope(run)) || source.runId !== String(run._id) || source.ownerId !== String(run.ownerId) || source.planHash !== run.planHash || !ID.test(source.auditId || '') || !Number.isFinite(Date.parse(source.approvedAt)) || source.productionConfirmed !== (run.environment === 'production') || hash(source) !== contentHash) throw denied('The owner must approve this exact master preparation.');
   return approval;
 }
+// Re-read current saved choices without turning an unrelated draft revision into
+// a create refusal. The retained plan and every reserved/admitted request stay fixed.
+function assertMasterSource(run, view, now = Date.now()) {
+  if (!view?.connectionMatches || view.business.openingDate !== run.plan.source.business.openingDate || view.business.fiscalYearStartMonth !== run.plan.source.business.fiscalYearStartMonth) throw denied('The current business opening or company changed.');
+  const requirements = require('./business-master-data').masterRequirements(view.business);
+  const parents = verifiedParents(run);
+  for (const record of run.records) {
+    const entry = run.plan.entries[record.ordinal], selected = entry.target === 'mapping' ? view.mappings[entry.key] : view.masterBindings?.[entry.key];
+    if (selected && selected !== record.qboId) throw denied('A current business choice already assigns this prepared role. Retain its IDs before creating another record.');
+    if (record.state === 'verified') continue;
+    if (entry.entity !== 'Account') {
+      const role = requirements.find(row => row.key === entry.key);
+      if (!role || role.entity !== entry.entity || (role.itemType || null) !== (entry.itemType || null)) throw denied('This master role is no longer required by the current business.');
+      for (const key of Object.values(role.accountMappings || {})) {
+        const selected = view.mappings[key] || null, original = run.plan.source.mappings[key] || null;
+        if (selected !== original && selected !== parents[key]?.qboId) throw denied('The current product account routing needs a new unsent preparation.');
+      }
+      if (entry.entity === 'Item') {
+        const dated = require('./business-dated-tax'), context = dated.bindDatedTax(view.business, view.mappings), today = require('./business-activity-preview').businessDate(new Date(now));
+        for (const key of ['salesTax', ...(entry.itemType === 'Inventory' ? ['purchaseTax'] : [])]) {
+          const current = context ? dated.datedTaxChoice(context, key, today).id : view.mappings[key];
+          if (current !== (run.plan.taxDefaults?.[key] || run.plan.source.mappings[key])) throw denied('Current product tax choices need a new unsent preparation.');
+        }
+      }
+    }
+  }
+  return view;
+}
 function createMasterPreparationTransport({ MasterRuns, Versions, Sequences, Audits, Receipts, assertReady, now = () => Date.now() }) {
   if ([MasterRuns, Versions, Sequences, Audits, Receipts].some(value => !value) || typeof assertReady !== 'function') throw new TypeError('Master transport needs explicit storage and source fencing');
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
   async function fenceSource(run, session) {
     const latest = await Versions.findOne({ realmId: run.realmId, environment: run.environment, contractVersion: 2 }).sort({ version: -1 }).session(session).maxTimeMS(3000).lean();
-    if (!latest || !same(latest._id, run.sourceDraftId) || !same(latest.connectionId, run.connectionId) || latest.contentHash !== run.sourceDraftHash || hash(latest.definition) !== run.sourceDraftHash) throw denied('A newer or changed business draft stops further master creates. Review the saved IDs against the current draft.');
-    const view = draftView(latest, String(run.connectionId));
-    if (canonical({ business: view.business, mappings: view.mappings, masterBindings: view.masterBindings }) !== canonical({ business: run.plan.source.business, mappings: run.plan.source.mappings, masterBindings: run.plan.source.masterBindings })) throw denied('The saved business choices changed before master dispatch.');
+    if (!latest || !same(latest.connectionId, run.connectionId) || hash(latest.definition) !== latest.contentHash) throw denied('The current scoped saved business draft is unavailable or changed.');
+    assertMasterSource(run, draftView(latest, String(run.connectionId)), now());
     const sequence = await read(Sequences, { _id: run.realmId }, session);
     if (!sequence || !validRevision(sequence.value) || sequence.value < latest.version || !validRevision(sequence.masterPreparationFence ?? 0)) throw denied('The business draft dispatch fence needs recovery.');
     const touched = await Sequences.findOneAndUpdate({ _id: sequence._id, value: sequence.value, ...(sequence.masterPreparationFence === undefined ? { masterPreparationFence: { $exists: false } } : { masterPreparationFence: sequence.masterPreparationFence }) }, { $inc: { masterPreparationFence: 1 } }, { new: true, session }).lean();
@@ -105,4 +132,4 @@ function createMasterPreparationTransport({ MasterRuns, Versions, Sequences, Aud
   }
   return { admit, settle, fenceSource };
 }
-module.exports = { createMasterPreparationTransport, assertMasterRun, assertMasterApproval, verifiedParents, dispatchKeyFor };
+module.exports = { createMasterPreparationTransport, assertMasterRun, assertMasterApproval, assertMasterSource, verifiedParents, dispatchKeyFor };

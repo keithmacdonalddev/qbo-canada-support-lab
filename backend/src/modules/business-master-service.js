@@ -92,7 +92,8 @@ function createMasterService(dependencies = {}) {
   async function approve(user, id, body) {
     runId(id); exact(body, ['planHash','productionConfirmed']); if (!HASH.test(body.planHash || '') || typeof body.productionConfirmed !== 'boolean') fail('Review the exact plan and confirm its target environment.', 400);
     const bound = await bind(user, 'operations.execute', true), run = await load(bound,id);
-    const currentPlan = run.approval ? undefined : await bound.runtime.prepare({ connectionId: bound.scope.connectionId, baseHash: run.sourceDraftHash, inventoryStartDate: run.plan.inventoryStartDate, ...(run.plan.recordScope ? { recordScope: run.plan.recordScope } : {}) });
+    const currentDraft = run.approval ? null : await bound.runtime.store.latest();
+    const currentPlan = run.approval ? undefined : await bound.runtime.prepare({ connectionId: bound.scope.connectionId, baseHash: currentDraft?.contentHash, inventoryStartDate: run.plan.inventoryStartDate, ...(run.plan.recordScope ? { recordScope: run.plan.recordScope } : {}) });
     return reply(bound, await bound.runtime.store.approve(id, body.planHash, body.productionConfirmed, currentPlan));
   }
   async function start(user, id, body, recover = false) {
