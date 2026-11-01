@@ -30,6 +30,8 @@ function createBankingWorkspaceRouter(dependencies = {}) {
     if(operatorLoop.resumeAvailable && operatorLoop.packageId){try{canResume=await operator().canResume(req.user,operatorLoop.packageId);}catch(error){if(!['BANKING_RESUME_FORBIDDEN','BUSINESS_ACCESS_DENIED'].includes(error.code))throw error;}}
     return {...list,operatorLoop:{...operatorLoop,canResume}};
   }, ['accountId','period']));
+  router.get('/accounts', action(req => service().accounts(req.user)));
+  router.get('/accounts/:accountId', action(req => service().accountDetail(req.user, req.params.accountId, req.query), ['period']));
   router.post('/operator/resume', action(async req => {
     const body=req.body;
     if(!body || Object.keys(body).some(k=>!['packageId','resolution'].includes(k)) || !/^[a-f0-9]{64}$/.test(body.packageId || ''))throw Object.assign(new Error('Exact packageId and resolution required'),{code:'BANKING_INVALID',status:400});

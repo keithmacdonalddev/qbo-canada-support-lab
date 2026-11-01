@@ -356,6 +356,86 @@ function createBankingWorkspaceService(dependencies = {}) {
       nativeSuccess(completion); nativeSuccess(attachment); nativeSuccess(ev); row.state.reconciled = { report, completion, statementAttachment: attachment, openingMinor: c.openingMinor, closingMinor: c.closingMinor, differenceMinor: 0, outstandingItems: clone(c.outstandingItems), evidence: ev };
     });
   }
+  // Read-only bank-style projection of immutable retained statement packages.
+  // It does not treat the synced QBO balance as an independently observed bank balance.
+  const bankName = 'Maple Harbour Bank';
+  const evidenceLabel = 'Historical reconstruction baseline — not independent bank confirmation.';
+  const pendingActivity = () => ({ availability: 'not-observed', count: null, note: 'Independent pending bank activity is not observed. Retained statement timing items are shown separately.' });
+  function periodEnd(period) { const date = new Date(period + '-01T00:00:00Z'); date.setUTCMonth(date.getUTCMonth() + 1); date.setUTCDate(0); return date.toISOString().slice(0, 10); }
+  async function retainedManifest(bound, row) {
+    const file = row.snapshot.files.find(f => f.kind === 'manifest');
+    check(file, 'Opening evidence manifest is unavailable.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
+    let manifest;
+    try { manifest = JSON.parse((await artifact({ path: file.path, sha256: file.sha256 }, bound, row.accountId)).toString('utf8')); }
+    catch (error) { if (error.code?.startsWith('BANKING_')) throw error; fail('Retained opening evidence could not be read.', 409, 'BANKING_EVIDENCE_UNAVAILABLE'); }
+    check(sameScope(manifest.scope, bound.scope) && manifest.accountId === row.accountId && manifest.accountCurrency === row.accountCurrency && manifest.period === row.period && canonical(manifest.rows) === canonical(row.snapshot.rows), 'Retained account manifest no longer agrees with its package.', 409, 'BANKING_ARTIFACT_CHANGED');
+    check(manifest.openingMinor === row.snapshot.openingMinor && manifest.closingMinor === row.snapshot.closingMinor, 'Retained statement balance evidence is unavailable or inconsistent.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
+    return manifest;
+  }
+  function openingProof(manifest) {
+    const opening = manifest.openingEvidence;
+    return { available: Boolean(opening?.evidenceRef && opening?.basis), basis: opening?.period && opening.period !== manifest.period ? 'Carried forward to ' + manifest.period + ' from the retained ' + opening.period + ' reconstruction baseline. ' + (manifest.openingBasis || opening.basis) : manifest.openingBasis || opening?.basis || 'Opening evidence unavailable.', evidenceRef: opening?.evidenceRef || null, evidenceHash: opening?.evidenceHash || null,
+      openingPeriod: opening?.period || null, amountMinor: opening?.amountMinor ?? null, statementOpeningMinor: manifest.openingMinor,
+      crossCheck: opening?.crossCheck ? clone(opening.crossCheck) : null };
+  }
+  function currentPeriods(rows) {
+    const periods = new Map();
+    for (const row of rows) {
+      if (row.state.supersededBy) continue;
+      const prior = periods.get(row.period);
+      if (!prior || row.revision > prior.revision) periods.set(row.period, row);
+    }
+    return [...periods.values()].sort((a, b) => b.period.localeCompare(a.period));
+  }
+  async function accountSummary(bound, rows, selected = rows[0]) {
+    const record = await account(bound, selected.accountId, selected.accountCurrency);
+    let manifest = null; const unavailableEvidence = [];
+    try { manifest = await retainedManifest(bound, selected); }
+    catch (error) { if (!error.code?.startsWith('BANKING_')) throw error; unavailableEvidence.push(error.message); }
+    const openingEvidence = manifest ? openingProof(manifest) : { available: false, basis: 'Opening evidence unavailable.', evidenceRef: null, evidenceHash: null };
+    if (!openingEvidence.available && !unavailableEvidence.length) unavailableEvidence.push('The retained opening balance has no evidence reference.');
+    return { accountId: selected.accountId, accountName: record.Name || record.name || manifest?.accountName || selected.accountId,
+      accountType: record.AccountType || record.type, accountCurrency: selected.accountCurrency,
+      balanceConvention: selected.snapshot.balanceConvention, balanceMinor: selected.snapshot.closingMinor, balanceAsOf: periodEnd(selected.period),
+      period: selected.period, packageId: selected._id, revision: selected.revision, openingMinor: selected.snapshot.openingMinor,
+      postedCount: selected.snapshot.events.filter(e => e.expectedResolution !== 'exclude').length,
+      availablePeriods: rows.map(row => ({ period: row.period, packageId: row._id, revision: row.revision })),
+      openingEvidence, pendingActivity: pendingActivity(), unavailableEvidence };
+  }
+  async function accounts(user) {
+    const bound = await bind(user), rows = await store().list(bound.scope);
+    check(rows.every(row => sameScope(row, bound.scope)), 'Stored banking scope mismatch.', 409);
+    const groups = new Map();
+    for (const row of rows) { if (!groups.has(row.accountId)) groups.set(row.accountId, []); groups.get(row.accountId).push(row); }
+    const summaries = [];
+    for (const family of groups.values()) { const periods = currentPeriods(family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
+    return { bankName, evidenceLabel, accounts: summaries, truncated: rows.length === 2000, qboCalls: 0 };
+  }
+  async function accountDetail(user, accountId, filters = {}) {
+    check(id(accountId) && exact(filters, ['period']) && (!filters.period || /^\d{4}-(0[1-9]|1[0-2])$/.test(filters.period)), 'Exact account and optional statement month required.');
+    const bound = await bind(user), family = await store().list(bound.scope, { accountId });
+    check(family.every(row => sameScope(row, bound.scope) && row.accountId === accountId), 'Stored banking account scope mismatch.', 409);
+    const periods = currentPeriods(family), row = filters.period ? periods.find(value => value.period === filters.period) : periods[0];
+    check(row, 'No retained statement is available for this account/month.', 404, 'BANKING_NOT_FOUND');
+    const summary = await accountSummary(bound, periods, row), snapshot = row.snapshot;
+    let balance = snapshot.openingMinor;
+    const transactions = snapshot.rows.map(spec => {
+      const event = snapshot.events.find(value => value.eventId === spec.eventId && value.revision === spec.eventRevision);
+      check(event && Number.isSafeInteger(event.amountMinor), 'Retained transaction lineage is unavailable.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
+      const balanceMovementMinor = event.expectedResolution === 'exclude' ? 0 : snapshot.balanceConvention === 'card-amount-owed' ? -event.amountMinor : event.amountMinor;
+      balance = amountSum([balance, balanceMovementMinor]);
+      return { eventId: event.eventId, eventRevision: event.revision, rowId: spec.rowId, fileId: spec.fileId, rowNumber: spec.rowNumber,
+        postingDate: event.actualPostingDate || event.expectedPostingDate, postingBasis: event.postingBasis || (event.actualPostingDate ? 'retained-posting-evidence' : 'simulated-policy'),
+        status: event.expectedResolution === 'exclude' ? 'excluded' : 'posted', description: event.description || event.kind || [event.source?.entity, event.source?.id].filter(Boolean).join(' '),
+        amountMinor: event.amountMinor, balanceMovementMinor, runningBalanceMinor: balance,
+        source: { entity: event.source?.entity || null, id: event.source?.id || null, sourceHash: event.sourceHash || event.source?.sourceHash || null },
+        qboRefs: clone(event.resolution?.linkedQboIds || []) };
+    });
+    check(balance === snapshot.closingMinor, 'Retained transaction movements do not equal the statement closing balance.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
+    const retained = view(row);
+    return { bankName, evidenceLabel, ...summary, transactions, outstandingItems: clone(snapshot.outstandingItems),
+      package: { id: retained.id, contentHash: retained.contentHash, stateVersion: retained.stateVersion, summary: retained.summary, files: clone(snapshot.files), blockers: clone(snapshot.blockers) }, qboCalls: 0 };
+  }
   async function list(user, filters = {}) {
     check(exact(filters, ['accountId','period']) && (!filters.accountId || id(filters.accountId)) && (!filters.period || /^\d{4}-(0[1-9]|1[0-2])$/.test(filters.period)), 'Unsupported banking filter.');
     const bound = await bind(user), rows = await store().list(bound.scope, filters);
@@ -364,6 +444,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { list, detail, register, recordImport, recordRow, recordReconciliation, download };
+  return { list, detail, accounts, accountDetail, register, recordImport, recordRow, recordReconciliation, download };
 }
 module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };

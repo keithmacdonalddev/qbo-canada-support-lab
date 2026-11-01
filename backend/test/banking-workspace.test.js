@@ -173,6 +173,12 @@ test('authenticated unmounted routes reject unauthenticated calls and company ov
   const response = await fetch(base + '/packages/' + row.id, { headers }); assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store'); assert.equal((await response.json()).data.id, row.id);
   assert.equal((await fetch(base + '/packages', { method: 'POST', headers, body: JSON.stringify({ ...h.input(), ownerId: 'attacker' }) })).status, 400);
   assert.equal((await fetch(base + '/packages/' + row.id + '/files/unknown', { headers })).status, 404);
+  assert.equal((await fetch(base + '/accounts')).status, 401);
+  assert.equal((await fetch(base + '/accounts?realmId=99', { headers })).status, 400);
+  const accounts = await fetch(base + '/accounts', { headers }); assert.equal(accounts.status, 200); assert.equal((await accounts.json()).data.accounts[0].accountId, '60');
+  const detail = await fetch(base + '/accounts/60?period=2026-10', { headers }); assert.equal(detail.status, 200); assert.equal((await detail.json()).data.package.id, row.id);
+  assert.equal((await fetch(base + '/accounts/60?realmId=99', { headers })).status, 400);
+  assert.equal((await fetch(base + '/accounts/60?period=2026-11', { headers })).status, 404);
 });
 test('real retained banking audit replays through production register/detail path without database or QBO', async t => {
   const location = path.resolve(__dirname, '../../artifacts/goal-realization/banking-research-20261101.json');
@@ -244,4 +250,49 @@ test('BF1 aliases cannot override retained source, action or creator proof', asy
     input.events[0][key] = { creator: 'native-add', expectedResolution: 'add', sourceHash: hash('different source') }[key];
     await assert.rejects(h.service.register(user, input), /conflicts with retained BF1/); assert.equal(h.packages.size, 0);
   }
+});
+
+
+test('bank account views reopen retained history with exact native signs, dated balances and opening provenance', async () => {
+  const h = fixture();
+  h.accounts.get('60').Name = 'Operating CAD';
+  h.accounts.set('61', { Id: '61', Name: 'Business card CAD', AccountType: 'Credit Card', CurrencyRef: { value: 'CAD' } });
+  async function retainStatement(accountId, card) {
+    const input = h.input({ accountId, balanceConvention: card ? 'card-amount-owed' : 'bank-balance', openingMinor: 1000, closingMinor: card ? 6000 : 6000,
+      events: [{ eventId: accountId + ':settlement', revision: 1, accountId, accountCurrency: 'CAD', sourceHash: hash(accountId), amountMinor: card ? -5000 : 5000,
+        expectedPostingDate: '2026-10-20', actualPostingDate: '2026-10-20', postingBasis: 'simulated-policy', description: 'Retained payment', expectedResolution: 'match', creator: 'none', source: { entity: card ? 'Purchase' : 'Payment', id: accountId }, resolution: { action: 'Match', designatedCreator: 'existing-qbo', linkedQboIds: [{ entity: card ? 'Purchase' : 'Payment', id: accountId }] } }],
+      rows: [{ rowId: accountId + ':row', eventId: accountId + ':settlement', eventRevision: 1, fileId: 'feed-1', rowNumber: 1 }] });
+    const file = input.files.find(f => f.kind === 'manifest'), manifest = JSON.parse(h.artifacts.get(file.path));
+    Object.assign(manifest, { openingMinor: input.openingMinor, closingMinor: input.closingMinor, openingBasis: 'Retained balance reconstruction', openingEvidence: { evidenceRef: 'retained-opening-proof', evidenceHash: hash('opening'), basis: 'Native balance less retained movements', amountMinor: 1000, period: card ? '2026-09' : input.period } });
+    Object.assign(file, h.retain('account-view-' + accountId + '.json', JSON.stringify(manifest), accountId));
+    return h.service.register(user, input);
+  }
+  const bank = await retainStatement('60', false), card = await retainStatement('61', true);
+  const before = clone([...h.packages]);
+  const overview = await h.service.accounts(user);
+  assert.equal(overview.bankName, 'Maple Harbour Bank'); assert.match(overview.evidenceLabel, /not independent/); assert.equal(overview.qboCalls, 0);
+  assert.deepEqual(overview.accounts.map(a => [a.accountId, a.accountName, a.balanceMinor, a.balanceAsOf]), [['60','Operating CAD',6000,'2026-10-31'],['61','Business card CAD',6000,'2026-10-31']]);
+  for (const [accountId, row, nativeAmount] of [['60',bank,5000],['61',card,-5000]]) {
+    const detail = await h.service.accountDetail(user, accountId, { period: '2026-10' });
+    assert.equal(detail.package.id, row.id); assert.equal(detail.openingEvidence.available, true); assert.equal(detail.openingEvidence.evidenceRef, 'retained-opening-proof');
+    assert.equal(detail.transactions[0].amountMinor, nativeAmount); assert.equal(detail.transactions[0].balanceMovementMinor, 5000); assert.equal(detail.transactions[0].runningBalanceMinor, 6000);
+    assert.equal(detail.transactions[0].rowId, accountId + ':row'); assert.equal(detail.transactions[0].source.sourceHash, hash(accountId)); assert.equal(detail.transactions[0].postingBasis, 'simulated-policy');
+    if (accountId === '61') assert.match(detail.openingEvidence.basis, /Carried forward to 2026-10.*2026-09/);
+    assert.equal(detail.pendingActivity.availability, 'not-observed'); assert.equal(detail.pendingActivity.count, null);
+    const reopen = createBankingWorkspaceService({ store: h.store, resolveContext: async () => h.context, authorize: async () => {}, getAccount: async (_s, id) => h.accounts.get(id), readArtifact: async file => { const bytes = h.artifacts.get(file.path); assert.equal(digest(bytes), file.sha256); return bytes; } });
+    assert.deepEqual(await reopen.accountDetail(user, accountId), detail);
+    assert.equal((await reopen.download(user, row.id, 'feed-1')).sha256, row.snapshot.files.find(f => f.kind === 'csv').sha256);
+  }
+  assert.deepEqual([...h.packages], before, 'Bank-style reads preserve all accepted packages and native state');
+  await assert.rejects(h.service.accountDetail(user, '60', { period: '2026-11' }), /No retained statement/);
+  await assert.rejects(h.service.accountDetail(user, '60', { realmId: '99' }), /Exact account/);
+  h.context.connection.realmId = '99'; assert.equal((await h.service.accounts(user)).accounts.length, 0);
+});
+
+test('bank account view exposes missing opening provenance and fails closed on inconsistent transaction balances', async () => {
+  const h = fixture(), row = await h.service.register(user, h.input());
+  const overview = await h.service.accounts(user);
+  assert.equal(overview.accounts[0].openingEvidence.available, false); assert.match(overview.accounts[0].unavailableEvidence.join(' '), /unavailable|inconsistent/);
+  h.packages.get(row.id).snapshot.closingMinor++;
+  await assert.rejects(h.service.accountDetail(user, '60'), /movements/);
 });
