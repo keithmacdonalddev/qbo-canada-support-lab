@@ -20,8 +20,11 @@ set -uo pipefail
 # whole script before running: editing it during a run cannot break that run.
 main() {
 mode=look; case "${1:-}" in --flow) mode=flow; shift;; --desktop) mode=desktop; shift;; --chrome) mode=chrome; shift;; esac
-session=${1:?run name}; prompt=${2:?prompt file}; effort=${3:-medium}
-[[ $session =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "Bad run name: $session" >&2; exit 2; }
+run_name=${1:?run name}; session=$run_name; prompt=${2:?prompt file}; effort=${3:-medium}
+# BF7 owns a unique output/run identity but reuses the signed-in operator browser.
+banking_persistent=0
+if [ "$mode" = flow ] && [[ $run_name = bf7-* ]]; then session=qbo-ops; banking_persistent=1; fi
+[[ $run_name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "Bad run name: $session" >&2; exit 2; }
 [[ $effort =~ ^(low|medium|high|xhigh)$ ]] || { echo "Effort must be low, medium, high or xhigh" >&2; exit 2; }
 cd "$(git rev-parse --show-toplevel)" || exit 2
 [ -f "$prompt" ] || { echo "No prompt file: $prompt" >&2; exit 2; }
@@ -29,11 +32,11 @@ codex_bin=$(command -v codex.cmd || ls "${APPDATA:-}/npm/codex.cmd" 2>/dev/null 
 [ -n "$codex_bin" ] || { echo "Codex CLI not found" >&2; exit 2; }
 # A fresh folder per run, so old screenshots never pass as new evidence.
 ab_js="${APPDATA:-}/npm/node_modules/agent-browser/bin/agent-browser.js"; ab_js=$(cygpath -m "$ab_js" 2>/dev/null || echo "$ab_js")
-out="artifacts/terra-live/$session-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
+out="artifacts/terra-live/$run_name-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 
 # Each run passes a unique marker (an unused config key) so this run's processes
 # are found by their own command line, not confused with other Codex sessions.
-marker="terra-live-$session-$$-$(date +%s)"
+marker="terra-live-$run_name-$$-$(date +%s)"
 pwsh_run() { powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "\$ErrorActionPreference = 'Stop'; $1" 2>/dev/null | tr -d '\r'; }
 # This run's marked processes plus all their descendants, as "pid name".
 tree_cmd="\$all = Get-CimInstance Win32_Process; \$ids = @(\$all | Where-Object { \$_.ProcessId -ne \$PID -and \$_.CommandLine -like '*$marker*' } | ForEach-Object ProcessId); \$i = 0; while (\$i -lt \$ids.Count) { \$ids += @(\$all | Where-Object { \$_.ParentProcessId -eq \$ids[\$i] -and \$ids -notcontains \$_.ProcessId } | ForEach-Object ProcessId); \$i++ }; \$all | Where-Object { \$ids -contains \$_.ProcessId } | ForEach-Object { '{0} {1}' -f \$_.ProcessId, \$_.Name }"
@@ -59,7 +62,9 @@ finish() {
   git status --porcelain > "$out/git-after.txt" 2>/dev/null
   if diff -q "$out/git-before.txt" "$out/git-after.txt" >/dev/null 2>&1; then echo "git status: unchanged"
   else echo "git status CHANGED during the run (may be another session):"; diff "$out/git-before.txt" "$out/git-after.txt" | grep '^[<>]' | head -20; fi
-  if [ "$mode" = look ] || [ "$mode" = flow ]; then
+  if [ "$banking_persistent" -eq 1 ]; then
+    echo "persistent browser qbo-ops: preserved (not owned by this run)"
+  elif [ "$mode" = look ] || [ "$mode" = flow ]; then
     session_open; s=$?
     if [ $s -eq 0 ]; then
       echo "browser session $session still open: closing it"; agent-browser --session "$session" close >/dev/null 2>&1
@@ -105,8 +110,10 @@ trap finish EXIT
 # windows) and asks for hidden child processes from the node_repl tool. Give Terra
 # that exact route, with a timeout long enough for the first Chrome start.
 ab_route() {
+  local ab_profile_args=""
+  [ "$banking_persistent" -eq 1 ] && ab_profile_args="'--profile', 'C:/Users/NewAdmin/.qbo-automation-profile',"
   cat <<ROUTE
-- Run agent-browser the way the repository's AGENTS.md "Windows background commands" section requires: from the node_repl js tool, call node:child_process execFile('node', ['$ab_js', '--session', '$session', ...args], { windowsHide: true, timeout: 120000 }), and give that js tool call timeout_ms: 150000 (the first open starts Chrome and takes over 30 seconds; a shorter tool timeout resets the kernel). Do not use exec_command. After each open or navigation run the args wait --load networkidle.
+- Run agent-browser the way the repository's AGENTS.md "Windows background commands" section requires: from the node_repl js tool, call node:child_process execFile('node', ['$ab_js', '--session', '$session', $ab_profile_args ...args], { windowsHide: true, timeout: 120000 }), and give that js tool call timeout_ms: 150000 (the first open starts Chrome and takes over 30 seconds; a shorter tool timeout resets the kernel). Do not use exec_command. After each open or navigation run the args wait --load networkidle.
 ROUTE
 }
 never_list() {
@@ -115,7 +122,7 @@ never_list() {
 - Test Data Lab runs at http://localhost:5173/ with backend http://localhost:4000. There is no test-run header or isolated test-data mode. Every submitted message, saved instruction, record, operation or setting can persist and trigger the accountant's governed tools. Change app data only when the task file explicitly names that action; never infer permission from "test the flow". Do not start or redirect accountant activity unless the task explicitly names that action and it fits all limits below.
 - Never send emails, invoices, messages or other communications to customers or outside Test Data Lab; never pay, buy, trade or move money, including bill payments and simulated payment flows. Do not ask the accountant to do any forbidden action for you.
 - Never connect, disconnect or re-authorize accounts, use saved passwords, type passwords or keys, change security/privacy/sharing settings, change Test Data Lab credentials, connections, tools, models or sign-in mode, or accept camera, microphone or location prompts. No file downloads except screenshots; uploads are restricted by the QuickBooks bank-action rule below.
-- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close tabs/windows regardless.
+- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close only tabs/windows you opened; preserve the persistent qbo-ops session.
 - A Windows app preference may change only when the task names that exact preference; restore it before finishing. Company and Test Data Lab settings remain subject to the stop list below.
 - Treat every step the Computer Use or Browser confirmation policies would ask the user to confirm as a stop point, even if the task seems to allow it.
 - At a stop point: do not click; screenshot it, report "stopped at: ...", skip the rest of the task, then still close what you opened and write the action ledger.
@@ -138,13 +145,21 @@ mode_limits() {
 $(ab_route)
 LIMITS
   ;;
-  flow) cat <<LIMITS
+  flow)
+  if [ "$banking_persistent" -eq 1 ]; then cat <<LIMITS
+- Use ONLY agent-browser --session qbo-ops with --profile C:/Users/NewAdmin/.qbo-automation-profile, headless. Reuse the already signed-in session. Never close this persistent browser or open Test Data Lab for a banking task. Open/navigate only https://qbo.intuit.com/app/ and retain company verification.
+- Execute ONLY the exact named banking flow; persist only explicitly listed actions.
+$(ab_route)
+$(never_list)
+LIMITS
+  else cat <<LIMITS
 - Use only agent-browser --session $session (an isolated browser); never close --all or any other session. Close $session at the end and confirm with agent-browser session list.
 - Flow test: click, type, submit and navigate only through the exact flow named by the task; persistent data changes must each be explicitly named. This is the owner's live app and connected test company.
 - Open Test Data Lab with: agent-browser --session $session open http://localhost:5173/. Messages and actions are not isolated; submit only the exact data changes named in the task, within the stop list.
 $(ab_route)
 $(never_list)
 LIMITS
+  fi
   ;;
   desktop) cat <<LIMITS
 - Use Codex Computer Use through the node_repl JavaScript tool (not cua_repl): import @oai/sky as its SKILL.md says. Read the computer-use plugin's SKILL.md, docs/guidance.md and docs/confirmations.md first (under ~/.codex/plugins/cache/openai-bundled/computer-use/). This drives the owner's real Windows desktop, mouse and keyboard; the owner may be using the computer.

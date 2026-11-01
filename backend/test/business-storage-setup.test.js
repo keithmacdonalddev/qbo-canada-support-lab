@@ -434,3 +434,15 @@ test('authority is checked again after partial DDL and completed receipts cannot
   g.data().generaldaycloses.indexes.pop(); const writes = g.writes;
   await assert.rejects(g.additiveApply(gp.planHash), /completed additive/); assert.equal(g.writes, writes);
 });
+
+test('banking and close-checklist additive profiles preserve populated business and exact prior receipts',async()=>{
+ for(const profile of ['banking','close-checklist']){
+  const f=await populatedGeneralStorage(),before=businessDocuments(f),writes=f.writes;
+  const plan=await previewAdditiveStorage(f.db,target,'sandbox',profile);assert.equal(f.writes,writes);assert.equal(plan.permissionChange,null);assert.equal(plan.activation,'none');assert.equal(plan.qboWrites,0);
+  await assert.rejects(applyAdditiveStorage(f.db,target,'sandbox','a'.repeat(64),profile),/changed/);
+  await applyAdditiveStorage(f.db,target,'sandbox',plan.planHash,profile);
+  for(const [name,docs] of Object.entries(before))assert.deepEqual(f.data()[name].docs,docs);
+  assert.equal((await applyAdditiveStorage(f.db,target,'sandbox',plan.planHash,profile)).status,'already-complete');await assertProfileSetupCompleted(f.db,target,'continual-business');
+  await assert.rejects(f.preview(profile),/additive/);
+ }
+});

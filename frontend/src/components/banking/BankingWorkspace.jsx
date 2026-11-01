@@ -25,6 +25,7 @@ export function BankingWorkspaceView({ data, loading = false, error = '', loaded
     {error && <div className="banking-notice banking-notice--error" role="alert"><strong>{data ? 'Saved view may be out of date. ' : ''}</strong>{error} <button type="button" onClick={() => onRefresh()}>Try again</button></div>}
     {!data && !error && <p className="banking-notice" role="status">Loading account-month packages and saved evidence…</p>}
     {data && <>
+      {data.operatorLoop?.paused && <div className="banking-notice banking-notice--error" role="alert"><strong>Scheduled banking is paused. </strong>{data.operatorLoop.reason} {data.operatorLoop.recovery}</div>}
       <div className="banking-toolbar">
         <label htmlFor={accountFilterId}>Account<select id={accountFilterId} value={accountFilter} onChange={filter(setAccountFilter)}><option value="">All accounts</option>{[...new Set(packages.map(pkg => pkg.accountId))].map(id => <option value={id} key={id}>{accountName(id)}</option>)}</select></label>
         <label htmlFor={monthFilterId}>Month<select id={monthFilterId} value={monthFilter} onChange={filter(setMonthFilter)}><option value="">All months</option>{[...new Set(packages.map(pkg => pkg.period))].sort().map(month => <option key={month}>{month}</option>)}</select></label>

@@ -571,9 +571,11 @@ function createBusinessAgentService(options={}) {
     const controller=new AbortController(),promise=Promise.resolve().then(()=>worker(id,controller)).catch(()=>{lastScanError='Business monitoring needs storage recovery. Saved controls and cursors are retained.';}).finally(()=>jobs.delete(id));jobs.set(id,{controller,promise});
   }
   async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{const rows=await store.due();for(const row of rows)kick(String(row._id));lastScanError=null;})().catch(()=>{lastScanError='Business monitoring storage is unavailable.';}).finally(()=>{scanPromise=null;});return scanPromise;}
-  function start(){if(closed||interval)return;interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
-  function close(){closed=true;if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
-  async function drain(){await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
+  // Opt-in only: source publication does not activate native banking work.
+  const bankingLoop=options.bankingLoop || (process.env.BANKING_OPERATOR_ENABLED==='true' ? require('./banking-accountant-tools').createBankingRuntime().loop : null);
+  function start(){if(closed||interval)return;bankingLoop?.start();interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
+  function close(){closed=true;bankingLoop?.close();if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
+  async function drain(){await bankingLoop?.drain();await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
   return {status,blockers,live,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
 }
 let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService();}

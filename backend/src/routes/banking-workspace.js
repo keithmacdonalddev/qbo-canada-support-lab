@@ -22,9 +22,16 @@ function createBankingWorkspaceRouter(dependencies = {}) {
       res.status(status).json({ error: status === 500 ? 'Banking evidence could not be confirmed. Retain the exact request and retry.' : error.message, code: status === 500 ? 'BANKING_FAILED' : error.code });
     }
   };
-  router.get('/', action(req => service().list(req.user, req.query), ['accountId','period']));
+  router.get('/', action(async req => {
+    const list=await service().list(req.user,req.query);
+    return {...list,operatorLoop:await (dependencies.readLoopStatus || require('../modules/banking-operator-loop').readBankingLoopStatus)({packages:list.packages})};
+  }, ['accountId','period']));
   router.post('/packages', action(req => service().register(req.user, req.body)));
-  router.get('/packages/:id', action(req => service().detail(req.user, req.params.id)));
+  router.get('/packages/:id', action(async req => {
+    const pkg=await service().detail(req.user,req.params.id);
+    const operator=dependencies.operator || require('../modules/banking-accountant-tools').createBankingRuntime({workspace:service()}).operator;
+    return {...pkg,operatorStatus:await operator.status(req.user,pkg.id)};
+  }));
   router.get('/packages/:id/files/:fileId', action(async (req, res) => {
     const file = await service().download(req.user, req.params.id, req.params.fileId);
     const types = { csv: ['text/csv; charset=utf-8','csv'], statement: ['application/pdf','pdf'], manifest: ['application/json','json'] };

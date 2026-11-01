@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, Check, Copy, LoaderCircle } from 'lucide-react'
 import Layout from '../components/Layout'
 import BookEvidence from '../components/BookEvidence'
+import BankingWorkspace from '../components/banking/BankingWorkspace'
 import CompanyProgress from '../components/CompanyProgress'
 import BusinessBaseline from '../components/BusinessBaseline'
 import BusinessMaintenance from '../components/BusinessMaintenance'
@@ -136,6 +137,8 @@ function CompanyContent({ connection }) {
       <div className="mx-auto max-w-[1080px]">
         <h1 className="text-[22px] font-semibold tracking-[-0.015em] text-[var(--ink)]">{status?.companyName || 'Company'}</h1>
         <p className="mt-1 text-[13.5px] text-[var(--ink-2)]">Maintain a realistic business, keep its records current, and verify the results.</p>
+
+        {ready && <BankingWorkspace scopeKey={[status?.realmId, status?.connectionId, connection?.environment].join(':')} />}
 
         <CompanyProgress enabled={ready} realmId={status?.realmId} environment={connection?.environment} connectionId={status?.connectionId} />
 

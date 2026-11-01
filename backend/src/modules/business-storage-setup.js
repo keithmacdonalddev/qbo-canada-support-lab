@@ -38,10 +38,17 @@ const GENERAL_WRITE_COLLECTIONS = Object.freeze([
   { name: 'generaldaycloses', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, fromDate: 1, throughDate: 1, kind: 1, verifiedAt: -1 })] },
 ]);
 const REPLAY_EVIDENCE_COLLECTIONS = Object.freeze([{ name: 'businessreplayevidences', indexes: [index({ capturedAt: 1 }, { expireAfterSeconds: 2592000 }), index({ environment: 1, realmId: 1, connectionId: 1, operationIds: 1, capturedAt: -1 })] }]);
+const BANKING_COLLECTIONS = Object.freeze([
+  { name: 'bankingevents', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, eventId: 1, revision: 1 }, { unique: true, name: 'banking_event_revision' })] },
+  { name: 'bankingpackages', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, accountId: 1, period: 1, revision: 1 }, { unique: true, name: 'banking_package_revision' })] },
+]);
+const CLOSE_CHECKLIST_COLLECTIONS = Object.freeze([{ name: 'businessclosechecklistevidences', indexes: [index({ environment: 1, realmId: 1, connectionId: 1, ownerId: 1, period: 1, accountId: 1, checkKey: 1, revision: 1 }, { unique: true })] }]);
 function freeze(value) { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
 freeze(GENERAL_WRITE_COLLECTIONS); freeze(MASTER_COLLECTIONS); freeze(CONTINUAL_COLLECTIONS); freeze(OPERATIONS_COLLECTIONS); freeze(BASELINE_COLLECTIONS); freeze(LEGACY_PREREQUISITES);
 function setupDefinition(profile = 'blueprint') {
   // Independent additive contract. The existing populated v4 profile is never reinstalled.
+  if (profile === 'banking') return { version: 8, profile, collections: BANKING_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'additive-banking-storage-existing-records-retained' };
+  if (profile === 'close-checklist') return { version: 9, profile, collections: CLOSE_CHECKLIST_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'additive-close-checklist-storage-existing-records-retained' };
   if (profile === 'replay-evidence') return { version: 7, profile, collections: REPLAY_EVIDENCE_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'diagnostic-evidence-only-existing-business-storage-retained' };
   if (profile === 'general-writes') return { version: 6, profile, collections: GENERAL_WRITE_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'general-write-collections-empty-database-wide-existing-business-storage-retained' };
   if (profile === 'master-preparation') return { version: 5, profile, collections: MASTER_COLLECTIONS, prerequisites: [...LEGACY_PREREQUISITES, ...CONTINUAL_COLLECTIONS], initialState: 'master-preparation-runs-empty-database-wide-existing-business-storage-retained' };
@@ -130,6 +137,7 @@ function receiptMatches(receipt, definition, target, approvedHash) {
   if (receipt.planHash !== approvedHash || hash(receipt.target) !== hash(target)) fail('The completion receipt belongs to another target.');
 }
 async function previewSetup(db, target, configuredEnvironment, profile = 'blueprint') {
+  if (['banking','close-checklist'].includes(profile)) fail('Use additive storage preview/apply for this profile.');
   const definition = setupDefinition(profile);
   validateTarget(target, configuredEnvironment);
   const identity = await deployment(db);
@@ -148,6 +156,7 @@ async function previewSetup(db, target, configuredEnvironment, profile = 'bluepr
 }
 function ids(planHash) { return { intent: new ObjectId(hash({ setup: planHash, event: 'intent' }).slice(0, 24)), complete: new ObjectId(hash({ setup: planHash, event: 'complete' }).slice(0, 24)), membership: new ObjectId(hash({ setup: planHash, event: 'owner' }).slice(0, 24)) }; }
 async function applySetup(db, client, target, configuredEnvironment, approvedHash, profile = 'blueprint') {
+  if (['banking','close-checklist'].includes(profile)) fail('Use additive storage preview/apply for this profile.');
   const definition = setupDefinition(profile);
   validateTarget(target, configuredEnvironment);
   if (typeof approvedHash !== 'string' || !/^[a-f0-9]{64}$/.test(approvedHash)) fail('Apply requires the hash of the explicitly approved preview.');
@@ -240,7 +249,7 @@ async function assertBaselineSetupCompleted(db, target, session) {
 // Maintenance is deliberately separate from initial installation: existing records and
 // owner/access fences are never updated. Only missing static DDL and append-only audits.
 function additiveDefinition(profile) {
-  if (!['general-writes', 'replay-evidence'].includes(profile)) fail('Additive storage preparation supports only the general-writes or replay-evidence profiles.');
+  if (!['general-writes', 'replay-evidence', 'banking', 'close-checklist'].includes(profile)) fail('Additive storage preparation supports only general-writes, replay-evidence, banking or close-checklist.');
   return setupDefinition(profile);
 }
 async function additiveState(db, target, configuredEnvironment, profile) {
@@ -331,4 +340,4 @@ async function applyAdditiveStorage(db, target, configuredEnvironment, approvedH
   }
   return { status: 'complete', planHash: approvedHash, auditId: String(keys.complete), qboWrites: 0 };
 }
-module.exports = { previewAdditiveStorage, applyAdditiveStorage, assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, REPLAY_EVIDENCE_COLLECTIONS, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };
+module.exports = { BANKING_COLLECTIONS, CLOSE_CHECKLIST_COLLECTIONS, previewAdditiveStorage, applyAdditiveStorage, assertProfileSetupCompleted, assertBaselineSetupCompleted, GENERAL_WRITE_COLLECTIONS, MASTER_COLLECTIONS, CONTINUAL_COLLECTIONS, COLLECTIONS, OPERATIONS_COLLECTIONS, BASELINE_COLLECTIONS, LEGACY_PREREQUISITES, REPLAY_EVIDENCE_COLLECTIONS, setupDefinition, validateTarget, exactIndex, inspectStorage, previewSetup, applySetup };

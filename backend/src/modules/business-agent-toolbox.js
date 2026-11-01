@@ -22,6 +22,10 @@ const CATEGORIES = Object.freeze({
 // Search metadata for the known tools. A tool missing here still registers (category from
 // its catalog group when known, otherwise other) so a newly added tool is never lost.
 const INFO = Object.freeze({
+  getBankingWorkspace:{category:'business-read',keywords:['banking','statements','feed','upload','reconciliation','account','month']},
+  getBankingPackage:{category:'business-read',keywords:['banking','csv','statement','native','operator','blocked']},
+  getBankingCloseSupport:{category:'business-read',keywords:['banking','close','reconciliation','evidence']},
+  prepareBankingPackage:{category:'quickbooks-write',keywords:['banking','prepare','package','manifest','register']},
   reviewCapability: {category:"notes",keywords:["records","build","list","status","changes","resolutions","and","regressions","with","evidence"]},
   recordCloseChecklistEvidence: {category:"notes",keywords:["records","close","evidence","and","exceptions","manual","owner","attestations","stay","manual"]},
   getCloseChecklist: {category:"business-read",keywords:["reads","month","end","checks","and","evidence"]},

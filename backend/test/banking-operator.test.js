@@ -37,6 +37,7 @@ async function harness(input=real) {
     if(lost)throw new Error('Lost Terra process connection');
     const d=task.data,type=d.step.type;
     const value={...clone(replies[type]),kind:'banking-operator-result',version:1,runId:d.runId,packageId:d.packageId,step:type,scope,accountId,accountCurrency:d.account.currency,period:d.period,companyVerified:{realmId:scope.realmId,name:'My Business'},screenshot:type+'.jpg'};
+    if(type==='preflight')value.rulesInspection={scope,accountId,complete:true,observedAt:now(),screenshot:'rules.jpg',rules:[]};
     if(type==='upload') {const file=source.envelope.files.find(f=>f.fileId===d.step.fileId);value.upload={fileId:file.fileId,fileHash:file.sha256,observedCount:file.rowCount,nativeRows:source.envelope.rows.filter(r=>r.fileId===file.fileId).map(r=>({rowId:r.rowId,nativeRowId:'native-'+r.rowNumber})),confirmation:'Recorded fake native import confirmation'};value.actionLedger=[{action:'upload',fileId:file.fileId}];}
     if(type==='review') {value.rows=d.rows.map(r=>({rowId:r.rowId,decision:r.action,qboRefs:r.qboRefs,reason:'Recorded exact fake row resolution',screenshot:'row-'+r.rowId+'.jpg'}));value.actionLedger=d.rows.map(r=>({action:r.action,rowId:r.rowId}));}
     if(type==='reconcile')value.reconciliation={completed:true,openingMinor:d.openingMinor,closingMinor:d.closingMinor,differenceMinor:0,outstandingItems:d.outstandingItems,statementEndingDate:d.statementEndingDate,completion:'zero.jpg',report:'native-report.jpg'};
@@ -45,7 +46,7 @@ async function harness(input=real) {
     if(h.mutateReply)h.mutateReply(value,task);
     return {exitCode:0,cleanupConfirmed:!h.badCleanup,model:'gpt-6.1-terra',reply:JSON.stringify(value),commandAudit:{shell:0,flagged:0},replyPath:'fake-reply.json'};
   }};
-  const readVerification=async ({phase,rows=[]})=>({scope,complete:true,observedAt:now(),records:clone(records),settlementEvents:[],marks:h.withMarks ? rows.map(r=>{const row=source.envelope.rows.find(b=>b.rowId===r.rowId),e=source.envelope.events.find(e=>e.eventId===row.eventId);return {scope,artifact:{path:hash(scope)+'/'+accountId+'/fake-report.json',sha256:'a'.repeat(64)},rowId:r.rowId,accountId,accountCurrency:source.envelope.accountCurrency,amountMinor:e.amountMinor,date:e.actualPostingDate || e.expectedPostingDate,qboRefs:r.qboRefs,mark:'C',observedAt:phase==='after'?now():'2020-01-01T00:00:00Z'};}) : []});
+  const readVerification=async ({phase,rows=[]})=>({scope,complete:true,observedAt:now(),syncedThrough:now(),records:clone(records),settlementEvents:[],marks:h.withMarks ? rows.map(r=>{const row=source.envelope.rows.find(b=>b.rowId===r.rowId),e=source.envelope.events.find(e=>e.eventId===row.eventId);return {scope,artifact:{path:hash(scope)+'/'+accountId+'/fake-report.json',sha256:'a'.repeat(64)},rowId:r.rowId,accountId,accountCurrency:source.envelope.accountCurrency,amountMinor:e.amountMinor,date:e.actualPostingDate || e.expectedPostingDate,qboRefs:r.qboRefs,mark:'C',observedAt:phase==='after'?now():'2020-01-01T00:00:00Z'};}) : []});
   const h={advance:ms=>clock+=ms,source,scope,account,workspace,store,packages,journal,journals,runner,records,artifacts,now,readVerification,get calls(){return calls;},get leaseHeld(){return leaseHeld;},lose:()=>lost=true,deny:()=>denied=true};
   const deps={workspace,getAccount:async()=>account,journal,runner,now,readVerification,readReportArtifact:async()=>Buffer.from('recorded fake scoped report'),authorize:async()=>{if(denied)throw new Error('Write denied');},lease:async()=>{assert.equal(leaseHeld,false);leaseHeld=true;return async()=>{leaseHeld=false;};}};
   h.deps=deps;h.operator=createBankingOperator(deps);h.pkg=pkg;
@@ -55,14 +56,14 @@ async function harness(input=real) {
 }
 test('real stored Payment26 package replays through BF2 -> BF4 -> BF7 production execute with fake Terra',async t=>{
   const h=await harness();const e=h.source.envelope.events.find(e=>e.source.entity==='Payment' && e.source.id==='26');assert.equal(e.amountMinor,342349);assert.equal(real.envelope.period,'2023-08');
-  await h.upload();h.withMarks=true;const reviewed=await h.exec('review');assert.equal(reviewed.package.summary.matched,12);assert.equal(reviewed.verification.status,'observed');
-  await h.exec('reconcile');assert.equal(h.pkg.summary.reconciled,false);const done=await h.exec('attach');assert.equal(done.package.summary.reconciled,true);assert.equal(done.verification.status,'Terra-reported only');assert.equal(h.calls,5);assert.ok(h.journals.every(j=>j.status==='completed'));assert.equal(h.leaseHeld,false);
+  await h.upload();h.withMarks=true;let reviewed;for(let i=0;i<12;i++)reviewed=await h.exec('review');assert.equal(reviewed.package.summary.matched,12);assert.equal(reviewed.verification.status,'observed');
+  await h.exec('reconcile');assert.equal(h.pkg.summary.reconciled,false);const done=await h.exec('attach');assert.equal(done.package.summary.reconciled,true);assert.equal(done.verification.status,'Terra-reported only');assert.equal(h.calls,17);assert.ok(h.journals.every(j=>j.status==='completed'));assert.equal(h.leaseHeld,false);
   t.diagnostic('Real package '+real.packageId+' account 60 / 2023-08: 12 rows, Payment26 CAD3423.49; all native outcomes FAKE, no QBO/DB calls.');
 });
-test('task scopes CSV only, Company ID, existing Chrome tab and deliberate rule Auto-post',async()=>{
+test('task scopes CSV only, Company ID, persistent operator browser and deliberate rule Auto-post',async()=>{
   const h=await harness(), f=h.source.envelope.files.find(f=>f.kind==='csv');
   const task=buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:h.account,step:{type:'upload',fileId:f.fileId},runId:'test',files:[f]});
-  for(const text of ['9130357222392856','My Business','claim the existing QuickBooks tab','NEVER open a new QuickBooks tab','Upload ONLY the named CSV','Never upload a PDF','security-verification error'])assert.ok(task.prompt.includes(text));
+  for(const text of ['9130357222392856','My Business','session qbo-ops','C:/Users/NewAdmin/.qbo-automation-profile','Upload ONLY the named CSV','Never upload a PDF','security-verification error','Banking > Rules'])assert.ok(task.prompt.includes(text));
   assert.throws(()=>buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:{...h.account,Id:'85'},step:{type:'preflight'},runId:'test'}),/account/);
   assert.throws(()=>buildBankingTask({pkg:h.pkg,manifest:h.source.manifest,account:h.account,step:{type:'reconcile',extra:true},runId:'test'}),/Unsupported/);
   await h.upload();const rule={action:'create',name:'BF7 exact rule',accountId:h.account.Id,period:h.pkg.period,autoPost:false,conditions:[{field:'description',operator:'equals',value:'Simulated fee'}],categoryId:'7',taxTreatment:'out-of-scope'};
@@ -80,7 +81,7 @@ test('superseded earlier revision does not block its reconciled replacement',asy
   const h=await harness(), list=h.workspace.list;h.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'old',period:'2023-07',revision:1,summary:{reconciled:false}},{...v.packages[0],id:'new',period:'2023-07',revision:2,summary:{reconciled:true}});return v;};await h.exec('preflight');assert.equal(h.calls,1);
 });
 test('stopped at blocks account permanently; upload remains uncertain rather than retrying',async()=>{
-  const h=await harness();await h.exec('preflight');h.mutateReply=v=>{v.status='stopped';v.reason='confirmation policy';};await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/stopped at/);assert.equal(h.journals.at(-1).status,'blocked');const status=await h.operator.status(user,h.pkg.id);assert.equal(status.blocked,true);assert.match(status.reasons[0].reason,/confirmation policy/);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports[0].status,'started');const count=h.calls;await assert.rejects(h.exec('preflight'),/stopped, uncertain/);assert.equal(h.calls,count);
+  const h=await harness();await h.exec('preflight');h.mutateReply=(v,task)=>{if(task.data.step.type==='upload'){v.status='stopped';v.reason='confirmation policy';}};await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/stopped at/);assert.equal(h.journals.at(-1).status,'blocked');const status=await h.operator.status(user,h.pkg.id);assert.equal(status.blocked,true);assert.match(status.reasons[0].reason,/confirmation policy/);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports[0].status,'started');const count=h.calls;await assert.rejects(h.exec('preflight'),/stopped, uncertain/);assert.equal(h.calls,count);
 });
 test('lost process keeps operator lease and durable blocked intent',async()=>{
   const h=await harness();h.lose();await assert.rejects(h.exec('preflight'),/Lost Terra/);assert.equal(h.leaseHeld,true);assert.equal(h.journals[0].status,'blocked');
@@ -89,7 +90,7 @@ test('missing screenshot, unexpected action and false company each block complet
   for(const mutate of [v=>v.screenshot=null,v=>v.actionLedger.push({action:'add',rowId:'unexpected'}),v=>v.companyVerified.realmId='99']){const h=await harness();h.mutateReply=mutate;await assert.rejects(h.exec('preflight'));assert.equal(h.journals.at(-1).status,'blocked');}
 });
 test('missing fresh report marks stays Terra-reported only, not observed',async()=>{
-  const h=await harness();await h.upload();const result=await h.exec('review');assert.equal(result.verification.status,'Terra-reported only');assert.equal(result.package.summary.matched,12);
+  const h=await harness();await h.upload();const result=await h.exec('review');assert.equal(result.verification.status,'Terra-reported only');assert.equal(result.package.summary.matched,1);
 });
 test('BF3 Add cannot be substituted for a Match or use another account',async()=>{
   const h=await harness();await h.upload();const p=clone(h.pkg),m=clone(h.source.manifest),event=p.snapshot.events[0];
@@ -100,15 +101,15 @@ test('BF3 Add cannot be substituted for a Match or use another account',async()=
 test('file journal preserves blocked state across restart and global lease refuses overlap',async t=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-journal-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const store=createFileJournal(path.join(dir,'journal')),value={runId:'run-one',scope:real.envelope.scope,accountId:'60',status:'started'};await store.start(value);await store.finish({...value,status:'blocked'});assert.equal((await createFileJournal(path.join(dir,'journal')).list(value.scope,'60'))[0].status,'blocked');const release=await acquireOperatorLease(path.join(dir,'lease'));await assert.rejects(acquireOperatorLease(path.join(dir,'lease')),/Another/);await release();
 });
-test('runner uses hidden explicit Chrome wrapper args, model section and retained evidence boundaries',async t=>{
+test('runner uses hidden explicit flow wrapper args, model section and retained evidence boundaries',async t=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'bf7-runner-test-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const runId='bf7-11111111-1111-1111-1111-111111111111',out='artifacts/terra-live/'+runId+'-20261101-000000';await fs.mkdir(path.join(dir,out),{recursive:true});await fs.writeFile(path.join(dir,out,'reply.txt'),'recorded fake');let captured;
   const spawnProcess=(exe,args,opts)=>{captured={exe,args,opts};const c=new EventEmitter();c.pid=123;c.stdout=new PassThrough();c.stderr=new PassThrough();setImmediate(()=>{c.stdout.write('files in '+out+'/\n--- command audit: shell=0; flagged=0 ---\n--- Terra reply ---\n--- effective settings (thread fixture) ---\n"model":"gpt-6.1-terra"\n--- cleanup ---\nthis run\'s processes: none left\n');c.emit('close',0);});return c;};
-  const runner=createTerraRunner({root:dir,spawnProcess});const execution=await runner.run({task:{prompt:'fake'},runId});assert.equal(execution.cleanupConfirmed,true);assert.equal(execution.model,'gpt-6.1-terra');assert.deepEqual(execution.commandAudit,{shell:0,flagged:0});assert.ok(captured.args.includes('--chrome'));assert.equal(captured.opts.windowsHide,true);assert.equal(captured.opts.shell,false);
+  const runner=createTerraRunner({root:dir,spawnProcess});const execution=await runner.run({task:{prompt:'fake'},runId});assert.equal(execution.cleanupConfirmed,true);assert.equal(execution.model,'gpt-6.1-terra');assert.deepEqual(execution.commandAudit,{shell:0,flagged:0});assert.ok(captured.args.includes('--flow'));assert.equal(captured.opts.windowsHide,true);assert.equal(captured.opts.shell,false);
   const png=Buffer.from([137,80,78,71,13,10,26,10,1]);await fs.writeFile(path.join(dir,out,'screen.png'),png);const a=await runner.retainEvidence(execution,'screen.png',{scope:real.envelope.scope,accountId:'60',runId});assert.equal(a.sha256,digest(png));await assert.rejects(runner.retainEvidence(execution,'../screen.png',{}),/inside/);
 });
 
-test('read-only preflight can refresh after five minutes and old UUID ordering is irrelevant',async()=>{
- const h=await harness();await h.exec('preflight');h.advance(301000);await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/Fresh successful preflight/);await h.exec('preflight');h.journals.reverse();await h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId});assert.equal(h.pkg.summary.uploaded,true);
+test('every upload automatically obtains its own fresh Rules pre-flight',async()=>{
+ const h=await harness();await h.exec('preflight');h.advance(301000);await h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId});assert.equal(h.pkg.summary.uploaded,true);assert.equal(h.journals.filter(j=>j.step.type==='preflight').length,2);
 });
 function nativeAddPackage(){
  const {buildBankOriginEvents}=require(path.join(root,'backend/src/modules/bank-origin-events'));
@@ -146,8 +147,43 @@ test('rules retain exact desired settings and mismatched Auto-post/category cann
  for(const wrong of [false,true]){const h=await harness();await h.upload();h.mutateReply=(v,task)=>{if(wrong && task.data.step.type==='rules')v.rules[0].categoryId='wrong';};if(wrong)await assert.rejects(h.exec('rules',{rules:[spec]}),/Exact rule/);else assert.equal((await h.exec('rules',{rules:[spec]})).evidence.result.rules[0].autoPost,false);}
 });
 test('wrong statement PDF hash cannot complete reconciliation evidence',async()=>{
- const h=await harness();await h.upload();await h.exec('review');await h.exec('reconcile');h.mutateReply=v=>v.attachment.fileHash='f'.repeat(64);await assert.rejects(h.exec('attach'),/Exact statement attachment/);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.reconciled,false);
+ const h=await harness();await h.upload();for(let i=0;i<12;i++)await h.exec('review');await h.exec('reconcile');h.mutateReply=v=>v.attachment.fileHash='f'.repeat(64);await assert.rejects(h.exec('attach'),/Exact statement attachment/);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.reconciled,false);
 });
 test('flagged command audit cannot advance a native outcome',async()=>{
  const h=await harness(),run=h.runner.run;h.runner.run=async args=>({...await run(args),commandAudit:{shell:1,flagged:1}});await assert.rejects(h.exec('preflight'),/Terra process/);assert.equal(h.journals.at(-1).status,'blocked');
+});
+
+const savingsFailure=require('./fixtures/banking-savings-autopost.json');
+const savingsPackage=generated.packages.find(p=>p.envelope.accountId==='1150040007' && p.envelope.period==='2026-10');
+test('real Savings Transfer591 / duplicate Deposit11232 replay: Auto-post blocks before upload',async t=>{
+ const h=await harness(savingsPackage);h.mutateReply=(v,task)=>{if(task.data.step.type==='preflight')v.rulesInspection.rules=clone(savingsFailure.rules);};
+ await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/Auto-post.*add sales/);
+ assert.equal(h.calls,1);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports.length,0);assert.equal((await h.operator.status(user,h.pkg.id)).blocked,true);
+ t.diagnostic('Real Savings1150040007 October2026 Transfer591/Deposit11232 CAD1000 each; rule settings owner-reported, IDs test-local.');
+});
+test('real duplicate Deposit11232 blocks after upload and Match; no subsequent row can run',async()=>{
+ for(const phase of ['upload','review']){
+  const h=await harness(savingsPackage),original=savingsFailure.records.find(r=>r.entity==='Transfer'),duplicate=savingsFailure.records.find(r=>r.entity==='Deposit');h.records.push(clone(original));
+  h.mutateReply=(v,task)=>{if(task.data.step.type===phase)h.records.push(clone(duplicate));};
+  if(phase==='review')await h.upload();
+  const action=phase==='upload'?{type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}:'review';
+  await assert.rejects(h.exec(action),/Unexpected new accounting record.*Deposit 11232/);
+  assert.equal((await h.operator.status(user,h.pkg.id)).blocked,true);const count=h.calls;await assert.rejects(h.exec('preflight'),/stopped, uncertain/);assert.equal(h.calls,count);
+ }
+});
+test('unknown Rules scope/completeness and missing post-action completeness fail closed',async()=>{
+ for(const patch of [v=>v.complete=false,v=>v.rules=[{ruleId:'unknown',name:'Unknown',active:true,autoPost:true}]]){
+  const h=await harness(savingsPackage);h.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')patch(v.rulesInspection);};await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}));assert.equal(h.calls,1);
+ }
+ const h=await harness(savingsPackage),reader=h.deps.readVerification;h.deps.readVerification=async args=>{const v=await reader(args);if(args.phase==='after')v.complete=false;return v;};h.operator=createBankingOperator(h.deps);await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/complete scoped/);
+});
+
+test('Rules pre-flight never waits for mirror sync and expired Rules screen cannot upload',async()=>{
+ const h=await harness(),reader=h.deps.readVerification;let reads=0;h.deps.readVerification=async args=>{reads++;h.advance(301000);return reader(args);};h.operator=createBankingOperator(h.deps);await h.exec('preflight');assert.equal(reads,0);
+ await assert.rejects(h.exec({type:'upload',fileId:h.source.envelope.files.find(f=>f.kind==='csv').fileId}),/expired while waiting/);assert.equal(h.calls,2);assert.equal((await h.workspace.detail(user,h.pkg.id)).evidence.imports.length,0);
+});
+
+test('inactive and other-account Auto-post rules are harmless; deliberate scenario binds exact file and rules',async()=>{
+ const h=await harness(savingsPackage),file=h.source.envelope.files.find(f=>f.kind==='csv');h.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')v.rulesInspection.rules=clone(savingsFailure.rules).map((r,i)=>i===0?{...r,active:false}:{...r,allAccounts:false,accountIds:['123']});};await h.exec({type:'upload',fileId:file.fileId});assert.equal(h.pkg.summary.uploaded,true);
+ const x=await harness(savingsPackage),rules=clone(savingsFailure.rules);x.mutateReply=(v,t)=>{if(t.data.step.type==='preflight')v.rulesInspection.rules=rules;};x.deps.ruleScenarioFor=async()=>({deliberate:true,packageId:x.pkg.id,accountId:x.account.Id,fileId:file.fileId,rulesHash:hash(rules),ruleIds:rules.map(r=>r.ruleId)});x.operator=createBankingOperator(x.deps);await x.exec({type:'upload',fileId:file.fileId});assert.equal(x.pkg.summary.uploaded,true);assert.equal(x.journals[0].rulesInspection.deliberateScenario,true);
 });

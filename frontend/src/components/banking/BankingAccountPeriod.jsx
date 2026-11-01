@@ -58,7 +58,7 @@ function PackageFiles({ pkg, api, stale }) {
 
 export function BankingAccountPeriodView({ pkg, accountName, api = bankingApi, stale = false, operatorStatus }) {
   const [rowPage, setRowPage] = useState(0), [evidenceCount, setEvidenceCount] = useState(12)
-  const operator = bankingOperatorStatus(pkg, operatorStatus)
+  const operator = bankingOperatorStatus(pkg, operatorStatus || pkg.operatorStatus)
   const state = bankingPeriodState(pkg), summary = pkg.summary || {}, evidence = pkg.evidence || {}, snapshot = pkg.snapshot
   const rows = snapshot.rows || [], events = new Map((snapshot.events || []).map(event => [event.eventId, event]))
   const entries = bankingEvidenceEntries(pkg), uncertain = (evidence.imports || []).filter(run => ['started', 'interrupted'].includes(run.status))

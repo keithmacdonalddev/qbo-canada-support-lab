@@ -1,0 +1,118 @@
+{
+  "provenance": {
+    "capturedAt": "2026-11-01T05:15:04.128Z",
+    "source": "Read-only companysyncrecords query; owner live lesson. Rule names/settings owner-reported; IDs test-local."
+  },
+  "scope": {
+    "environment": "production",
+    "realmId": "9130357222392856",
+    "connectionId": "6a18e43d0b392890a1303e03"
+  },
+  "accountId": "1150040007",
+  "period": "2026-10",
+  "rules": [
+    {
+      "ruleId": "test-owner-add-sales",
+      "name": "add sales",
+      "active": true,
+      "autoPost": true,
+      "allAccounts": true,
+      "accountIds": [],
+      "conditions": [
+        {
+          "field": "money-in",
+          "operator": "greater-than",
+          "value": "1.00"
+        }
+      ]
+    },
+    {
+      "ruleId": "test-owner-google",
+      "name": "Google",
+      "active": true,
+      "autoPost": true,
+      "allAccounts": true,
+      "accountIds": [],
+      "conditions": [
+        {
+          "field": "description",
+          "operator": "contains",
+          "value": "Google"
+        }
+      ]
+    },
+    {
+      "ruleId": "test-owner-amount",
+      "name": "amount > -1.00",
+      "active": true,
+      "autoPost": true,
+      "allAccounts": true,
+      "accountIds": [],
+      "conditions": [
+        {
+          "field": "amount",
+          "operator": "greater-than",
+          "value": "-1.00"
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "environment": "production",
+      "realmId": "9130357222392856",
+      "connectionId": "6a18e43d0b392890a1303e03",
+      "entity": "Deposit",
+      "qboId": "11232",
+      "deleted": false,
+      "lastObservedAt": "2026-11-01T05:05:50.061Z",
+      "record": {
+        "Id": "11232",
+        "DepositToAccountRef": {
+          "value": "1150040007",
+          "name": "Savings"
+        },
+        "TotalAmt": 1000,
+        "TxnDate": "2026-10-05",
+        "CurrencyRef": {
+          "value": "CAD",
+          "name": "Canadian Dollar"
+        },
+        "MetaData": {
+          "CreateTime": "2026-10-31T22:03:32-07:00",
+          "LastUpdatedTime": "2026-10-31T22:03:32-07:00"
+        }
+      }
+    },
+    {
+      "environment": "production",
+      "realmId": "9130357222392856",
+      "connectionId": "6a18e43d0b392890a1303e03",
+      "entity": "Transfer",
+      "qboId": "591",
+      "deleted": false,
+      "lastObservedAt": "2026-10-23T15:57:07.114Z",
+      "record": {
+        "Id": "591",
+        "FromAccountRef": {
+          "value": "60",
+          "name": "Chequing"
+        },
+        "ToAccountRef": {
+          "value": "1150040007",
+          "name": "Savings"
+        },
+        "Amount": 1000,
+        "TxnDate": "2026-10-02",
+        "CurrencyRef": {
+          "value": "CAD",
+          "name": "Canadian Dollar"
+        },
+        "MetaData": {
+          "CreateTime": "2026-10-02T17:02:48-07:00",
+          "LastUpdatedTime": "2026-10-02T17:02:48-07:00"
+        }
+      }
+    }
+  ]
+}

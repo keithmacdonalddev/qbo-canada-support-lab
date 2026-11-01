@@ -13,6 +13,7 @@ const READ_NOTES=Object.freeze({lookupCustomer:LOCAL_NOTE,lookupInvoice:LOCAL_NO
 function accountantReadDefinitions(native){return native.toolDefinitions.filter(tool=>READ_NAMES.includes(tool.name)).map(tool=>({...tool,description:tool.description+(READ_NOTES[tool.name]||'')}));}
 const QUERY_OPS=require('./business-company-query').OPS, QUERY_VALUE={type:['string','number','boolean','null']};
 const EXTRA_TOOLS = Object.freeze([
+  ...require('./banking-accountant-tools').DEFINITIONS,
   {name:'findBusinessOperation',description:'Find original fixed and general operations by exact decisionKey within your authenticated company and agent ownership, including retired unsent previews. Returns retained choices and effects; never grants execution authority or changes retry identities.',input_schema:schema({decisionKey:text},['decisionKey'])},
   {name:'getCoverageSituations',description:'Read measured current QBO situations from the synchronized company copy. Unknown observations are not gaps. Plan deliberate eligible situations using governed tools.',input_schema:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:40}})},
   {name:'getWeeklyCoverage',description:'Read seven-day record, lifecycle, class and location breadth; plan reachable missing situations without padding volume.',input_schema:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:40}})},
@@ -118,7 +119,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     if(Math.max(ids.size,(Number(today?.inFlight)||0)-(reuse&&today?.open?.some(run=>run.operationId===reuse)?1:0))>=cadence.MAX_IN_FLIGHT)fail('Three operations are already prepared, queued or executing. Continue an existing operation before preparing another.');
     return today;
   }
-  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord','reviewCapability','recordCloseChecklistEvidence'].includes(tool.name))].map(tool=>({...tool,input_schema:{...tool.input_schema}}));
+  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord','reviewCapability','recordCloseChecklistEvidence','prepareBankingPackage'].includes(tool.name))].map(tool=>({...tool,input_schema:{...tool.input_schema}}));
   for(const tool of definitions)if(require('./business-agent-accountability').WRITE_TOOLS.has(tool.name)){tool.description+=' Include decision.goal and decision.planItem to connect this write to your business objective and exact daily-plan change; use an explicit independent-work item when unplanned.';tool.input_schema={...tool.input_schema,properties:{...tool.input_schema.properties,decision:schema({goal:text,planItem:text},['goal','planItem'])}};}
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0,local=null;
   const localReads=()=>local||(local=require('./business-local-reads').createLocalReads({Records:store.models.Records,scope,freshness:()=>require('./business-agent-service').publicSync(row,now())}));
@@ -163,6 +164,11 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     else if(name==='getCoverageSituations'||name==='getWeeklyCoverage'){
       const snapshot=await require('./business-management-review').snapshotFor(scope,{Records:store.models?.Records,nowMs:now(),sources:row.sync?.sources||{}}),value=snapshot?.[name==='getWeeklyCoverage'?'weekly':'situations'],offset=input.offset||0,limit=input.limit||25;
       result=value?{success:true,data:{...value,rows:value.rows.slice(offset,offset+limit),total:value.rows.length,nextOffset:offset+limit<value.rows.length?offset+limit:null}}:{success:false,error:'Current measured coverage is unavailable; do not claim missing or covered situations.'};
+    }
+    else if(require('./banking-accountant-tools').DEFINITIONS.some(t=>t.name===name)){
+      if(name==='prepareBankingPackage')await guard(true);
+      const runtime=require('./banking-accountant-tools').createBankingRuntime();
+      result={success:true,data:await runtime.tools.execute(user,name,input)};
     }
     else if(name==='getCloseChecklist')result={success:true,data:await governanceFor(null).getCloseChecklist(user,input)};
     else if(name==='recordCloseChecklistEvidence')result={success:true,data:await governanceFor(null).recordCloseChecklistEvidence(user,{...input,attestation:null})};

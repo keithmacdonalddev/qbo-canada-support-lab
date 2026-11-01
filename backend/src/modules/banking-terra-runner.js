@@ -11,7 +11,7 @@ const SCRIPT='.claude/skills/qbo-team-delivery/scripts/terra-live.sh';
 const digest=b=>crypto.createHash('sha256').update(b).digest('hex');
 const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
 async function acquireOperatorLease(directory=path.join(os.tmpdir(),'qbo-banking-operator.lock')) {
-  try { await fs.mkdir(directory); } catch(e) { if(e.code==='EEXIST') throw new Error('Another banking operator is running or needs recovery'); throw e; }
+  try { await fs.mkdir(directory); } catch(e) { if(e.code==='EEXIST') throw Object.assign(new Error('Another banking operator is running or needs recovery'),{code:'BANKING_OPERATOR_BUSY'}); throw e; }
   await fs.writeFile(path.join(directory,'owner.json'),JSON.stringify({pid:process.pid,at:new Date().toISOString()}));
   return async()=>{await fs.unlink(path.join(directory,'owner.json'));await fs.rmdir(directory);};
 }
@@ -35,13 +35,13 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     try {await fs.writeFile(absolute,bytes,{flag:'wx'});} catch(e){if(e.code!=='EEXIST')throw e; check(digest(await fs.readFile(absolute))===sha256,'Evidence hash collision');}
     return {path:dest,sha256};
   }
-  async function run({task,runId,mode='chrome'}) {
-    check(/^bf7-[a-f0-9-]{36}$/.test(runId) && ['chrome','desktop'].includes(mode),'Invalid Terra invocation');
+  async function run({task,runId,mode='flow'}) {
+    check(/^bf7-[a-f0-9-]{36}$/.test(runId) && ['flow','desktop'].includes(mode),'Invalid Terra invocation');
     const taskDirectory=path.join(bankingRoot,'operator-tasks',runId); await fs.mkdir(taskDirectory,{recursive:true});
     const taskFile=path.join(taskDirectory,'task.txt'); await fs.writeFile(taskFile,task.prompt,{flag:'wx'});
     const startedMs=Date.now();
     // terra-live.sh owns the all-Terra lock, fixed model and 20-minute timeout.
-    // --chrome/--desktop are wrapper modes, not Codex CLI flags.
+    // --flow/--desktop are wrapper modes, not Codex CLI flags.
     const result=await new Promise((resolve,reject)=>{
       let child,stdout='',stderr='',timedOut=false,cleanupError=null,overflow=false,closing=false,timer,cleanupTimer;
       const done=(code,signal)=>{if(closing)return;closing=true;clearTimeout(timer);clearTimeout(cleanupTimer);resolve({code,signal,stdout,stderr,timedOut,cleanupError,overflow});};
