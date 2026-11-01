@@ -184,3 +184,81 @@ test('supplier selection is exact and hash-bound; legacy plans retain their orig
     const plan=structuredClone(selected); mutate(plan); const {planHash,...body}=plan; plan.planHash=hash(body); assert.throws(()=>assertMasterPlan(plan));
   }
 });
+
+
+test('master readback checks purpose while retaining provider drift as audit fields', () => {
+  const f = fixture(), plan = prepareMasterPlan(f), parents = {};
+  for (const entry of plan.entries) {
+    const compiled = compileMasterEntry(plan, entry.ordinal, parents);
+    const record = { ...structuredClone(compiled.payload), Id: String(1000 + entry.ordinal), SyncToken: '8', Name: 'Current label', DisplayName: 'Current party', V4IDPseudonym: 'provider value', ClientEntityId: '0', DeferredRevenue: null };
+    if (entry.itemType === 'Service') record.UnitPrice = 333;
+    const proof = verifyMasterReadback(compiled, record, record.Id);
+    assert.equal(proof.fields.Name ?? proof.fields.DisplayName, entry.entity === 'Employee' ? 'Current party' : entry.entity === 'Customer' || entry.entity === 'Vendor' ? 'Current party' : 'Current label');
+    assert.equal(proof.projectionHash, hash({ entity: entry.entity, qboId: record.Id, fields: proof.fields }));
+    assert.throws(() => verifyMasterReadback(compiled, { ...record, Active: false }, record.Id));
+    assert.throws(() => verifyMasterReadback(compiled, { ...record, sparse: true }, record.Id));
+    if (['Account', 'Customer', 'Vendor'].includes(entry.entity)) assert.throws(() => verifyMasterReadback(compiled, { ...record, CurrencyRef: { value: 'USD' } }, record.Id));
+    if (entry.entity === 'Account') assert.throws(() => verifyMasterReadback(compiled, { ...record, AccountType: 'Equity' }, record.Id));
+    if (entry.entity === 'Customer') assert.throws(() => verifyMasterReadback(compiled, { ...record, IsProject: true }, record.Id));
+    if (entry.entity === 'Item') {
+      assert.throws(() => verifyMasterReadback(compiled, { ...record, IncomeAccountRef: { value: '999' } }, record.Id));
+      assert.throws(() => verifyMasterReadback(compiled, { ...record, SalesTaxCodeRef: { value: '999' } }, record.Id));
+    }
+    if (entry.itemType === 'Inventory') for (const patch of [{QtyOnHand: 1}, {InvStartDate: '2023-10-02'}, {TrackQtyOnHand: false}, {PurchaseCost: 99}, {AssetAccountRef: {value:'999'}}, {ExpenseAccountRef:{value:'999'}}]) assert.throws(() => verifyMasterReadback(compiled, { ...record, ...patch }, record.Id));
+    parents[entry.key] = { ...proof, state: 'verified', planHash: plan.planHash, ordinal: entry.ordinal };
+  }
+});
+
+test('apply review uses current service purpose and ignores presentation or SyncToken drift', () => {
+  const { masterApplyReview } = require('../src/modules/business-master-apply');
+  const { buildDraftDefinition } = require('../src/modules/blueprint-draft');
+  const f = fixture(), plan = prepareMasterPlan(f), parents = {}, records = [], mappings = {...f.view.draft.mappings};
+  for (const entry of plan.entries) {
+    const compiled = compileMasterEntry(plan, entry.ordinal, parents), id=String(1000+entry.ordinal);
+    const proof = verifyMasterReadback(compiled, {...compiled.payload,Id:id,SyncToken:'0'},id);
+    records.push({ ...entry, state:'verified',qboId:id,readback:proof,attempts:[{number:1}] });
+    parents[entry.key]={...proof,state:'verified',planHash:plan.planHash,ordinal:entry.ordinal};
+    if(entry.target==='mapping') mappings[entry.key]=id;
+  }
+  const run={_id:'a'.repeat(24),...scope,ownerId:f.ownerId,plan,planHash:plan.planHash,records,revision:1};
+  const latest={_id:'b'.repeat(24),...scope,contractVersion:2,version:2,definition:buildDraftDefinition({requestKey:'00000000-0000-0000-0000-000000000000',connectionId:scope.connectionId,baseHash:f.input.baseHash,business:f.view.draft.business,mappings,masterBindings:{}})};
+  latest.contentHash=hash(latest.definition);
+  const ordinal=plan.entries.find(row=>row.itemType==='Service').ordinal, row=records[ordinal];
+  const proof=structuredClone(row.readback), observation={proof,observedAt:new Date(f.now).toISOString()};
+  const first=masterApplyReview(run,latest,[ordinal],[observation],f.now);
+  proof.fields.Name='Current service';proof.fields.UnitPrice=333;proof.syncToken='9';proof.projectionHash=hash({entity:proof.entity,qboId:proof.qboId,fields:proof.fields});
+  const drift=masterApplyReview(run,latest,[ordinal],[observation],f.now);
+  assert.equal(drift.reviewHash,first.reviewHash);assert.equal(drift.entries[0].qboId,row.qboId);
+  const originalRecordBytes=JSON.stringify(run.records);
+  const role=masterRequirements(f.view.draft.business).find(x=>x.key===row.key), mapping=role.accountMappings.IncomeAccountRef;
+  latest.definition.mappings[mapping]='999';latest.contentHash=hash(latest.definition);
+  proof.fields.IncomeAccountRef={value:'999'};proof.projectionHash=hash({entity:proof.entity,qboId:proof.qboId,fields:proof.fields});
+  assert.throws(()=>masterApplyReview(run,latest,[ordinal],[observation],f.now),/prerequisites/);
+  f.setup.options.accounts.push({id:'999',active:true,type:'Income',subtype:null,currency:'CAD'});
+  const current=masterApplyReview(run,latest,[ordinal],[observation],f.now,f.setup);
+  assert.equal(current.input.mappings[mapping],'999');assert.equal(JSON.stringify(run.records),originalRecordBytes);
+  f.setup.options.accounts.at(-1).type='Expense';assert.throws(()=>masterApplyReview(run,latest,[ordinal],[observation],f.now,f.setup),/purpose/);
+});
+
+
+test('dated item apply keeps current defaults without pinning the whole old tax context', () => {
+  const {masterApplyReview}=require('../src/modules/business-master-apply');
+  const {buildDraftDefinition}=require('../src/modules/blueprint-draft');
+  const f=fixture({activityTemplateVersion:2,datedTax:{version:1,regime:'CA-NS-2025-postpaid',salesTax:'16',purchaseTax:'16'}}),plan=prepareMasterPlan(f),parents={},records=[],mappings={...f.view.draft.mappings};
+  for(const entry of plan.entries){const compiled=compileMasterEntry(plan,entry.ordinal,parents),id=String(1000+entry.ordinal),proof=verifyMasterReadback(compiled,{...compiled.payload,Id:id,SyncToken:'0'},id);records.push({...entry,state:'verified',qboId:id,readback:proof,attempts:[{number:1}]});parents[entry.key]={...proof,state:'verified',planHash:plan.planHash,ordinal:entry.ordinal};if(entry.target==='mapping'){mappings[entry.key]=id;f.setup.options.accounts.push({id,active:true,type:entry.accountType,subtype:entry.accountSubtype,currency:'CAD'});}}
+  // Change only the business history boundary; current effective item defaults stay 16.
+  const business={...f.view.draft.business,openingDate:'2023-09-01'};
+  const definition=buildDraftDefinition({requestKey:'00000000-0000-0000-0000-000000000000',connectionId:scope.connectionId,baseHash:f.input.baseHash,business,mappings,masterBindings:{}});
+  const latest={_id:'b'.repeat(24),...scope,contractVersion:2,version:2,definition,contentHash:hash(definition)},run={_id:'a'.repeat(24),...scope,ownerId:f.ownerId,plan,planHash:plan.planHash,records,revision:1},ordinal=plan.entries.find(x=>x.itemType==='Service').ordinal;
+  const result=masterApplyReview(run,latest,[ordinal],[{proof:records[ordinal].readback,observedAt:new Date(f.now).toISOString()}],f.now,f.setup);
+  assert.equal(result.entries[0].proof.fields.SalesTaxCodeRef.value,'16');assert.ok(result.prerequisites.options.taxCodes.some(c=>c.id==='16'));
+  const inventory=plan.entries.find(x=>x.itemType==='Inventory').ordinal;
+  assert.throws(()=>masterApplyReview(run,latest,[inventory],[{proof:records[inventory].readback,observedAt:new Date(f.now).toISOString()}],f.now,f.setup),/opening date/);
+});
+
+test('current account purpose allows later finite balances while initial creation stays zero',()=>{
+  const compiled=compileMasterEntry(prepareMasterPlan(fixture()),0),record={...compiled.payload,Id:'100',SyncToken:'2',CurrentBalance:120};
+  assert.throws(()=>verifyMasterReadback(compiled,record,'100'),/nonzero/);
+  assert.equal(verifyMasterReadback(compiled,record,'100',{current:true}).qboId,'100');
+  assert.throws(()=>verifyMasterReadback(compiled,{...record,CurrentBalance:NaN},'100',{current:true}));
+});

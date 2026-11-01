@@ -73,3 +73,32 @@ test('revocation after a full first page never sends a second setup page', async
   };
   const result = await h.execute(String(h.run()._id)); assert.equal(result.failure.code, 'access'); assert.equal(queries.filter(sql => /FROM Account/.test(sql)).length, 1); assert.equal(queries.some(sql => /STARTPOSITION 1001/.test(sql)), false); assert.equal(queries.some(sql => /FROM CompanyInfo/.test(sql)), false); assert.equal(h.sent.length, 0);
 });
+
+
+test('harmless current master labels and service prices do not interrupt the worker', async t => {
+  const h = await fixture(t);
+  h.changeRead = record => ({ ...record, ...(record.Name ? {Name:'Current '+record.Id} : {DisplayName:'Current '+record.Id}), ...(record.Type === 'Service' ? {UnitPrice:333} : {}), ClientEntityId:'0',V4IDPseudonym:'provider value',DeferredRevenue:null });
+  const result = await h.execute(String(h.run()._id));
+  assert.equal(result.complete,true);assert.equal(h.sent.length,32);assert.equal(h.exactReads.length,32);
+  assert.ok(h.run().records.every(row=>row.attempts.length===1));
+  const before=JSON.stringify(h.run().records.map(row=>({id:row.qboId,attempts:row.attempts})));
+  await h.execute(String(h.run()._id));assert.equal(h.sent.length,32);
+  assert.equal(JSON.stringify(h.run().records.map(row=>({id:row.qboId,attempts:row.attempts}))),before);
+  const ordinals=h.run().records.map(row=>row.ordinal),review=await h.store.applyReview(String(h.run()._id),ordinals);
+  const prior=h.changeRead;h.changeRead=record=>({...prior(record),SyncToken:'9',...(record.AccountType?{CurrentBalance:42}:{})});
+  const applied=await h.store.apply(String(h.run()._id),{ordinals,reviewHash:review.reviewHash},'30000000-0000-0000-0000-000000000001');
+  assert.equal(applied.run.claim,'closed');assert.equal(h.sent.length,32);
+  assert.equal(JSON.stringify(h.run().records.map(row=>({id:row.qboId,attempts:row.attempts}))),before);
+  const replay=await h.store.apply(String(h.run()._id),{ordinals,reviewHash:review.reviewHash},'30000000-0000-0000-0000-000000000001');
+  assert.equal(replay.reused,true);assert.equal(h.sent.length,32);
+});
+
+
+test('master preview refreshes incomplete current references once without reserving attempts', async t=>{
+  const h=await fixture(t),{createMasterRuntime}=require('../src/modules/business-master-runtime');
+  const original=h.onGET;let accounts=0;
+  h.onGET=async opts=>{const sql=new URL(opts.url).searchParams.get('query');if(sql && /FROM Account/.test(sql) && ++accounts===1)return {status:200,json:{QueryResponse:{Account:[{Id:''}]}}};return original(opts);};
+  const runtime=createMasterRuntime({scope,ownerId,actorId:ownerId,models:h.models,connection:{db:h.db},transaction:h.transaction,assertReady:async()=>{},assertQuiescent:async()=>{},createClient:async()=>h.client,environment:()=>scope.environment,now:()=>h.clock});
+  const before=JSON.stringify(h.run().records),plan=await runtime.prepare(h.source.input);
+  assert.equal(plan.runnable,true);assert.equal(accounts,2);assert.equal(h.sent.length,0);assert.equal(JSON.stringify(h.run().records),before);
+});

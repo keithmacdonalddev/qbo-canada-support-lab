@@ -186,13 +186,29 @@ function masterFields(plan, entry, accountRef) {
   } else throw problem('Unsupported master entity.', 409);
   return { entity: entry.entity, payload };
 }
+// Purpose checks deliberately omit presentation, provider defaults and service prices.
+// The projection/hash format stays unchanged so retained creation proofs still authenticate.
+function masterPurpose(compiled) {
+  const p = compiled.payload;
+  if (compiled.entity === 'Account') {
+    return { Active: true, AccountType: p.AccountType, ...(p.AccountSubType === 'Inventory' ? { AccountSubType: p.AccountSubType } : {}), CurrencyRef: { value: 'CAD' } };
+  }
+  if (['Customer', 'Vendor'].includes(compiled.entity)) return { Active: true, CurrencyRef: { value: 'CAD' } };
+  if (compiled.entity === 'Employee') return { Active: true };
+  if (compiled.entity !== 'Item') throw problem('Unsupported master purpose.', 409);
+  return { Active: true, Type: p.Type, IncomeAccountRef: p.IncomeAccountRef,
+    Taxable: p.Taxable, SalesTaxCodeRef: p.SalesTaxCodeRef,
+    ...(p.Type === 'Inventory' ? { TrackQtyOnHand: true, QtyOnHand: 0, InvStartDate: p.InvStartDate,
+      AssetAccountRef: p.AssetAccountRef, ExpenseAccountRef: p.ExpenseAccountRef,
+      PurchaseTaxCodeRef: p.PurchaseTaxCodeRef, PurchaseCost: p.PurchaseCost, UnitPrice: p.UnitPrice } : {}) };
+}
 // Retain only intended business fields and identifiers, never addresses, contacts or payroll data.
-function verifyMasterReadback(compiled, record, expectedId) {
-  if (!record || !ID.test(expectedId || '') || record.Id !== expectedId || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken)) throw problem('The accepted master record needs complete exact-ID readback.', 409);
+function verifyMasterReadback(compiled, record, expectedId, { current = false } = {}) {
+  if (!record || record.sparse === true || !ID.test(expectedId || '') || record.Id !== expectedId || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken)) throw problem('The accepted master record needs complete exact-ID readback.', 409);
   const project = (wanted, actual) => Object.fromEntries(Object.entries(wanted).map(([key, value]) => [key, value && typeof value === 'object' ? project(value, actual?.[key]) : actual?.[key] ?? null]));
   const fields = project(compiled.payload, record);
-  if (!require('./qbo-semantic-compare').matchesQboRequest(compiled.payload, record, { entity: compiled.entity, transport: false }) || (compiled.entity === 'Customer' && record.IsProject === true)) throw problem('The created master fields do not match the reviewed record.', 409);
-  if (compiled.entity === 'Account' && [record.CurrentBalance, record.CurrentBalanceWithSubAccounts].some(value => value != null && value !== 0)) throw problem('The prepared account has a nonzero balance; review it before using it.', 409);
+  if (!require('./qbo-semantic-compare').matchesQboRequest(masterPurpose(compiled), record, { entity: compiled.entity, transport: false }) || (compiled.entity === 'Customer' && record.IsProject === true)) throw problem('The current master does not fit its accounting purpose.', 409);
+  if (compiled.entity === 'Account' && [record.CurrentBalance, record.CurrentBalanceWithSubAccounts].some(value => value != null && (typeof value !== 'number' || !Number.isFinite(value) || !current && value !== 0))) throw problem('The prepared account has a nonzero balance; review it before using it.', 409);
   return { entity: compiled.entity, qboId: record.Id, syncToken: record.SyncToken, fields, projectionHash: hash({ entity: compiled.entity, qboId: record.Id, fields }) };
 }
-module.exports = { ACCOUNTS, validateMasterPreparationInput, prepareMasterPlan, assertMasterPlan, compileMasterEntry, describeMasterEntry, verifyMasterReadback };
+module.exports = { ACCOUNTS, validateMasterPreparationInput, prepareMasterPlan, assertMasterPlan, compileMasterEntry, describeMasterEntry, verifyMasterReadback, masterPurpose };

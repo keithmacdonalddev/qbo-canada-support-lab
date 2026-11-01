@@ -9,15 +9,16 @@ const fresh = (value, now) => typeof value === 'string' && Number.isFinite(Date.
 function expectedMappings(run) {
   return Object.fromEntries(Object.keys(MAPPINGS).map(key => [key, run.plan.taxDefaults?.[key] || run.plan.source.mappings[key] || run.records.find(row => row.key === key && row.entity === 'Account' && row.state === 'verified')?.qboId || null]).filter(([, id]) => id));
 }
-function assertSelections(run, selections) {
+function assertSelections(run, selections, ordinal) {
   const expected = expectedMappings(run);
   if (!selections || Object.keys(selections).sort().join(',') !== Object.keys(expected).sort().join(',')) throw denied('Every assigned master prerequisite needs current exact-ID evidence.');
   for (const [key, id] of Object.entries(expected)) {
     const definition = MAPPINGS[key], record = selections[key];
-    if (!record || record.id !== id || record.active !== true || (definition.types && !definition.types.includes(record.type)) || (definition.subtypes && !definition.subtypes.includes(record.subtype)) || (definition.currency && record.currency !== definition.currency) || (definition.entity === 'TaxCode' && record[key === 'salesTax' ? 'sales' : 'purchases'] !== true && record.taxable !== false)) throw denied('The current ' + definition.label + ' no longer fits the approved business.');
+    if (!record || record.id !== id || record.active !== true || (definition.types && !definition.types.includes(record.type)) || (definition.subtypes && !definition.subtypes.includes(record.subtype)) || (definition.currency && record.currency !== definition.currency) || (definition.entity === 'TaxCode' && record[key === 'salesTax' ? 'sales' : 'purchases'] !== true && record.taxable !== false)) throw denied('The current ' + definition.label + ' no longer fits its current accounting purpose.');
   }
-  if (run.plan.taxDefaults) for (const key of ['salesTax', 'purchaseTax']) if (selections[key].taxable !== true || selections[key][key === 'salesTax' ? 'sales' : 'purchases'] !== true || typeof selections[key].syncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(selections[key].syncToken)) throw denied('The frozen current tax-code choice needs its active direction and a complete fresh version.');
-  if ((selections.salesTax.taxable !== false) !== run.plan.salesTaxable) throw denied('The selected sales tax code changed taxable status after review.');
+  const entry = run.plan.entries[ordinal];
+  if (entry?.entity === 'Item' && run.plan.taxDefaults) for (const key of ['salesTax', 'purchaseTax']) if (selections[key].taxable !== true || selections[key][key === 'salesTax' ? 'sales' : 'purchases'] !== true || typeof selections[key].syncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(selections[key].syncToken)) throw denied('The current tax-code choice needs its active direction and a complete fresh version.');
+  if (entry?.entity === 'Item' && (selections.salesTax.taxable !== false) !== run.plan.salesTaxable) throw denied('The selected sales tax code changed taxable status after review.');
 }
 function assertMasterDispatchEvidence(run, ordinal, requestHash, proof, controls, now = Date.now()) {
   const scope = scoped({ environment: run.environment, realmId: run.realmId, connectionId: String(run.connectionId) });
@@ -25,7 +26,7 @@ function assertMasterDispatchEvidence(run, ordinal, requestHash, proof, controls
   const { evidenceHash, ...content } = proof || {};
   if (Buffer.byteLength(canonical(proof || null)) > 8192) throw denied('Master dispatch evidence exceeds its compact storage budget.');
   if (!HASH.test(evidenceHash || '') || hash(content) !== evidenceHash || content.version !== 1 || canonical(content.scope) !== canonical(scope) || content.runId !== String(run._id) || content.planHash !== run.planHash || content.ordinal !== ordinal || content.requestHash !== requestHash || content.periodControlHash !== controls.contentHash || !fresh(content.setupObservedAt, now) || !fresh(content.countryObservedAt, now) || !fresh(content.observedAt, now) || !HASH.test(content.setupHash || '') || !HASH.test(content.countryHash || '') || content.country !== 'CA' || content.setupComplete !== true || content.homeCurrency !== 'CAD') throw denied('Fresh complete Canadian master-dispatch evidence is required.');
-  assertSelections(run, content.selections);
+  assertSelections(run, content.selections, ordinal);
   const stockRemains = run.plan.entries.some(entry => entry.entity === 'Item' && entry.itemType === 'Inventory' && run.records[entry.ordinal].state !== 'verified');
   if (stockRemains) {
     if (content.qboClosingVerified !== true) throw denied('QuickBooks closing preferences must remain explicitly readable before any master create.');

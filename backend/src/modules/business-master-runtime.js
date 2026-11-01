@@ -69,13 +69,18 @@ function createMasterRuntime({ scope, ownerId, actorId, models = loadMasterModel
     const current = await store.latest(), view = { ...scope, draft: draftView(current, scope.connectionId) };
     assertMappingVersion(view, { connectionId: input.connectionId, baseHash: input.baseHash });
     if (!view.draft?.connectionMatches) throw denied('Save the business for this exact company connection before preparing records.');
-    const observedSetup = await readDraftSetup(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
-    const masters = await readBusinessMasters(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
-    const country = await readCanadianCompany(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
-    const latest = await store.latest();
-    if (!current || !latest || String(latest._id) !== String(current._id) || latest.contentHash !== current.contentHash) throw denied('The business draft changed during master preparation. Reload it.');
-    const policy = await readPolicy(scope);
-    return prepareMasterPlan({ view, input, setup: observedSetup, masters, country, periodControl: policy?.periodControl, ownerId, now: now() });
+    // Refresh incomplete/stale reference reads once before an unsent preview.
+    // Owner edits and scope changes remain conflict fences; no attempt is reserved here.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const observedSetup = await readDraftSetup(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
+      const masters = await readBusinessMasters(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
+      const country = await readCanadianCompany(reads.queryClient, scope, now); await access.authorize(scope, 'operations.preview');
+      const latest = await store.latest();
+      if (!current || !latest || String(latest._id) !== String(current._id) || latest.contentHash !== current.contentHash) throw denied('The business draft changed during master preparation. Reload it.');
+      const policy = await readPolicy(scope);
+      const plan = prepareMasterPlan({ view, input, setup: observedSetup, masters, country, periodControl: policy?.periodControl, ownerId, now: now() });
+      if (attempt === 1 || !plan.blockers.some(row => ['setup', 'masters'].includes(row.key))) return plan;
+    }
   }
   return Object.freeze({ scope, ownerId, actorId, assertReady, access, store, prepare, execute });
 }
