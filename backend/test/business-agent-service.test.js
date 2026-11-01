@@ -509,3 +509,70 @@ test('saved needs-check work is automatically queued between model reviews once 
 test('a previous-day scorecard is not shown as business results today',async()=>{
  const h=fixture();h.store.latestScorecard=async()=>({scorecard:{day:'2026-10-22',records:{saved:220,target:220}}});const view=await h.service.status({id:ownerId});assert.equal(view.management.scorecard,null);h.service.close();
 });
+
+// Job V2: stored Nov 1 failure replay. Prior-day close proof never grants or
+// blocks independent current-day work; cadence read failures must not add an hour.
+test('V2 starts the first overnight work while October 31 is still unverified',async()=>{
+ const h=fixture();moveTo(h,'2026-11-01T03:20:00Z');h.business.verifiedThrough='2026-10-30';h.row.cadence={day:'2026-11-01',lastKind:'catch-up',lastReviewAt:'2026-11-01T03:10:00Z'};
+ h.row.nextDecisionAt=new Date('2026-11-01T04:10:00Z');
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'slice');
+ assert.equal(h.passContext.today.saved,0);assert.ok(h.passContext.today.dueSlot.records>=1);
+ assert.deepEqual(h.passContext.calendarClose,{closedThrough:'2026-10-30',fromDate:'2026-10-31',throughDate:'2026-10-31',behindDays:1});
+ assert.equal(h.business.verifiedThrough,'2026-10-30');h.service.close();
+});
+test('V2 a failed post-review state read schedules one minute and retains the diagnostic',async()=>{
+ const h=fixture();moveTo(h,'2026-11-01T03:52:36.137Z');h.business.verifiedThrough='2026-10-30';
+ const business=h.store.business;h.store.business=async()=>{if(h.engineCalls)throw Object.assign(new Error('Executor error during getMore :: operation exceeded time limit'),{code:50});return business();};
+ await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+60000);
+ assert.equal(h.row.errorDetail.code,'BUSINESS_CADENCE_READ_FAILED');assert.equal(h.row.errorDetail.detail.causeCode,'50');
+ assert.match(h.row.lastError,/Retrying in one minute/);assert.equal(h.row.activePass,null);assert.equal(h.row.leaseToken,null);
+ h.store.business=business;h.clock+=60000;await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,2,'the same-kind review continues without the old hourly fallback');
+ assert.equal(h.row.errorDetail,null);h.service.close();
+});
+test('V2 stored current state enters the real worker as independent November work',async()=>{
+ const h=fixture();const file=process.env.QBO_JOB_V2_REPLAY;
+ const stored=file?JSON.parse(require('node:fs').readFileSync(file,'utf8')):null;
+ moveTo(h,stored?new Date(stored.now).toISOString():'2026-11-01T04:24:09.793Z');
+ if(stored){h.row=copy(stored.agent);h.business=copy(stored.business);h.today=copy(stored.activity);h.owned=copy(stored.owned);}else{h.business.verifiedThrough='2026-10-30';h.row.cadence={day:'2026-11-01',lastKind:'catch-up',lastReviewAt:'2026-11-01T03:51:15.484Z',misses:3};h.row.nextDecisionAt=new Date('2026-11-01T04:52:36.137Z');}
+ // All I/O is replaced by in-memory doubles. No provider, sync or write transport.
+ h.row.nextSyncAt=new Date(h.clock+30000);h.row.cadence.recoveryCheckedAt=new Date(h.clock).toISOString();
+ await h.service._worker(String(h.row._id),new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'slice');
+ assert.equal(h.passContext.today.saved,0);assert.ok(h.passContext.today.dueSlot.records>=1);
+ assert.equal(h.passContext.calendarClose.fromDate,'2026-10-31');
+ assert.equal(h.business.verifiedThrough,'2026-10-30');assert.equal(h.syncCalls,0);
+ if(stored)console.log('V2 stored-state replay: independent slice started; October31 remains unverified; no live I/O.');
+ h.service.close();
+});
+
+test('V2 a cadence fallback cannot bypass the daily review ceiling',async()=>{
+ const h=fixture();moveTo(h,'2026-11-01T03:52:36.137Z');h.business.verifiedThrough='2026-10-30';h.row.cadence={day:'2026-11-01',reviews:399};
+ const business=h.store.business;h.store.business=async()=>{if(h.engineCalls)throw Object.assign(new Error('saved read timed out'),{code:50});return business();};
+ await h.service._worker(agentId,new AbortController());assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.reviews,400);
+ h.store.business=business;h.clock+=60000;await h.service._worker(agentId,new AbortController());
+ assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.kind,'ceiling');h.service.close();
+});
+test('V2 first-record start preserves batching and review capacity during an all-day close failure',()=>{
+ const cadence=require('../src/modules/business-agent-cadence');const start=Date.parse('2026-11-01T03:00:00Z'),end=Date.parse('2026-11-02T04:00:00Z');
+ const business={published:true,openingDate:'2023-09-01',verifiedThrough:'2026-10-30',blockers:[],currentOperation:null};
+ let state={},runs=[],receipts=[],first=null,slices=0,closes=0;
+ for(let now=start;now<end;now+=60000){
+  const rhythm=cadence.frozenRhythm(state,'2026-11-01'),today=cadence.summarizeToday({rhythm,runs,receipts,now});
+  const decision=cadence.decide({now,business,today,state,settings:{decisionIntervalMinutes:60}});state=decision.state;
+  if(!decision.callModel)continue;
+  state=cadence.beginReview(state,{now,signature:cadence.progressSignature(business,today),kind:decision.kind});
+  if(decision.kind==='slice'){
+   first??=now;slices++;const id=String(slices),records=today.dueSlot.records;
+   runs.push({id,status:'verified',decisionKey:today.dueSlot.decisionKey,createdAt:now,recordCount:records});
+   for(let n=0;n<records;n++)receipts.push({operationId:id,entity:'Invoice',logicalKey:'record-'+n});
+  }else if(decision.kind==='catch-up')closes++;
+  state=cadence.finishReview(state);
+ }
+ assert.ok(first-start<=20*60000,'first activity starts within 20 minutes instead of 80+');
+ assert.ok(receipts.length>=215&&receipts.length<=220,'sustains the weighted daily target');
+ assert.ok(slices<55,'later activity still batches');assert.ok(state.reviews<400,'close retries leave daily review capacity');
+ console.log('V2 day replay: '+receipts.length+' saved records, '+slices+' slices, '+closes+' close retries, '+state.reviews+' reviews; first work '+((first-start)/60000)+' minutes after midnight.');
+});

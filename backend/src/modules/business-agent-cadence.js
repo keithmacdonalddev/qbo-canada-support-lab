@@ -231,7 +231,11 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   const nowMinute = local.date === rhythm.day ? local.minutes + local.seconds / 60 : null;
   const elapsed = inHours(rhythm, local) ? hourly ? slots[Math.min(23, Math.floor(local.minutes / 60))] : slots.filter(slot => Date.parse(slot.at) <= now).at(-1) || null : null;
   const expectedNow = !elapsed ? 0 : hourly ? expectedAtMinute(nowMinute) : elapsed.expected;
-  const behind = Math.max(0, expectedNow - used), enough = Math.max(1, Math.min(hourly ? MIN_DUE : 1, rhythm.target - used));
+  // Begin the day at its first genuine due record; subsequent work keeps the
+  // five-record batching threshold to conserve model reviews. Reservations count
+  // too, so a prepared first batch is never duplicated.
+  const minimum = hourly && used > 0 ? MIN_DUE : 1;
+  const behind = Math.max(0, expectedNow - used), enough = Math.max(1, Math.min(minimum, rhythm.target - used));
   // Work is due whenever today is behind its expected count, batch after batch, within the daily ceiling and the
   // rolling hourly cap; a v2 shortfall is never replayed after that day's hours.
   const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0 && inFlight < MAX_IN_FLIGHT

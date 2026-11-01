@@ -27,7 +27,7 @@ function ledgerEndpoint(day, through = day) { if (![day, through].every(value =>
 function money(cell) {
   const value = cell?.value;
   if (value === undefined || value === '') return 0;
-  if (typeof value !== 'string' || !/^-?(0|[1-9]\d*)(\.\d{1,2})?$/.test(value)) fail('A General Ledger amount is not exact money.');
+  if (typeof value !== 'string' || !/^-?(?:(0|[1-9]\d*)(\.\d{1,2})?|\.\d{1,2})$/.test(value)) fail('A General Ledger amount is not exact money.');
   return Math.round(Number(value) * 100);
 }
 // { 'Entity:id': [{ accountId, cents }] } (debit positive) from a GeneralLedger report of a

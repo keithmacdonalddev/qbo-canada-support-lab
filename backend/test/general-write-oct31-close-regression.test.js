@@ -74,3 +74,9 @@ test('cached passing accounting proof records recovery after a more recent faile
  clock+=60000;await gate.assertPeriodReady(scope,args);
  assert.equal(reads,1);assert.equal(closes.at(-1).ok,true);assert.equal((await businessBlockersFor({models,scope,now:clock})).blockers.length,0);
 });
+
+test('V2 stored October 31 GL Payment11132 uses .00, and fractional cents remain exact',()=>{
+ const parsed=parseLedger(report([section(null,[data(day,'Payment','11132','.00','.00')]),section('63',[data(day,'Invoice','700','.35')]),section('68',[data(day,'Invoice','700','','.35')])]),day);
+ assert.deepEqual(parsed.byRecord['Invoice:700'],[{accountId:'63',cents:35},{accountId:'68',cents:-35}]);
+ for(const amount of ['.001','1e2','1,000.00','1.2.3','.',null,' 0.00','0.00 '])assert.throws(()=>parseLedger(report([section('63',[data(day,'Invoice','700',amount)])]),day),/not exact money/);
+});
