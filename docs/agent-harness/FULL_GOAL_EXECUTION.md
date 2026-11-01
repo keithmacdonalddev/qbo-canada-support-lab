@@ -2,6 +2,8 @@
 
 ## Current task tracking
 
+2026-11-01T20:59:27.375Z execution direction: use the [three-part work order and single-session subagent workflow](../plans/app-completion-task-list-2026-11-01.md#execution-order-and-delivery-rules). Keep the business running; deliver one primary missing feature while ready historical work progresses; continue through the full backlog. Maintain bounded owners/proof/checkpoints, preserve independent feature work during repairs, and apply the existing five-minute optional/fifteen-minute essential work-value rules. Current task checkpoints are not sequential gates. Documentation only; no new live authority or automatic enforcement.
+
 2026-11-01T20:54UTC: actual business activity has resumed after A08/fa703fc. App132 saved/220, up7 from125, plus10 unfinished reservations. Six new create receipts and three direct QBO GETs prove fresh time-linked invoices (11341/11342, CAD427.50 each, dueDec1) and billed time. A02/10ceec4 is installed/pushed but original deposit recovery remains unobserved; A01 missing estimate links remain real. Sign-in6117cbc is live verified. Keep C01/C02 and SB/D banking outcomes moving under existing authority. Work-value checkpoint: restored owner-useful discovery and new native company records delivered; no sustained-target/banking-completion claim.
 
 2026-11-01T20:50UTC: A08 activity discovery is directly restored (same GET now200, choicesAvailable:true,40 customers/4 services). Stored run ObjectId normalization fixes the approval/history read; external scope remains strict.69 installed checks and both reviews pass. A02 is pushed as10ceec4. Next evidence is actual accountant output; daily baseline was125 at20:43.
