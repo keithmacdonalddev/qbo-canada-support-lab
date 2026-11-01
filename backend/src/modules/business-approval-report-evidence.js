@@ -52,7 +52,13 @@ async function readApprovalReports({ models, run, ownerId, session }) {
   const marked = details.reportEvidenceHash !== undefined || details.reportSourceHash !== undefined;
   if (!marked) { if (pointer !== undefined) fail(); return null; }
   if (!pointer || pointer.version !== 1 || ![2, 3].includes(pointer.sourceVersion) || !HASH.test(pointer.evidenceHash || '') || !HASH.test(pointer.sourceHash || '') || details.reportEvidenceHash !== pointer.evidenceHash || details.reportSourceHash !== pointer.sourceHash) fail();
-  const row = await models.Candidates.findOne({ ...scope, candidateHash: pointer.evidenceHash }).session(session).maxTimeMS(3000).lean();
+  let row = await models.Candidates.findOne({ ...scope, candidateHash: pointer.evidenceHash }).session(session).maxTimeMS(3000).lean();
+  // Older Mixed payloads lost empty objects on save. Recover only this exact
+  // non-posting observation, in memory, when BOTH original audited hashes agree.
+  if (row?.payload?.version === 2 && Array.isArray(row.payload.requiredReports) && row.payload.requiredReports.length === 0 && row.payload.sources && !Object.hasOwn(row.payload.sources, 'reports')) {
+    const payload = { ...row.payload, sources: { ...row.payload.sources, reports: {} } };
+    if (hash(payload.sources) === pointer.sourceHash && hash(payload) === pointer.evidenceHash) row = { ...row, payload };
+  }
   if (!row || row.contractVersion !== 1 || String(row.actorId) !== actorId || !row.auditId || hash(row.payload) !== pointer.evidenceHash || row.payload.sourceHash !== pointer.sourceHash || row.payload.sources?.version !== pointer.sourceVersion || row.payload.sources?.observedAt !== pointer.observedAt || canonical(row.payload.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate })) fail();
   const plan = row.payload.version === 2 ? await models.Plans.findOne({ _id: run.planId, ...scope, planHash: run.planHash }).session(session).maxTimeMS(3000).lean() : null;
   const evaluation = validateApprovalReports(row.payload, scope, operationId, run.planHash, actorId, ownerId, run.approval.approvedAt, plan?.manifest);

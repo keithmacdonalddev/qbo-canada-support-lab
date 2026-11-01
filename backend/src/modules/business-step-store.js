@@ -186,7 +186,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       const row = await read(ctx, session), clock = now();
       if (row) {
         assertIdentity(row, ctx.intent);
-        if (row.state !== 'claimed' || row.dispatch || row.receipt || !Number.isFinite(new Date(row.leaseExpiresAt).getTime()) || new Date(row.leaseExpiresAt).getTime() > clock || !Number.isSafeInteger(row.attempts) || row.attempts < 1 || row.attempts >= MAX_ATTEMPTS) fail('Activity is busy, already dispatched or requires recovery');
+        if (row.state !== 'claimed' || row.dispatch || row.compilation || row.receipt || row.qboId || row.verification || row.rejection || !Number.isFinite(new Date(row.leaseExpiresAt).getTime()) || new Date(row.leaseExpiresAt).getTime() > clock || !Number.isSafeInteger(row.attempts) || row.attempts < 1 || row.attempts >= MAX_ATTEMPTS) fail('Activity is busy, already dispatched or requires recovery');
         return publicHandle(await replace(ctx, row, { leaseToken, leaseExpiresAt: new Date(clock + leaseMs), attempts: row.attempts + 1 }, 'claim', session));
       }
       const next = { ...ctx.intent, state: 'claimed', revision: 1, attempts: 1, leaseToken, leaseExpiresAt: new Date(clock + leaseMs), dispatch: null, receipt: null, verification: null };

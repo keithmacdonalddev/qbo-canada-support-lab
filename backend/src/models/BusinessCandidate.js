@@ -6,7 +6,7 @@ const schema = new mongoose.Schema({
   contractVersion: { ...fixed(Number), enum: [1] },
   environment: { ...fixed(String), enum: ['sandbox', 'production'] }, realmId: fixed(String), connectionId: fixed(mongoose.Schema.Types.ObjectId),
   candidateHash: fixed(String), payload: fixed(mongoose.Schema.Types.Mixed), actorId: fixed(mongoose.Schema.Types.ObjectId), auditId: fixed(String),
-}, { timestamps: { createdAt: true, updatedAt: false }, autoCreate: false, autoIndex: false });
+}, { timestamps: { createdAt: true, updatedAt: false }, minimize: false, autoCreate: false, autoIndex: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, candidateHash: 1 }, { unique: true });
 schema.pre('validate', function () { if (hash(this.payload) !== this.candidateHash) throw new Error('Retained candidate content changed'); });
 schema.pre('save', function () { if (!this.isNew) throw new Error('Business candidate is append-only'); });

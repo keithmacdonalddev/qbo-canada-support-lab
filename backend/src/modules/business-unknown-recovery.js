@@ -264,6 +264,23 @@ function createBusinessUnknownRecovery({models,connection,transaction,now,bind,f
     const {scope}=await bind(user,'operations.execute',true);
     const run=await read(models.Runs,{_id:operationId,...scope,planHash:input.planHash});
     if(!run || !['blocked','running','reserved'].includes(run.status) || run.executionRequest?.pending || (run.leaseToken && new Date(run.leaseExpiresAt).getTime()>now()))return {pending:false};
+    // An abandoned pre-dispatch claim has no uncertain QuickBooks outcome. The
+    // normal runner will replace its expired lease using the existing fenced CAS;
+    // this read-only hint never clears a dispatch or grants fresh authority.
+    if (run.agentAuthority && (!run.leaseToken || Number.isFinite(new Date(run.leaseExpiresAt).getTime()))) {
+      assertRun(run,scope); assertRunApproval(run);
+      const writer=await read(models.Writers,{...scope,operationId,planHash:run.planHash});
+      const claims=await models.Steps.find({...scope,operationId,planHash:run.planHash,state:'claimed',dispatch:null,compilation:null,receipt:null,qboId:null,verification:null,rejection:null}).limit(20).maxTimeMS(3000).lean();
+      for (const step of claims) {
+        const expiry=new Date(step.leaseExpiresAt).getTime();
+        if (!writer || writer.unresolved || writer.populationDelegation || !step.leaseExpiresAt || !Number.isFinite(expiry) || expiry>now() || !Number.isSafeInteger(step.attempts) || step.attempts<1 || step.attempts>=20) continue;
+        // Stable per abandoned claim: repeated scans cannot queue the same failed
+        // continuation every minute. A new claim revision, if interrupted too, gets its own continuation.
+        const at='unsent-claim:'+hash({logicalKey:step.logicalKey,revision:step.revision,leaseExpiresAt:new Date(expiry).toISOString()});
+        if (run.executionRequest?.requestKey === hash({operationId,phase:'auto-recovery-continue',at})) continue;
+        return {pending:true,at};
+      }
+    }
     const attributed=await models.Authorities.find({...scope,'payload.kind':'owner-attributed-business-creation','payload.operationId':operationId,'payload.automatic.source':AUTOMATIC_SOURCE}).select('payload.approvedAt').limit(20).maxTimeMS(3000).lean();
     const settled=await models.Receipts.find({environment:scope.environment,realmId:scope.realmId,operationId,'reconciliation.outcome':'not-created','reconciliation.source':AUTOMATIC_SOURCE}).select('reconciliation.at').limit(20).maxTimeMS(3000).lean();
     const at=[...attributed.map(row=>row.payload?.approvedAt),...settled.map(row=>row.reconciliation?.at)].filter(value=>Number.isFinite(Date.parse(value || ''))).sort().at(-1) || null;
