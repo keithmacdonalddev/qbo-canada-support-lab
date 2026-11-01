@@ -223,6 +223,8 @@ Prefer the smallest useful verification step.
 - Backend code changes: run Node syntax checks against touched backend files; broaden to all `backend/src/**/*.js` for shared changes.
 - QBO mutation paths: do not live-test without explicit user approval and a stated target company/environment.
 - Browser testing: use the available browser tool only if the app is already running or the user asks to start/open it.
+- Before material UI work, verify an allowed browser route against the intended running app early, including the planned capture/download mechanism. Keep tool availability, page access and authorization separate. Use the current assignment’s browser route and reuse valid explicit approval; obey tool-specific requirements for alternative automation. A failed first-party host does not establish that the repository’s isolated automation browser is broken. Record the error once, continue independent work, and request only a specific missing permission if required. Do not launch desktop apps, restart services, alter settings or fabricate browser-access host configuration as speculative repairs.
+- QBO native banking follows the existing shared qbo-session/qbo-ops flow and the Terra reference, not the owner’s Chrome extension by default. Local app inspection uses a separate session. Tool choice never expands company, upload, accounting or credential authority.
 
 ## Review Standard
 
