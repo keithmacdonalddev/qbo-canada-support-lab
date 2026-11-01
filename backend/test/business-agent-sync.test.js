@@ -549,7 +549,7 @@ test('expected payables net remaining vendor credits, unapplied bill payments an
 
 test('missing mirrored component types and missing remaining or unapplied fields are explicit unknowns, never zero', () => {
   for (const entity of ['Invoice', 'Bill']) {
-    for (const type of reconciliation.agingEntities(entity).filter(type => type !== 'Account')) {
+    for (const type of reconciliation.agingEntities(entity).filter(type => !['Account','Item','SalesReceipt'].includes(type) && !(entity === 'Bill' && type === 'Payment'))) {
       const byEntity = agingMirror(entity); delete byEntity[type];
       const result = reconciliation.agingMirrorTotal(entity, byEntity, 'CAD');
       assert.equal(result.mirrorCents, null); assert.ok(result.limitations.some(row => row.entity === type && /not mirrored/.test(row.reason)));
@@ -638,17 +638,17 @@ test('native bill-only applications establish exact unapplied cash and ambiguous
   assert.equal(native({ TotalAmt: '10.01', Line: [{ Amount: '8.02', LinkedTxn: [{ TxnId: '1', TxnType: 'Bill' }, { TxnId: '2', TxnType: 'VendorCredit' }] }] }).mirrorCents, null);
 });
 
-test('direct Deposit/Purchase control-account postings and journal settlements are recorded as unsupported effects', () => {
+test('direct Deposit/Purchase control-account postings contribute with opposite signs; ambiguous journal settlements remain unknown', () => {
   for (const [entity, account] of [['Invoice', 'ar'], ['Bill', 'ap']]) {
     const records = agingMirror(entity);
     records.Account.push(...mirrorRows([bank('bank', 0), bank('expense', 0, 'Expense')]));
     records.Deposit = mirrorRows([{ DepositToAccountRef: { value: 'bank' }, Line: [{ Amount: 10, DepositLineDetail: { AccountRef: { value: account } } }] }]);
     let result = reconciliation.agingMirrorTotal(entity, records, 'CAD');
-    assert.equal(result.mirrorCents, null); assert.match(result.components.deposits.reason, /posts directly/);
+    assert.equal(result.mirrorCents, entity === 'Invoice' ? -1000 : 1000);
     records.Deposit = mirrorRows([{ DepositToAccountRef: { value: 'bank' }, Line: [{ Amount: 10, DepositLineDetail: { AccountRef: { value: 'income' } } }] }]);
-    records.Purchase = mirrorRows([{ AccountRef: { value: 'bank' }, Line: [{ Amount: 10, AccountBasedExpenseLineDetail: { AccountRef: { value: account } } }] }]);
+    records.Purchase = mirrorRows([{ AccountRef: { value: 'bank' }, Line: [{ Amount: 10, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: account } } }] }]);
     result = reconciliation.agingMirrorTotal(entity, records, 'CAD');
-    assert.equal(result.mirrorCents, null); assert.equal(result.components.deposits.cents, 0); assert.match(result.components.purchases.reason, /posts directly/);
+    assert.equal(result.mirrorCents, entity === 'Invoice' ? 1000 : -1000); assert.equal(result.components.deposits.cents, 0);
     records.Purchase[0].record.Line[0].AccountBasedExpenseLineDetail.AccountRef.value = 'expense';
     assert.equal(reconciliation.agingMirrorTotal(entity, records, 'CAD').mirrorCents, 0);
     records[entity === 'Invoice' ? 'Payment' : 'BillPayment'] = mirrorRows([{ UnappliedAmt: 0, Line: [{ Amount: 10, LinkedTxn: [{ TxnType: 'JournalEntry', TxnId: '1' }] }] }]);
@@ -662,7 +662,7 @@ test('a same-day legacy invoice-only proof is replaced by component-based eviden
   state.amountReconciliation = { version: 1, day: '2026-10-24', status: 'attention', checks: { receivables: { entity: 'Invoice', status: 'mismatched', attempts: 2, mirrorCents: 12000, qboCents: 9000 } } }; h.setState(state);
   h.replies.push(h.cdcMany([['Payment', [{ Id: '2', UnappliedAmt: 30 }]]]), aging(h, 'AgedReceivables', '90.00'));
   const result = await h.sync.tick({ maxRequests: 2 });
-  assert.equal(result.amountReconciliation.basisVersion, 2); assert.equal(result.amountReconciliation.status, 'matched');
+  assert.equal(result.amountReconciliation.basisVersion, 3); assert.equal(result.amountReconciliation.status, 'matched');
   assert.equal(result.amountReconciliation.checks.receivables.attempts, 1); assert.equal(result.amountReconciliation.checks.receivables.components.unappliedPayments.cents, -3000);
 });
 

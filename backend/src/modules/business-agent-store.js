@@ -137,7 +137,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         for(const batch of run.batches||[])for(const item of batch.transport?.items||[])if(item.outcome==='saved'||item.mismatch){const sent=batch.items.find(row=>row.bId===item.bId);if(sent&&createRefs.has(sent.ref))answered.set(sent.ref,sent.entity);}
         for(const [ref,item]of Object.entries(run.items||{}))if(createRefs.has(ref)&&['saved','mismatch'].includes(item.outcome))answered.set(ref,item.entity);
         for(const [ref,entity]of answered)value.receipts.push({operationId:id,entity,logicalKey:ref});
-        const unsent=!(run.batches||[]).length,terminal=run.status==='complete'||run.status==='needs-correction';
+        const unsent=!(run.batches||[]).length,terminal=['complete','needs-correction','expired-unsent'].includes(run.status);
         const count=terminal?answered.size:creates.length;
         value.runs.push({id,status:terminal?'retired':unsent?'prepared':'blocked',decisionKey:run.decisionKey,createdAt:new Date(run.createdAt).getTime(),recordCount:count,createCount:count,hourlyActivity:true,hourAt:terminal?Math.max(new Date(run.createdAt).getTime(),new Date(run.updatedAt||run.createdAt).getTime(),...(run.batches||[]).map(batch=>Date.parse(batch.transport?.observedAt||batch.savedAt||'')||0)):now()});
       }

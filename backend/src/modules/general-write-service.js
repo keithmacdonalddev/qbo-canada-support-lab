@@ -166,7 +166,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     if (!run || String(run.connectionId) !== scope.connectionId) fail('This general write is unavailable.', 404);
     if (canonical(run.caseAuthority || null) !== canonical(bound.caseAuthority || null) || run.caseAuthority && !caseWrites) fail('This write belongs to a different case authority.');
     run = await unsent.retire(scope, run);
-    if (['complete', 'expired-unsent'].includes(run.status)) return report(run);
+    if (['complete', 'expired-unsent'].includes(run.status) || run.retirement?.retainedSavedEffects) return report(run);
     if (!dispatchEnabled() || !transport) { if (run.status !== 'held') run = await save(run, { status: 'held', lastError: 'Dispatch of general writes is not enabled on this server yet; the plan is saved and nothing was sent.' }); return report(run); }
     run = await recheckSavedMismatch(run, scope);
     if (run.status === 'complete') return report(run);
@@ -249,7 +249,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
             ...(prolonged ? failureFields(run, error, { operationId: String(run._id), detail: { batch: batch.index, waitingSince: since } }, now()) : { errorDetail: null, errorHistory: [], progressAt: new Date(since) }) });
           return { ...report(run), waiting };
         }
-        if (error?.lost !== true) { attachBusinessError(error, { operationId: String(run._id), detail: { batch: batch.index } }); run = await save(run, failureFields(run, error, {}, now())); throw error; }
+        if (error?.lost !== true) { attachBusinessError(error, { operationId: String(run._id), detail: { batch: batch.index } }); run = await save(run, failureFields(run, error, {}, now())); run = await unsent.retire(scope, run); if (run.status === 'expired-unsent' || run.retirement?.retainedSavedEffects) return report(run); throw error; }
         run = await refreshSettlement(run, batch);
         run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, state: 'lost' } : row), status: 'unknown', lastError: 'The QuickBooks response was lost; the same request will be replayed with its original identity.' });
         return report(run);
@@ -285,7 +285,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     return report(run);
   }
   function report(run, problems = null) {
-    return { runId: run._id, status: run.status, ...(run.status === 'expired-unsent' ? { next: { action: 'replan', day: run.retirement.currentDay, reason: 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
+    return { runId: run._id, status: run.status, ...(run.status === 'expired-unsent' || run.retirement?.retainedSavedEffects ? { next: { action: run.retirement?.retainedSavedEffects ? 'replan-remaining' : 'replan', day: run.retirement.currentDay, reason: run.retirement.reason || 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
   }
   // Called again INSIDE gate admission for every unsent/resumed saved batch.
   async function guardBatch({ scope, run, batch, session, periodProof }) {
@@ -293,7 +293,9 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id));
     for (const proof of periodProof?.proofs || []) for (const record of proof.evidence.records) {
       const current = local.get(record.entity, record.id);
-      if (!current || hash(current) !== record.recordHash) fail('The general batch copy differs from its fresh linked-record evidence.');
+      if (!current || (hash(current) !== record.recordHash && (!record.meaningHash || hash(require('./qbo-semantic-compare').canonicalQboValue(current, { entity: record.entity, metadata: true })) !== record.meaningHash))) {
+        throw Object.assign(new Error(record.entity + ' ' + record.id + ' changed in the fresh linked-record evidence. Nothing was sent; replan the still-needed work against its current balance and identity.'), { status: 409, code: 'GENERAL_WRITE_REPLAN_REQUIRED', qboStage: 'write_admission', outcomeUnknown: false, businessDetail: { entity: record.entity, recordId: record.id, mirrorHash: current ? hash(current) : null, freshHash: record.recordHash } });
+      }
     }
     for (const item of batch.items) for (const [key, snapshot] of Object.entries(item.postingSources || {})) { const [entity, id] = key.split(':'); if (hash(local.get(entity, id)) !== hash(snapshot)) fail('The foreign settlement source changed before admission; retain its current balance under a new decision.'); }
     if (context.day !== run.day) throw Object.assign(new Error('The business day changed since this general write was prepared. Nothing was sent.'), { code: 'GENERAL_WRITE_DAY_CHANGED', qboStage: 'write_admission', outcomeUnknown: false });

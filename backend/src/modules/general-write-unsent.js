@@ -8,6 +8,14 @@ function unsentBatch(batch) { return batch.state === 'sending' && (batch.sends =
 function unsentRun(run) {
   return ['prepared', 'sending', 'held', 'needs-correction'].includes(run.status) && !(run.dirty || []).length && !(run.owned || []).length && !Object.keys(run.items || {}).length && (run.batches || []).every(unsentBatch);
 }
+function refusalReason(run) {
+  const detail = run.errorDetail;
+  if (detail?.detail?.qboStage !== 'write_admission' || detail.detail.outcomeUnknown !== false) return null;
+  if (detail.code === 'GENERAL_WRITE_REPLAN_REQUIRED') return detail.message;
+  const key = require('./business-error-detail').fingerprint(detail);
+  const repeated = (run.errorHistory || []).find(row => row.count >= 3 && row.key === key);
+  return repeated ? 'Retired after ' + repeated.count + ' identical admission refusals: ' + detail.message + ' Nothing was sent. Replan the still-needed work with a new decisionKey.' : null;
+}
 function createGeneralUnsentRetirement({ models = {}, Runs = models.GeneralWriteRuns, now = () => Date.now(), transaction = models.transaction } = {}) {
   // Isolated callers must supply their offline stores; never fall back to a live
   // connection for an injected fake run store.
@@ -29,17 +37,23 @@ function createGeneralUnsentRetirement({ models = {}, Runs = models.GeneralWrite
   }
   async function retire(scope, run) {
     const today = businessDate(new Date(now()));
-    if (!run.day || run.day >= today || run.caseAuthority || !unsentRun(run) || !Audits || !Receipts || !Writers) return run;
+    if (!run.day || run.day >= today && !refusalReason(run) || run.caseAuthority || run.retirement?.reason || !unsentRun(run) && !refusalReason(run) || !Audits || !Receipts || !Writers) return run;
     const transact = transaction || (live ? require('./business-transaction').createBusinessTransaction(Runs.db) : null);
     if (!transact) return run;
     return transact(async session => {
       const current = await read(Runs, { _id: run._id, ...company(scope) }, session);
-      if (!current || current.status === 'expired-unsent' || current.day >= today || current.caseAuthority || !await provesUnsent(scope, current, null, session)) return current || run;
+      if (!current || current.status === 'expired-unsent' || current.retirement?.reason || current.day >= today && !refusalReason(current) || current.caseAuthority) return current || run;
+      const refusal = refusalReason(current), whole = unsentRun(current);
+      const batch = whole ? null : (current.batches || []).find(row => row.state !== 'answered');
+      if (!whole && (!refusal || !batch || Object.values(current.items || {}).some(item => !['saved','deleted'].includes(item.outcome)) || current.batches.some(row => row !== batch && row.state !== 'answered'))) return current;
+      if (!await provesUnsent(scope, current, batch, session)) return current;
+      const status = whole ? 'expired-unsent' : 'needs-correction';
+      const reason = whole ? refusal : 'Batch ' + batch.index + ' was not sent. Refusal: ' + current.errorDetail.message + ' Saved records in items remain accepted; do not recreate them. Replan only unsent refs: ' + current.plan.operations.filter(op => !current.items[op.ref]).map(op => op.ref).join(', ') + '.';
       const auditId = hash({ kind: 'general-expired-unsent', runId: String(current._id), revision: current.revision }).slice(0, 24);
-      const retirement = { version: 1, at: new Date(now()).toISOString(), preparedDay: current.day, currentDay: today, auditId, noReceipts: true, noDispatch: true };
-      const saved = await Runs.findOneAndUpdate({ _id: current._id, ...company(scope), revision: current.revision, status: current.status }, { $set: { status: 'expired-unsent', retirement, lastError: null, errorDetail: null, errorHistory: [], progressAt: new Date(now()) }, $inc: { revision: 1 } }, { new: true, session }).lean();
+      const retirement = { ...(reason ? { reason, errorDetail: current.errorDetail, errorHistory: current.errorHistory } : {}), version: 1, at: new Date(now()).toISOString(), preparedDay: current.day, currentDay: today, auditId, ...(whole ? { noReceipts: true, noDispatch: true } : { batchIndex: batch.index, requestId: batch.requestId, batchNoReceipts: true, batchNoDispatch: true, retainedSavedEffects: true }) };
+      const saved = await Runs.findOneAndUpdate({ _id: current._id, ...company(scope), revision: current.revision, status: current.status }, { $set: { status, retirement, lastError: reason || null, errorDetail: reason ? current.errorDetail : null, errorHistory: reason ? current.errorHistory : [], progressAt: new Date(now()) }, $inc: { revision: 1 } }, { new: true, session }).lean();
       if (!saved) throw Object.assign(new Error('The general write changed during unsent expiry; retry with fresh evidence.'), { code: 'GENERAL_UNSENT_CHANGED', status: 409 });
-      await Audits.create([{ _id: auditId, userId: current.ownerId, actorUserId: current.actorId, realmId: scope.realmId, action: 'Prior-day unsent general write expired', actionType: 'ai_executed', aiDriven: Boolean(current.agentAuthority), outcome: 'skipped', beforeState: { ...company(scope), runId: String(current._id), status: current.status, revision: current.revision, errorDetail: current.errorDetail || null }, afterState: { status: 'expired-unsent', retirement, qboWrites: 0 } }], { session });
+      await Audits.create([{ _id: auditId, userId: current.ownerId, actorUserId: current.actorId, realmId: scope.realmId, action: reason ? 'Unsent general write retired after admission refusal' : 'Prior-day unsent general write expired', actionType: 'ai_executed', aiDriven: Boolean(current.agentAuthority), outcome: 'skipped', beforeState: { ...company(scope), runId: String(current._id), status: current.status, revision: current.revision, errorDetail: current.errorDetail || null }, afterState: { status, retirement, qboWrites: 0 } }], { session });
       return saved;
     });
   }

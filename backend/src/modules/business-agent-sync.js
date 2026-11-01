@@ -234,19 +234,19 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
   // Keep a pending resync across slices/restarts; never reset its one-recheck limit at midnight.
   function prepareAmounts(state) {
     const clock = now(), local = localParts(clock), definitions = amounts.DEFINITIONS.filter(row => entities.includes(row.entity));
-    const previous = state.amountReconciliation, invalidated = Boolean(previous && previous.basisVersion !== 2);
+    const previous = state.amountReconciliation, invalidated = Boolean(previous && previous.basisVersion !== 3);
     // Obsolete Invoice/Bill-only evidence must stop affecting status even while
     // its replacement source is still bootstrapping or was restarted today.
     if (invalidated) delete state.amountReconciliation;
     if (!definitions.length || local.minutes < RECONCILE_FROM_MINUTES) return invalidated;
-    if (previous?.basisVersion === 2 && (previous.day === local.date || Object.values(previous.checks).some(row => ['waiting', 'resyncing'].includes(row.status)))) return false;
+    if (previous?.basisVersion === 3 && (previous.day === local.date || Object.values(previous.checks).some(row => ['waiting', 'resyncing'].includes(row.status)))) return false;
     // Bootstrap/catchup already consumes its allowance. The first nightly proof is on the next
     // Halifax day, alongside the first COUNT sweep (no implicit report calls during bootstrap).
     if (!definitions.every(({ entity }) => {
       const source = state.sources[entity];
       return source?.phase === 'incremental' && source.status === 'current' && stamp(source.startedAt) !== null && localParts(stamp(source.startedAt)).date < local.date;
     })) return invalidated;
-    state.amountReconciliation = { version: 1, basisVersion: 2, day: local.date, status: 'checking', startedAt: iso(clock), checkedAt: null,
+    state.amountReconciliation = { version: 1, basisVersion: 3, day: local.date, status: 'checking', startedAt: iso(clock), checkedAt: null,
       toleranceCents: 0, note: amounts.TIMING_NOTE, checks: Object.fromEntries(definitions.map(({ key, entity }) => [key, { entity, status: 'waiting', attempts: 0, refreshAfter: iso(clock) }])) };
     return true;
   }
@@ -259,7 +259,7 @@ function createBusinessAgentSync({ client, scope, Records, loadState, saveState,
   }
   async function reconcileAmounts(state, canRequest, charge, control, readCurrent) {
     const proof = state.amountReconciliation;
-    if (!proof || proof.basisVersion !== 2) return;
+    if (!proof || proof.basisVersion !== 3) return;
     for (const { key, entity, report } of amounts.DEFINITIONS) {
       const previous = proof.checks[key], source = state.sources[entity];
       if (!previous || !['waiting', 'resyncing'].includes(previous.status) || source?.phase !== 'incremental' || source.status !== 'current') continue;

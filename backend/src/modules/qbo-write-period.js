@@ -87,7 +87,7 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
     if (!record || record.Id !== next.id || typeof record.SyncToken !== 'string' || !/^\d+$/.test(record.SyncToken)) throw denied('An original or linked record could not be read completely before writing.');
     if (next.target && (typeof payload.SyncToken !== 'string' || payload.SyncToken !== record.SyncToken)) throw denied('The original record changed before protected-period verification.');
     const entity = next.entity.toLowerCase(), dates = datesIn(entity, record, TRANSACTIONS.has(entity)), links = linksIn(record);
-    records.set(key, { entity: next.entity, id: next.id, syncToken: record.SyncToken, recordHash: hash(record), dates, links });
+    records.set(key, { entity: next.entity, id: next.id, syncToken: record.SyncToken, recordHash: hash(record), meaningHash: hash(require('./qbo-semantic-compare').canonicalQboValue(record, { entity: next.entity, metadata: true })), dates, links });
     for (const link of links) if (!records.has(link.entity + ':' + link.id)) pending.push(link);
   }
   const affectedDates = postingDates(request, payload, [...records.values()], directDates);

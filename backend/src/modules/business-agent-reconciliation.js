@@ -42,7 +42,7 @@ function parseAgingReport(body, report, currency, clock) {
 async function readAmountMirror(Records, scope, entity) {
   // CompanySyncRecord holds the complete record; select only fields needed for this private comparison.
   const rows = await Records.find({ ...scope, deleted: false, entity })
-    .select('qboId record.Balance record.RemainingCredit record.TotalAmt record.HomeBalance record.UnappliedAmt record.HomeUnappliedAmt record.CurrencyRef record.CurrentBalance record.AccountType record.Line record.TxnDate record.ARAccountRef record.APAccountRef record.DepositToAccountRef record.AccountRef').maxTimeMS(5000).lean();
+    .select('qboId record.Credit record.ExchangeRate record.Type record.ExpenseAccountRef record.AssetAccountRef record.IncomeAccountRef record.Balance record.RemainingCredit record.TotalAmt record.HomeBalance record.UnappliedAmt record.HomeUnappliedAmt record.CurrencyRef record.CurrentBalance record.AccountType record.Line record.TxnDate record.ARAccountRef record.APAccountRef record.DepositToAccountRef record.AccountRef').maxTimeMS(5000).lean();
   if (!Array.isArray(rows)) throw fail('The local amount evidence could not be read.');
   return rows;
 }
@@ -83,7 +83,7 @@ const AGING_COMPONENTS = Object.freeze({
     { key: 'purchases', entity: 'Purchase' },
   ],
 });
-const agingEntities = entity => [...new Set([...(AGING_COMPONENTS[entity] || []).map(row => row.entity), 'Account'])];
+const agingEntities = entity => [...new Set([...(AGING_COMPONENTS[entity] || []).map(row => row.entity), 'Account', 'Item', 'SalesReceipt', 'Payment'])];
 function addCents(left, right) {
   const sum = left + right;
   if (!Number.isSafeInteger(sum)) throw fail('The mirror total exceeds the exact amount budget.');
@@ -96,39 +96,86 @@ function fieldCents(record, field, currency) {
   if (amount === 0 || !record.CurrencyRef?.value || record.CurrencyRef.value === currency) return amount;
   // HomeBalance is a remaining balance, not an unapplied amount or an individual JE line.
   const home = moneyCents(record[field === 'Balance' ? 'HomeBalance' : 'HomeUnappliedAmt']);
-  if (home === null || home < 0) throw fail('A foreign component has no exact home-currency amount.');
+  if (home === null && field === 'UnappliedAmt') { try { return require('./general-write-currency').homeCents(amount, record.ExchangeRate); } catch { throw fail('A foreign unapplied amount has no exact home-currency amount or transaction exchange rate.'); } }
+   if (home === null || home < 0) throw fail('A foreign component has no exact home-currency amount.');
   return home;
 }
 // Native BillPayment has no guaranteed UnappliedAmt. Derive it only for
 // unambiguous single Bill/VendorCredit applications; journals/mixed links need
 // remaining-balance evidence that the mirror does not expose.
-function billPaymentUnapplied(record) {
+function billPaymentUnapplied(record, byEntity, target, accounts) {
   const total = moneyCents(record.TotalAmt);
   if (total === null || total < 0 || !Array.isArray(record.Line)) throw fail('BillPayment has no exact unapplied amount or complete application lines.');
   let applied = 0;
   for (const line of record.Line) {
     const links = line.LinkedTxn, amount = moneyCents(line.Amount);
-    if (amount === null || amount < 0 || !Array.isArray(links) || links.length !== 1 || !links[0].TxnId || !['Bill', 'VendorCredit'].includes(links[0].TxnType)) throw fail('BillPayment applications cannot establish an exact unapplied amount.');
-    applied = addCents(applied, links[0].TxnType === 'Bill' ? amount : -amount);
+    if (amount === null || amount < 0 || !Array.isArray(links) || links.length !== 1 || !links[0].TxnId || !['Bill', 'VendorCredit', 'Deposit', 'Purchase'].includes(links[0].TxnType)) throw fail('BillPayment applications cannot establish an exact unapplied amount.');
+    const type = links[0].TxnType;
+    if (['Deposit', 'Purchase'].includes(type)) {
+      const source = byEntity?.[type]?.find(row => row.qboId === links[0].TxnId)?.record;
+      const posting = directPosting(source, type, target, accounts, byEntity);
+      if (type === 'Deposit' ? posting <= 0 : posting >= 0) throw fail('BillPayment has no proven direct-posting application source.');
+    }
+    applied = addCents(applied, ['Bill', 'Deposit'].includes(type) ? amount : -amount);
   }
   const unapplied = addCents(total, -applied);
   if (unapplied < 0) throw fail('BillPayment applications exceed its total; the unapplied amount is unknown.');
   return unapplied;
 }
-function assertNoDirectPosting(record, type, target, accounts, accountRows) {
-  if (!plain(record) || !Array.isArray(accountRows) || !Array.isArray(record.Line)) throw fail(type + ' has incomplete direct-posting account evidence.');
-  const checkRef = reference => {
-    if (!reference?.value || !ACCOUNT_TYPES.has(accounts.get(reference.value))) throw fail(type + ' references an account with no mirrored type.');
-    if (accounts.get(reference.value) === target) throw fail(type + ' posts directly to ' + target + '; its remaining effect is not mirrored.');
+// Cash refunds and linked deposits do not touch A/R or A/P unless their native
+// posting accounts do. Direct customer/supplier postings retain their residual
+// after explicit single-source applications, rather than being assumed zero.
+function directPosting(record, type, target, accounts, byEntity) {
+  if (!plain(record) || !Array.isArray(record.Line)) throw fail(type + ' has incomplete posting evidence.');
+  const account = ref => {
+    const kind = accounts.get(ref?.value);
+    if (!ACCOUNT_TYPES.has(kind)) throw fail(type + ' references an account with no mirrored type.');
+    return kind;
   };
-  if (type === 'Deposit') checkRef(record.DepositToAccountRef);
-  else checkRef(record.AccountRef);
+  const bank = account(type === 'Purchase' ? record.AccountRef : record.DepositToAccountRef);
+  if (!['Bank', 'Credit Card', 'Other Current Asset'].includes(bank)) throw fail(type + ' cash account is not a proved cash/control-clearing account.');
+  if (type === 'Purchase' && record.Credit === true) throw fail('A credit Purchase needs a separately proved reversed remaining allocation.');
+  let debit = 0;
   for (const line of record.Line) {
-    if (line.DetailType === 'DescriptionOnly') continue;
-    const detail = type === 'Deposit' ? line.DepositLineDetail : line.AccountBasedExpenseLineDetail;
-    if (!plain(detail)) throw fail(type + ' line posting accounts cannot be determined from mirrored fields.');
-    checkRef(detail.AccountRef);
+    if (['DescriptionOnly','SubTotalLineDetail'].includes(line.DetailType)) continue;
+    const links = line.LinkedTxn || [];
+    if (type === 'Deposit' && links.length) {
+      if (links.length !== 1 || !['Payment','SalesReceipt'].includes(links[0].TxnType) || !byEntity[links[0].TxnType]?.some(row => row.qboId === links[0].TxnId)) throw fail('Deposit linked cash source is not mirrored.');
+      continue;
+    }
+    let ref;
+    if (type === 'Deposit') ref = line.DepositLineDetail?.AccountRef;
+    else if (line.DetailType === 'AccountBasedExpenseLineDetail') ref = line.AccountBasedExpenseLineDetail?.AccountRef;
+    else if (['ItemBasedExpenseLineDetail','SalesItemLineDetail'].includes(line.DetailType)) {
+      const detail = line[line.DetailType], item = byEntity.Item?.find(row => row.qboId === detail?.ItemRef?.value)?.record;
+      ref = detail?.ItemAccountRef || (type === 'RefundReceipt' ? item?.IncomeAccountRef : item?.Type === 'Inventory' ? item?.AssetAccountRef : item?.ExpenseAccountRef);
+      // Item account roles cannot be control accounts. A changed historical Item
+      // mapping within its allowed income/expense/asset roles cannot affect aging.
+      if (['Accounts Receivable','Accounts Payable'].includes(account(ref))) throw fail('An item line names a control account without historical posting evidence.');
+    }
+    if (account(ref) !== target) continue;
+    if (record.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD') throw fail('A foreign direct posting has no exact remaining home-currency allocation.');
+    const amount = moneyCents(line.Amount);
+    if (amount === null) throw fail(type + ' direct posting is not an exact cent amount.');
+    debit = addCents(debit, type === 'Deposit' ? -amount : amount);
   }
+  return target === 'Accounts Receivable' ? debit : -debit;
+}
+function remainingDirect(record, id, type, target, accounts, byEntity) {
+  const original = directPosting(record, type, target, accounts, byEntity);
+  if (!original) return 0;
+  const settlement = target === 'Accounts Receivable' ? 'Payment' : 'BillPayment';
+  if (!Array.isArray(byEntity[settlement])) throw fail('Direct-posting settlements are not mirrored.');
+  let applied = 0;
+  for (const row of byEntity[settlement]) for (const line of row.record?.Line || []) {
+    const links = line.LinkedTxn || [];
+    if (!links.some(link => (link.TxnType === 'Expense' ? 'Purchase' : link.TxnType) === type && link.TxnId === id)) continue;
+    const amount = moneyCents(line.Amount);
+    if (links.length !== 1 || amount === null || amount < 0 || row.record.CurrencyRef?.value && row.record.CurrencyRef.value !== (record.CurrencyRef?.value || 'CAD')) throw fail('Direct-posting application allocation is ambiguous.');
+    applied = addCents(applied, amount);
+  }
+  if (applied > Math.abs(original)) throw fail('Direct-posting applications exceed the original posting.');
+  return original - Math.sign(original) * applied;
 }
 function agingMirrorTotal(entity, byEntity, currency) {
   if (!currency) throw fail('The mirror home currency has not been independently observed.');
@@ -151,7 +198,7 @@ function agingMirrorTotal(entity, byEntity, currency) {
         if (!Array.isArray(settlements)) throw fail('Journal settlement records are not mirrored.');
         if (settlements.some(row => row.record?.Line?.some(line => line.LinkedTxn?.some(link => link.TxnType === 'JournalEntry')))) throw fail('A journal is linked to a payment; its remaining A/R or A/P effect is not mirrored.');
       }
-      for (const { record } of rows) {
+      for (const { record, qboId } of rows) {
         if (field) {
           let source = record, sourceField = field;
           if (type === 'CreditMemo' && record?.RemainingCredit !== undefined) {
@@ -159,17 +206,13 @@ function agingMirrorTotal(entity, byEntity, currency) {
             source = { ...record, Balance: record.RemainingCredit }; sourceField = 'RemainingCredit';
           }
           if (type === 'BillPayment' && record?.UnappliedAmt === undefined) {
-            const digits = String(billPaymentUnapplied(record)).padStart(3, '0');
+            const digits = String(billPaymentUnapplied(record, byEntity, target, accounts)).padStart(3, '0');
             source = { ...record, UnappliedAmt: digits.slice(0, -2) + '.' + digits.slice(-2) }; sourceField = 'TotalAmt - net applied Line.Amount';
           }
           total = addCents(total, sign * fieldCents(source, field, currency)); fieldsUsed.add(sourceField);
         }
-        else if (type === 'RefundReceipt') {
-          // TotalAmt is a cash refund, not a remaining customer A/R balance. Do not
-          // manufacture a debit without a mirrored open-balance field.
-          throw fail('RefundReceipt A/R effects cannot be determined from a cash refund total.');
-        } else if (['Deposit', 'Purchase'].includes(type)) {
-          assertNoDirectPosting(record, type, target, accounts, accountRows);
+        else if (['RefundReceipt', 'Deposit', 'Purchase'].includes(type)) {
+          total = addCents(total, remainingDirect(record, qboId, type, target, accounts, byEntity));
         } else {
           if (!Array.isArray(accountRows)) throw fail('Account is not mirrored; journal account types are unknown.');
           if (!Array.isArray(record?.Line)) throw fail('JournalEntry lines are missing.');

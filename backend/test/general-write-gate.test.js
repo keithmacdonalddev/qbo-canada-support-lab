@@ -149,7 +149,7 @@ test('a balance consumed after preflight is refused at transactional admission',
   h.run().batches[0].items=[item];h.run().plan.operations=[item];
   const gate=h.gateFor(),request=h.request(),evidence=await gate.preflight({request,client:h.client});
   invoice.Balance=10;
-  await assert.rejects(gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence}),/differs from its fresh linked-record evidence|has \$10 open/);
+  await assert.rejects(gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence}),/changed in the fresh linked-record evidence|has \$10 open/);
   assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);
 });
 
@@ -497,4 +497,19 @@ test('transport preflight warms a resumed saved batch with its exact run before 
  const h=harness();let warmed=false;
  const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:createGeneralGateTransport({models:h.models,scope,runId,batchIndex:0,admissionGuard:input=>{assert.equal(warmed,true);return h.service.guardBatch(input)},warmCurrency:async(s,batch,run)=>{assert.deepEqual(s,scope);assert.equal(run._id,runId);assert.equal(batch.requestId,run.batches[0].requestId);warmed=true;},now:()=>h.clock})});
  const ticket=await h.begin(gate);assert.equal(warmed,true);assert.equal(ticket.kind,'general-write');
+});
+
+// Regression from stored Invoice11020: CDC includes FreeFormAddress:false while
+// the full GET omits it. Metadata can advance; the exact application still binds.
+for (const change of ['default','metadata','balance','party','date','unknown']) test('semantic linked admission: '+change,async()=>{
+ const h=harness();h.records.set('Customer:1',{Id:'1',Active:true});
+ const invoice={Id:'100',SyncToken:'0',TxnDate:'2026-11-20',Balance:100,TotalAmt:100,CustomerRef:{value:'1'}};
+ h.records.set('Invoice:100',{...clone(invoice),FreeFormAddress:false});
+ const fresh=clone(invoice);if(change==='metadata'){fresh.SyncToken='1';fresh.MetaData={LastUpdatedTime:'2026-12-02T14:59:00Z'};}
+ if(change==='balance')fresh.Balance=0;if(change==='party')fresh.CustomerRef.value='2';if(change==='date')fresh.TxnDate='2026-11-19';if(change==='unknown')fresh.UnknownFlag=false;
+ h.client.read=async()=>({Invoice:fresh});
+ const item={bId:'1',ref:'pay',op:'create',operation:'create',entity:'Payment',payload:{TxnDate:'2026-12-02',CustomerRef:{value:'1'},TotalAmt:50,Line:[{Amount:50,LinkedTxn:[{TxnId:'100',TxnType:'Invoice'}]}]}};
+ h.run().batches[0].items=[item];h.run().plan.operations=[item];
+ const gate=h.gateFor();if(['default','metadata'].includes(change)){await h.begin(gate);assert.equal(h.data.Receipts.length,1);assert.match(h.data.Receipts[0].periodProof.proofs[0].evidence.records[0].meaningHash,/^[a-f0-9]{64}$/);}
+ else {await assert.rejects(h.begin(gate),e=>e.code==='GENERAL_WRITE_REPLAN_REQUIRED'&&e.outcomeUnknown===false);assert.equal(h.data.Receipts.length,0);}
 });
