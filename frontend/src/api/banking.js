@@ -4,6 +4,16 @@ import client from './client'
 const base = '/company/banking-workspace'
 const segment = value => encodeURIComponent(String(value))
 export const bankingApi = {
+  async accounts({ signal } = {}) {
+    const data = (await client.get(base + '/accounts', { signal })).data?.data
+    if (!Array.isArray(data?.accounts)) throw new Error('The server did not return retained bank accounts. Try refreshing.')
+    return data
+  },
+  async account(accountId, { period, signal } = {}) {
+    const data = (await client.get(base + '/accounts/' + segment(accountId), { signal, params: period ? { period } : undefined })).data?.data
+    if (data?.accountId !== accountId || !Array.isArray(data?.transactions) || !data.package?.id) throw new Error('The server did not return this retained bank account. Refresh and select it again.')
+    return data
+  },
   async resume(packageId, resolution) {
     const data = (await client.post(base + '/operator/resume', { packageId, resolution })).data?.data
     if (data?.resolved !== true || data.packageId !== packageId) throw new Error('The server did not confirm this banking resolution. Refresh and inspect the current pause before retrying.')
@@ -30,7 +40,7 @@ export const bankingApi = {
 }
 
 export function bankingError(error) {
-  if (error.response?.status === 404) return 'Banking is not available on this server yet. Refresh after the workspace has been connected.'
+  if (error.response?.status === 404) return error.response?.data?.error || 'The requested bank account or retained statement is unavailable. Return to accounts and select another period.'
   return error.response?.data?.error || error.message || 'Banking could not be loaded. Try refreshing.'
 }
 

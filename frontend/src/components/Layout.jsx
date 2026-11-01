@@ -4,7 +4,7 @@ import { Tooltip } from '@base-ui/react/tooltip'
 import { ScrollArea } from '@base-ui/react/scroll-area'
 import '../styles/sidebar.css'
 import {
-  WandSparkles, Building2, FileText, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Bot, Layers, Archive,
+  WandSparkles, Building2, FileText, Table2, History, Settings, LogOut, LoaderCircle, RefreshCw, ChevronDown, LayoutGrid, PanelLeftClose, PanelLeftOpen, Bot, Layers, Archive, Landmark,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useConnection } from '../context/ConnectionContext'
@@ -15,7 +15,8 @@ import { cn } from '@/lib/utils'
 // Keep continuing business activity, report evidence, support reproduction,
 // company records and the retained history directly accessible.
 const NAV = [
-  { to: '/company', label: 'Business', icon: Building2, match: (p) => p === '/' || (p.startsWith('/company') && !p.startsWith('/company/reports') && !p.startsWith('/company/period-close')) || p.startsWith('/lab') },
+  { to: '/company', label: 'Business', icon: Building2, match: (p) => p === '/' || (p.startsWith('/company') && !p.startsWith('/company/bank') && !p.startsWith('/company/reports') && !p.startsWith('/company/period-close')) || p.startsWith('/lab') },
+  { to: '/company/bank', label: 'Bank', icon: Landmark, match: (p) => p.startsWith('/company/bank') },
   { to: '/reproduce', label: 'Reproduce', icon: WandSparkles, match: (p) => p.startsWith('/reproduce') || p.startsWith('/cases') },
   { to: '/coverage', label: 'Coverage', icon: LayoutGrid, match: (p) => p.startsWith('/coverage') },
   { to: '/reports', label: 'Reports', icon: FileText, match: (p) => p.startsWith('/reports') || p.startsWith('/company/reports') || p.startsWith('/company/period-close') },

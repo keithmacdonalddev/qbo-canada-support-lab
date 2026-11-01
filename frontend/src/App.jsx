@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Reproduce from './pages/Reproduce'
 import Case from './pages/Case'
 import Company from './pages/Company'
+import Bank from './pages/Bank'
 import BusinessWorkspace from './pages/BusinessWorkspace'
 import BookChecks from './pages/BookChecks'
 import Reports from './pages/Reports'
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="/reproduce" element={<ProtectedRoute><Reproduce /></ProtectedRoute>} />
         <Route path="/cases/:id" element={<ProtectedRoute><Case /></ProtectedRoute>} />
         <Route path="/company" element={<ProtectedRoute><BusinessWorkspace /></ProtectedRoute>} />
+        <Route path="/company/bank" element={<ProtectedRoute><Bank /></ProtectedRoute>} />
         <Route path="/company/manage" element={<ProtectedRoute><Company /></ProtectedRoute>} />
         <Route path="/company/accountant/tools" element={<ProtectedRoute><AccountantTools /></ProtectedRoute>} />
         <Route path="/company/setup" element={<ProtectedRoute><CompanySetup /></ProtectedRoute>} />
