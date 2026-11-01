@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-01T20:59:27.375Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-01T21:12:53.045Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -12,8 +12,10 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 ## Execution order and delivery rules
 
+**Current session boundary: [BANK-1 — usable bank foundation](current-session-assignment.md).** One existing CAD bank account plus one CAD credit-card account, durable bank state, rendered account views and real CSV/PDF downloads. The assignment contains the fixed acceptance checklist and exact start prompt. Automatic issuance/all-account expansion and full historical reconciliation remain later milestones; the complete SB/D backlog is unchanged. This replaces the earlier oversized single-session prompt.
+
 1. **Keep the business running.** Protect safe ongoing trading, useful accountant output, collections, purchasing, nightly close and recovery. Interrupt feature work for an active data-safety risk or a failure that actually stops the relevant workflow; an isolated record/feature defect is not automatically a company-wide emergency.
-2. **Build missing features while historical work progresses.** Keep one primary feature moving alongside bounded essential repairs and safely ready historical work. The next primary feature is the simulated online bank SB01/SB03/SB04 with a usable SB02 account slice; D02 historical imports/reconciliation can progress independently where their real dependencies and existing authority permit. C01/C02 remain useful bounded corrections, not prerequisites for starting the bank feature.
+2. **Build missing features while historical work progresses.** Keep one primary feature moving alongside bounded essential repairs and safely ready historical work. The next primary feature is BANK-1: a bounded SB01/SB02 bank-state/account-view slice with retained D01 downloads, under the current session assignment; D02 historical imports/reconciliation can progress independently where their real dependencies and existing authority permit. C01/C02 remain useful bounded corrections, not prerequisites for starting the bank feature.
 3. **Continue through the full backlog.** After each delivered milestone, choose the highest-value ready task across A/B/C/D/E/F/S/SB, considering owner impact, actual dependencies, expected effort and overdue outcomes. Keep situational coverage, accountant capability, owner controls, reports, sync and operating costs in view. The bank feature does not replace them. P0/P1 labels express broad urgency; they are not a requirement to clear every repair before feature delivery.
 
 **An isolated problem blocks only dependent work.** Identify the affected records/accounts/periods/actions and name the independent work that continues. Serialize conflicting browser/company/account operations through existing controls. Completion means a working owner flow or directly evidenced company outcome; tests, reviews and commits support that result.
@@ -42,7 +44,7 @@ After each milestone update the shared task IDs, evidence, remaining proof and n
 - S01 sign-in is installed and live verified. S02 shared coordination is implemented and tested; observe its first governed native banking task without weakening existing paused/uncertain-outcome barriers.
 - A08 discovery is restored: the same live GET now returns200, choicesAvailable:true,40 customer choices and4 service choices. Actual output resumed:132 saved at20:54UTC versus125 before the fix;10 additional reservations are still in progress. A02 admission repair is installed/pushed; original deposit outcomes remain to be observed. Continue A01 relationships without duplicate invoices.
 - Repair C01/C02: truthful verification counts and executable capability descriptions, independently of banking completion.
-- Start the simulated online bank SB01/SB03/SB04 and ready historical D02 work in parallel with independent app outcomes. The bank-style owner workspace SB02 and per-account currentness SB06 are required product work; do not wait for every unrelated invoice repair. Follow the [owner-confirmed banking outcome](simulated-online-bank-and-reconciliation-2026-11-01.md).
+- Deliver [BANK-1](current-session-assignment.md) as the next fixed session milestone. BANK-2 retains continuing bank behavior/automatic issuance and all-account expansion; BANK-3 retains historical and ongoing native QBO banking completion. Ready D02 work may proceed independently under existing authority. The [full owner-confirmed banking outcome](simulated-online-bank-and-reconciliation-2026-11-01.md) remains required.
 - Continue the highest-value independent items below. Keep ordinary business operation and deliberate situational coverage advancing together.
 
 ## Verified baseline and evidence limits
@@ -157,3 +159,5 @@ Record UTC time, affected task IDs, what changed, direct app/QBO/report proof an
 - 2026-11-01T20:54:16UTC — A08 business activity resumed afterfa703fc (pushed main/origin/main). App saved count132/220, up7 from125;11 displayed verified and10 reserved are separate measures, and C01 remains open. Six new original create receipts identify Invoices11341/11342/11344 and TimeActivities1073742987/1073742988/1073742989. Three fresh direct QBO GETs at20:52:40UTC confirm Invoices11341/11342 eachCAD427.50, due2026-12-01, retaining links to1073742988/1073742987; TimeActivity1073742987 is billed. This proves resumed useful activity, not completion of target/endurance/banking. Next independent priorities remain C01/C02, A01 native relationships and the preserved SB/D banking work.
 
 - 2026-11-01T20:59:27.375Z — Owner requested the simple execution order plus efficient single-session delegation and prevention of stalled delivery. Added the three responsibilities, small assigned queue, bounded briefs/file ownership, proportionate checks/reviews and existing work-value checkpoints. Converted numbered task checkpoints into non-serial notes; preserved the complete backlog and all existing evidence. Documentation only; no worker, service or live banking action launched.
+
+- 2026-11-01T21:12:53.045Z — Corrected the oversized session prompt without reducing the full goal. Added the authoritative BANK-1 assignment and copyable prompt with five explicit acceptance conditions; BANK-2/BANK-3 retain automatic/all-account and native reconciliation outcomes. No implementation milestone or new live authority claimed.

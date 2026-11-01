@@ -42,6 +42,8 @@ Task IDs SB01–SB07 live in the [maintained task list](app-completion-task-list
 
 ## Execution order and value checkpoints
 
+Session delivery is staged under [the current BANK-1 assignment](current-session-assignment.md): BANK-1 delivers persistent state, desktop views and downloads for one existing CAD bank and one CAD card; BANK-2 adds ongoing settlement/file automation and all-account/currency expansion; BANK-3 completes historical and future native QBO banking/reconciliation. BANK-1 does not require the full event-to-QBO chain below to finish in the same session. The full inventory/history scope and SB01–SB07 acceptance above remain unchanged; each session marks only its actual bounded scope delivered.
+
 1. Resume ready historical D02 packages with existing valid authority and safe recovery, oldest-first within each account. Resolve D03 carry-forward/deferred evidence in its dependent branch. Refresh registration completeness against the actual artifacts; do not regenerate accepted files or replay uncertain uploads.
 2. Begin SB01/SB03/SB04 implementation as an independent work stream using the existing bank modules. Deliver one complete proof of the bank-event-to-QBO chain, then expand across the complete account/history inventory. The first proof is a verification slice, not permission to limit the requested history to one month or one account.
 3. Deliver SB02 and SB06 so both owner and accountant can use and inspect the workflow; preserve normal trading and other app outcomes alongside catch-up.
