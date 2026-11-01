@@ -449,3 +449,28 @@ Plainly, so you don't repeat it.
 - Deployment: `docs/deployment.md`
 - Blocker audit: `artifacts/blocker-audit-2026-10-31.md`
 - Handoff log (newest first): `docs/agent-harness/FULL_GOAL_EXECUTION.md`
+
+---
+
+## 10. Update, night of 2026-11-01 (orchestrator session 5c0ba517)
+
+Owner intent is now only in the "Owner intent" section of `AGENTS.md` (single source; do not restate it).
+
+**Live state at about 08:00 UTC Nov 1**
+- Calendar verified through 2026-10-31 (Oct 31 closed overnight after fixes U, V, V2). Oct 31 ended with 167 records.
+- Nov 1: 8 records at 08:00 UTC, 6 behind schedule; accountant producing again after job AR's review watchdog (`4c?` see git log) cleared orphaned review attempts left by backend restarts.
+- Multicurrency is already enabled (home CAD); company renamed by owner to "My Business" (Company ID 9130357222392856).
+- Banking loop: `BANKING_OPERATOR_ENABLED=true` in `.env`; 208 account-month packages registered (109 deferred behind carry-forward, 7 drafts); Savings Oct 2026 fully reconciled through the QBO UI by Terra (upload, match, reconcile, statement attached, native report saved). Loop is **paused**: the automation browser session (agent-browser `qbo-ops`, profile `C:/Users/NewAdmin/.qbo-automation-profile`, headless) was logged out by QuickBooks at ~07:20 UTC. Owner must log in once (open it `--headed`), then Resume banking (form on the banking screen, or `POST /api/company/banking-workspace/operator/resume`).
+- Owner test bank rules "add sales", "Sort Ad expenses", "taxes" were DISABLED (not deleted; settings in `artifacts/terra-live/qbo-ops-20261101-010805/`) because their catch-all Auto-post turned uploaded bank lines into duplicate Sales deposits.
+
+**Built tonight (all committed and pushed)**: activity choices from the synced copy (E, Z fix), verification read economy (E2, R), situation coverage catalogue 353 situations (C), month-end close checklist (K), billable links guard (B), foreign-currency general writes (F), parallel writer for lists/quotes (P), general-write admission fix (G), lost-reply recovery (L), unsent-claim recovery (Y), definition defaults (D), unsent expiry (U), day-close fixes (V, V2), accountant beliefs/build-list/tools/decision records/scorecard/owner-intent loading (W), tax by meaning (Q), meaning-checks stage 1 (1A/1B/1C) and stage 2 (2A/2B/2C) and 3C, banking BF1-BF7, OB, BA, BL, BL2, BK1, AU, RG/RG2 replay gate and evidence capture, FX/FX2 suite fixes, AR review watchdog. Designs: `docs/plans/meaning-checks-design-s0-2026-11-01.md`, `docs/plans/bank-feed-simulation-design-bf0-2026-11-01.md`, screen map `docs/plans/qbo-banking-screen-map-terra-2026-11-01.md`.
+
+**Parked (stop-loss after two withheld attempts)**: meaning-checks stage 3A+3B (fixed compiler/graph, admission/recovery). Candidates and reports in `artifacts/stage3/` (3a-candidate.patch, marker fix, 3ab-WITHHELD.patch, JOB-3AB-REPORT.json, 3b-HANDOFF.md). Open gaps: mixed saved/held operations hold the writer and block close; unsent opening rebasing; unknown-recovery regression goes global instead of local hold. Stage 3 wave 2 (3D-3F) not started.
+
+**In progress at writing**: IR2 (inventory returns, valuation in day close) after IR's candidate was reverted for 5 suite failures (`artifacts/stage3/ir-candidate.patch`, `ir-new/`). Inventory stays disabled.
+
+**Lessons tonight**
+- Every backend/src save restarts the backend and kills in-flight accountant reviews, Terra runs and child processes. Several stalls tonight were self-inflicted. Batch saves; prefer one builder writing at a time when the business is behind.
+- Run the full backend suite after any combination of jobs; per-job focused tests missed 47 conflicts once and 5 another time. Revert a live candidate immediately if the suite shows safety failures.
+- Terra: use the agent-browser `--flow` route with the persistent profile; the Codex Chrome plugin refuses file uploads. Terra must claim existing tabs only via that session; never the owner's Chrome for writes. Do not take over the desktop while the owner reports lag.
+- Check QBO bank rules before uploads; catch-all Auto-post rules swallow feed lines.
