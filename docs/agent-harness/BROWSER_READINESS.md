@@ -2,6 +2,12 @@
 
 Use the browser route that matches the task, before substantial UI implementation. A configured tool is not a connected browser; a working browser is not an authenticated app; an authenticated page is not completed feature acceptance.
 
+## Identify the browser route before diagnosing it
+
+Claude Code’s overnight Terra workflow used `terra-live.sh --flow` and isolated agent-browser, without a desktop-app dependency. Its original session records show the switch from Chrome-plugin mode at 2026-11-01T05:01:17Z, followed by an explicit route explanation at 05:19:53Z. Session: 5c0ba517-1424-42c8-818a-42acc6d80f63; retained rendered evidence: artifacts/terra-live/qbo-ops-20261101-013249/. Terra’s screenshots-only rule separately refused that run’s requested PDF. This proves historical page access/rendering, not current authentication or completed banking work.
+
+The app-managed cua_repl plugin that currently reports a missing browser-access host is a different integration. Its manifest lists pass-through variable names; the inspected parent process lacks their values. That observation does not establish a regression in the working agent-browser route, and it does not establish that the owner’s previous workflow needed the desktop app. Compare the actual successful invocation, backend and retained result before changing setup. The isolated Playwright readiness check below is a separate verified route, not repair evidence for cua_repl or a current agent-browser flow.
+
 ## Local application inspection
 
 When isolated browser automation is explicitly requested/permitted and the intended app is already running, use the repository command:
