@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "replay-gate": "node ../scripts/agent-harness/replay-gate.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.86.1",
