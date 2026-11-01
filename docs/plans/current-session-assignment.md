@@ -1,6 +1,12 @@
 # Current implementation session assignment
 
-Updated: 2026-11-01T21:12:53.045Z. Assignment: BANK-1. Status: READY / NOT STARTED. This is the authoritative next-session boundary; it supersedes the earlier chat prompt that bundled the full first bank release and automatic issuance into one session. It does not supersede the full app/bank outcome or change live authorization.
+Updated: 2026-11-01T21:23:48.369Z. Assignment: BANK-1. Status: IMPLEMENTED / DIRECT APPLICATION PROOF OPEN. This is the authoritative next-session boundary; it supersedes the earlier chat prompt that bundled the full first bank release and automatic issuance into one session. It does not supersede the full app/bank outcome or change live authorization.
+
+## Current BANK-1 evidence
+
+2026-11-01T21:23:48.369Z: frontend `0281720` and backend `1d8d24f` / `2871cef` are committed/pushed on `main` to `origin/main`. The account workflow is at `/company/bank`. Acceptance is **not complete** while actual desktop/download/reload evidence remains open. See [BANK-1 evidence](bank-1-evidence-2026-11-01.md).
+
+Chosen acceptance scope (fixed once): production connected company ending 2856, existing CAD bank account **123**, **2023-09**, package `a86a4c4ff040c2ffed87384754e044446b8f8835433df3a5fd106a2c5a8abe65` revision 1; existing CAD credit-card account **85**, **2025-04**, package `87d08dcbc5ffd16ed2fce19f1aa15c206b4e711c067af9d53d79b48c32338a33` revision 1.
 
 ## Fixed delivery milestone: usable bank foundation
 

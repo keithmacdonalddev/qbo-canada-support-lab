@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-01T21:12:53.045Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-01T21:27:16.114Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -91,8 +91,8 @@ Owner clarification: provide an online banking experience like accessing a simul
 
 | ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
 |---|---|---|---|
-| SB01 | P0 — OPEN | Durable simulated bank/card accounts, native-currency balances and a ledger of pending/posted/reversed settlements independent of QBO edits; retain business-event lineage and evidenced opening balances. | Reuse BankingEvent/BankingPackage and settlement modules; establish the labelled historical baseline without rewriting accepted bank/QBO history. |
-| SB02 | P1 — OPEN | Working bank-style desktop overview, account balances/history, transaction detail, pending/posted views, statements and CSV/PDF downloads, usable by owner and accountant. | Render a coherent account slice with real retained bank state, as-of times, recovery and links to QBO progress; this is more than an artifact list. |
+| SB01 | P0 — OPEN (BANK-1 source delivered; app proof open) | Durable simulated bank/card accounts, native-currency balances and a ledger of pending/posted/reversed settlements independent of QBO edits; retain business-event lineage and evidenced opening balances. | Reuse BankingEvent/BankingPackage and settlement modules; establish the labelled historical baseline without rewriting accepted bank/QBO history. |
+| SB02 | P1 — OPEN (BANK-1 source delivered; app proof open) | Working bank-style desktop overview, account balances/history, transaction detail, pending/posted views, statements and CSV/PDF downloads, usable by owner and accountant. | Render a coherent account slice with real retained bank state, as-of times, recovery and links to QBO progress; this is more than an artifact list. |
 | SB03 | P0 — OPEN | Continuing settlements, bank/card fees, interest, transfers, returns and deliberate bank-feed situations follow the governed calendar and retain separate bank identities/dates. | Existing bank-origin generator accepts explicit scenarios; connect persistent scheduling and financial lifecycle tools, with one economic event per counterpart. |
 | SB04 | P0 — OPEN | Automatically create, retain and register current transaction CSVs and due monthly statements for every eligible account; preserve revisions, carry-forward, quiet months and duplicate-safe export windows. | Production generation scheduling is missing. Existing prepareBankingPackage registers an already generated manifest; source/tests alone do not prove automatic issuance. |
 | SB05 | P0 — OPEN | Actual QBO upload, Match/Add/Exclude, statement attachment where supported, and native reconciliation complete through the latest due cycle with retained evidence. | Reuse S02/D02 safe browser/recovery workflows and valid target authority. Verify unknown uploads before retry; keep generated/imported/reconciled states distinct. |
@@ -139,6 +139,8 @@ D02 remains the P0 historical catch-up task; D03 resolves dependent carry-forwar
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-01T21:24:52.893Z — BANK-1 source committed/pushed: frontend 0281720, backend 1d8d24f plus readable-label correction 2871cef, main/origin/main. Fixed bank123/Sep2023 (37 rows) and card85/Apr2025 (3 rows) use existing durable packages. Real service reads, exact original-ledger lineage/opening carry, CSV byte regeneration and three rendered statement pages verified; both independent reviews clear. Actual desktop/download/reload evidence remains OPEN because browser tool is unavailable and fallback permission is pending. [Acceptance ledger](bank-1-evidence-2026-11-01.md). BANK-1 is not DELIVERED; full SB/D outcomes remain OPEN.
 
 - 2026-11-01T20:09:22.881Z — Created this maintained task list at the owner's request. Unified review findings, current implementation/proof distinctions, dependencies and next steps; did not declare the full app complete. No accounting or service changes accompanied this documentation.
 - Sign-in candidate checkpoint: fixed credential presence confirmed; one private password submission reached QuickBooks; current native Intuit User ID and formatted native company ID were then verified by the helper. Ninety affected tests passed before the latest readiness-wait refinement; the final suite and independent reviews remain required. The running backend has not received the candidate source batch yet.
