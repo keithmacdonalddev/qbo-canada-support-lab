@@ -1,6 +1,6 @@
 ---
 name: banking-and-deposits
-description: Daily general-tool grouped deposits, Undeposited Funds clearing, net-of-fee processor deposits, bank/card transfers and cash checks; fixed collections deposit automatically. Use when taking payments, grouping remittances, following up undeposited money or preparing close evidence; reconciliation stays owner/manual.
+description: Daily general-tool grouped deposits, Undeposited Funds clearing, net-of-fee processor deposits, bank/card transfers and cash checks; fixed collections deposit automatically. Use when taking payments, grouping remittances, following up undeposited money or preparing close evidence; native banking runs through owner-authenticated browser automation with retained evidence.
 ---
 
 # Banking and deposits
@@ -37,7 +37,7 @@ Replace example amounts with each receipt's actual tax-inclusive TotalAmt. The D
 
 ## Fees, transfers and cash
 
-For a Square/merchant settlement use full linked undeposited Payment/SalesReceipt lines plus a negative DepositLineDetail fee line: {Amount:-3,DetailType:"DepositLineDetail",DepositLineDetail:{AccountRef:{value:"<ACTIVE_FEE_EXPENSE_ID>"}}}. The net total must stay positive. This fee shape accepts no tax override; post taxable fees separately with the published purchase tax code. Verify gross clearing, fee expense and net bank movement; never deposit a source twice.
+For a Square/merchant settlement use full linked undeposited Payment/SalesReceipt lines plus a negative DepositLineDetail fee line: {Amount:-3,DetailType:"DepositLineDetail",DepositLineDetail:{AccountRef:{value:"<ACTIVE_FEE_EXPENSE_ID>"}}}. The net total must stay positive. This fee shape accepts no tax override; post taxable fees separately with the published purchase tax code. Verify gross clearing, fee expense and net bank movement; never deposit a source twice. This negative expense-line shape is supported by the current app guards. Native bank-feed matching of the net payout is unverified until the exact company preview and saved Match evidence are retained. A fee already included in the net Deposit must not produce another bank-origin fee, Purchase or withdrawal. Stored Deposit 208 illustrates $113 from Payment 206 less $10 fee = $103 bank movement.
 
 General transfer:
 `manageQboRecord({decisionKey:"transfer_20261031_bank_card",purpose:"Pay down the company credit card from available operating cash",operations:[{ref:"card-payment",op:"create",entity:"Transfer",payload:{TxnDate:"<TODAY>",FromAccountRef:{value:"<BANK_ID>"},ToAccountRef:{value:"<CREDIT_CARD_ACCOUNT_ID>"},Amount:500}}]})`.
@@ -47,9 +47,9 @@ General non-inventory JournalEntry can use appropriate loan/equity accounts for 
 
 Read cash through synced Account balances and dated BalanceSheet/GeneralLedger reports. Check enough cash for scheduled payables and retained operating buffer before non-critical spending. Report a falling buffer and overdue receipts rather than manufacturing cash.
 
-## Owner/manual boundary
+## Native banking boundary
 
-Bank/card reconciliation, bank feeds, matching, rules and cleared status remain manual here. Supply dated ledger/deposit exceptions; retain stable owner items under month-end-and-year-end-close. Never say a statement is matched or the bank reconciled from a Deposit or TrialBalance alone.
+Load banking-feed-operations for simulated bank-origin advice, creator ownership and the native checklist. Upload, Match/Add/Exclude, bank rules and reconciliation use QuickBooks screens through browser automation logged in as the owner. The Accounting API does not perform these steps. If the banking tool/workspace is not exposed in this run, record an exact capability request; do not claim execution or ask the owner to perform routine work. Never say a statement is matched or the bank reconciled from a Deposit or TrialBalance alone.
 
 ## Every account gets a deliberate role
 
@@ -65,7 +65,7 @@ Support breadth is an explicit business purpose in this simulated company: delib
 
 ## Reconciliation feature tests in QuickBooks UI
 
-Get the per-account reconciliation situation checklist: exact account ID/name, statement date, synced account-currency ending balance and UI steps. Those balances are simulated statement targets, not external bank statements or reconstructed historical balances. Recheck the register before use because the business continues operating. Only QuickBooks UI can create/attest blank/C/R states, incomplete reconciliation, discrepancy and completed reconciliation report evidence; the Accounting API does not expose a Reconcile operation or supported read/write reconciliation status. Keep these as **needs owner in QuickBooks UI** and unknown until native evidence is retained. Never use a balanced trial balance, Deposit, or absent flag as reconciliation proof.
+Get the per-account reconciliation situation checklist: exact account ID/name, statement date, synced account-currency ending balance and UI steps. Those balances are simulated statement targets, not external bank statements or reconstructed historical balances. Recheck the register before use because the business continues operating. Only QuickBooks UI can create/attest blank/C/R states, incomplete reconciliation, discrepancy and completed reconciliation report evidence; the Accounting API does not expose a Reconcile operation or supported read/write reconciliation status. Keep these as **needs native browser evidence** and unknown until native evidence is retained. Never use a balanced trial balance, Deposit, or absent flag as reconciliation proof.
 
 Intuit references checked 2026-11-01: [Purchase](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/purchase), [Deposit](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/deposit), [Transfer](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/transfer), [exchange rates](https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/exchangerate), [reconciliation visibility](https://help.developer.intuit.com/s/question/0D5TR00000KQGyp0AH/is-it-is-possible-to-query-reconciliation-status-if-so-please-advise-where-to-find-thisthank-you).
 
