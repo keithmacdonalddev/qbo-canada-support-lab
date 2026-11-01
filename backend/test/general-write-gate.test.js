@@ -513,3 +513,60 @@ for (const change of ['default','metadata','balance','party','date','unknown']) 
  const gate=h.gateFor();if(['default','metadata'].includes(change)){await h.begin(gate);assert.equal(h.data.Receipts.length,1);assert.match(h.data.Receipts[0].periodProof.proofs[0].evidence.records[0].meaningHash,/^[a-f0-9]{64}$/);}
  else {await assert.rejects(h.begin(gate),e=>e.code==='GENERAL_WRITE_REPLAN_REQUIRED'&&e.outcomeUnknown===false);assert.equal(h.data.Receipts.length,0);}
 });
+
+// A saved Payment invalidates its Invoice copy before the next Deposit admission.
+function depositRecoveryFixture(){
+ const h=harness(),invoice={Id:'100',SyncToken:'0',TxnDate:'2026-11-20',TotalAmt:90,Balance:0,CustomerRef:{value:'1'},Line:[],MetaData:{}};
+ const payment={Id:'501',SyncToken:'0',TxnDate:'2026-12-02',TotalAmt:90,CustomerRef:{value:'1'},Line:[{Amount:90,LinkedTxn:[{TxnId:'100',TxnType:'Invoice'}]}],MetaData:{}};
+ h.records.set('Customer:1',{Id:'1',Active:true});h.records.set('Account:50',{Id:'50',Active:true,AccountType:'Bank'});
+ const item={bId:'1',ref:'deposit',op:'create',operation:'create',entity:'Deposit',payload:{TxnDate:'2026-12-02',DepositToAccountRef:{value:'50'},Line:[{Amount:90,LinkedTxn:[{TxnId:'501',TxnType:'Payment',TxnLineId:'0'}]}]}};
+ h.run().batches[0].items=[item];h.run().plan.operations=[item];h.run().items={accepted:{outcome:'saved',entity:'Payment',qboId:'501',record:clone(payment)}};
+ h.native=new Map([['Invoice:100',invoice],['Payment:501',payment]]);let reads=0;
+ h.client.read=async(entity,id)=>{reads++;const name=['Invoice','Payment'].find(name=>name.toLowerCase()===entity.toLowerCase());return {[name]:clone(h.native.get(name+':'+id))};};
+ h.reads=()=>reads;
+ const readAt=(object,key)=>{const keys=key.split('.');const walk=(value,index)=>index===keys.length?value:Array.isArray(value)?value.flatMap(v=>walk(v,index)):walk(value?.[keys[index]],index+1);return walk(object,0);};
+ const queryMatches=(row,filter)=>Object.entries(filter).every(([key,value])=>key==='$or'?value.some(v=>queryMatches(row,v)):key==='$and'?value.every(v=>queryMatches(row,v)):(()=>{const found=readAt(row,key);if(value instanceof Date)return new Date(found).getTime()===value.getTime();if(value&&typeof value==='object'){return Object.entries(value).every(([op,v])=>op==='$in'?v.includes(found):op==='$gte'?new Date(found).getTime()>=new Date(v).getTime():op==='$elemMatch'?Array.isArray(found)&&found.some(r=>queryMatches(r,v)):false);}return found===value;})());
+ h.models.Receipts.find=filter=>{let cap=Infinity;const q={session(){return q;},limit(n){cap=n;return q;},maxTimeMS(){return q;},lean:async()=>clone(h.data.Receipts.filter(r=>queryMatches(r,filter)).slice(0,cap))};return q;};
+ return h;
+}
+test('saved Payment -> Deposit uses fresh graph after mirror miss, with no native read in admission',async()=>{
+ const h=depositRecoveryFixture(),before=clone(h.run().items),gate=h.gateFor(),request=h.request();
+ const evidence=await gate.preflight({request,client:h.client});const readCount=h.reads();
+ const ticket=await gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence});
+ assert.equal(ticket.kind,'general-write');assert.equal(h.reads(),readCount);assert.deepEqual(h.run().items,before);assert.equal(h.run().items.accepted.qboId,'501');
+});
+for(const mode of ['old-saved','late-saved','unknown','unrelated'])test('fresh graph receipt fence: '+mode,async()=>{
+ const h=depositRecoveryFixture(),gate=h.gateFor(),request=h.request(),evidence=await gate.preflight({request,client:h.client});
+ const dependency=mode==='unrelated'?'999':'100',late=mode==='late-saved';
+ h.data.Receipts.push({_id:'prior-'+mode,...scope,entity:'batch',kind:'general-write',state:mode==='unknown'?'unknown':'saved',sentAt:new Date(h.clock+(late?1:-1000)),observedAt:new Date(h.clock+(late?1:-1000)),periodProof:{proofs:[{evidence:{records:[{entity:'Invoice',id:dependency}]}}]}});
+ const begin=()=>gate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence});
+ if(['old-saved','unrelated'].includes(mode))assert.equal((await begin()).kind,'general-write');else await assert.rejects(begin(),/conflicting or unresolved/);
+});
+test('a current conflicting Invoice copy still refuses; fresh linked bodies never grant ownership',async()=>{
+ const h=depositRecoveryFixture();h.records.set('Invoice:100',{...clone(h.native.get('Invoice:100')),Balance:30});await assert.rejects(h.begin(h.gateFor()),e=>e.code==='GENERAL_WRITE_REPLAN_REQUIRED');
+ const x=depositRecoveryFixture(),native=x.native.get('Invoice:100');
+ const item={bId:'1',ref:'change-native-invoice',op:'update',operation:'update',entity:'Invoice',id:'100',before:clone(native),payload:{Id:'100',SyncToken:'0',sparse:true,PrivateNote:'Must not gain edit authority'}};x.run().batches[0].items=[item];x.run().plan.operations=[item];
+ await assert.rejects(x.begin(x.gateFor()),/not created by|owned|ownership|general-created|synced company copy|admission refused|only change/i);
+});
+
+for(const mode of ['scope','run','batch','requestId','requestHash','proofHash','stale','sparse','changed-balance','duplicate','missing'])test('fresh read binding refuses '+mode,async()=>{
+ const h=depositRecoveryFixture();
+ const transport=createGeneralGateTransport({models:h.models,scope,runId,batchIndex:0,now:()=>h.clock,admissionGuard:input=>{
+   const p=input.preflightReads;if(mode==='scope')p.scope.connectionId='f'.repeat(24);if(mode==='run')p.runId='f'.repeat(24);if(mode==='batch')p.batchIndex=1;if(mode==='requestId')p.requestId='f'.repeat(32);if(mode==='requestHash')p.requestHash='f'.repeat(64);if(mode==='proofHash')p.proofHash='f'.repeat(64);if(mode==='stale')p.startedAt=new Date(h.clock-300001).toISOString();if(mode==='sparse')p.records[0].record.sparse=true;if(mode==='changed-balance')p.records.find(r=>r.entity==='Invoice').record.Balance=5;if(mode==='duplicate')p.records.push(clone(p.records[0]));if(mode==='missing')p.records=[];
+   return h.service.guardBatch(input);
+ }});
+ const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
+ await assert.rejects(h.begin(gate),/Fresh linked-record|changed in the fresh linked-record|not in the synced company copy/);assert.equal(h.data.Receipts.length,0);
+});
+test('a disjoint direct Payment claim still blocks Deposit through their shared transitive Invoice',async()=>{
+ const h=depositRecoveryFixture();h.native.get('Invoice:100').Balance=20;h.native.get('Invoice:100').TotalAmt=110;
+ const deposit=h.gateFor(),request=h.request(),evidence=await deposit.preflight({request,client:h.client});
+ const otherId='9'.repeat(24),item={bId:'1',ref:'later-payment',op:'create',operation:'create',entity:'Payment',payload:{TxnDate:'2026-12-02',CustomerRef:{value:'1'},TotalAmt:5,Line:[{Amount:5,LinkedTxn:[{TxnId:'100',TxnType:'Invoice'}]}]}};
+ h.data.GeneralWriteRuns.push({...clone(h.run()),_id:otherId,items:{},owned:[],plan:{operations:[item],layers:[['later-payment']]},batches:[{index:0,attempt:1,requestId:'9'.repeat(32),items:[item],state:'sending',sends:1}]});
+ const transport=createGeneralGateTransport({models:h.models,scope,runId:otherId,batchIndex:0,admissionGuard:i=>h.service.guardBatch(i),now:()=>h.clock});
+ const later=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
+ const otherRequest=buildGeneralBatch(scope,h.data.GeneralWriteRuns[1].batches[0]),otherEvidence=await later.preflight({request:otherRequest,client:h.client});
+ const ticket=await later.begin({request:otherRequest,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId:otherId,batchIndex:0,sends:1},periodEvidence:otherEvidence});assert.equal(ticket.kind,'general-write');
+ await assert.rejects(deposit.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence}),/conflicting or unresolved/);
+ assert.equal(h.data.Receipts.length,1);assert.equal(h.data.Receipts[0].general.runId,otherId);
+});

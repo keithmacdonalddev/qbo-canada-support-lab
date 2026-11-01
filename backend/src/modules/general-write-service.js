@@ -64,6 +64,26 @@ function resolve(value, saved) {
   return out;
 }
 const unresolved = value => JSON.stringify(value).includes('"$ref"');
+// Read-only native bodies from this exact protected-period preflight. They may
+// fill a hardened-copy miss; they never grant ownership or replace current data.
+function preflightRecordsFor({ scope, run, batch, periodProof, preflightReads, now }) {
+  if (!preflightReads) return new Map();
+  const bad = () => fail('Fresh linked-record evidence changed or is incomplete; nothing was sent.');
+  const request = require('./general-write-transport').buildGeneralBatch(scope, batch);
+  if (preflightReads.version !== 1 || canonical(preflightReads.scope) !== canonical(scopeOf(scope)) || preflightReads.runId !== String(run._id) || preflightReads.batchIndex !== batch.index || preflightReads.requestId !== batch.requestId || preflightReads.requestHash !== request.requestHash || preflightReads.proofHash !== hash(periodProof) || !Array.isArray(preflightReads.records) || !Number.isFinite(Date.parse(preflightReads.startedAt)) || now < Date.parse(preflightReads.startedAt) || now - Date.parse(preflightReads.startedAt) > 300000 || periodProof?.kind !== 'general-period-proof') bad();
+  const expected = new Map(), records = new Map();
+  for (const proof of periodProof.proofs || []) for (const row of proof.evidence?.records || []) {
+    const key = row.entity + ':' + row.id;
+    if (expected.has(key) && canonical(expected.get(key)) !== canonical(row)) bad();
+    expected.set(key, row);
+  }
+  for (const row of preflightReads.records) {
+    const key = row.entity + ':' + row.id, proof = expected.get(key), record = row.record;
+    if (!proof || records.has(key) || record?.Id !== row.id || record?.SyncToken !== proof.syncToken || record?.sparse === true || !isComplete(row.entity, record) || hash(record) !== proof.recordHash) bad();
+    records.set(key, JSON.parse(canonical(record)));
+  }
+  return records;
+}
 function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
@@ -77,10 +97,12 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     }
     return owned;
   }
-  async function guard(scope, operations, extras = [], stale = new Set(), session, runId) {
+  async function guard(scope, operations, extras = [], stale = new Set(), session, runId, fresh = new Map()) {
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
-    const local = await loadCopy(session && copy.forSession ? copy.forSession(session) : copy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
+    const currentCopy = session && copy.forSession ? copy.forSession(session) : copy;
+    const readOnlyCopy = { ...currentCopy, read: async (readScope, entity, id) => (await currentCopy.read(readScope, entity, id)) || fresh.get(entity + ':' + id) || null };
+    const local = await loadCopy(readOnlyCopy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
     const result = checkGeneralWrite({ proposal: { operations }, local, context, scope, runId });
     // A later posting day is independent; changing an earlier pending day's records,
     // names or links would change the close's exact readback evidence and must wait.
@@ -288,9 +310,35 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     return { runId: run._id, status: run.status, ...(run.status === 'expired-unsent' || run.retirement?.retainedSavedEffects ? { next: { action: run.retirement?.retainedSavedEffects ? 'replan-remaining' : 'replan', day: run.retirement.currentDay, reason: run.retirement.reason || 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
   }
   // Called again INSIDE gate admission for every unsent/resumed saved batch.
-  async function guardBatch({ scope, run, batch, session, periodProof }) {
+  async function guardBatch({ scope, run, batch, session, periodProof, preflightReads }) {
+    const fresh = preflightRecordsFor({ scope, run, batch, periodProof, preflightReads, now: now() });
+    if (fresh.size) {
+      if (!session || !models.Receipts) fail('Transaction-visible receipt evidence is required for fresh linked records.');
+      const graph = [...new Map(periodProof.proofs.flatMap(proof => proof.evidence.records).map(row => [row.entity + ':' + row.id, { entity: row.entity, id: row.id }])).values()];
+      const dependent = { $or: graph }, since = new Date(preflightReads.startedAt);
+      const affected = await models.Receipts.find({ ...scopeOf(scope), $and: [
+        { $or: [{ state: { $in: ['possibly-sent', 'unknown'] } }, { sentAt: { $gte: since } }, { observedAt: { $gte: since } }] },
+        { $or: [ ...graph.map(row => ({ entity: row.entity.toLowerCase(), 'observed.qboId': row.id })), { 'periodProof.evidence.records': { $elemMatch: dependent } }, { 'periodProof.proofs.evidence.records': { $elemMatch: dependent } } ] },
+      ] }).session(session).limit(101).maxTimeMS(3000).lean();
+      if (affected.length > 100) fail('Fresh linked-record receipt evidence exceeds its inspection budget.');
+      for (const receipt of affected) {
+        // Keep the existing authenticated terminal-attribution exception. A later
+        // actual send/observation still needs a new preflight, even when attributed.
+        let terminal = false;
+        if (receipt.state === 'unknown' && receipt.ownerRecovery && Date.parse(receipt.sentAt) < since.getTime() && Date.parse(receipt.observedAt) < since.getTime() && models.Steps && models.Authorities) {
+          const step = await models.Steps.findOne({ ...scopeOf(scope), operationId: receipt.operationId, logicalKey: receipt.logicalKey }).session(session).maxTimeMS(3000).lean();
+          if (step?.receipt?.source === 'owner-attributed-readback' && step.dispatch?.key === receipt.dispatchKey) {
+            try { const attribution = await require('./business-owner-attribution').assertOwnerAttribution(models, scope, step, session);
+              terminal = attribution?.payload?.receiptId === receipt._id && canonical(receipt.ownerRecovery) === canonical({ version: 1, authorityHash: attribution.authority.contentHash, auditId: String(attribution.authority.auditId), qboId: attribution.payload.qboId, reviewHash: attribution.payload.reviewHash });
+            } catch { /* Unauthenticated attribution remains an unresolved barrier. */ }
+          }
+        }
+        if (!terminal) fail('A linked record has a conflicting or unresolved write; read fresh evidence before continuing.');
+      }
+    }
+
     const operations = batch.items.map(item => { const { Id, SyncToken, sparse, ...payload } = item.payload; return { ref: item.ref, op: item.op, entity: item.entity, ...(item.id ? { id: item.id } : {}), payload, ...(run.plan.operations.find(op => op.ref === item.ref)?.reason ? { reason: run.plan.operations.find(op => op.ref === item.ref).reason } : {}) }; });
-    const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id));
+    const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id), fresh);
     for (const proof of periodProof?.proofs || []) for (const record of proof.evidence.records) {
       const current = local.get(record.entity, record.id);
       if (!current || (hash(current) !== record.recordHash && (!record.meaningHash || hash(require('./qbo-semantic-compare').canonicalQboValue(current, { entity: record.entity, metadata: true })) !== record.meaningHash))) {
@@ -428,4 +476,4 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   api = createGeneralWriteService({ models, copy, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
-module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest };
+module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest, preflightRecordsFor };

@@ -2,6 +2,8 @@
 
 ## Current task tracking
 
+2026-11-01T20:46UTC: A02 fresh-graph admission fix is installed (337 affected /80 saved-source checks passed; both reviews clear); actual deposits still await observed governed execution. A08 now takes priority: live activity/options returns400 BUSINESS_PLAN_UNVERIFIED (exact company scope required), while saved activity remains125 after16 idle reviews. Essential investigation starts20:46, next direct-proof checkpoint21:01. Repair this read-only discovery path before optional UI/catalogue work.
+
 2026-11-01T20:30UTC: shared dedicated-account sign-in is installed and live verified through the common CLI. Current native identity and exact company passed; actual historical banking task completion remains open. A01/A02 now have direct missing-estimate-link and unsent-deposit diagnoses. See the maintained list and [recovery evidence](../plans/saved-invoice-recovery-2026-11-01.md). No new accounting writes or service-control commands in this milestone. Work-value next milestone: repair posting recovery while preserving accepted records; do not repeat saved payments.
  — 2026-11-01
 

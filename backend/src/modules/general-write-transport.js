@@ -63,7 +63,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
     return { run, batch };
   }
   // The batch read at preflight; the gate asserts its period proof synchronously.
-  let preflighted = replayState?.preflighted ?? null, lastResponse = replayState?.lastResponse ?? null, recovery = replayState?.recovery ?? null;
+  let preflighted = replayState?.preflighted ?? null, lastResponse = replayState?.lastResponse ?? null, recovery = replayState?.recovery ?? null, preflightReads = replayState?.preflightReads ?? null;
   const sameReplay = (writer, batch, request) => writer?.unresolved?.kind === 'general-write' && writer.unresolved.runId === runId && writer.unresolved.batchIndex === batchIndex && writer.unresolved.requestId === batch.requestId && writer.unresolved.requestHash === request.requestHash;
   async function recoveryReceipt(writer, batch, request, session) {
     const receiptId = writer?.unresolved?.transportConsumed?.receiptId;
@@ -80,7 +80,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
     async preflight({ request, client, coordination }) {
       const { run, batch } = await saved();
       if (buildGeneralBatch(scope, batch).requestHash !== request.requestHash) throw denied('The general batch request differs from its saved identity.');
-      recovery = null; preflighted = batch;
+      recovery = null; preflightReads = null; preflighted = batch;
       // Reuse the original admission evidence: a saved update advances its target
       // token and a saved delete removes it. Only preferences and controls are fresh.
       const writer = require('./business-writer-fence').writerForRequest(models.Writers ? await read(models.Writers, scope) : null, request);
@@ -101,10 +101,12 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
       }
       if (warmCurrency) await warmCurrency(scope, batch, run);
       // Linked records shared by several items are read once.
-      const memo = new Map(), memoClient = { read: (entity, id) => { const key = entity + ':' + id; if (!memo.has(key)) memo.set(key, client.read(entity, id)); return memo.get(key); }, query: text => { if (!memo.has(text)) memo.set(text, client.query(text)); return memo.get(text); } };
+      const startedAt = new Date(now()).toISOString(), native = new Map(), memo = new Map();
+      const memoClient = { read: (entity, id) => { const key = entity + ':' + id; if (!memo.has(key)) memo.set(key, Promise.resolve().then(() => client.read(entity, id)).then(body => { const name = Object.keys(body || {}).find(name => name.toLowerCase() === entity.toLowerCase()), record = body?.[name]; if (record && record.sparse !== true && require('./general-write-merge').isComplete(name, record)) native.set(name + ':' + id, { entity: name, id, record: JSON.parse(JSON.stringify(record)) }); return body; })); return memo.get(key); }, query: text => { if (!memo.has(text)) memo.set(text, client.query(text)); return memo.get(text); } };
       preflighted = batch;
       const proofs = [];
       for (const item of batch.items) proofs.push(await readWritePeriodEvidence(itemRequest(scope, item), memoClient, now, coordination));
+      preflightReads = { version: 1, scope: { environment: scope.environment, realmId: scope.realmId, connectionId: String(scope.connectionId) }, runId, batchIndex, requestId: batch.requestId, requestHash: request.requestHash, startedAt, records: [...native.values()] };
       return { version: 1, kind: 'general-period-evidence', coordination, scope, requestHash: request.requestHash, runId, batchIndex, proofs };
     },
     assertPeriod({ request, evidence, controls, ownerId, clock }) {
@@ -122,7 +124,9 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
       }
       if (!batch || evidence?.kind !== 'general-period-evidence' || evidence.runId !== runId || evidence.batchIndex !== batchIndex || evidence.requestHash !== request.requestHash || !Array.isArray(evidence.proofs) || evidence.proofs.length !== batch.items.length) throw denied('General protected-period evidence is incomplete.');
       const proofs = evidence.proofs.map((proof, n) => assertWritePeriod(itemRequest(scope, batch.items[n]), proof, controls, clock, ownerId));
-      return { version: 1, kind: 'general-period-proof', runId, batchIndex, proofs, protectedThrough: proofs.map(row => row.protectedThrough).filter(Boolean).sort().at(-1) || null, evidenceHash: hash({ requestHash: request.requestHash, proofs }) };
+      const proof = { version: 1, kind: 'general-period-proof', runId, batchIndex, proofs, protectedThrough: proofs.map(row => row.protectedThrough).filter(Boolean).sort().at(-1) || null, evidenceHash: hash({ requestHash: request.requestHash, proofs }) };
+      if (preflightReads) preflightReads.proofHash = hash(proof);
+      return proof;
     },
     async savedBatch(session) { return (await saved(session)).batch; },
     async resourceTypes({ session }) {
@@ -159,7 +163,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
       if (!replay) {
         if (run.day !== require('./business-activity-preview').businessDate(new Date(now()))) throw Object.assign(denied('The business day changed since this general write was prepared. Nothing was sent.'), { code: 'GENERAL_WRITE_DAY_CHANGED' });
         if (typeof admissionGuard !== 'function') throw denied('Full general-write admission guards are required.');
-        try { historyDates = (await admissionGuard({ scope, run, batch, session, periodProof }))?.reverifyDates || []; }
+        try { historyDates = (await admissionGuard({ scope, run, batch, session, periodProof, preflightReads: preflightReads ? JSON.parse(JSON.stringify(preflightReads)) : null }))?.reverifyDates || []; }
         catch (error) {
           // Keep diagnostics through failureFields/JSON without retaining raw records.
           // The shared serializer omits arbitrary stack fields; these are scrubbed frames.
@@ -202,7 +206,7 @@ function createGeneralGateTransportImplementation({ models, scope, runId, batchI
       if (!updated) throw denied('The general write changed while its response was saved.', true);
     },
   };
-  Object.defineProperty(api, Symbol.for('business-replay-state'), { value: () => ({ preflighted, lastResponse, recovery }) });
+  Object.defineProperty(api, Symbol.for('business-replay-state'), { value: () => ({ preflighted, lastResponse, recovery, preflightReads }) });
   return api;
 }
 // Send one saved batch through a coordinated client and gate. Returns the BatchItemResponse
