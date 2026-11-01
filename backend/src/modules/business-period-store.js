@@ -65,7 +65,7 @@ function validatePeriodProof(run, proof, now = Date.now()) {
   const records = new Map(proof.records.map(record => [record.logicalKey, record]));
   for (const record of proof.records) for (const link of record.relationships) {
     const parent = records.get(link.logicalKey);
-    if (!parent || parent.qboId !== link.qboId || parent.entity !== link.entity || parent.syncToken !== link.syncToken) throw problem('Verified relationships do not match the observed record versions');
+    if (!parent || parent.qboId !== link.qboId || parent.entity !== link.entity) throw problem('Verified relationships do not match the current record identities');
   }
   if (!Array.isArray(proof.assertions) || proof.assertions.length !== run.requiredAssertions.length) throw problem('Required business assertions are incomplete');
   const assertions = new Set();

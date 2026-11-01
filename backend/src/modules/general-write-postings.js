@@ -9,6 +9,15 @@
 //   - current postings: a record's current GL rows equal postingsOf(its current record)
 //     (an update from $100 to $150 expects $150; a deleted or voided record expects none);
 //   - period movement: date-allocated before/after differences (movementsOf).
+// Provider presentation is audit data. Only typed accounting content participates in
+// close comparisons; retained request/receipt bodies themselves are never rewritten.
+const ACCOUNTING_FIELDS = new Set(['Id','TxnDate','DueDate','TotalAmt','HomeTotalAmt','Amount','Balance','HomeBalance','RemainingCredit','UnappliedAmt','CurrencyRef','ExchangeRate','GlobalTaxCalculation','TxnTaxDetail','TotalTax','TaxLine','TaxLineDetail','TaxRateRef','NetAmountTaxable','TaxPercent','PercentBased','Line','DetailType','SalesItemLineDetail','ItemBasedExpenseLineDetail','AccountBasedExpenseLineDetail','JournalEntryLineDetail','DepositLineDetail','DiscountLineDetail','SubTotalLineDetail','SalesItemLineGroupDetail','GroupLineDetail','Qty','UnitPrice','TaxInclusiveAmt','MarkupInfo','Percent','Value','PriceLevelRef','LinkedTxn','TxnId','TxnType','TxnLineId','PostingType','Credit','PaymentType','PayType','CheckPayment','CreditCardPayment','Entity','Type','BillableStatus','Billable','Taxable','Hours','Minutes','HourlyRate','StartTime','EndTime','BreakHours','BreakMinutes','TimeActivityType','NameOf','PurchaseCost','PurchaseTaxIncluded','SalesTaxIncluded','TrackQtyOnHand','QtyOnHand','InvStartDate','AccountType','AccountSubType','Active','status']);
+function accountingView(value, key = '') {
+  if (Array.isArray(value)) return value.map(row => accountingView(row, key));
+  if (!value || typeof value !== 'object') return value;
+  if (/Ref$/.test(key)) return { ...(value.value === undefined ? {} : { value: value.value }), ...(value.type === undefined ? {} : { type: value.type }) };
+  return Object.fromEntries(Object.entries(value).filter(([field]) => ACCOUNTING_FIELDS.has(field) || /Ref$/.test(field)).map(([field, child]) => [field, accountingView(child, field)]));
+}
 const NON_POSTING = new Set(['Estimate', 'PurchaseOrder', 'TimeActivity', 'Attachable', 'Customer', 'Vendor', 'Employee', 'Item', 'Account', 'Class', 'Department', 'Term', 'PaymentMethod', 'Preferences']);
 // Control side of each posting entity: +1 debit, -1 credit, for the record's gross.
 const SALES = { Invoice: -1, SalesReceipt: -1, CreditMemo: 1, RefundReceipt: 1 }, PURCHASES = { Bill: 1, Purchase: 1, VendorCredit: -1 };
@@ -103,6 +112,23 @@ function nativePostingsOf(entity, record, ctx) {
     default: return fail(entity + ' has no posting rule.');
   }
 }
+// A trusted current cash/credit application must also reconcile internally, even
+// when its date is outside the period whose parent is being closed.
+function settlementConsistent(entity, record) {
+  if (!['Payment','BillPayment'].includes(entity)) return true;
+  try {
+    const total = cents(record.TotalAmt), left = record.UnappliedAmt === undefined ? null : cents(record.UnappliedAmt);
+    let net = 0;
+    for (const line of record.Line || []) {
+      if (line.LinkedTxn?.length !== 1) return false;
+      const type = line.LinkedTxn[0].TxnType, amount = cents(line.Amount);
+      const normal = entity === 'Payment' ? 'Invoice' : 'Bill', credit = entity === 'Payment' ? 'CreditMemo' : 'VendorCredit';
+      if (amount < 0 || ![normal, credit].includes(type)) return false;
+      net += (type === credit ? -1 : 1) * amount;
+    }
+    return total >= 0 && net >= 0 && net <= total && Number.isSafeInteger(net) && (left === null || left >= 0 && net + left === total);
+  } catch { return false; }
+}
 function postingsOf(entity, record, ctx) {
   const { currencyOf, foreignPostings } = require('./general-write-currency');
   if (!record || NON_POSTING.has(entity) || currencyOf(record) === 'CAD' || record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) return nativePostingsOf(entity, record, ctx);
@@ -128,4 +154,4 @@ function movementsOf(entity, before, after, ctx) {
   return [...rows].filter(([, amount]) => amount).map(([key, amount]) => { const [date, accountId] = key.split('|'); return { date, accountId, cents: amount }; }).sort((a, b) => (a.date + a.accountId).localeCompare(b.date + b.accountId));
 }
 const isPosting = entity => !NON_POSTING.has(entity);
-module.exports = { postingsOf, compareLedger, movementsOf, isPosting, NON_POSTING };
+module.exports = { accountingView, settlementConsistent, postingsOf, compareLedger, movementsOf, isPosting, NON_POSTING };

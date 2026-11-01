@@ -239,3 +239,14 @@ test('supplemental interrupted completion repairs its original receipt without t
  const h=supplementalHarness();h.Runs.failStatus='verified';await assert.rejects(h.store.finish(id,scope),/interrupted/);
  assert.equal(h.Calendars.value.verifiedThrough,'2026-10-05');assert.ok(h.Calendars.value.pendingCommit);assert.equal(h.Runs.value.status,'committing');await h.store.repair(scope,id);assert.equal(h.Calendars.value.revision,4);assert.equal(h.Calendars.value.verifiedThrough,'2026-10-05');assert.equal(h.Calendars.value.lastVerifiedOperationId,'e'.repeat(24));assert.equal(h.Calendars.value.lastActivityOperationId,id);
 });
+
+test('current relationship identity survives later parent versions while wrong identity still fails', () => {
+  const data=fixture(),parent=data.proof.records[0];
+  const child={...clone(parent),logicalKey:hash('payment'),fingerprint:hash('payment-intent'),entity:'Payment',qboId:'101',relationships:[{logicalKey:parent.logicalKey,entity:'Invoice',qboId:parent.qboId,syncToken:'0'}]};
+  parent.syncToken='4';data.proof.records.push(child);data.run.recordCount=2;
+  data.proof.expectedRecordSetHash=data.run.expectedRecordSetHash=hash(data.proof.records.map(r=>({logicalKey:r.logicalKey,entity:r.entity,fingerprint:r.fingerprint,relationships:r.relationships.map(l=>l.logicalKey).sort()})).sort((a,b)=>a.logicalKey.localeCompare(b.logicalKey)));
+  data.proof.assertions[0].recordSetHash=hash([...data.proof.records].sort((a,b)=>a.logicalKey.localeCompare(b.logicalKey)));data.run.verificationCandidateHash=hash(data.proof);
+  assert.doesNotThrow(()=>validatePeriodProof(data.run,data.proof,Date.parse(timestamp)));
+  child.relationships[0].qboId='999';data.run.verificationCandidateHash=hash(data.proof);
+  assert.throws(()=>validatePeriodProof(data.run,data.proof,Date.parse(timestamp)),/current record identities/);
+});

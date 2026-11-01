@@ -7,6 +7,8 @@
 // never clears an externally edited record. dirtyRange turns durable dirty-period markers
 // into the closes that must be re-verified, through the current cursor.
 const { hash } = require('./business-calendar');
+const { accountingView, NON_POSTING } = require('./general-write-postings');
+const accountingRecord = (entity, record) => NON_POSTING.has(entity) && entity !== 'TimeActivity' ? record : accountingView(record);
 const { businessErrorDetail, definitionDifferences } = require('./business-error-detail');
 // Fields an own later settlement may change on a parent: balance, remaining credit,
 // backlinks, version metadata and the deposit/billing status those links imply.
@@ -16,7 +18,7 @@ const { sameQboValue } = require('./qbo-semantic-compare');
 function sameProvenRecord(entity, proof, current, expectedHash) {
   const version = /^(0|[1-9]\d{0,63})$/;
   if (!proof || !current || typeof proof.SyncToken !== 'string' || typeof current.SyncToken !== 'string' || !version.test(proof.SyncToken || '') || !version.test(current.SyncToken || '') || BigInt(current.SyncToken) < BigInt(proof.SyncToken)) return false;
-  return Boolean(hash(proof) === expectedHash && sameQboValue(proof, current, { entity, metadata: true }));
+  return Boolean(hash(proof) === expectedHash && sameQboValue(accountingRecord(entity, proof), accountingRecord(entity, current), { entity, metadata: true }));
 }
 function headerLinks(record) { return (record?.LinkedTxn || []).map(link => (link.TxnType === 'BillPaymentCheck' ? 'BillPayment' : link.TxnType) + ':' + String(link.TxnId)); }
 // proven: the version last proved; current: the copy's version; ownSettlements: set of
@@ -24,12 +26,69 @@ function headerLinks(record) { return (record?.LinkedTxn || []).map(link => (lin
 // Close supplies a Map from each settlement key to its exact parent keys. Pure callers
 // may supply a Set when parent ownership has already been established.
 // True when current differs from proven only by those settlements' effects.
+function settlementTargets(value) { return value instanceof Set ? value : new Set(value?.targets || []); }
+function allocation(record, entity, id) {
+  let total = 0;
+  for (const line of record?.Line || []) {
+    const links = line.LinkedTxn || [];
+    if (!links.some(link => (link.TxnType === 'BillPaymentCheck' ? 'BillPayment' : link.TxnType) === entity && String(link.TxnId) === String(id))) continue;
+    // A split line cannot establish how much belongs to each source.
+    const amount = Math.round(line.Amount * 100);
+    if (links.length !== 1 || typeof line.Amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0 || Math.abs(line.Amount * 100 - amount) > 0.00001) return null;
+    total += amount; if (!Number.isSafeInteger(total)) return null;
+  }
+  return total;
+}
 function explainedByOwnSettlements(proven, current, ownSettlements, entity) {
-  if (!proven || !current) return false;
-  const strip = record => Object.fromEntries(Object.entries(record).filter(([key]) => !SETTLEMENT_FIELDS.has(key) && key !== 'Line'));
-  if (!sameQboValue(strip(proven), strip(current), { entity, metadata: true }) || !sameQboValue({ Line: proven.Line || [] }, { Line: current.Line || [] })) return false;
-  const before = new Set(headerLinks(proven)), added = headerLinks(current).filter(key => !before.has(key));
-  return added.length > 0 && headerLinks(proven).every(key => headerLinks(current).includes(key)) && added.every(key => ownSettlements.has(key) && (!(ownSettlements instanceof Map) || ownSettlements.get(key).has(entity + ':' + current.Id)));
+  if (!proven || !current || String(proven.Id) !== String(current.Id)) return false;
+  const version = /^(0|[1-9]\d{0,63})$/;
+  if (!version.test(proven.SyncToken || '') || !version.test(current.SyncToken || '') || BigInt(current.SyncToken) < BigInt(proven.SyncToken)) return false;
+  const strip = record => Object.fromEntries(Object.entries(accountingView(record)).filter(([key]) => !SETTLEMENT_FIELDS.has(key)));
+  if (!sameQboValue(strip(proven), strip(current), { entity, metadata: true })) return false;
+  const before = new Set(headerLinks(proven)), links = headerLinks(current), added = links.filter(key => !before.has(key));
+  if (new Set(links).size !== links.length || ![...before].every(key => links.includes(key))) return false;
+  const target = entity + ':' + current.Id;
+  if (!added.every(key => ownSettlements.has(key) && (!(ownSettlements instanceof Map) || settlementTargets(ownSettlements.get(key)).has(target)))) return false;
+  // Legacy pure Set callers have already established the target graph. Runtime
+  // callers supply bodies so ownership alone cannot explain an arbitrary balance.
+  if (!(ownSettlements instanceof Map)) return added.length > 0;
+  const cents = value => typeof value === 'number' && Number.isSafeInteger(Math.round(value * 100)) && Math.abs(value * 100 - Math.round(value * 100)) < 0.00001 ? Math.round(value * 100) : null;
+  let applied = 0;
+  const completeGraph = typeof current.TotalAmt === 'number' && ['Invoice','Bill','CreditMemo','VendorCredit'].includes(entity);
+  const applicationType = ['Bill','VendorCredit'].includes(entity) ? 'BillPayment:' : 'Payment:';
+  const applications = completeGraph ? links.filter(key => key.startsWith(applicationType)) : added;
+  if (added.some(key => !key.startsWith(applicationType) && !key.startsWith('Deposit:'))) return false;
+  if (!applications.length) return false;
+  for (const key of applications) {
+    if (!ownSettlements.has(key) || !settlementTargets(ownSettlements.get(key)).has(target)) return false;
+    const body = ownSettlements.get(key)?.record;
+    if (!body || body.status === 'Voided' || body.PrivateNote?.startsWith?.('Voided')) return false;
+    const amount = allocation(body, entity, current.Id);
+    if (amount === null || amount <= 0) return false;
+    const party = entity === 'Bill' || entity === 'VendorCredit' ? 'VendorRef' : 'CustomerRef';
+    if (proven[party]?.value && body[party]?.value && proven[party].value !== body[party].value) return false;
+    if (key.startsWith('Deposit:')) {
+      const gross = cents(proven.TotalAmt) ?? (proven.Line || []).reduce((n, line) => n + (cents(line.Amount) || 0), 0);
+      if (!['Payment','SalesReceipt'].includes(entity) || amount !== gross || !body.DepositToAccountRef?.value || (!sameQboValue(proven.DepositToAccountRef || null, current.DepositToAccountRef || null) && current.DepositToAccountRef?.value !== body.DepositToAccountRef.value)) return false;
+    } else {
+      const expected = ['Bill','VendorCredit'].includes(entity) ? 'BillPayment:' : 'Payment:';
+      if (!key.startsWith(expected)) return false;
+      applied += amount;
+    }
+  }
+  const openField = entity === 'CreditMemo' && (proven.RemainingCredit !== undefined || current.RemainingCredit !== undefined) ? 'RemainingCredit' : ['Invoice','Bill','VendorCredit','CreditMemo'].includes(entity) ? 'Balance' : null;
+  for (const field of ['Balance','RemainingCredit','UnappliedAmt']) {
+    if (field !== openField && !sameQboValue(proven[field] ?? null, current[field] ?? null)) return false;
+    if (field !== openField) continue;
+    if (proven[field] === undefined && current[field] === undefined) continue;
+    const old = cents(proven[field]), next = cents(current[field]);
+    if (old === null || next === null || next < 0 || (completeGraph ? cents(current.TotalAmt) : old) - applied !== next) return false;
+  }
+  // Foreign home allocations require their original conversion proof, never a
+  // guessed proportional exchange rate from today's remaining balance.
+  if (proven.HomeBalance !== current.HomeBalance) return false;
+  if (!added.some(key => key.startsWith('Deposit:')) && !sameQboValue(proven.DepositToAccountRef || null, current.DepositToAccountRef || null)) return false;
+  return true;
 }
 // evidence: { accountant: { versionHash, record } | null, fixed: { observedHash, record } |
 // null, adopted: { proofHash, record } | null }. Returns { kind, reason }.
@@ -78,7 +137,7 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         const proof = row.evidence?.accountant, ownDeposit = ['Payment', 'SalesReceipt'].includes(row.entity) && explainedByOwnSettlements(proof?.record, row.current, ownSettlements, row.entity)
           && headerLinks(row.current).some(key => key.startsWith('Deposit:') && ownSettlements.has(key));
         const requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
-        if (!row.deleted && !require('./general-write-recovery').matchesRequest(row.evidence?.accountant?.request || {}, requestedView, row.entity)) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
+        if (!row.deleted && !require('./qbo-semantic-compare').matchesQboRequest(accountingRecord(row.entity, row.evidence?.accountant?.request || {}), accountingRecord(row.entity, requestedView), { entity: row.entity })) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
         const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);
         result.postings = comparison;
@@ -90,4 +149,4 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
   }
   return { ok: failures.length === 0, results, movements, failures };
 }
-module.exports = { classifyRecord, explainedByOwnSettlements, dirtyRange, earliestAffected, versionHash, sameProvenRecord, evaluateDay };
+module.exports = { accountingRecord, classifyRecord, explainedByOwnSettlements, dirtyRange, earliestAffected, versionHash, sameProvenRecord, allocation, evaluateDay };

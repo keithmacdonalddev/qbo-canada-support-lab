@@ -55,7 +55,7 @@ function balances(report, accounts, selected, period) {
 function accountSelection(scope, mappings, accounts, keys = KEYS) {
   return keys.map(key => {
     const rows = accounts.filter(row => row.Id === mappings[key]), role = MAPPINGS[key], row = rows[0];
-    if (rows.length !== 1 || !role.types.includes(row.AccountType) || (role.subtypes && !role.subtypes.includes(row.AccountSubType)) || (role.currency && row.CurrencyRef?.value !== role.currency)) fail('The selected ' + role.label.toLowerCase() + ' definition is unavailable.');
+    if (rows.length !== 1 || row.Active === false || !role.types.includes(row.AccountType) || (role.subtypes && !role.subtypes.includes(row.AccountSubType)) || (role.currency && row.CurrencyRef?.value !== role.currency)) fail('The selected ' + role.label.toLowerCase() + ' definition is unavailable.');
     let definition; try { definition = referenceDefinition(scope, 'Account', row); } catch { fail('The selected financial account definition is incomplete.'); }
     return { key, id: row.Id, definitionHash: definition.hash };
   });
@@ -82,7 +82,7 @@ function validateFinancialExpectation(value, scope, period, entries) {
   if (!equal(accountSelection(scope, mappings, value.source.accounts, keysFor(value)), value.accounts) || !equal(balances(unpackReport('TrialBalance', value.source.report, value.version >= 2 ? 3 : 2), value.source.accounts, value.accounts, period), value.opening)) fail('The starting account balances differ from their retained source.');
   for (const entry of entries || []) for (const ref of entry.step.references.filter(ref => ref.entity === 'Account' && keysFor(value).includes(ref.key))) {
     const expected = value.accounts.find(row => row.key === ref.key);
-    if (ref.id !== expected.id || ref.definition?.hash !== expected.definitionHash) fail('A managed activity uses a different approved financial account.');
+    if (ref.id !== expected.id) fail('A managed activity uses a different approved financial account.');
   }
   if (value.version === 3) for (const selected of value.accounts) {
     const aliases = value.accounts.filter(row => row.id === selected.id);
@@ -104,7 +104,7 @@ function earningsLines(expectation, step, payload, policy, add) {
   };
   const account = key => {
     const row = binding('Account', key), expected = selected.get(key);
-    if (!expected || row.id !== expected.id || row.definition.hash !== expected.definitionHash) fail('The original earnings account differs from its selected starting definition.');
+    if (!expected || row.id !== expected.id) fail('The original earnings account differs from its selected starting definition.');
     return row.id;
   };
   const exact = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype && equal(Object.keys(value).sort(), [...keys].sort());
@@ -193,7 +193,7 @@ function movementRow(expectation, step, compiled, policy, origin) {
     }
     case 'Deposit': {
       const holding = step.references.filter(row => row.entity === 'Account' && row.key === 'undepositedFunds'), links = payload.Line?.[0]?.LinkedTxn, relationship = compiled.relationships.filter(row => row.entity === 'Payment' && row.logicalKey === step.details.amountSourceKey);
-      if (payload.Line?.length !== 1 || links?.length !== 1 || links[0].TxnType !== 'Payment' || relationship.length !== 1 || relationship[0].kind !== 'linked' || relationship[0].qboId !== links[0].TxnId || holding.length !== 1 || holding[0].id !== selected.undepositedFunds || holding[0].definition.hash !== expectation.accounts.find(row => row.key === 'undepositedFunds').definitionHash) fail('The deposit lacks its exact verified undeposited payment origin.');
+      if (payload.Line?.length !== 1 || links?.length !== 1 || links[0].TxnType !== 'Payment' || relationship.length !== 1 || relationship[0].kind !== 'linked' || relationship[0].qboId !== links[0].TxnId || holding.length !== 1 || holding[0].id !== selected.undepositedFunds) fail('The deposit lacks its exact verified undeposited payment origin.');
       const amount = net(); add('undepositedFunds', -amount); add(ref('operatingBank', payload.DepositToAccountRef), amount); break;
     }
     case 'Estimate': case 'PurchaseOrder': case 'TimeActivity': break;
@@ -212,7 +212,7 @@ function compareFinancialMovements(expectation, basis, observation) {
   try {
     if (!equal(observation.scope, expectation.scope) || !equal(observation.period, expectation.period)) fail('Financial report observation changed company or period.');
     const mappings = Object.fromEntries(expectation.accounts.map(row => [row.key, row.id]));
-    if (!equal(accountSelection(expectation.scope, mappings, observation.accounts, keys), expectation.accounts)) fail('Selected financial account definitions changed.');
+    if (!equal(accountSelection(expectation.scope, mappings, observation.accounts, keys).map(({ key, id }) => ({ key, id })), expectation.accounts.map(({ key, id }) => ({ key, id })))) fail('Selected financial account definitions changed.');
     actual = balances(unpackReport('TrialBalance', observation.reports.TrialBalance, observation.version), observation.accounts, expectation.accounts, expectation.period);
   } catch (error) { if (error.code !== 'BUSINESS_FINANCIAL_MOVEMENTS_UNVERIFIED') throw error; reason = error.message; }
   const grouped = expectation.version === 3 ? [...new Set(expectation.accounts.map(row => row.id))].map(id => expectation.accounts.filter(row => row.id === id).map(row => row.key)) : KEYS.map(key => [key]);

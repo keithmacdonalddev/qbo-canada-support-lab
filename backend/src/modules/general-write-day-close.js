@@ -125,16 +125,16 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
   // Ownership is target-specific and must still explain the current settlement,
   // including settlements dated outside this close. Resolve deposits/credit applications
   // from exact saved versions first, then their own explained parent changes.
-  const trusted = new Map(), pending = settlementVersions.filter(row => row.outcome === 'saved' && row.op !== 'void' && row.targets.length && row.current && row.record?.Id && row.record.status !== 'Voided' && !row.record.PrivateNote?.startsWith?.('Voided') && row.current.status !== 'Voided' && !row.current.PrivateNote?.startsWith?.('Voided'));
+  const trusted = new Map(), pending = settlementVersions.filter(row => row.outcome === 'saved' && row.op !== 'void' && row.targets.length && row.current && require('./general-write-postings').settlementConsistent(row.key.split(':')[0], row.current) && row.record?.Id && row.record.status !== 'Voided' && !row.record.PrivateNote?.startsWith?.('Voided') && row.current.status !== 'Voided' && !row.current.PrivateNote?.startsWith?.('Voided'));
   for (let changed = true; changed;) {
     changed = false;
     for (const row of pending) {
       if (trusted.has(row.key)) continue;
       if (!require('./general-write-close').sameProvenRecord(row.key.split(':')[0], row.record, row.current, hash(row.record)) && !explainedByOwnSettlements(row.record, row.current, trusted, row.key.split(':')[0])) continue;
-      trusted.set(row.key, new Set(row.targets)); changed = true;
+      trusted.set(row.key, { targets: row.targets, record: row.current }); changed = true;
     }
   }
-  const ownSettlements = [...trusted].map(([key, targets]) => ({ key, targets: [...targets] })).sort((a, b) => a.key.localeCompare(b.key));
+  const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets, record: value.record })).sort((a, b) => a.key.localeCompare(b.key));
   settlementVersions.sort((a, b) => a.key.localeCompare(b.key));
   return { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
 }
@@ -145,7 +145,7 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
 async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
   if (records.some(row => [row.current, row.before].some(record => record?.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD')) && ledgerReport?.Header?.Currency !== 'CAD') fail('Foreign records require a General Ledger explicitly expressed in CAD.');
-  const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, new Set(row.targets)]));
+  const settlements = new Map([...(evidence.ownSettlements || []), ...(ownSettlements || [])].map(row => [row.key, { targets: row.targets, record: row.record }]));
   const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx, fromDate: day, throughDate: through });
   const general = new Set(records.map(row => row.entity + ':' + row.id));
   const others = Object.keys(ledger.byRecord).filter(key => !general.has(key)).sort();

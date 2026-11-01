@@ -79,8 +79,8 @@ test('posting-reference changes during the ledger read cannot produce a passing 
   const saved=invoice(100,'2026-12-02'),item={Id:'40',Type:'Service',IncomeAccountRef:{value:'400'}};
   const run={_id:'race',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:saved}}};
   const h=setup({run,copyRecord:saved,itemRecord:item});
-  await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const report=await h.readLedger(...args);item.IncomeAccountRef.value='999';return report;}}),/posting references changed/);
-  assert.equal(h.closes.length,1);assert.equal(h.closes[0].ok,false);assert.match(h.closes[0].errorDetail.message,/posting references changed/);
+  await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const report=await h.readLedger(...args);item.IncomeAccountRef.value='999';return report;}}),/posting references changed|General Ledger rows differ/);
+  assert.equal(h.closes.length,1);assert.equal(h.closes[0].ok,false);assert.match(h.closes[0].errorDetail.message,/posting references changed|General Ledger rows differ/);
 });
 
 test('an external move from a closed day into the closing period cannot escape enumeration', async () => {
@@ -89,4 +89,21 @@ test('an external move from a closed day into the closing period cannot escape e
   const h = setup({ run, copyRecord: current });
   await assert.rejects(h.gate.assertPeriodReady(scope, { fromDate: '2026-12-02', throughDate: '2026-12-02', verifiedThrough: '2026-12-01', mappings, readLedger: h.readLedger }), /changed after it was proved/);
   assert.equal(h.reads.length, 1);
+});
+
+test('provider defaults, notes and reference labels do not change accounting or interrupt a coherent ledger window', async () => {
+  const saved=invoice(100,'2026-12-02'),current=structuredClone(saved);
+  const run={_id:'presentation',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:saved,request:{...saved,PrivateNote:'original',Line:saved.Line.map(line=>({...line,Description:'old description'}))}}}};
+  const h=setup({run,copyRecord:current});
+  current.PrivateNote='new memo';current.ClientEntityId='provider default';current.CustomerRef.name='renamed';current.Line[0].Description='renamed service';
+  const result=await h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const report=await h.readLedger(...args);current.ProviderDefault={new:true};current.SyncToken='1';return report;}});
+  assert.equal(result.results[0].ok,true);
+});
+
+test('a tax-role rename during the ledger window refreshes once and detects new ambiguity', async () => {
+  const saved=invoice(100,'2026-12-02'),accounts=[{qboId:'210',record:{AccountSubType:'GlobalTaxPayable'}},{qboId:'211',record:{AccountSubType:'OtherCurrentLiabilities',Name:'Other liability'}}];
+  const run={_id:'tax-role',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:saved}}};
+  const h=setup({run,copyRecord:saved,taxAccounts:accounts});
+  await assert.rejects(h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:async(...args)=>{const result=await h.readLedger(...args);accounts[1].record.Name='HST liability';return result;}}),/tax posting account cannot be attributed uniquely/);
+  assert.equal(h.reads.length,2);assert.equal(h.closes.at(-1).ok,false);
 });
