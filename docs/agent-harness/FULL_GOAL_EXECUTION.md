@@ -1,5 +1,9 @@
 # Whole-goal execution and current handoff
 
+## Current task tracking — 2026-11-01
+
+Start with [the maintained app completion task list](../plans/app-completion-task-list-2026-11-01.md). It records the fresh session/source/app/native-QBO review, active dedicated sign-in integration, remaining outcomes, dependencies and direct proof. Update it after every verified milestone and continue the next independent authorized task. The dated evidence below remains historical; no older snapshot resets current company progress or grants new live authority.
+
 Updated 2026-10-18 UTC (2026-10-17 Halifax). This governs execution of the owner's full Test Data Lab request; it does not grant new company, service, provider or destructive-action authority.
 
 ## Orchestrator handoff — 2026-10-31 (read first)

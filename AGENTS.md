@@ -61,6 +61,8 @@ Owner direction, 2026-10-23: every frontend and backend change must serve the us
 
 ## Full-goal execution
 
+Read and maintain [the current app completion task list](docs/plans/app-completion-task-list-2026-11-01.md) when implementing the remaining owner outcomes. Update task status, direct evidence and the next step at every verified milestone; do not infer completion from tests or commits.
+
 For the owner’s full product/company request, follow [the execution contract and current handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md). Keep the complete outcome as the finish line and continue the next authorized step after each verified milestone. An unanswered decision blocks only its dependent actions; check independent branches before calling the whole job blocked. Reuse valid target-specific authorization while respecting explicit budgets and factual/destructive boundaries. Status questions and frustration do not cancel the goal or justify an acknowledgement-only final response.
 
 Check the actual goal-control state before promising automatic continuation and after a resume instruction. If it remains paused despite the owner’s continue instruction, keep authorized work moving in the current turn, report the unavailable resume control once, and do not claim the automatic task is active. These instructions do not grant new QBO, database, provider or service authority.
