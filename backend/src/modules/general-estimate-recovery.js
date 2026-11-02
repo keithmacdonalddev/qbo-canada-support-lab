@@ -108,7 +108,8 @@ function idleWriter(writer,scope) {
 function createRecoveryFence({models,transaction,authorize,now=()=>Date.now()}) {
   const one=(Model,filter,session)=>{let q=Model.findOne(filter);if(session)q=q.session(session);return q.maxTimeMS(3000).lean();};
   const conflicts=async(scope,ids,session)=>{
-    const graph=[{entity:'Invoice',id:ids.invoiceId},{entity:'Estimate',id:ids.estimateId}];
+    const graph=ids.graph||[{entity:'Invoice',id:ids.invoiceId},{entity:'Estimate',id:ids.estimateId}];
+    if(!Array.isArray(graph)||!graph.length||graph.length>24||graph.some(r=>!['Invoice','Estimate','BillPayment','Bill'].includes(r.entity)||!QID.test(r.id||''))||new Set(graph.map(r=>r.entity+':'+r.id)).size!==graph.length)throw Error('Exact recovery target graph required');
     const filter={...scope,state:{$in:['possibly-sent','unknown']},$or:[...graph.map(r=>({entity:r.entity.toLowerCase(),'observed.qboId':r.id})),{'periodProof.evidence.records':{$elemMatch:{$or:graph}}},{'periodProof.proofs.evidence.records':{$elemMatch:{$or:graph}}}]};
     let q=models.Receipts.find(filter);if(session)q=q.session(session);return (await q.limit(1).maxTimeMS(3000).lean()).length>0;
   };

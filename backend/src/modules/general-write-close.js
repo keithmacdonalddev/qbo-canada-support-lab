@@ -136,14 +136,17 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         // after an owned Deposit. Its original request still described Undeposited Funds.
         const proof = row.evidence?.accountant, ownDeposit = ['Payment', 'SalesReceipt'].includes(row.entity) && explainedByOwnSettlements(proof?.record, row.current, ownSettlements, row.entity)
           && headerLinks(row.current).some(key => key.startsWith('Deposit:') && ownSettlements.has(key));
-        let requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
+        const apProof=proof?.apOmission,apView=apProof?require('./general-billpayment-recovery').accountingView(row.current,apProof):null;if(apProof&&!apView)throw Error('The proved omitted payable account no longer matches this payment');
+        const accountingCurrent=apView||row.current;
+        let requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : accountingCurrent;
         if(row.entity==='Estimate'&&proof.estimateConversion) requestedView={...requestedView,TxnStatus:proof.estimateConversion.originalStatus};
         if (!row.deleted && !require('./qbo-semantic-compare').matchesQboRequest(accountingRecord(row.entity, row.evidence?.accountant?.request || {}), accountingRecord(row.entity, requestedView), { entity: row.entity })) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
-        const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);
+        const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : accountingCurrent, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);
+        if(apView&&inPeriod&&!require('./general-billpayment-recovery').exactRows(accountingCurrent,ledger[key]||[])){comparison.ok=false;comparison.differences.push({field:'BillPayment ledger rows',reason:'Expected exactly the proved payable debit and bank credit'});}
         result.postings = comparison;
         if (!comparison.ok) failures.push({ key, reason: 'Its General Ledger rows differ from the postings its own lines require.', differences: comparison.differences });
-        if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : row.current, { ...ctx, postingSources: proof?.postingSources }));
+        if (row.before !== undefined) movements.push(...movementsOf(row.entity, row.before, row.deleted ? null : accountingCurrent, { ...ctx, postingSources: proof?.postingSources }));
       } catch (error) { failures.push({ key, reason: error.message, errorDetail: businessErrorDetail(error, { entity: row.entity, recordId: row.id }) }); }
     }
     results.push(result);

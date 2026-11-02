@@ -107,12 +107,12 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
       const version = BigInt((item.op === 'delete' ? request.SyncToken : item.record?.SyncToken) ?? op?.targetVersion ?? before?.SyncToken ?? -1);
       // Newest proved version wins regardless of run-id ordering; a successful delete
       // follows the version it consumed and must not be hidden by an earlier create.
-      if (!previous || version > previous.version || version === previous.version && item.outcome === 'deleted') candidates.set(key, { item, op, before, id, version, dates, request });
+      if (!previous || version > previous.version || version === previous.version && item.outcome === 'deleted') candidates.set(key, { run,ref,item, op, before, id, version, dates, request });
       else previous.dates = dates;
     }
   }
   const records = [], settlementVersions = [];
-  for (const { item, op, before, id, dates, request } of candidates.values()) {
+  for (const { run,ref,item, op, before, id, dates, request } of candidates.values()) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
     if (item.outcome === 'saved' && !preservesBillableState(before, item.record, item.entity)) fail('General write ' + item.entity + ' ' + id + ' changed native billable expense history; recover its original evidence before close.');
@@ -120,9 +120,10 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
     const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
+    let apOmission=null;if(item.entity==='BillPayment'&&item.reconciliation?.kind===require('./general-billpayment-recovery').KIND){const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope}).maxTimeMS(3000).lean();apOmission=await require('./general-billpayment-recovery').loadProof({models,scope,run,ref,receipt,current});if(!apOmission)fail('Saved bill-payment account proof is unavailable or changed');}
     const deleted = item.outcome === 'deleted';
     records.push({ entity: item.entity, id, current: current || null, deleted, unavailable: !deleted && !current, before: item.op === 'create' ? null : before,
-      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request, postingSources: item.postingSources || {} } } });
+      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request, ...(apOmission?{apOmission}:{}),postingSources: item.postingSources || {} } } });
   }
   // Ownership is target-specific and must still explain the current settlement,
   // including settlements dated outside this close. Resolve deposits/credit applications
@@ -172,9 +173,18 @@ function settlementEvidence(gathered) {
 // ledger, movements for the period assertion, and dirty ranges through the cursor.
 // Ledger rows of transactions that are not general records belong to the fixed
 // workflows' own period proof and are returned for it, never silently accepted.
-async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null }) {
-  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy }), { records, dirty } = evidence;
+async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null, models = {} }) {
+  const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy, models }), { records:capturedRecords, dirty } = evidence;
+  const records=[];
+  for(const row of capturedRecords){
+    const retained=row.evidence?.accountant?.apOmission;if(!retained){records.push(row);continue;}
+    const proof=await require('./general-billpayment-recovery').resolveProof({models,scope,proof:retained,current:row.current});
+    if(!proof)fail('Saved bill-payment account proof is unavailable or changed');
+    records.push({...row,evidence:{...row.evidence,accountant:{...row.evidence.accountant,apOmission:proof}}});
+  }
   if (records.some(row => [row.current, row.before].some(record => record?.CurrencyRef?.value && record.CurrencyRef.value !== 'CAD')) && ledgerReport?.Header?.Currency !== 'CAD') fail('Foreign records require a General Ledger explicitly expressed in CAD.');
+  const omittedPayments=records.filter(row=>row.evidence?.accountant?.apOmission).map(row=>row.current);
+  if(omittedPayments.length)require('./general-billpayment-recovery').validateLedgerForPayments(ledgerReport,day,through,omittedPayments);
   const settlements = new Map([...settlementEvidence(evidence), ...(ownSettlements || [])].map(row => [row.key, { targets: row.targets, record: row.record }]));
   const evaluation = evaluateDay({ records, ledger: ledger.byRecord, ownSettlements: settlements, ctx, fromDate: day, throughDate: through });
   const general = new Set(records.map(row => row.entity + ':' + row.id));

@@ -159,7 +159,7 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
       if (!retry && hash(settlementWindow(preview.settlementVersions || [])) === hash(settlementWindow(after.settlementVersions || [])) && hash(preview.runVersions) === hash(after.runVersions) && hash(settlements.map(row => [row.key,row.revision,row.verification])) === hash(afterSettlements.map(row => [row.key,row.revision,row.verification]))) return verifyRange(scope, { fromDate, throughDate, readLedger, mappings, verifiedThrough, openingDate, gathered: after, force: true, retry: 1 });
       fail('General-write records or posting references changed while the ledger was read; close needs fresh evidence.');
     }
-    const closed = await closeGeneralDay({ Runs, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
+    const closed = await closeGeneralDay({ Runs, models, scope, day: fromDate, through: throughDate, copy, ledgerReport: report, ctx, verifiedThrough, openingDate, gathered: preview, ownSettlements: settlements });
     if (!closed.ok) {
       const first = closed.failures[0] || {};
       const error = Object.assign(new Error('General writes in ' + fromDate + ' to ' + throughDate + ' are not verified: ' + closed.failures.map(item => (item.key ? item.key + ': ' : '') + item.reason).slice(0, 10).join(' | ') + ' The calendar waits until they are corrected or explained.'), { status: 409, code: 'GENERAL_DAY_CLOSE_UNVERIFIED', businessDetail: { ...failureContext(first), fromDate, throughDate, recordCount: closed.records.length, failures: closed.failures.slice(0, 5) }, ...(first.errorDetail?.check ? { businessCheck: first.errorDetail.check } : {}) });
@@ -226,7 +226,7 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
         const settlements = await fixedSettlementsFor(scope, preview);
         if (typeof verifyFixedDay !== 'function') fail('Historical fixed-record re-verification is unavailable.');
         const fixed = await verifyFixedDay(from, day, preview.records);
-        const closed = await closeGeneralDay({ Runs, scope, day: from, through: day, copy, ledgerReport, ctx: dayCtx, gathered: preview, ownSettlements: settlements });
+        const closed = await closeGeneralDay({ Runs, models, scope, day: from, through: day, copy, ledgerReport, ctx: dayCtx, gathered: preview, ownSettlements: settlements });
         if (closed.fixedWorkflowKeys.some(key => !fixed.some(row => row.key === key))) fail('A historical ledger record has no re-verified original ownership proof.');
         return { ...closed, fixedRecords: fixed, ledgerReport };
       },

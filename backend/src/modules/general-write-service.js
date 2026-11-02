@@ -87,7 +87,7 @@ function preflightRecordsFor({ scope, run, batch, periodProof, preflightReads, n
   }
   return records;
 }
-function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, recoveryCopy = copy, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
+function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, recoveryCopy = copy, recoveryLedger = null, recoveryReadsFor = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
   const recoveryHelper = require('./general-estimate-recovery'), recoveryFence = recoveryHelper.createRecoveryFence({ models, transaction, authorize: authorizeRecovery, now });
@@ -164,6 +164,9 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
   async function recheckSavedMismatch(run, scope, bound) {
     if (run.status !== 'needs-correction' || !models.Receipts || Object.values(run.items).some(item => item.outcome === 'unknown')) return run;
     const items = { ...run.items }, snapshots = [];
+    const sameRecoveryOwner=String(bound.ownerId||'')===String(run.ownerId)&&String(bound.actorId||'')===String(run.actorId)&&canonical(bound.agentAuthority||null)===canonical(run.agentAuthority||null)&&!run.caseAuthority;
+    const apRecovery=sameRecoveryOwner?await require('./general-billpayment-recovery').assess({models,scope,run,bound,copy:recoveryCopy,fence:recoveryFence,ledgerFor:recoveryLedger,readersFor:recoveryReadsFor,now}):null;
+    if(apRecovery){Object.assign(items,apRecovery.items);snapshots.push(apRecovery.snapshot);}
     for (const [ref, item] of Object.entries(items)) {
       if (item.outcome === 'mismatch' && item.entity === 'Invoice') {
         if (String(bound.ownerId || '') !== String(run.ownerId) || String(bound.actorId || '') !== String(run.actorId) || canonical(bound.agentAuthority || null) !== canonical(run.agentAuthority || null) || run.caseAuthority) continue;
@@ -199,7 +202,9 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     const settled = Object.values(items).every(item => ['saved','deleted'].includes(item.outcome));
     const changes = { items, ...((complete || settled) ? { status: complete ? 'complete' : 'prepared', lastError: null, errorDetail: null, errorHistory: [] } : {}) };
     if (snapshots.length) return recoveryFence.commit({scope,run,bound,snapshots,work:async session=>{
+      if(apRecovery)await require('./general-billpayment-recovery').commit({assessment:apRecovery,models,scope,run,session});
       for (const [ref,item] of Object.entries(items)) if (item.reconciliation && item.outcome==='saved' && run.items[ref]?.outcome==='mismatch') {
+        if(item.entity==='BillPayment'){const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope}).session(session).maxTimeMS(3000).lean();if(!await require('./general-billpayment-recovery').loadProof({models,scope,run:{...run,items},ref,receipt,current:item.record,session}))fail('Saved bill-payment ledger proof changed');continue;}
         const batch=run.batches.find(row=>row.attempt===item.attempt&&row.items.some(sent=>sent.ref===ref));
         const receipt=await models.Receipts.findOne({_id:batch.transport.receiptId,...scope,kind:'general-write',state:'saved'}).session(session).maxTimeMS(3000).lean();
         const source=recoveryHelper.sourceOf(run,ref,receipt),quote=await recoveryHelper.loadEstimateCreation({Runs,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:item.reconciliation.estimate.Id,session});
@@ -335,6 +340,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
       const open = Object.values(items).filter(item => !['saved', 'deleted'].includes(item.outcome));
       const status = open.some(item => item.outcome === 'unknown') ? 'unknown' : open.length ? 'needs-correction' : 'sending';
       run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, waiting: null, state: 'answered', answeredAt: new Date(now()).toISOString() } : row), items, owned, status, lastError: open.length ? open.map(item => item.entity + ' (' + item.outcome + ')' + (item.fault ? ': ' + item.fault.map(row => row.code + ' ' + row.message).join('; ') : '')).join(' | ') : null });
+      if(status==='needs-correction'&&Object.values(run.items).some(i=>i.entity==='BillPayment'&&i.outcome==='mismatch'))return report(await recheckSavedMismatch(run,scope,bound));
       if (status !== 'sending') return report(run);
       if (run.batches.length >= MAX_ATTEMPTS * Math.max(1, run.plan.layers.length)) fail('This general write used its attempt budget.');
     }
@@ -515,7 +521,7 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   const readValuation = require('./business-stock-valuation').createValuationReader({access,now});
   const warmCurrency = async (scope, batch, run) => { if(require('../config').features?.generalWriteInventory===true) await api.guardBatch({scope,run,batch}); for (const item of batch.items) { const r = { ...item.before, ...item.payload }; if (r.CurrencyRef?.value && r.CurrencyRef.value !== 'CAD' && r.TxnDate && (item.op === 'create' || item.payload.ExchangeRate !== undefined || item.payload.TxnDate !== undefined)) await readRate(scope, r.CurrencyRef.value, r.TxnDate); } };
   const transport = enabled ? (caseTransport || (access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), warmCurrency, now }) : null)) : null;
-  api = createGeneralWriteService({ models, copy, recoveryCopy: { ...copy, read: async (scope,entity,id) => recoveryHints?.get(entity+':'+id) || copy.read(scope,entity,id) }, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
+  api = createGeneralWriteService({ models, copy, recoveryReadsFor:(scope,maxAttempts)=>require('./general-billpayment-recovery').createBoundedReader({access,scope,maxAttempts}),recoveryCopy: { ...copy, read: async (scope,entity,id) => recoveryHints?.get(entity+':'+id) || copy.read(scope,entity,id) }, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest, preflightRecordsFor };
