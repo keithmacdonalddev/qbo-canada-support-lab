@@ -20,7 +20,7 @@ function unchanged(original,current,entity){
 }
 function compatiblePair(invoice,estimate) {
   const sales=r=>(r.Line||[]).filter(l=>l.DetailType!=='SubTotalLineDetail');
-  const a=sales(invoice),b=sales(estimate),financial=line=>{const v=clone(line);delete v.Id;return v;};
+  const a=sales(invoice),b=sales(estimate),financial=line=>{const v=clone(line);delete v.Id;delete v.Description;return v;};
   return invoice.CustomerRef?.value===estimate.CustomerRef?.value && /^\d{1,30}$/.test(invoice.CustomerRef?.value||'') &&
     invoice.CurrencyRef?.value==='CAD' && estimate.CurrencyRef?.value==='CAD' &&
     Number.isFinite(invoice.TotalAmt) && invoice.TotalAmt>0 && invoice.TotalAmt===estimate.TotalAmt && invoice.Balance===invoice.TotalAmt &&
@@ -50,6 +50,7 @@ function promptFor(plan){
     'Open https://qbo.intuit.com/app/invoice?txnId='+i.Id+'. Confirm company and invoice identity before any input. If wrong company/record, sign-in challenge or stale record: stop.',
     'Preserve original DocNumber '+JSON.stringify(i.DocNumber)+', customer '+JSON.stringify(i.CustomerRef)+', TxnDate '+i.TxnDate+', DueDate '+i.DueDate+', currency CAD, GlobalTaxCalculation '+i.GlobalTaxCalculation+', invoice total '+i.TotalAmt+', balance '+i.Balance+', full tax '+JSON.stringify(i.TxnTaxDetail)+', and all other fields.',
     'Exact source is Estimate '+e.Id+' only. Use the native add/copy whole-estimate procedure into this EXISTING invoice. If copying creates a duplicate financial line, remove only the exact original duplicate line in the UNSAVED draft so one identical source line remains; do not delete any transaction. Exact financial line: '+JSON.stringify(line)+'.',
+    'The Estimate may use a proposed/blank description. In the UNSAVED invoice draft, preserve/restore the invoice original line Description exactly as '+JSON.stringify(line.Description??null)+'. Do not change the saved Estimate description. '+
     'BEFORE Save: inspect and capture the UNSAVED native draft. It must have exactly ONE financial sales line, identical customer, document number, dates, quantity, unit price, amount, tax and totals. Native line ID/source-link representation may change only for the exact quoted line. No extra charges, auto credits, discounts, allocations, payments or links. If any original field cannot be preserved, STOP WITHOUT SAVING.',
     'At most ONE Save attempt. Never retry a click/keyboard submit when its outcome is uncertain. Stop immediately on any uncertainty; do not re-open and save again. A model-driven instruction is not a mechanical click counter: record exactly which Save action was attempted and whether a saved confirmation appeared.',
     'Capture before-save and saved-result screenshots privately in this run output directory. After the one Save, inspect the exact existing Invoice and Estimate in native UI. Stop with a precise result; external deterministic SDK reads will verify accounting. Do not assume UI confirmation proves ledger equality.',

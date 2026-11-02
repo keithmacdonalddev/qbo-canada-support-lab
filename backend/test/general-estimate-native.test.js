@@ -5,8 +5,8 @@ const {hash}=require('../src/modules/business-calendar');
 const {controls}=require('./helpers/period-controls');
 const {createGeneralEstimateNative}=require('../src/modules/general-estimate-native');
 const clone=v=>structuredClone(v);
-function fixture(mode='success'){
-  const h=incident(),db={authorities:[],audits:[]},counters={runs:0,sessions:0,releases:0,reads:0};let acted=false,denied=false,retained=null;
+function fixture(mode='success',descriptions){
+  const h=incident('11331','11217',descriptions),db={authorities:[],audits:[]},counters={runs:0,sessions:0,releases:0,reads:0};let acted=false,denied=false,retained=null;
   const query=value=>({select(){return this;},session(){return this;},maxTimeMS(){return this;},lean:async()=>clone(value)});
   h.models.Authorities={findOne:filter=>query(db.authorities.find(r=>r._id===filter._id&&(filter.environment===undefined||r.environment===filter.environment)&&(filter.realmId===undefined||r.realmId===filter.realmId)&&(filter.connectionId===undefined||String(r.connectionId)===String(filter.connectionId)))||null),create:async rows=>{for(const r of rows){if(db.authorities.some(old=>old._id===r._id))throw Error('duplicate action');db.authorities.push(clone(r));}}};
   h.models.Audits={create:async rows=>db.audits.push(...clone(rows))};
@@ -102,4 +102,9 @@ test('child completion receipt binds task, action and artifact bytes and cannot 
   assert.equal((await readReceipt(root,request)).model,'gpt-6.1-terra');
   await assert.rejects(writeReceipt(opts));await assert.rejects(readReceipt(root,{...request,nativeRepair:{actionId:'c'.repeat(64),authorityHash}}));
   await fs.writeFile(path.join(output,'reply.txt'),'changed');await assert.rejects(readReceipt(root,request),/artifacts changed/);
+});
+
+for(const estimate of [undefined,'Proposed fictional planning'])test('different proposed description preserves both original documents: '+String(estimate),async()=>{
+  const f=fixture('success',{invoice:'Fictional planning, two hours',estimate});const result=await f.repair();assert.equal(result.status,'verified');assert.equal(f.h.current('Invoice').Line[0].Description,'Fictional planning, two hours');assert.equal(f.h.current('Estimate').Line[0].Description,estimate);
+  const source=f.h.source(),bad=f.h.current('Invoice');bad.Line[0].Description='Overwritten by quote';assert.equal(require('../src/modules/general-estimate-recovery').assertRepairedPair(source,bad,f.h.current('Estimate'),f.h.estimate),false);
 });

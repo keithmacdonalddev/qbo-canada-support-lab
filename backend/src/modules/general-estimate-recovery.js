@@ -53,7 +53,11 @@ function assertRepairedPair(source, invoice, estimate, originalEstimate = null) 
   const beforeTime = Date.parse(source.original.MetaData?.LastUpdatedTime), afterTime = Date.parse(invoice.MetaData?.LastUpdatedTime);
   if (!Number.isFinite(beforeTime) || !Number.isFinite(afterTime) || afterTime < beforeTime || !Number.isFinite(Date.parse(source.original.MetaData?.CreateTime)) || source.original.MetaData.CreateTime !== invoice.MetaData?.CreateTime) return false;
   if (invoice.CustomerRef?.value !== estimate.CustomerRef?.value || invoice.CurrencyRef?.value !== estimate.CurrencyRef?.value || invoice.TotalAmt !== estimate.TotalAmt || !sameQboValue(invoice.TxnTaxDetail, estimate.TxnTaxDetail) || invoice.GlobalTaxCalculation !== estimate.GlobalTaxCalculation) return false;
-  const financial = record => (record.Line || []).filter(line => line.DetailType !== 'SubTotalLineDetail').map(line => { const out = structuredClone(line); delete out.Id; return out; });
+  const financial = record => (record.Line || []).filter(line => line.DetailType !== 'SubTotalLineDetail').map(line => { const out = structuredClone(line); delete out.Id; delete out.Description; return out; });
+  // Proposed descriptions can differ. This source-only comparison checks the
+  // economics; matchesQboRequest and the full before/after view above still
+  // preserve the Invoice Description, and assertEstimateTransition preserves
+  // the Estimate Description independently.
   return sameQboValue(financial(source.original), financial(originalEstimate || estimate));
 }
 async function assessSavedEstimate({ run, ref, receipt, copy, scope, loadEstimate, snapshot = null, now = () => Date.now() }) {
