@@ -33,13 +33,13 @@ async function validateNativeLaunch({models,access,actionId,authorityHash,runId,
   else check(!plan.assignedMissingDocNumber,'An existing invoice number cannot be reassigned');
   if((plan.attempt||1)===1)check(actionId===rootId&&(plan.rootActionId||actionId)===rootId&&!plan.predecessor,'Invalid root native launch');
   else{
-    check([2,3].includes(plan.attempt)&&plan.rootActionId===rootId,'Native lineage launch limit exceeded');
+    check([2,3,4].includes(plan.attempt)&&plan.rootActionId===rootId,'Native lineage launch limit exceeded');
     const root=await one(models.Authorities,{_id:rootId.slice(0,24),...scope}),rootPlan=root?.payload?.plan;
     const rootStop=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope});
     check(root&&root.contentHash===hash(root.payload)&&(rootPlan?.attempt||1)===1&&!rootPlan.predecessor&&canonical(rootPlan.source)===canonical(plan.source)&&rootPlan.ownerId===plan.ownerId&&rootPlan.invoiceId===plan.invoiceId&&rootPlan.estimateId===plan.estimateId,'Replacement root differs');
     check(rootStop&&rootStop.contentHash===hash(rootStop.payload)&&rootStop.payload.phase==='no-effect'&&rootStop.payload.reason==='native-executable-unavailable'&&rootStop.payload.authorityHash===root.contentHash,'Replacement root no-effect is missing');
     let previous=root,stopped=rootStop,previousId=rootId;
-    if(plan.attempt===3){
+    if(plan.attempt>=3){
       previousId=native.replacementId(rootId,rootStop.contentHash);previous=await one(models.Authorities,{_id:previousId.slice(0,24),...scope});stopped=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'no-effect'}).slice(0,24),...scope});
       const second=previous?.payload?.plan,rootUse=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'replacement-admitted'}).slice(0,24),...scope});
       check(plan.browserReadiness?.onlyHomepage===true&&Number.isFinite(Date.parse(plan.browserReadiness.observedAt))&&Date.parse(plan.browserReadiness.observedAt)>=Date.parse(stopped?.payload?.verifiedAt)&&Date.parse(plan.browserReadiness.observedAt)<=Date.parse(plan.reviewedAt),'Final native admission requires a fresh responsive homepage after no-effect settlement');
@@ -48,6 +48,14 @@ async function validateNativeLaunch({models,access,actionId,authorityHash,runId,
       const cleanup=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'draft-cleanup-complete'}).slice(0,24),...scope});
       check(stopped?.payload?.reason==='missing-invoice-document-number'&&cleanup&&cleanup.contentHash===hash(cleanup.payload)&&cleanup.payload.authorityHash===previous.contentHash&&cleanup.payload.proof?.invoiceId===plan.invoiceId&&cleanup.payload.proof.runId===second.runId&&canonical(cleanup.payload.proof)===canonical(stopped.payload.cleanup),'Final launch requires exact journaled owned-draft cleanup');
       check(!await one(models.Authorities,{_id:hash({actionId:previousId,phase:'verified'}).slice(0,24),...scope}),'A saved second action never admits replacement');
+    }
+    if(plan.attempt===4){
+      const secondId=previousId,secondAuthority=previous,secondStop=stopped;previousId=native.replacementId(rootId,secondStop.contentHash);previous=await one(models.Authorities,{_id:previousId.slice(0,24),...scope});stopped=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'no-effect'}).slice(0,24),...scope});
+      const third=previous?.payload?.plan,use=await one(models.Authorities,{_id:hash({actionId:secondId,phase:'replacement-admitted'}).slice(0,24),...scope});
+      check(previous&&previous.contentHash===hash(previous.payload)&&third?.attempt===3&&third.rootActionId===rootId&&third.predecessor?.actionId===secondId&&third.predecessor.authorityHash===secondAuthority.contentHash&&third.predecessor.noEffectHash===secondStop.contentHash&&third.assignedMissingDocNumber===missing&&canonical(third.source)===canonical(plan.source),'Only the exact historical third action admits the informational-notice successor');
+      check(use&&use.contentHash===hash(use.payload)&&use.payload.authorityHash===secondAuthority.contentHash&&use.payload.noEffectHash===secondStop.contentHash&&use.payload.successorActionId===previousId&&use.payload.successorAuthorityHash===previous.contentHash,'Historical third action was not consumed from its predecessor');
+      check(stopped?.payload?.reason==='unrestored-informational-draft-notice'&&/^[a-f0-9]{64}$/.test(stopped.payload.stopEvidence?.sha256||'')&&Date.parse(plan.browserReadiness.observedAt)>=Date.parse(stopped.payload.verifiedAt),'Final informational-notice action requires a newer responsive homepage');
+      check(!await one(models.Authorities,{_id:hash({actionId:previousId,phase:'verified'}).slice(0,24),...scope}),'A saved third action never admits replacement');
     }
     check(plan.predecessor?.actionId===previousId&&plan.predecessor.authorityHash===previous.contentHash&&stopped&&stopped.contentHash===hash(stopped.payload)&&stopped.contentHash===plan.predecessor.noEffectHash&&stopped.payload.phase==='no-effect'&&stopped.payload.authorityHash===previous.contentHash&&stopped.payload.noDraft?.onlyHomepage===true&&native.unchanged(source.original,stopped.payload.after?.invoice,'Invoice')&&native.unchanged(estimate.original,stopped.payload.after?.estimate,'Estimate')&&actionId===native.replacementId(rootId,stopped.contentHash),'Replacement requires exact unchanged no-effect evidence');
     const consumed=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'replacement-admitted'}).slice(0,24),...scope});

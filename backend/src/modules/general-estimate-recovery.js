@@ -160,7 +160,7 @@ async function loadNativeAssignment({models,scope,source,estimateOriginal,action
   const native=require('./general-estimate-native'),rootId=native.actionId(scope,{_id:source.operationId},source);
   const find=async id=>{let q=models.Authorities.findOne({_id:id,...scope});if(session)q=q.session(session);return q.maxTimeMS(3000).lean();};
   let id=actionId||rootId;
-  for(let attempt=1;attempt<=3;attempt++){
+  for(let attempt=1;attempt<=4;attempt++){
     const authority=await find(id.slice(0,24)),body=authority?.payload,plan=body?.plan;
     if(!authority||authority.contentHash!==hash(body)||body.kind!==native.KIND||body.phase!=='admitted'||body.actionId!==id||plan?.actionId!==id||authorityHash&&authority.contentHash!==authorityHash||['environment','realmId','connectionId'].some(k=>String(authority[k])!==String(scope[k])||String(plan.scope?.[k])!==String(scope[k]))||String(authority.actorId)!==source.ownerId||body.ownerId!==source.ownerId||plan.ownerId!==source.ownerId||plan.actorId!==source.actorId||plan.source?.invoiceReceiptId!==source.receiptId||plan.source.invoiceRequestHash!==source.requestHash||plan.source.invoiceOriginalHash!==hash(source.original)||plan.invoiceId!==source.item.qboId||plan.estimateId!==source.estimateId||estimateOriginal&&plan.source.estimateOriginalHash!==hash(estimateOriginal))return null;
     const event=completed?await find(hash({actionId:id,phase:'verified'}).slice(0,24)):null;
