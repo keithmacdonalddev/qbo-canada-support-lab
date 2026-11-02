@@ -18,7 +18,7 @@
 .bank-account-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .bank-account-card { display: flex; flex-direction: column; min-width: 0; text-align: left; padding: 21px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 11px; color: var(--ink); cursor: pointer; font: inherit; box-shadow: 0 2px 4px #00000003; transition: border-color .15s, box-shadow .15s; }
 .bank-account-card:hover { border-color: #51837e; box-shadow: 0 3px 10px #174e4910; }
-.bank-card-top { display: flex; align-items: center; gap: 9px; width: 100%; color: #27645d; font-size: 11px; }
+.bank-card-top { display: flex; align-items: center; gap: 9px; width: 100%; color: var(--ink-2); font-size: 11px; }
 .bank-card-top > svg:last-child { margin-left: auto; }
 .bank-account-card h2 { margin-top: 20px; font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
 .bank-card-number { color: var(--ink-3); margin-top: 4px; font-size: 11px; }
@@ -36,7 +36,7 @@
 .bank-account-balance > div:last-child { border: 0; }
 .bank-account-balance span { font-size: 12px; color: var(--ink-2); display: block; }
 .bank-account-balance strong { font-size: 24px; font-weight: 600; letter-spacing: -.4px; display: block; margin-top: 7px; font-variant-numeric: tabular-nums; }
-.bank-account-balance > div:first-child strong { color: #24635b; }
+.bank-account-balance > div:first-child strong { color: var(--ink); }
 .bank-account-balance p { color: var(--ink-2); font-size: 11px; margin-top: 7px; }
 .bank-downloads { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; padding-bottom: 19px; }
 .bank-downloads h2, .bank-history h2 { font-size: 16px; font-weight: 650; }
@@ -54,7 +54,7 @@
 .bank-history td button { display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; text-align: left; font: inherit; color: var(--link); cursor: pointer; line-height: 1.6; }
 .bank-history td button svg { flex-shrink: 0; }
 .bank-history .bank-amount { text-align: right; font-variant-numeric: tabular-nums; }
-.bank-posted { color: #24635b; background: #eaf4f0; padding: 3px 6px; border-radius: 4px; font-size: 10px; }
+.bank-posted { color: var(--ok); background: var(--ok-soft); padding: 3px 6px; border-radius: 4px; font-size: 10px; }
 .bank-history .is-selected td { background: var(--link-soft); }
 .bank-pagination { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
 .bank-pagination span { margin-right: auto; font-size: 12px; color: var(--ink-2); }
