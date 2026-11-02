@@ -1,6 +1,6 @@
 # BANK-1 delivery evidence — 2026-11-01
 
-Updated: 2026-11-01T23:16:40.963Z. Status: **EXISTING-CHROME ATTACHMENT BLOCKED / DIRECT APPLICATION PROOF OPEN**. BANK-1 remains incomplete; no BANK-2/BANK-3 completion is claimed.
+Updated: 2026-11-02T00:20:44.353Z. Status: APP SIGN-IN VERIFIED / BANK-1 APPLICATION ACCEPTANCE OPEN. Earlier browser/authentication blockers below are historical; the current shared login procedure supersedes them.
 
 The canonical checkout is C:\Projects\qbo on main, configured upstream origin/main. Frontend commit 0281720 and backend commits 1d8d24f and 2871cef are pushed. Normal business services were left running; no explicit service control, QBO call, persistent database write, storage preparation, accepted-file change or native banking action was performed by this BANK-1 work.
 
@@ -73,3 +73,9 @@ One named owned agent-browser controller attempted supported `--auto-connect --p
 No account screen, feature download click or authenticated reload was reached. All BANK-1 account-journey/download/reload requirements remain OPEN. Exact next step: expose/share the existing authenticated app tab through a reachable browser connection, or provide an already-enabled CDP port. No further login was requested. Private direct receipt: `artifacts/bank-1/chrome-attach/attempt.json`. Stop attachment investigation at this concrete external dependency; no new framework or security-setting workaround. Existing implementation/checks/reviews remain unchanged.
 
 A final bounded read-only Chrome process-metadata check confirmed running Chrome: one main process has no debugging port/pipe; a separate process has automatic ephemeral debugging port0. The supported inventory still exposed no authenticated Test Data Lab tab. No command lines, profile data or credentials were printed, and no debugging setting or browser process was changed. Attachment discovery stops here; the existing Chrome sign-in is not the requested owner action.
+
+## Shared app sign-in restored — 2026-11-02T00:20:44.353Z
+
+The owner requested permanent local agent app credentials. The same existing account/company now supports automatic private sign-in through [the shared helper](../agent-harness/APP_AGENT_LOGIN.md), documented in AGENTS.md for Codex and Claude. Two fresh independent browsers and one repeated session verified account/company and opened the real bank page. The desktop overview was inspected. No password/token or manual Chrome attachment is needed for normal local agent login.
+
+This removes the prior sign-in/attachment dependency. Both selected-period account journeys, four actual CSV/PDF feature clicks and authenticated reload remain OPEN; this authentication task does not claim those checks were performed. Continue BANK-1 using the helper-returned session.

@@ -96,6 +96,12 @@ Multiple coding-agent sessions may work in this checkout at the same time.
 - If overlapping edits make the task ambiguous or risky, stop and ask before overwriting them.
 - Base final code-state claims on fresh checks from the current turn.
 
+## Automatic local app sign-in
+
+Owner authorization, 2026-11-01: local coding chats and agents may reuse the privately enrolled app credential to sign into the existing owner account/company for authorized app work, without repeated sign-in permission requests. Read [the shared app login procedure](docs/agent-harness/APP_AGENT_LOGIN.md).
+
+Use hidden Node child-process execution to run `node scripts/security/app-agent-login.cjs login --actor codex-cli` (Claude: `--actor claude-code`). The helper returns a unique owned agent-browser session and account/company proof, handles renewal, and keeps the secret private in Windows DPAPI outside Git. Continue browser actions in the returned session and close only that session afterward. Do not ask for the owner's password/token, Chrome sharing or CDP port for routine app login. Do not create another app account, mint a JWT, reset owner credentials, or reenroll on every session. This applies to this Windows user/computer; QBO login, action authority and other existing safety boundaries remain separate.
+
 ## Current Implementation Snapshot
 
 Treat docs as useful but potentially stale. Re-check source before making status claims. Use [the current full-goal handoff](docs/agent-harness/FULL_GOAL_EXECUTION.md) and its direct evidence for current company progress; the dated early-rebuild snapshots below are historical and must not reset an already prepared company to an empty state.

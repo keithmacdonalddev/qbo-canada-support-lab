@@ -38,6 +38,7 @@ const connectionSchema = new mongoose.Schema(
     },
     // Write fence for explicitly reviewed local business-storage setup.
     businessSetupVersion: { type: Number, default: 0 },
+    agentCredentialEnrollmentVersion: { type: Number, default: 0 },
     // Transaction conflict fence for retained company observations.
     businessObservationVersion: { type: Number, default: 0 },
     lastRefreshedAt: {

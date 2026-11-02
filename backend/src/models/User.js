@@ -22,6 +22,14 @@ const userSchema = new mongoose.Schema(
       enum: ['agent', 'supervisor'],
       default: 'agent',
     },
+    // Independent local agent access; never changes the owner's password/session version.
+    agentCredentialId: { type: String },
+    agentCredentialHash: { type: String, select: false },
+    agentCredentialRealmId: { type: String },
+    agentCredentialEnvironment: { type: String },
+    agentCredentialAuthVersion: { type: Number },
+    agentCredentialConnectionId: { type: String },
+    agentCredentialCreatedAt: { type: Date },
     authVersion: { type: Number, default: 0, min: 0 },
     accessPolicyVersion: { type: Number, default: 0, min: 0 },
     automationAccessPolicyVersion: { type: Number, default: 0, min: 0 },
@@ -41,6 +49,7 @@ const userSchema = new mongoose.Schema(
     toJSON: {
       transform(_doc, ret) {
         delete ret.password;
+        for (const key of Object.keys(ret)) if (key.startsWith('agentCredential')) delete ret[key];
         delete ret.authVersion;
         delete ret.accessPolicyVersion;
         delete ret.automationAccessPolicyVersion;

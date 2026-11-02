@@ -9,14 +9,16 @@ function sessionLifetime() {
   if(!Number.isSafeInteger(seconds) || seconds<1 || seconds>MAX_LIFETIME)throw new Error('JWT_EXPIRES_IN must be a positive duration of at most seven days (for example 1h or 7d).');
   return seconds;
 }
-function issueToken(user) {
+function issueToken(user, { agent } = {}) {
   assertAccountEligible(user);
-  return jwt.sign({id:String(user._id),email:user.email,role:user.role,av:accountVersion(user)},config.jwtSecret,{algorithm:'HS256',issuer:ISSUER,audience:AUDIENCE,expiresIn:sessionLifetime()});
+  if (agent !== undefined && !require('./agent-app-access').validBinding(agent)) throw new Error('Invalid agent session binding');
+  return jwt.sign({id:String(user._id),email:user.email,role:user.role,av:accountVersion(user),...(agent?{agent}:{})},config.jwtSecret,{algorithm:'HS256',issuer:ISSUER,audience:AUDIENCE,expiresIn:sessionLifetime()});
 }
 function verifyToken(token,secret=config.jwtSecret,clock=Math.floor(Date.now()/1000)) {
   if(typeof token!=='string' || token.length>8192)throw new Error('Invalid session');
   const decoded=jwt.verify(token,secret,{algorithms:['HS256'],issuer:ISSUER,audience:AUDIENCE,clockTimestamp:clock,maxAge:MAX_LIFETIME});
   if(!decoded || !/^[a-f0-9]{24}$/i.test(String(decoded.id || '')) || !Number.isSafeInteger(decoded.av) || decoded.av<0 || !Number.isSafeInteger(decoded.iat) || !Number.isSafeInteger(decoded.exp) || decoded.iat>clock+30 || decoded.exp<=decoded.iat || decoded.exp-decoded.iat>MAX_LIFETIME)throw new Error('Invalid session');
+  if (decoded.agent !== undefined && !require('./agent-app-access').validBinding(decoded.agent)) throw new Error('Invalid agent session binding');
   return decoded;
 }
 function validateStartupSecurity() {

@@ -5,7 +5,7 @@ const { RESERVED_EMAIL, normalizeEmail, publicTesterAttempt, accountEligible } =
 const DefaultUser = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 
-function createAuthRouter({ Users: User = DefaultUser, automation = () => require('../modules/account-automation-review').accountAutomationReview() } = {}) {
+function createAuthRouter({ Users: User = DefaultUser, automation = () => require('../modules/account-automation-review').accountAutomationReview(), agentAccess = () => require('../modules/agent-app-access').defaultAgentAccess() } = {}) {
 const router = express.Router();
 
 /**
@@ -16,6 +16,14 @@ function signToken(user) { return issueToken(user); }
 // No passwords are published and no development login can create, promote or
 // reset a real-company account. Reserved legacy access needs explicit recovery.
 router.get('/dev-access', (_req,res) => res.json({ enabled: false }));
+
+// Private agent credentials redeem through normal account/session validation.
+router.post('/agent-login', async (req,res) => {
+  res.set('Cache-Control','no-store');
+  if (Object.keys(req.headers).some(name=>name==='forwarded'||name.startsWith('x-forwarded-')) || !['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return res.status(403).json({error:'Local agent sign-in only'});
+  try { return res.json(await agentAccess().login(req.body)); }
+  catch (error) { return res.status(error.status===401?401:503).json({error:error.status===401?'Invalid or revoked agent credential':'Agent app sign-in is unavailable'}); }
+});
 
 /**
  * POST /register
