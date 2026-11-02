@@ -1,6 +1,6 @@
 'use strict';
 const {hash}=require('./business-calendar');
-const WRITE_TOOLS=new Set(['manageQboRecord','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordCloseChecklistEvidence']);
+const WRITE_TOOLS=new Set(['repairEstimateConversion','manageQboRecord','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordCloseChecklistEvidence']);
 function decisionData({name,input,plan,day,passId,operation}){
  const meta=input.decision||{},purpose=input.purpose||input.reason||input.note||'Close the elapsed business period under published policy';
  return {version:1,day,tool:name,goal:meta.goal||'Maintain a coherent, active business with deliberate feature coverage',reason:purpose.slice(0,2000),planItem:meta.planItem||'Independent governed work outside the saved daily changes',planId:plan?.id||null,decisionKey:input.decisionKey||operation?.activityBatch?.decisionKey||operation?.decisionKey||(input.throughDate?'period:'+input.throughDate:passId),operationId:input.operationId||null,passId};

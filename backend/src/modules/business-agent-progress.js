@@ -102,6 +102,7 @@ const FIXED = Object.freeze({
   recordDailyPlan: 'Recording today’s plan',
   requestCapability: 'Adding a missing tool to the build list',
   getQboEntitySchema: 'Reading the QuickBooks record format',
+  repairEstimateConversion: 'Repairing the saved invoice’s estimate link',
   manageQboRecord: 'Preparing QuickBooks records',
 });
 // One table maps every governed tool to a short label; unknown tools get a humanised name.

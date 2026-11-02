@@ -87,7 +87,7 @@ function preflightRecordsFor({ scope, run, batch, periodProof, preflightReads, n
   }
   return records;
 }
-function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
+function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, recoveryCopy = copy, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
   const recoveryHelper = require('./general-estimate-recovery'), recoveryFence = recoveryHelper.createRecoveryFence({ models, transaction, authorize: authorizeRecovery, now });
@@ -174,7 +174,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
         if (!source) continue;
         const snapshot = await recoveryFence.start(scope,run,bound,{invoiceId:source.item.qboId,estimateId:source.estimateId});
         const loadEstimate = id => recoveryHelper.loadEstimateCreation({ Runs, Receipts:models.Receipts, scope, ownerId:run.ownerId, id });
-        const recovered = await recoveryHelper.assessSavedEstimate({ run, ref, receipt, copy, scope, now, snapshot, loadEstimate });
+        const recovered = await recoveryHelper.assessSavedEstimate({ run, ref, receipt, copy: recoveryCopy, scope, now, snapshot, loadEstimate });
         if (recovered?.reconciliation && recovered.outcome === 'saved') snapshots.push(snapshot);
         if (recovered) items[ref] = recovered;
         continue;
@@ -490,7 +490,7 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
 }
 // Server composition: the synced copy through the hardened observation store (fresh
 // sources only), the published-business context, and NO transport yet (dispatch held).
-function createDefaultGeneralWrite({ now = () => Date.now(), access = null, caseTransport = null } = {}) {
+function createDefaultGeneralWrite({ now = () => Date.now(), access = null, caseTransport = null, recoveryHints = null } = {}) {
   const models = { ...require('./business-runtime').loadModels(), Authorities: require('../models/BusinessAuthority'), Versions: require('../models/BlueprintVersion'), Baselines: require('../models/BusinessBaseline') };
   const observations = require('./business-observation-store').createBusinessObservationStore({ now });
   // fetch: one targeted fresh read, only for a record this same write just changed.
@@ -507,7 +507,7 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   const readValuation = require('./business-stock-valuation').createValuationReader({access,now});
   const warmCurrency = async (scope, batch, run) => { if(require('../config').features?.generalWriteInventory===true) await api.guardBatch({scope,run,batch}); for (const item of batch.items) { const r = { ...item.before, ...item.payload }; if (r.CurrencyRef?.value && r.CurrencyRef.value !== 'CAD' && r.TxnDate && (item.op === 'create' || item.payload.ExchangeRate !== undefined || item.payload.TxnDate !== undefined)) await readRate(scope, r.CurrencyRef.value, r.TxnDate); } };
   const transport = enabled ? (caseTransport || (access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), warmCurrency, now }) : null)) : null;
-  api = createGeneralWriteService({ models, copy, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
+  api = createGeneralWriteService({ models, copy, recoveryCopy: { ...copy, read: async (scope,entity,id) => recoveryHints?.get(entity+':'+id) || copy.read(scope,entity,id) }, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest, preflightRecordsFor };

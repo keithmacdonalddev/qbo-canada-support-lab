@@ -51,6 +51,7 @@ const INFO = Object.freeze({
   prepareBusinessPeriod: { category: 'quickbooks-write', keywords: ['period', 'calendar', 'close', 'month', 'prepare', 'scheduled'] },
   executeBusinessPeriod: { category: 'quickbooks-write', keywords: ['execute', 'approve', 'save', 'plan', 'queue', 'run'] },
   resumeBusinessOperation: { category: 'quickbooks-write', keywords: ['resume', 'recover', 'continue', 'interrupted', 'stopped', 'unfinished'] },
+  repairEstimateConversion: {category:'quickbooks-write',keywords:['repair','estimate','invoice','saved','mismatch','native','recovery','linkedtxn']},
   manageQboRecord: { category: 'quickbooks-write', keywords: ['create', 'update', 'void', 'delete', 'record', 'write', 'payload', 'general'] },
   recordBusinessDecision: { category: 'notes', keywords: ['decision', 'escalate', 'owner', 'question', 'evidence', 'finding'] },
   rememberBusinessContext: { category: 'notes', keywords: ['memory', 'handoff', 'remember', 'next', 'note'] },

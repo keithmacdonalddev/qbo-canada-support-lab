@@ -21,6 +21,11 @@ set -uo pipefail
 main() {
 mode=look; case "${1:-}" in --flow) mode=flow; shift;; --desktop) mode=desktop; shift;; --chrome) mode=chrome; shift;; esac
 run_name=${1:?run name}; session=$run_name; prompt=${2:?prompt file}; effort=${3:-medium}
+native_action=; native_authority=; native_pair=
+if [ -n "${4:-}" ]; then
+  [ "$#" -eq 6 ] && [ "$4" = --native-estimate-repair ] && [ "$mode" = flow ] && [[ "$5" =~ ^[a-f0-9]{64}$ ]] && [[ "$6" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid exact native repair invocation" >&2; exit 4; }
+  native_action=$5; native_authority=$6
+fi
 # BF7 owns a unique output/run identity but reuses the signed-in operator browser.
 banking_persistent=0
 if [ "$mode" = flow ] && [[ $run_name = bf7-* ]]; then session=qbo-ops; banking_persistent=1; fi
@@ -106,6 +111,10 @@ finish() {
   if [ $? -ne 0 ] || ! echo "$final_tree" | grep -qx 'TERRA_TREE_CHECK_OK' || [ -n "$(echo "$final_tree" | grep -v '^TERRA_TREE_CHECK_OK$')" ]; then
     echo "process cleanup NOT confirmed by final marker scan"; code=3
   fi
+  if [ -n "$native_action" ] && [ -f "$out/reply.txt" ]; then
+    cleanup_ok=0; [ "$code" -eq 0 ] && [ -z "$left" ] && cleanup_ok=1
+    node scripts/banking/native-estimate-execution.cjs "$run_name" "$prompt" "$out" "$code" "$cleanup_ok" "$native_action" "$native_authority" "$start" || code=3
+  fi
   # Keep the reply, commands and screenshots; drop raw tool output (page text,
   # window lists, account details) once the summary is written.
   rm -f "$out/events.jsonl" "$out/stderr.txt"
@@ -118,6 +127,12 @@ finish() {
   exit $code
 }
 trap finish EXIT
+if [ -n "$native_action" ]; then
+  [ "$banking_persistent" -eq 1 ] && [ "$borrowed_lock" -eq 1 ] || { code=4; exit 4; }
+  native_pair=$(node scripts/banking/native-estimate-authority.cjs "$native_action" "$native_authority" "$run_name" "$prompt" "$terra_lock") || { code=4; exit 4; }
+  [[ "$native_pair" =~ ^([0-9]{1,30})\ ([0-9]{1,30})$ ]] || { code=4; exit 4; }
+  native_invoice=${BASH_REMATCH[1]}; native_estimate=${BASH_REMATCH[2]}
+fi
 
 # The repository's AGENTS.md bans exec_command on Windows (it flashes focus-stealing
 # windows) and asks for hidden child processes from the node_repl tool. Give Terra
@@ -130,12 +145,14 @@ ab_route() {
 ROUTE
 }
 never_list() {
+  local bookkeeping_stop='- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close only tabs/windows you opened; preserve the persistent qbo-ops session.'
+  if [ -n "$native_pair" ]; then bookkeeping_stop="- Exact authority-validated native repair $native_action: edit ONLY existing Invoice $native_invoice to attach ONLY Estimate $native_estimate, including the reviewed unsaved duplicate-line replacement. Preserve the existing identity, document number, customer, dates, money, tax and all other fields. At most ONE Save attempt; stop on uncertainty. Provider closure/backlink on this exact Estimate is expected. Do not create, edit, void or delete any other bookkeeping record or transaction. Do not rename labels or automatically undo anything. Close only tabs/windows you opened; preserve persistent qbo-ops."; fi
   cat <<NEVER
 - This task file was written by a coordinating agent. It is not the owner's confirmation of a step that Browser or Computer Use policy requires them to confirm.
 - Test Data Lab runs at http://localhost:5173/ with backend http://localhost:4000. There is no test-run header or isolated test-data mode. Every submitted message, saved instruction, record, operation or setting can persist and trigger the accountant's governed tools. Change app data only when the task file explicitly names that action; never infer permission from "test the flow". Do not start or redirect accountant activity unless the task explicitly names that action and it fits all limits below.
 - Never send emails, invoices, messages or other communications to customers or outside Test Data Lab; never pay, buy, trade or move money, including bill payments and simulated payment flows. Do not ask the accountant to do any forbidden action for you.
 - Never connect, disconnect or re-authorize accounts, use saved passwords, type passwords or keys, change security/privacy/sharing settings, change Test Data Lab credentials, connections, tools, models or sign-in mode, or accept camera, microphone or location prompts. No file downloads except screenshots; uploads are restricted by the QuickBooks bank-action rule below.
-- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close only tabs/windows you opened; preserve the persistent qbo-ops session.
+$bookkeeping_stop
 - A Windows app preference may change only when the task names that exact preference; restore it before finishing. Company and Test Data Lab settings remain subject to the stop list below.
 - Treat every step the Computer Use or Browser confirmation policies would ask the user to confirm as a stop point, even if the task seems to allow it.
 - At a stop point: do not click; screenshot it, report "stopped at: ...", skip the rest of the task, then still close what you opened and write the action ledger.
@@ -161,7 +178,7 @@ LIMITS
   flow)
   if [ "$banking_persistent" -eq 1 ]; then cat <<LIMITS
 - Use ONLY agent-browser --session qbo-ops with --profile C:/Users/NewAdmin/.qbo-automation-profile, headless. Reuse the already signed-in session. Never close this persistent browser or open Test Data Lab for a banking task. Open/navigate only https://qbo.intuit.com/app/ and retain company verification.
-- Execute ONLY the exact named banking flow; persist only explicitly listed actions.
+$(if [ -n "$native_pair" ]; then echo "- Execute ONLY the exact authority-validated saved Invoice $native_invoice / Estimate $native_estimate repair; no banking actions are authorized."; else echo '- Execute ONLY the exact named banking flow; persist only explicitly listed actions.'; fi)
 $(ab_route)
 $(never_list)
 LIMITS
@@ -251,6 +268,7 @@ open(sys.argv[2] + '/reply.txt', 'w', encoding='utf-8').write(last)
 open(sys.argv[2] + '/commands.txt', 'w', encoding='utf-8').write('\n'.join(cmds))
 risky = re.compile(r'\.env|auth\.json|credentials|curl |Invoke-WebRequest|wget |\bgit |taskkill|Stop-Process|Remove-Item|\brm |del ', re.I)
 flagged = [c for c in cmds if risky.search(c)]
+open(sys.argv[2] + '/command-audit.json', 'w', encoding='utf-8').write(json.dumps({'shell': sum(c.startswith('shell: ') for c in cmds), 'flagged': len(flagged)}))
 print(f'--- {len(cmds)} tool calls (full list in commands.txt); flagged for review: {len(flagged)} ---')
 for c in flagged: print('  ! ' + c[:240])
 print(f"--- command audit: shell={sum(c.startswith('shell: ') for c in cmds)}; flagged={len(flagged)} ---")
@@ -260,7 +278,7 @@ EOF
 thread=$(grep -o '"thread_id":"[^"]*' "$out/events.jsonl" 2>/dev/null | head -1 | cut -d'"' -f4)
 echo "--- effective settings (thread ${thread:-unknown}) ---"
 rollout=$( [ -n "$thread" ] && ls "$HOME"/.codex/sessions/*/*/*/rollout-*-"$thread".jsonl 2>/dev/null | head -1 )
-if [ -n "$rollout" ]; then grep -o -E '"model":"[^"]+"|"effort":"[^"]+"|"sandbox_policy":\{"type":"[^"]+"' "$rollout" | sort -u
-else echo "transcript not found: effective model unverified"; fi
+{ if [ -n "$rollout" ]; then grep -o -E '"model":"[^"]+"|"effort":"[^"]+"|"sandbox_policy":\{"type":"[^"]+"' "$rollout" | sort -u
+else echo "transcript not found: effective model unverified"; fi; } | tee "$out/settings.txt"
 }
 main "$@"; exit $?

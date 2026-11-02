@@ -48,13 +48,16 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     const taskDirectory=path.join(bankingRoot,'operator-tasks',runId); await fs.mkdir(taskDirectory,{recursive:true});
     const taskFile=path.join(taskDirectory,'task.txt'); await fs.writeFile(taskFile,task.prompt,{flag:'wx'});
     const startedMs=Date.now();
+    const native=task.nativeRepair;
+    if(native)check(mode==='flow' && /^[a-f0-9]{64}$/.test(native.actionId||'') && /^[a-f0-9]{64}$/.test(native.authorityHash||''),'Invalid exact native-repair authority');
+    const nativeArgs=native?['--native-estimate-repair',native.actionId,native.authorityHash]:[];
     // terra-live.sh owns the all-Terra lock, fixed model and 20-minute timeout.
     // --flow/--desktop are wrapper modes, not Codex CLI flags.
     const result=await new Promise((resolve,reject)=>{
       let child,stdout='',stderr='',timedOut=false,cleanupError=null,overflow=false,closing=false,timer,cleanupTimer;
       const done=(code,signal)=>{if(closing)return;closing=true;clearTimeout(timer);clearTimeout(cleanupTimer);resolve({code,signal,stdout,stderr,timedOut,cleanupError,overflow});};
       const terminate=()=>{if(timedOut)return;timedOut=true;cleanupTimer=setTimeout(()=>done(null,'cleanup-unconfirmed'),cleanupGraceMs); if(process.platform==='win32') exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:15000},e=>{cleanupError=e?e.message:null;}); else child.kill('SIGTERM');};
-      child=spawnProcess(bashPath,[path.join(root,SCRIPT),'--'+mode,runId,taskFile,'medium'],{cwd:root,windowsHide:true,shell:false,env:{...process.env,...(activeSession?.environment || {})},stdio:['ignore','pipe','pipe']});
+      child=spawnProcess(bashPath,[path.join(root,SCRIPT),'--'+mode,runId,taskFile,'medium',...nativeArgs],{cwd:root,windowsHide:true,shell:false,env:{...process.env,...(activeSession?.environment || {})},stdio:['ignore','pipe','pipe']});
       timer=setTimeout(terminate,timeoutMs);
       child.once('error',e=>{clearTimeout(timer);reject(e);});
       child.stdout.on('data',b=>{stdout+=b.toString();if(stdout.length>2000000){overflow=true;stdout=stdout.slice(-2000000);terminate();}});
@@ -75,9 +78,33 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     const commandsPath=path.join(outputDirectory,'commands.txt');
     const settings=result.stdout.split('--- effective settings (thread ').at(-1).split('--- cleanup ---')[0];
     const model=result.stdout.includes('--- effective settings (thread ') && /"model":"gpt-6\.1-terra"/.test(settings)?'gpt-6.1-terra':null;
-    return {exitCode:result.code,cleanupConfirmed,model,reply,replyPath,commandsPath,commandAudit,outputDirectory,startedMs};
+    let execution={exitCode:result.code,cleanupConfirmed,model,reply,replyPath,commandsPath,commandAudit,outputDirectory,startedMs};
+    if(native){
+      const retained=await require('../../../scripts/banking/native-estimate-execution.cjs').readReceipt(root,{runId,promptHash:require('./business-calendar').hash(task.prompt),nativeRepair:native});
+      check(retained && retained.exitCode===result.code && retained.cleanupConfirmed===cleanupConfirmed && retained.reply===reply && JSON.stringify(retained.commandAudit)===JSON.stringify(commandAudit),'Native child completion evidence is missing or differs');
+      execution=retained;
+    }
+    const body={runId,promptHash:require('./business-calendar').hash(task.prompt),execution};
+    await fs.writeFile(path.join(taskDirectory,'runner-result.json'),JSON.stringify({body,contentHash:require('./business-calendar').hash(body)}),{flag:'wx'});
+    return execution;
   }
-  return {run,retainInput,retainEvidence,withSession};
+  async function readExecution({runId,promptHash,nativeRepair}) {
+    check(/^bf7-[a-f0-9-]{36}$/.test(runId) && /^[a-f0-9]{64}$/.test(promptHash),'Invalid retained native run');
+    const taskDirectory=path.join(bankingRoot,'operator-tasks',runId);let retained;
+    try{retained=JSON.parse(await fs.readFile(path.join(taskDirectory,'runner-result.json'),'utf8'));}catch(error){if(error.code==='ENOENT'){const execution=await require('../../../scripts/banking/native-estimate-execution.cjs').readReceipt(root,{runId,promptHash,nativeRepair});if(execution)await require('./banking-operator-recovery').verifyRetainedRunStopped(root,{runId});return execution;}throw error;}
+    const {body,contentHash}=retained;
+    check(contentHash===require('./business-calendar').hash(body) && body.runId===runId && body.promptHash===promptHash && require('./business-calendar').hash(await fs.readFile(path.join(taskDirectory,'task.txt'),'utf8'))===promptHash,'Retained execution identity changed');
+    if(nativeRepair){
+      const execution=await require('../../../scripts/banking/native-estimate-execution.cjs').readReceipt(root,{runId,promptHash,nativeRepair});
+      check(execution && require('./business-calendar').hash(execution)===require('./business-calendar').hash(body.execution),'Native retained result differs from child evidence');
+      await require('./banking-operator-recovery').verifyRetainedRunStopped(root,{runId});return execution;
+    }
+    const execution=body.execution,base=await fs.realpath(artifacts),actual=await fs.realpath(execution.outputDirectory);
+    check(actual.startsWith(base+path.sep) && path.basename(actual).startsWith(runId+'-') && path.resolve(execution.replyPath)===path.join(actual,'reply.txt') && (await fs.readFile(execution.replyPath,'utf8'))===execution.reply,'Retained native result changed');
+    await require('./banking-operator-recovery').verifyRetainedRunStopped(root,{runId});
+    return execution;
+  }
+  return {run,retainInput,retainEvidence,withSession,readExecution,sessionProof:()=>activeSession?.environment?.TDL_QBO_SESSION_OWNER?require('./business-calendar').hash(activeSession.environment.TDL_QBO_SESSION_OWNER):null};
 }
 // Importing starts nothing; caller injects authorized BF4 and sync/report readers.
 function createDefaultBankingOperator({root=ROOT,workspace,getAccount,readVerification,authorize,resolveRows,...options}) {

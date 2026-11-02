@@ -5,7 +5,7 @@ const { hash } = require('./business-calendar');
 const CODE = 'BUSINESS_ESTIMATE_NATIVE_REQUIRED';
 const DOCUMENTATION = 'https://developer.intuit.com/app/developer/qbo/docs/api/accounting/most-commonly-used/invoice';
 const NATIVE_REASON = 'Estimate conversion requires the native QuickBooks workflow while Progress Invoicing is on or its setting is unverified. Keep existing invoices; do not retry the conversion through the API, create replacements or change company settings.';
-const SUPPORT = Object.freeze({ apiWritable: 'only-with-observed-progress-invoicing-off', nativeWorkflowRequiredWhen: ['on', 'unknown'], automaticNativeExecution: false, reason: NATIVE_REASON, documentation: DOCUMENTATION, checkedOn: '2026-11-02' });
+const SUPPORT = Object.freeze({ apiWritable: 'only-with-observed-progress-invoicing-off', nativeWorkflowRequiredWhen: ['on', 'unknown'], automaticNativeExecution: false, automaticNativeRepair: true, repairTool: 'repairEstimateConversion', reason: NATIVE_REASON, documentation: DOCUMENTATION, checkedOn: '2026-11-02' });
 function estimateIds(value) {
   const ids = [];
   const visit = node => {
