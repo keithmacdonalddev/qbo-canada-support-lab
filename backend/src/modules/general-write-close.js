@@ -140,6 +140,11 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         const accountingCurrent=apView||row.current;
         let requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : accountingCurrent;
         if(row.entity==='Estimate'&&proof.estimateConversion) requestedView={...requestedView,TxnStatus:proof.estimateConversion.originalStatus};
+        if(row.entity==='TimeActivity'&&proof.timeBilling){
+          const billed=require('./general-time-billing').requestView(row.current,proof.timeBilling);
+          if(!billed)throw Error('The owned time-billing proof is unavailable or changed');
+          requestedView=billed;
+        }
         if (!row.deleted && !require('./qbo-semantic-compare').matchesQboRequest(accountingRecord(row.entity, row.evidence?.accountant?.request || {}), accountingRecord(row.entity, requestedView), { entity: row.entity })) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
         const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : accountingCurrent, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);

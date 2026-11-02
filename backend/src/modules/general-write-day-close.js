@@ -158,6 +158,11 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
     if(hash(proof.record)!==hash(source.original))continue;
     row.evidence={...row.evidence,accountant:{...proof,record:row.current,versionHash:hash(row.current),estimateConversion:{evidenceHash:witness.evidence.evidenceHash,originalRecord:source.original,originalStatus:source.original.TxnStatus,sourceOperationId:source.operationId}}};
   }
+  for(const row of records.filter(r=>r.entity==='TimeActivity')){
+    const billing=await require('./general-time-billing').deriveTimeBilling({models,scope,runs,row,copy,ownSettlements:trusted});
+    if(!billing)continue;
+    row.evidence={...row.evidence,accountant:{...row.evidence.accountant,record:row.current,versionHash:hash(row.current),originalTimeRecord:billing.original,timeBilling:billing.proof}};
+  }
   const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets })).sort((a, b) => a.key.localeCompare(b.key));
   settlementVersions.sort((a, b) => a.key.localeCompare(b.key));
   return { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
@@ -175,8 +180,15 @@ function settlementEvidence(gathered) {
 // workflows' own period proof and are returned for it, never silently accepted.
 async function closeGeneralDayImplementation({ Runs, scope, day, through = day, copy, ledgerReport, ctx, ownSettlements = null, verifiedThrough, openingDate, gathered = null, models = {} }) {
   const ledger = parseLedger(ledgerReport, day, through, ctx.accountKey), evidence = gathered || await generalRecordsFor({ Runs, scope, day, through, copy, models }), { records:capturedRecords, dirty } = evidence;
+  let currentRecords=capturedRecords;
+  if(capturedRecords.some(r=>r.evidence?.accountant?.timeBilling)){
+    const fresh=await generalRecordsFor({Runs,scope,day,through,copy,models});
+    const persisted=v=>hash(JSON.parse(JSON.stringify(v)));
+    if(persisted(fresh)!==persisted(evidence))fail('Owned time billing changed before close; fresh evidence is required');
+    currentRecords=fresh.records;
+  }
   const records=[];
-  for(const row of capturedRecords){
+  for(const row of currentRecords){
     const retained=row.evidence?.accountant?.apOmission;if(!retained){records.push(row);continue;}
     const proof=await require('./general-billpayment-recovery').resolveProof({models,scope,proof:retained,current:row.current});
     if(!proof)fail('Saved bill-payment account proof is unavailable or changed');
