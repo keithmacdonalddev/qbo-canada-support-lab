@@ -49,7 +49,8 @@ function promptFor(plan){
     'Authorized native QuickBooks repair ONLY. Production My Business company '+plan.scope.realmId+' (ending2856). Use the existing coordinated qbo-ops browser; retain its lease. Actor is '+plan.actorProvenance+'.',
     'Modify existing Invoice '+i.Id+' ONLY to attach exact Estimate '+e.Id+'. Do not create an invoice, payment, credit, customer, or any other record. Do not delete/void a transaction, change settings, use APIs/network shortcuts or edit repository files.',
     'Open https://qbo.intuit.com/app/invoice?txnId='+i.Id+'. Confirm company and invoice identity before any input. If wrong company/record, sign-in challenge or stale record: stop.',
-    'Preserve original DocNumber '+JSON.stringify(i.DocNumber)+', customer '+JSON.stringify(i.CustomerRef)+', TxnDate '+i.TxnDate+', DueDate '+i.DueDate+', currency CAD, GlobalTaxCalculation '+i.GlobalTaxCalculation+', invoice total '+i.TotalAmt+', balance '+i.Balance+', full tax '+JSON.stringify(i.TxnTaxDetail)+', and all other fields.',
+    'Preserve original DocNumber '+JSON.stringify(plan.assignedMissingDocNumber||i.DocNumber)+', customer '+JSON.stringify(i.CustomerRef)+', TxnDate '+i.TxnDate+', DueDate '+i.DueDate+', currency CAD, GlobalTaxCalculation '+i.GlobalTaxCalculation+', invoice total '+i.TotalAmt+', balance '+i.Balance+', full tax '+JSON.stringify(i.TxnTaxDetail)+', and all other fields.',
+    ...(plan.assignedMissingDocNumber?['The original accepted invoice has no DocNumber. Fill ONLY that missing required field with '+plan.assignedMissingDocNumber+' before Save. This server-derived number was checked unused. Never alter an existing number; STOP on any duplicate-number warning.']:[]),
     'Exact source is Estimate '+e.Id+' only. Use the native add/copy whole-estimate procedure into this EXISTING invoice. If copying creates a duplicate financial line, remove only the exact original duplicate line in the UNSAVED draft so one identical source line remains; do not delete any transaction. Exact financial line: '+JSON.stringify(line)+'.',
     'The Estimate may use a proposed/blank description. In the UNSAVED invoice draft, preserve/restore the invoice original line Description exactly as '+JSON.stringify(line.Description??null)+'. Do not change the saved Estimate description. '+
     'BEFORE Save: inspect and capture the UNSAVED native draft. It must have exactly ONE financial sales line, identical customer, document number, dates, quantity, unit price, amount, tax and totals. Native line ID/source-link representation may change only for the exact quoted line. No extra charges, auto credits, discounts, allocations, payments or links. If any original field cannot be preserved, STOP WITHOUT SAVING.',
@@ -107,7 +108,8 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     const query=async text=>client.query(text,control);
     const prefs=async()=>{const rows=(await query('SELECT * FROM Preferences MAXRESULTS 1'))?.QueryResponse?.Preferences;check(Array.isArray(rows)&&rows.length===1&&rows[0].SalesFormsPrefs?.AutoApplyCredit===false,'Native repair requires observed Automatically apply credits Off; no preference change is authorized.');return rows[0];};
     const report=async(reportScope)=>{await access.authorize(scope,'reports.observe');const body=await client.apiCall('GET',reportScope.endpoint,undefined,0,0,control);reportShape(body,reportScope.dates);return body;};
-    try{return await work({get,query,prefs,report,submitted:()=>{submitted=true;},reads:()=>reads});}finally{clearTimeout(timer);controller.abort();}
+    const numbers=async docNumber=>{const body=await query("SELECT * FROM Invoice WHERE DocNumber = '"+docNumber+"' MAXRESULTS 2");check(body?.QueryResponse&&typeof body.QueryResponse==='object'&&[undefined,true].includes(body.QueryResponse.Invoice===undefined?undefined:Array.isArray(body.QueryResponse.Invoice)),'Complete document-number uniqueness query is required');return body.QueryResponse.Invoice||[];};
+    try{return await work({get,query,prefs,report,numbers,submitted:()=>{submitted=true;},reads:()=>reads});}finally{clearTimeout(timer);controller.abort();}
   }
   async function returned(plan,authorityHash,execution,bound) {
     await transaction(async session=>{
@@ -118,15 +120,25 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     });
   }
   function noEffectOf(authority,event,initial){
-    check(event&&event.contentHash===hash(event.payload)&&event.payload.phase==='no-effect'&&event.payload.authorityHash===authority.contentHash&&event.payload.actionId===authority.payload.actionId&&event.payload.reason==='native-executable-unavailable','The retained no-effect proof is invalid.');
+    check(event&&event.contentHash===hash(event.payload)&&event.payload.phase==='no-effect'&&event.payload.authorityHash===authority.contentHash&&event.payload.actionId===authority.payload.actionId&&['native-executable-unavailable','missing-invoice-document-number'].includes(event.payload.reason),'The retained no-effect proof is invalid.');
     const plan=authority.payload.plan,after=event.payload.after;
     check(plan.source.invoiceOriginalHash===hash(initial.source.original)&&plan.source.estimateOriginalHash===hash(initial.estimate.original)&&unchanged(initial.source.original,after.invoice,'Invoice')&&unchanged(initial.estimate.original,after.estimate,'Estimate')&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'})&&event.payload.noDraft?.onlyHomepage===true&&canonical(reportShape(plan.beforeReport,plan.reportScope.dates))===canonical(reportShape(event.payload.afterReport,plan.reportScope.dates)),'No-effect evidence no longer authenticates the original documents.');
     return event;
   }
-  async function verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads){
+  async function discardJournaledDraft(plan,authorityHash,bound){
+    const find=phase=>one(models.Authorities,{_id:hash({actionId:plan.actionId,phase}).slice(0,24),...plan.scope});
+    const completed=await find('draft-cleanup-complete');
+    if(completed){check(completed.contentHash===hash(completed.payload)&&completed.payload.authorityHash===authorityHash&&completed.payload.proof?.invoiceId===plan.invoiceId&&completed.payload.proof?.runId===plan.runId,'Retained owned cleanup differs');return completed.payload.proof;}
+    check(!await find('draft-cleanup-started'),'An uncertain owned-draft cleanup needs inspection; never issue a Save');
+    const retainPhase=async(phase,payload)=>transaction(async session=>{await workspace(bound,session,true);const writer=await one(models.Writers,plan.scope,session);check(writer?.unresolved?.actionId===plan.actionId&&writer.unresolved.authorityHash===authorityHash,'Owned cleanup lost its exact writer');await retain(plan,{authorityHash,...payload},phase,session);check(await models.Writers.findOneAndUpdate({_id:writer._id,...plan.scope,revision:writer.revision,'unresolved.actionId':plan.actionId},{$inc:{revision:1}},{new:true,session}).lean(),'Owned cleanup fence changed');});
+    const proof=await runner.discardOwnedDraft({invoiceId:plan.invoiceId,runId:plan.runId,scope:plan.scope,customerName:plan.before.customer.DisplayName,total:plan.before.invoice.TotalAmt,description:plan.before.invoice.Line.find(l=>l.DetailType==='SalesItemLineDetail')?.Description,beforeDiscard:witness=>retainPhase('draft-cleanup-started',{invoiceId:plan.invoiceId,runId:plan.runId,witness,at:new Date(now()).toISOString()})});
+    await retainPhase('draft-cleanup-complete',{proof});return proof;
+  }
+  async function verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,reason='native-executable-unavailable'){
     check(runner.readExecution&&runner.assertNoDraft,'No-effect native evidence adapters are required.');
     const retained=await runner.readExecution({runId:plan.runId,promptHash:plan.promptHash,nativeRepair:{actionId:plan.actionId,authorityHash}});
     check(retained&&hash(retained)===hash(execution),'No-effect execution evidence changed.');
+    let cleanup=null;if(reason==='missing-invoice-document-number'){check(plan.attempt===2&&!plan.assignedMissingDocNumber&&recovery.missingDocumentNumber(source)&&runner.discardOwnedDraft,'Only the historical missing-number draft is eligible');cleanup=await discardJournaledDraft(plan,authorityHash,bound);}
     const noDraft=await runner.assertNoDraft();check(noDraft?.onlyHomepage===true,'An open draft or pending submit prevents replacement.');
     const read=async()=>({invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId),customer:await reads.get('Customer',plan.before.customer.Id)});
     const after=await read();check(unchanged(source.original,after.invoice,'Invoice')&&unchanged(estimate.original,after.estimate,'Estimate')&&completeCustomer(after.customer,plan.before.customer.Id)&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'}),'Original native records changed; no-effect cannot be established.');
@@ -136,19 +148,22 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       await workspace(bound,session,true);await load(bound,plan.operationId,plan.ref,session);
       const writer=await one(models.Writers,plan.scope,session),policy=await one(models.Policies,plan.scope,session);
       check(writer?.unresolved?.actionId===plan.actionId&&writer.unresolved.authorityHash===authorityHash&&policy?.state==='active'&&policy.periodControl?.contentHash===plan.controlHash,'No-effect settlement fence changed.');
-      await retain(plan,{authorityHash,reason:'native-executable-unavailable',after,afterReport,noDraft,executionHash:hash(execution),sdkReads:reads.reads(),verifiedAt:new Date(now()).toISOString()},'no-effect',session);
+      await retain(plan,{authorityHash,reason,after,afterReport,noDraft,cleanup,executionHash:hash(execution),sdkReads:reads.reads(),verifiedAt:new Date(now()).toISOString()},'no-effect',session);
       check(await models.Writers.findOneAndUpdate({_id:writer._id,...plan.scope,revision:writer.revision,'unresolved.actionId':plan.actionId,'unresolved.authorityHash':authorityHash},{$set:{unresolved:null},$inc:{revision:1}},{new:true,session}).lean(),'No-effect retains its exact writer until settlement.');
     });
-    return {status:'not-repaired',actionId:plan.actionId,noEffectVerified:true,retryAvailable:(plan.attempt||1)===1,note:'Fresh unchanged records and complete accounting prove the missing-executable attempt made no change. Its original launch remains consumed.'};
+    return {status:'not-repaired',actionId:plan.actionId,noEffectVerified:true,retryAvailable:(plan.attempt||1)===1||reason==='missing-invoice-document-number'&&plan.attempt===2,note:'Fresh unchanged records and complete accounting prove this stopped attempt made no change. Its original launch remains consumed.'};
   }
   async function verify(plan,authorityHash,source,estimate,execution,bound,reads) {
     check(execution.exitCode===0&&execution.cleanupConfirmed===true&&execution.model==='gpt-6.1-terra'&&execution.commandAudit?.flagged===0,'Native runner result or cleanup is uncertain; keep the original action barrier.');
     let reply;try{reply=JSON.parse(execution.reply.replace(/^\s*```(?:json)?/,'').replace(/```\s*$/,''));}catch{fail('Native result is not an inspectable structured result; retain its action barrier.');}
     if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===false&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/MODULE_NOT_FOUND/.test(reply.notes||''))return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads);
+    if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===true&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/invoice number.*(blank|required)/i.test(reply.notes||'')&&recovery.missingDocumentNumber(source)&&plan.attempt===2&&!plan.assignedMissingDocNumber)return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,'missing-invoice-document-number');
     check(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===true&&reply.saveAttempts===1&&reply.saveOutcome==='saved','Native submission is not explicitly known saved; retain its action barrier.');
     const beforeShot=await runner.retainEvidence(execution,reply.beforeSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId}),afterShot=await runner.retainEvidence(execution,reply.afterSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId});
     const after={invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId),customer:await reads.get('Customer',plan.before.customer.Id)};
-    check(recovery.assertRepairedPair(source,after.invoice,after.estimate,estimate.original)&&recovery.assertEstimateTransition(estimate.original,after.estimate,plan.invoiceId)&&completeCustomer(after.customer,plan.before.customer.Id)&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'}),'Native saved record differs from the exact approved accounting; keep its barrier.');
+    const assignment=plan.assignedMissingDocNumber?await recovery.loadNativeAssignment({models,scope:plan.scope,source,estimateOriginal:estimate.original,actionId:plan.actionId,authorityHash,completed:false}):null;
+    if(plan.assignedMissingDocNumber){check(assignment,'The reviewed missing-number assignment authority is required');const numbered=await reads.numbers(plan.assignedMissingDocNumber);check(numbered.length===1&&numbered[0].Id===plan.invoiceId&&numbered[0].DocNumber===plan.assignedMissingDocNumber,'The assigned invoice number is not unique to the original invoice');}
+    check(recovery.assertRepairedPair(source,after.invoice,after.estimate,estimate.original,assignment)&&recovery.assertEstimateTransition(estimate.original,after.estimate,plan.invoiceId)&&completeCustomer(after.customer,plan.before.customer.Id)&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'}),'Native saved record differs from the exact approved accounting; keep its barrier.');
     const stable={invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId)};
     check(canonical(stable.invoice)===canonical(after.invoice)&&canonical(stable.estimate)===canonical(after.estimate),'Native repair readback changed during verification.');
     await reads.prefs();const afterReport=await reads.report(plan.reportScope);
@@ -169,7 +184,16 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     if(prior){
       check(prior.contentHash===hash(prior.payload)&&prior.payload.kind===KIND&&prior.payload.actionId===rootId,'Root native authority changed.');
       const noEffect=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...initial.scope});
-      if(noEffect){noEffectOf(prior,noEffect,initial);predecessor={actionId:rootId,authorityHash:prior.contentHash,noEffectHash:noEffect.contentHash,plan:prior.payload.plan};attempt=2;id=replacementId(rootId,noEffect.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});}
+      if(noEffect){
+        noEffectOf(prior,noEffect,initial);check(noEffect.payload.reason==='native-executable-unavailable','Only the missing-executable root may have a successor');
+        predecessor={actionId:rootId,authorityHash:prior.contentHash,noEffectHash:noEffect.contentHash,plan:prior.payload.plan};attempt=2;id=replacementId(rootId,noEffect.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
+        if(prior){const next=await one(models.Authorities,{_id:hash({actionId:id,phase:'no-effect'}).slice(0,24),...initial.scope});
+          if(next?.payload?.reason==='missing-invoice-document-number'){
+            noEffectOf(prior,next,initial);check(prior.payload.plan.attempt===2&&!prior.payload.plan.assignedMissingDocNumber&&prior.payload.plan.predecessor?.actionId===rootId&&next.payload.cleanup?.invoiceId===initial.source.item.qboId&&next.payload.cleanup.runId===prior.payload.plan.runId&&recovery.missingDocumentNumber(initial.source),'Only the exact historical helper-to-missing-number lineage has a final successor');
+            predecessor={actionId:id,authorityHash:prior.contentHash,noEffectHash:next.contentHash,plan:prior.payload.plan};attempt=3;id=replacementId(rootId,next.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
+          }
+        }
+      }
     }
     if(prior){
       check(prior.contentHash===hash(prior.payload)&&prior.payload.kind===KIND&&prior.payload.actionId===id,'Retained native action identity is invalid.');
@@ -203,17 +227,19 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       check(unchanged(source.original,invoice,'Invoice')&&unchanged(estimate.original,quote,'Estimate'),'Original Invoice or Estimate changed; no native action was admitted.');
       check(compatiblePair(invoice,quote),'Only an identical unpaid CAD whole-estimate customer, financial line, tax and total is supported.');
       const customer=await reads.get('Customer',invoice.CustomerRef.value);check(completeCustomer(customer,invoice.CustomerRef.value),'The exact complete active Customer must be verified before admission.');
+      const assignedMissingDocNumber=recovery.missingDocumentNumber(source);let documentNumberProof=null;
+      if(assignedMissingDocNumber){check(invoice.DocNumber===undefined,'The original missing number was already assigned; preserve that record');const matches=await reads.numbers(assignedMissingDocNumber);check(matches.length===0,'The proposed missing invoice number is already used');documentNumberProof={docNumber:assignedMissingDocNumber,matches:0,observedAt:new Date(now()).toISOString()};}
       const preferences=await reads.prefs(),semantic=freezeWriteRequest(scope,'POST','invoice',{Id:invoice.Id,SyncToken:invoice.SyncToken,sparse:true,LinkedTxn:[{TxnId:quote.Id,TxnType:'Estimate'}]});
       const period=await readWritePeriodEvidence(semantic,{read:async(e,i)=>({[e[0].toUpperCase()+e.slice(1)]:await reads.get(e[0].toUpperCase()+e.slice(1),i)}),query:reads.query},now);
       const policy=await one(models.Policies,scope),periodProof=assertWritePeriod(semantic,period,policy?.periodControl,now(),String(bound.ownerId));
       const dates={from:[invoice.TxnDate,quote.TxnDate].sort()[0].slice(0,4)+'-01-01',through:require('./business-activity-preview').businessDate(new Date(now()))};
       const reportScope={endpoint:'reports/TrialBalance?'+new URLSearchParams({start_date:dates.from,end_date:dates.through,accounting_method:'Accrual'}),dates},beforeReport=await reads.report(reportScope);
-      const plan={version:1,kind:KIND,actionId:id,rootActionId:rootId,attempt,predecessor:predecessor?{actionId:predecessor.actionId,authorityHash:predecessor.authorityHash,noEffectHash:predecessor.noEffectHash}:null,runId:'bf7-'+require('node:crypto').randomUUID(),scope,ownerId:String(bound.ownerId),actorId:String(bound.actorId),agentAuthority:bound.agentAuthority||null,browserLeaseHash:runner.sessionProof?.()||null,policyRevision:policy.revision,actorProvenance:bound.agentAuthority?'accountant under current standing grant':'codex-cli under exact owner-targeted request',operationId,ref,invoiceId:invoice.Id,estimateId:quote.Id,source:{invoiceReceiptId:source.receiptId,invoiceRequestHash:source.requestHash,invoiceOriginalHash:hash(source.original),estimateReceiptId:estimate.receiptId,estimateRequestHash:estimate.requestHash,estimateOriginalHash:hash(estimate.original)},before:{invoice,estimate:quote,customer},preferences,periodProof,controlHash:policy.periodControl.contentHash,reportScope,beforeReport,reviewedAt:new Date(now()).toISOString(),deadlineAt:new Date(now()+300000).toISOString()};
+      const plan={version:1,kind:KIND,actionId:id,rootActionId:rootId,attempt,predecessor:predecessor?{actionId:predecessor.actionId,authorityHash:predecessor.authorityHash,noEffectHash:predecessor.noEffectHash}:null,runId:'bf7-'+require('node:crypto').randomUUID(),scope,ownerId:String(bound.ownerId),actorId:String(bound.actorId),agentAuthority:bound.agentAuthority||null,browserLeaseHash:runner.sessionProof?.()||null,policyRevision:policy.revision,actorProvenance:bound.agentAuthority?'accountant under current standing grant':'codex-cli under exact owner-targeted request',operationId,ref,invoiceId:invoice.Id,estimateId:quote.Id,source:{invoiceReceiptId:source.receiptId,invoiceRequestHash:source.requestHash,invoiceOriginalHash:hash(source.original),estimateReceiptId:estimate.receiptId,estimateRequestHash:estimate.requestHash,estimateOriginalHash:hash(estimate.original)},before:{invoice,estimate:quote,customer},assignedMissingDocNumber,documentNumberProof,preferences,periodProof,controlHash:policy.periodControl.contentHash,reportScope,beforeReport,reviewedAt:new Date(now()).toISOString(),deadlineAt:new Date(now()+300000).toISOString()};
       plan.prompt=promptFor(plan);plan.promptHash=hash(plan.prompt);let authorityHash;
       await fence.commit({scope,run,bound,snapshots:[snapshot],work:async session=>{
         await workspace(bound,session);const fresh=await load(bound,operationId,ref,session);check(fresh.source.receiptId===source.receiptId&&hash(fresh.source.original)===plan.source.invoiceOriginalHash&&hash(fresh.estimate.original)===plan.source.estimateOriginalHash,'Original native repair sources changed.');
         await touchPolicy(plan,semantic,period,session);
-        if(predecessor){const previous=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope},session);check(previous?.contentHash===predecessor.noEffectHash&&previous.contentHash===hash(previous.payload),'Replacement predecessor proof changed.');}
+        if(predecessor){const previous=await one(models.Authorities,{_id:hash({actionId:predecessor.actionId,phase:'no-effect'}).slice(0,24),...scope},session);check(previous?.contentHash===predecessor.noEffectHash&&previous.contentHash===hash(previous.payload),'Replacement predecessor proof changed.');}
         authorityHash=await retain(plan,{plan},'admitted',session);
         if(predecessor)await retain(predecessor.plan,{authorityHash:predecessor.authorityHash,noEffectHash:predecessor.noEffectHash,successorActionId:id,successorAuthorityHash:authorityHash},'replacement-admitted',session);
         check(await models.Writers.findOneAndUpdate({...scope,_id:snapshot.writerId,revision:snapshot.revision+1,operationId:null,planHash:null,unresolved:null},{$set:{unresolved:{kind:KIND,actionId:id,authorityHash,operationId,invoiceId:invoice.Id,estimateId:quote.Id}},$inc:{revision:1}},{new:true,session}).lean(),'Native writer admission changed.');
@@ -235,6 +261,10 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
 function createDefaultGeneralEstimateNative({access,guard,now=()=>Date.now(),codingAuthority=null}={}){
   const models={...require('./business-runtime').loadModels(),Agents:require('../models/BusinessAgent')},transaction=require('./business-transaction').createBusinessTransaction(require('mongoose').connection);
   const runner=require('./banking-terra-runner').createTerraRunner({timeoutMs:MAX_NATIVE_MS});
-  return createGeneralEstimateNative({models,transaction,access,guard,now,codingAuthority,runner,lease:()=>require('./banking-terra-runner').acquireOperatorLease(),reconcile:async(bound,operationId,hints)=>require('./general-write-service').createDefaultGeneralWrite({access,now,recoveryHints:hints}).execute(bound,operationId)});
+  return createGeneralEstimateNative({models,transaction,access,guard,now,codingAuthority,runner,lease:()=>require('./banking-terra-runner').acquireOperatorLease(),reconcile:async(bound,operationId,hints)=>{
+    const origin=await one(models.GeneralWriteRuns,{_id:operationId,...bound.scope});check(origin&&String(origin.ownerId)===String(bound.ownerId)&&String(origin.actorId)===String(bound.actorId),'Original recovery owner changed');
+    const recoveryBound=!bound.agentAuthority&&codingAuthority&&origin.agentAuthority?{...bound,agentAuthority:clone(origin.agentAuthority)}:bound;
+    return require('./general-write-service').createDefaultGeneralWrite({access,now,recoveryHints:hints}).reconcileSaved(recoveryBound,operationId);
+  }});
 }
 module.exports={KIND,EVENT,MAX_READS,actionId,replacementId,promptFor,unchanged,reportShape,createGeneralEstimateNative,createDefaultGeneralEstimateNative};

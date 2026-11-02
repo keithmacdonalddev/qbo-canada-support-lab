@@ -20,7 +20,7 @@ function creationSourceOf(run, ref, receipt, entity, outcome) {
     if(!rows.every(row=>{const {bId,...body}=row,originals=proof.items.filter(p=>p.bId===bId);return originals.length===1&&originals[0].outcome==='saved'&&originals[0].responseHash===createHash('sha256').update(JSON.stringify(body)).digest('hex');}))return null;
     const original=rows.find(row=>row.bId===sent.bId)?.[entity],wanted=sent.payload,savedIds=Object.fromEntries(Object.entries(run.items).filter(([,row])=>row.outcome==='saved').map(([key,row])=>[key,row.qboId]));
     if(canonical(require('./general-write-service').resolve(op.payload,savedIds))!==canonical(wanted)||sent.op!=='create'||sent.operation!=='create'||sent.entity!==entity||canonical(wanted)!==canonical(item.request)||canonical(original)!==canonical(item.record)||!validRecord(original,entity,item.qboId))return null;
-    return {item,original,wanted,receiptId:String(receipt._id),requestHash:request.requestHash,batchIndex:batch.index,ref,operationId:String(run._id)};
+    return {ownerId:String(run.ownerId),actorId:String(run.actorId),item,original,wanted,receiptId:String(receipt._id),requestHash:request.requestHash,batchIndex:batch.index,ref,operationId:String(run._id)};
   }catch{return null;}
 }
 function readSource(run,ref,receipt){
@@ -38,7 +38,10 @@ function packetOf(run, source) {
 function hasReciprocalLink(invoice, estimate, source) {
   return validRecord(invoice, 'Invoice', source.item.qboId) && validRecord(estimate, 'Estimate', source.estimateId) && Array.isArray(invoice.LinkedTxn) && sameQboValue({ LinkedTxn: invoice.LinkedTxn }, { LinkedTxn: source.wanted.LinkedTxn }) && sameQboValue({ LinkedTxn: estimate.LinkedTxn || [] }, { LinkedTxn: [{ TxnId: invoice.Id, TxnType: 'Invoice' }] }) && estimate.TxnStatus === 'Closed';
 }
-function assertRepairedPair(source, invoice, estimate, originalEstimate = null) {
+const nativeAssignments=new WeakSet();
+function missingDocumentNumber(source){return source.original.DocNumber===undefined&&!Object.hasOwn(source.wanted,'DocNumber')?'TDL-R-'+source.item.qboId:null;}
+function assignmentFor(source,proof){return proof&&nativeAssignments.has(proof)&&proof.invoiceId===source.item.qboId&&proof.receiptId===source.receiptId&&proof.requestHash===source.requestHash&&proof.docNumber===missingDocumentNumber(source)?proof.docNumber:null;}
+function assertRepairedPair(source, invoice, estimate, originalEstimate = null, assignment = null) {
   if (!hasReciprocalLink(invoice, estimate, source) || !matchesQboRequest(source.wanted, invoice, { entity: 'Invoice' }) || !VERSION.test(source.original.SyncToken) || BigInt(invoice.SyncToken) <= BigInt(source.original.SyncToken)) return false;
   // A whole single-line source may replace that exact existing invoice line.
   // Its native identity/link may change; customer, money, tax, document number,
@@ -48,7 +51,8 @@ function assertRepairedPair(source, invoice, estimate, originalEstimate = null) 
   const replacement = originalEstimate && beforeLines.length===1 && afterLines.length===1 && quoteLines.length===1 && source.wanted.Line?.length===1 && source.wanted.Line[0].Id===undefined && beforeLines[0].DetailType==='SalesItemLineDetail' && afterLines[0].DetailType==='SalesItemLineDetail' && QID.test(beforeLines[0].Id||'') && QID.test(afterLines[0].Id||'') && QID.test(quoteLines[0].Id||'');
   const nativeLineLinks = afterLines[0]?.LinkedTxn;
   if(nativeLineLinks!==undefined && (!replacement || !Array.isArray(nativeLineLinks) || nativeLineLinks.length!==1 || nativeLineLinks[0].TxnId!==estimate.Id || nativeLineLinks[0].TxnType!=='Estimate' || Object.keys(nativeLineLinks[0]).some(key=>!['TxnId','TxnType','TxnLineId'].includes(key)) || ![undefined,'0',quoteLines[0].Id].includes(nativeLineLinks[0].TxnLineId)))return false;
-  const view = record => { const out = structuredClone(record); delete out.LinkedTxn; if(replacement)for(const line of out.Line||[])if(line.DetailType==='SalesItemLineDetail'){delete line.Id;delete line.LinkedTxn;} return out; };
+  const assigned=assignmentFor(source,assignment);if(assigned&&invoice.DocNumber!==assigned)return false;
+  const view = record => { const out = structuredClone(record); delete out.LinkedTxn;if(assigned&&out.DocNumber===undefined)out.DocNumber=assigned; if(replacement)for(const line of out.Line||[])if(line.DetailType==='SalesItemLineDetail'){delete line.Id;delete line.LinkedTxn;} return out; };
   if (!sameQboValue(view(source.original), view(invoice), { entity: 'Invoice', metadata: true })) return false;
   const beforeTime = Date.parse(source.original.MetaData?.LastUpdatedTime), afterTime = Date.parse(invoice.MetaData?.LastUpdatedTime);
   if (!Number.isFinite(beforeTime) || !Number.isFinite(afterTime) || afterTime < beforeTime || !Number.isFinite(Date.parse(source.original.MetaData?.CreateTime)) || source.original.MetaData.CreateTime !== invoice.MetaData?.CreateTime) return false;
@@ -60,7 +64,7 @@ function assertRepairedPair(source, invoice, estimate, originalEstimate = null) 
   // the Estimate Description independently.
   return sameQboValue(financial(source.original), financial(originalEstimate || estimate));
 }
-async function assessSavedEstimate({ run, ref, receipt, copy, scope, loadEstimate, snapshot = null, now = () => Date.now() }) {
+async function assessSavedEstimate({ run, ref, receipt, copy, scope, loadEstimate, loadAssignment = null, snapshot = null, now = () => Date.now() }) {
   if (['environment','realmId','connectionId'].some(key => String(run[key]) !== String(scope[key]))) return null;
   const source = sourceOf(run, ref, receipt); if (!source) return null;
   const packet = packetOf(run, source), pending = { ...source.item, next: { action: packet.action, reason: packet.reason, recovery: packet } };
@@ -70,13 +74,14 @@ async function assessSavedEstimate({ run, ref, receipt, copy, scope, loadEstimat
   if (!hasReciprocalLink(hintedInvoice, hintedEstimate, source) || typeof copy.fetch !== 'function' || !snapshot || typeof loadEstimate !== 'function') return pending;
   const estimateSource = await loadEstimate(source.estimateId);
   if (!estimateSource || !assertEstimateTransition(estimateSource.original, hintedEstimate, packet.invoiceId)) return pending;
+  const assignment=loadAssignment?await loadAssignment(source,estimateSource.original):null;
   const startedAt = new Date(now()).toISOString(), first = { invoice: await copy.fetch(scope, 'Invoice', packet.invoiceId), estimate: await copy.fetch(scope, 'Estimate', packet.estimateId) };
-  if (!assertRepairedPair(source, first.invoice, first.estimate, estimateSource.original) || !assertEstimateTransition(estimateSource.original,first.estimate,packet.invoiceId)) return pending;
+  if (!assertRepairedPair(source, first.invoice, first.estimate, estimateSource.original,assignment) || !assertEstimateTransition(estimateSource.original,first.estimate,packet.invoiceId)) return pending;
   const second = { invoice: await copy.fetch(scope, 'Invoice', packet.invoiceId), estimate: await copy.fetch(scope, 'Estimate', packet.estimateId) };
   const ended = now();
-  if (ended < Date.parse(startedAt) || ended - Date.parse(startedAt) > 60000 || canonical(first) !== canonical(second) || !assertRepairedPair(source, second.invoice, second.estimate, estimateSource.original)) return pending;
+  if (ended < Date.parse(startedAt) || ended - Date.parse(startedAt) > 60000 || canonical(first) !== canonical(second) || !assertRepairedPair(source, second.invoice, second.estimate, estimateSource.original,assignment)) return pending;
   const { next, errorDetail, ...saved } = source.item;
-  const evidence = { version: 1, kind: 'saved-invoice-estimate-reconciled', ...scope, operationId: String(run._id), ref, receiptId: source.receiptId, requestHash: source.requestHash, originalRecordHash: hash(source.original), currentRecordHash: hash(second.invoice), estimateRecordHash: hash(second.estimate), sourceEstimate: { operationId:estimateSource.operationId,ref:estimateSource.ref,receiptId:estimateSource.receiptId,requestHash:estimateSource.requestHash,recordHash:hash(estimateSource.original) }, startedAt, observedAt: new Date(ended).toISOString(), accountingReportVerified: false };
+  const evidence = { version: 1, kind: 'saved-invoice-estimate-reconciled', ...scope, operationId: String(run._id), ref, receiptId: source.receiptId, requestHash: source.requestHash, originalRecordHash: hash(source.original), currentRecordHash: hash(second.invoice), estimateRecordHash: hash(second.estimate), sourceEstimate: { operationId:estimateSource.operationId,ref:estimateSource.ref,receiptId:estimateSource.receiptId,requestHash:estimateSource.requestHash,recordHash:hash(estimateSource.original) }, startedAt, observedAt: new Date(ended).toISOString(), accountingReportVerified: false, ...(assignment?{nativeAssignment:{actionId:assignment.actionId,authorityHash:assignment.authorityHash,completionHash:assignment.completionHash,docNumber:assignment.docNumber}}:{}) };
   return { ...saved, outcome: 'saved', complete: true, originalSavedRecord: source.original, record: second.invoice, version: second.invoice.SyncToken, parents: require('./general-write-merge').invalidatedParents(source.original, second.invoice), reconciliation: { ...evidence, evidenceHash: hash(evidence), estimate: second.estimate, estimateOriginal: estimateSource.original } };
 }
 module.exports = { sourceOf, packetOf, hasReciprocalLink, assertRepairedPair, assessSavedEstimate };
@@ -139,11 +144,39 @@ function createRecoveryFence({models,transaction,authorize,now=()=>Date.now()}) 
 
 module.exports.creationSourceOf=creationSourceOf;module.exports.loadEstimateCreation=loadEstimateCreation;module.exports.assertEstimateTransition=assertEstimateTransition;module.exports.createRecoveryFence=createRecoveryFence;
 
-function storedReconciliation(run,ref,receipt,scope) {
+function nativeAssignmentRef(proof){return proof?{actionId:proof.actionId,authorityHash:proof.authorityHash,completionHash:proof.completionHash,docNumber:proof.docNumber}:null;}
+function storedReconciliation(run,ref,receipt,scope,assignment=null) {
   const item=run.items?.[ref],r=item?.reconciliation;if(item?.outcome!=='saved'||!item.originalSavedRecord||r?.kind!=='saved-invoice-estimate-reconciled')return null;
+  if(r.nativeAssignment&&canonical(r.nativeAssignment)!==canonical(nativeAssignmentRef(assignment)))return null;
   const {evidenceHash,estimate,estimateOriginal,...evidence}=r;
   if(hash(evidence)!==evidenceHash||['environment','realmId','connectionId'].some(k=>String(r[k])!==String(scope[k]))||r.operationId!==String(run._id)||r.ref!==ref||r.currentRecordHash!==hash(item.record)||r.estimateRecordHash!==hash(estimate)||r.originalRecordHash!==hash(item.originalSavedRecord)||!estimateOriginal||hash(estimateOriginal)!==r.sourceEstimate?.recordHash)return null;
   const source=sourceOf({...run,items:{...run.items,[ref]:{...item,outcome:'mismatch',record:item.originalSavedRecord}}},ref,receipt);
-  return source&&r.receiptId===source.receiptId&&r.requestHash===source.requestHash&&assertRepairedPair(source,item.record,estimate,estimateOriginal)?{source,evidence:r}:null;
+  return source&&r.receiptId===source.receiptId&&r.requestHash===source.requestHash&&assertRepairedPair(source,item.record,estimate,estimateOriginal,assignment)?{source,evidence:r}:null;
 }
 module.exports.storedReconciliation=storedReconciliation;
+
+async function loadNativeAssignment({models,scope,source,estimateOriginal,actionId=null,authorityHash=null,completed=true,session=null}){
+  if(!source||!missingDocumentNumber(source)||!models.Authorities?.findOne)return null;
+  const native=require('./general-estimate-native'),rootId=native.actionId(scope,{_id:source.operationId},source);
+  const find=async id=>{let q=models.Authorities.findOne({_id:id,...scope});if(session)q=q.session(session);return q.maxTimeMS(3000).lean();};
+  let id=actionId||rootId;
+  for(let attempt=1;attempt<=3;attempt++){
+    const authority=await find(id.slice(0,24)),body=authority?.payload,plan=body?.plan;
+    if(!authority||authority.contentHash!==hash(body)||body.kind!==native.KIND||body.phase!=='admitted'||body.actionId!==id||plan?.actionId!==id||authorityHash&&authority.contentHash!==authorityHash||['environment','realmId','connectionId'].some(k=>String(authority[k])!==String(scope[k])||String(plan.scope?.[k])!==String(scope[k]))||String(authority.actorId)!==source.ownerId||body.ownerId!==source.ownerId||plan.ownerId!==source.ownerId||plan.actorId!==source.actorId||plan.source?.invoiceReceiptId!==source.receiptId||plan.source.invoiceRequestHash!==source.requestHash||plan.source.invoiceOriginalHash!==hash(source.original)||plan.invoiceId!==source.item.qboId||plan.estimateId!==source.estimateId||estimateOriginal&&plan.source.estimateOriginalHash!==hash(estimateOriginal))return null;
+    const event=completed?await find(hash({actionId:id,phase:'verified'}).slice(0,24)):null;
+    if(!completed||event){
+      const candidate=missingDocumentNumber(source),numberProof=plan.documentNumberProof;
+      if(plan.assignedMissingDocNumber!==candidate||plan.before.invoice.DocNumber!==undefined||numberProof?.docNumber!==candidate||numberProof.matches!==0||!Number.isFinite(Date.parse(numberProof.observedAt))||Date.parse(numberProof.observedAt)>Date.parse(plan.reviewedAt))return null;
+      if(completed&&(event.contentHash!==hash(event.payload)||event.payload.phase!=='verified'||event.payload.authorityHash!==authority.contentHash||event.payload.actionId!==id||event.payload.after?.invoice?.DocNumber!==candidate||event.payload.beforeReportHash!==hash(plan.beforeReport)||canonical(native.reportShape(plan.beforeReport,plan.reportScope.dates))!==canonical(native.reportShape(event.payload.afterReport,plan.reportScope.dates))))return null;
+      const proof={invoiceId:source.item.qboId,receiptId:source.receiptId,requestHash:source.requestHash,docNumber:candidate,actionId:id,authorityHash:authority.contentHash,completionHash:completed?event.contentHash:null};Object.freeze(proof);nativeAssignments.add(proof);return proof;
+    }
+    if(actionId)return null;
+    const stopped=await find(hash({actionId:id,phase:'no-effect'}).slice(0,24));
+    if(!stopped||stopped.contentHash!==hash(stopped.payload)||stopped.payload.authorityHash!==authority.contentHash||stopped.payload.phase!=='no-effect')return null;
+    id=native.replacementId(rootId,stopped.contentHash);
+  }
+  return null;
+}
+module.exports.missingDocumentNumber=missingDocumentNumber;module.exports.loadNativeAssignment=loadNativeAssignment;
+
+module.exports.nativeAssignmentRef=nativeAssignmentRef;

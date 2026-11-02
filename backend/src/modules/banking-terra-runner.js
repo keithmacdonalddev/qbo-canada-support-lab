@@ -10,6 +10,13 @@ const ROOT=path.resolve(__dirname,'../../..');
 const SCRIPT='.claude/skills/qbo-team-delivery/scripts/terra-live.sh';
 const digest=b=>crypto.createHash('sha256').update(b).digest('hex');
 const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
+function draftIdentity(expected){
+  const url=new URL(location.href);
+  if(url.origin!=='https://qbo.intuit.com'||url.pathname!=='/app/invoice'||url.searchParams.get('txnId')!==expected.invoiceId)return {matches:false};
+  const text=String(document.body?.innerText||''),values=[...document.querySelectorAll('input,textarea')].filter(e=>e.type!=='password').map(e=>String(e.value||''));
+  const raw=/Company\s*ID(?:\s+is)?\s*[:#]?\s*([0-9][0-9 \u00a0]{8,30}[0-9])/i.exec(text)?.[1];
+  return {realmId:raw?.replace(/\D/g,'')||null,customerMatches:values.includes(expected.customerName)||text.includes(expected.customerName),amountMatches:text.replace(/,/g,'').includes(Number(expected.total).toFixed(2)),descriptionMatches:!expected.description||values.includes(expected.description)};
+}
 async function acquireOperatorLease(directory=path.join(os.tmpdir(),'qbo-banking-operator.lock')) {
   if(directory===path.join(os.tmpdir(),'qbo-banking-operator.lock')) {const recovered=await require('./banking-operator-recovery').recoverBankingLocks();if(recovered.busy)throw Object.assign(new Error('Another banking/Terra process is live'),{code:'BANKING_OPERATOR_BUSY'});}
   try { await fs.mkdir(directory); } catch(e) { if(e.code==='EEXIST') throw Object.assign(new Error('Another banking operator is running or needs recovery'),{code:'BANKING_OPERATOR_BUSY'}); throw e; }
@@ -38,6 +45,30 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
       const result=JSON.parse(raw),tabs=result?.data?.tabs;
       check(result.success===true && Array.isArray(tabs) && tabs.length===1 && tabs[0].url==='https://qbo.intuit.com/app/homepage','Native no-effect recovery requires the sole browser page to be the unchanged homepage, with no draft');
       return {onlyHomepage:true,tabCount:1,observedAt:new Date().toISOString()};
+    }catch(error){if(error.code==='QBO_SESSION_UNCERTAIN')lease.retain();throw error;}finally{if(ownsLease)await lease.release();}
+  }
+  async function discardOwnedDraft({invoiceId,runId,scope,customerName,total,description,beforeDiscard}){
+    check(/^\d{1,30}$/.test(invoiceId||'')&&/^bf7-[a-f0-9-]{36}$/.test(runId||''),'Exact owned draft identity required');
+    check(scope?.environment==='production'&&scope.realmId===require('./qbo-browser-login').REALM&&typeof customerName==='string'&&customerName.length>0&&Number.isFinite(total)&&typeof beforeDiscard==='function','Exact scoped original draft witness required');
+    const ownsLease=!activeSession,lease=activeSession||await require('./qbo-browser-session').acquireSessionLease({root});
+    const browser=path.join(process.env.APPDATA || path.join(os.homedir(),'AppData','Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
+    const command=async(args,input='')=>{const result=JSON.parse(await require('./qbo-browser-transport').privateRun(process.execPath,[browser,'--session','qbo-ops',...args,'--json'],{onChild:lease.trackChild,input}));check(result.success===true,'Owned draft cleanup command failed');return result.data;};
+    try{
+      const before=await command(['tab','list']),tabs=before?.tabs;check(Array.isArray(tabs)&&tabs.length===1,'Cleanup requires the sole task-owned editor');
+      const url=new URL(tabs[0].url);check(url.origin==='https://qbo.intuit.com'&&url.pathname==='/app/invoice'&&url.searchParams.get('txnId')===invoiceId,'Cleanup cannot navigate away from another record');
+      check(typeof tabs[0].tabId==='string'&&typeof tabs[0].targetId==='string','Owned browser target identity required');
+      let identity;
+      try{await command(['press','Control+Alt+Shift+/']);identity=(await command(['eval','--stdin'],'('+draftIdentity.toString()+')('+JSON.stringify({invoiceId,customerName,total,description})+')')).result;}
+      finally{await command(['press','Escape']);}
+      check(identity?.realmId===scope.realmId&&identity.customerMatches===true&&identity.amountMatches===true&&identity.descriptionMatches===true,'Current native company/customer/amount/draft does not match the original task');
+      const current=await command(['tab','list']);check(current?.tabs?.length===1&&current.tabs[0].tabId===tabs[0].tabId&&current.tabs[0].targetId===tabs[0].targetId&&current.tabs[0].url===tabs[0].url,'Owned draft browser target changed');
+      const witness={invoiceId,runId,realmId:identity.realmId,tabId:tabs[0].tabId,targetId:tabs[0].targetId,customerHash:hash(customerName),total,descriptionHash:hash(description||''),observedAt:new Date().toISOString()};
+      await beforeDiscard(witness);
+      // Navigation discards this run-owned, explicitly unsaved draft. No Save,
+      // Delete, transaction API or other editor is ever selected.
+      await command(['open','https://qbo.intuit.com/app/homepage']);
+      const after=await command(['tab','list']);check(after?.tabs?.length===1&&after.tabs[0].url==='https://qbo.intuit.com/app/homepage','Owned draft cleanup is not confirmed');
+      return {onlyHomepage:true,invoiceId,runId,witness,method:'discard-owned-unsaved-draft-by-navigation',observedAt:new Date().toISOString()};
     }catch(error){if(error.code==='QBO_SESSION_UNCERTAIN')lease.retain();throw error;}finally{if(ownsLease)await lease.release();}
   }
   async function retainInput(file,bytes) {
@@ -118,7 +149,7 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     await require('./banking-operator-recovery').verifyRetainedRunStopped(root,{runId});
     return execution;
   }
-  return {run,retainInput,retainEvidence,withSession,readExecution,assertAvailable,assertNoDraft,sessionProof:()=>activeSession?.environment?.TDL_QBO_SESSION_OWNER?require('./business-calendar').hash(activeSession.environment.TDL_QBO_SESSION_OWNER):null};
+  return {run,retainInput,retainEvidence,withSession,readExecution,assertAvailable,assertNoDraft,discardOwnedDraft,sessionProof:()=>activeSession?.environment?.TDL_QBO_SESSION_OWNER?require('./business-calendar').hash(activeSession.environment.TDL_QBO_SESSION_OWNER):null};
 }
 // Importing starts nothing; caller injects authorized BF4 and sync/report readers.
 function createDefaultBankingOperator({root=ROOT,workspace,getAccount,readVerification,authorize,resolveRows,...options}) {

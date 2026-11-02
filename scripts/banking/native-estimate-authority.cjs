@@ -28,14 +28,29 @@ async function validateNativeLaunch({models,access,actionId,authorityHash,runId,
   const estimate=source&&await recovery.loadEstimateCreation({Runs:models.GeneralWriteRuns,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:source.estimateId});
   check(source&&estimate&&source.item.qboId===plan.invoiceId&&source.estimateId===plan.estimateId&&source.receiptId===plan.source.invoiceReceiptId&&source.requestHash===plan.source.invoiceRequestHash&&hash(source.original)===plan.source.invoiceOriginalHash&&estimate.receiptId===plan.source.estimateReceiptId&&estimate.requestHash===plan.source.estimateRequestHash&&hash(estimate.original)===plan.source.estimateOriginalHash,'Native original receipts differ');
   const native=require('../../backend/src/modules/general-estimate-native'),rootId=native.actionId(scope,run,source);
+  const missing=recovery.missingDocumentNumber(source);
+  if(missing)check(plan.assignedMissingDocNumber===missing&&plan.before.invoice.DocNumber===undefined&&plan.documentNumberProof?.docNumber===missing&&plan.documentNumberProof.matches===0&&Number.isFinite(Date.parse(plan.documentNumberProof.observedAt))&&Date.parse(plan.documentNumberProof.observedAt)<=Date.parse(plan.reviewedAt),'Missing invoice number has no reviewed uniqueness authority');
+  else check(!plan.assignedMissingDocNumber,'An existing invoice number cannot be reassigned');
   if((plan.attempt||1)===1)check(actionId===rootId&&(plan.rootActionId||actionId)===rootId&&!plan.predecessor,'Invalid root native launch');
   else{
-    check(plan.attempt===2&&plan.rootActionId===rootId&&plan.predecessor?.actionId===rootId,'Native lineage launch limit exceeded');
-    const root=await one(models.Authorities,{_id:rootId.slice(0,24),...scope}),before=root?.payload?.plan;
-    const noEffect=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope}),consumed=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'replacement-admitted'}).slice(0,24),...scope});
-    check(root&&root.contentHash===hash(root.payload)&&root.contentHash===plan.predecessor.authorityHash&&(before?.attempt||1)===1&&!before.predecessor&&canonical(before.source)===canonical(plan.source)&&before.ownerId===plan.ownerId&&before.invoiceId===plan.invoiceId&&before.estimateId===plan.estimateId,'Replacement root differs');
-    check(noEffect&&noEffect.contentHash===hash(noEffect.payload)&&noEffect.contentHash===plan.predecessor.noEffectHash&&noEffect.payload.phase==='no-effect'&&noEffect.payload.reason==='native-executable-unavailable'&&noEffect.payload.authorityHash===root.contentHash&&noEffect.payload.noDraft?.onlyHomepage===true&&native.unchanged(source.original,noEffect.payload.after?.invoice,'Invoice')&&native.unchanged(estimate.original,noEffect.payload.after?.estimate,'Estimate')&&actionId===native.replacementId(rootId,noEffect.contentHash),'Replacement requires exact unchanged no-effect evidence');
-    check(consumed&&consumed.contentHash===hash(consumed.payload)&&consumed.payload.phase==='replacement-admitted'&&consumed.payload.authorityHash===root.contentHash&&consumed.payload.noEffectHash===noEffect.contentHash&&consumed.payload.successorActionId===actionId&&consumed.payload.successorAuthorityHash===authorityHash,'Replacement proof was not atomically consumed for this child');
+    check([2,3].includes(plan.attempt)&&plan.rootActionId===rootId,'Native lineage launch limit exceeded');
+    const root=await one(models.Authorities,{_id:rootId.slice(0,24),...scope}),rootPlan=root?.payload?.plan;
+    const rootStop=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope});
+    check(root&&root.contentHash===hash(root.payload)&&(rootPlan?.attempt||1)===1&&!rootPlan.predecessor&&canonical(rootPlan.source)===canonical(plan.source)&&rootPlan.ownerId===plan.ownerId&&rootPlan.invoiceId===plan.invoiceId&&rootPlan.estimateId===plan.estimateId,'Replacement root differs');
+    check(rootStop&&rootStop.contentHash===hash(rootStop.payload)&&rootStop.payload.phase==='no-effect'&&rootStop.payload.reason==='native-executable-unavailable'&&rootStop.payload.authorityHash===root.contentHash,'Replacement root no-effect is missing');
+    let previous=root,stopped=rootStop,previousId=rootId;
+    if(plan.attempt===3){
+      previousId=native.replacementId(rootId,rootStop.contentHash);previous=await one(models.Authorities,{_id:previousId.slice(0,24),...scope});stopped=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'no-effect'}).slice(0,24),...scope});
+      const second=previous?.payload?.plan,rootUse=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'replacement-admitted'}).slice(0,24),...scope});
+      check(missing&&previous&&previous.contentHash===hash(previous.payload)&&second?.attempt===2&&second.rootActionId===rootId&&second.predecessor?.actionId===rootId&&second.predecessor.authorityHash===root.contentHash&&second.predecessor.noEffectHash===rootStop.contentHash&&!second.assignedMissingDocNumber&&canonical(second.source)===canonical(plan.source),'Only the historical missing-number second action admits a final successor');
+      check(rootUse&&rootUse.contentHash===hash(rootUse.payload)&&rootUse.payload.authorityHash===root.contentHash&&rootUse.payload.noEffectHash===rootStop.contentHash&&rootUse.payload.successorActionId===previousId&&rootUse.payload.successorAuthorityHash===previous.contentHash,'Historical second launch was not consumed from its root');
+      const cleanup=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'draft-cleanup-complete'}).slice(0,24),...scope});
+      check(stopped?.payload?.reason==='missing-invoice-document-number'&&cleanup&&cleanup.contentHash===hash(cleanup.payload)&&cleanup.payload.authorityHash===previous.contentHash&&cleanup.payload.proof?.invoiceId===plan.invoiceId&&cleanup.payload.proof.runId===second.runId&&canonical(cleanup.payload.proof)===canonical(stopped.payload.cleanup),'Final launch requires exact journaled owned-draft cleanup');
+      check(!await one(models.Authorities,{_id:hash({actionId:previousId,phase:'verified'}).slice(0,24),...scope}),'A saved second action never admits replacement');
+    }
+    check(plan.predecessor?.actionId===previousId&&plan.predecessor.authorityHash===previous.contentHash&&stopped&&stopped.contentHash===hash(stopped.payload)&&stopped.contentHash===plan.predecessor.noEffectHash&&stopped.payload.phase==='no-effect'&&stopped.payload.authorityHash===previous.contentHash&&stopped.payload.noDraft?.onlyHomepage===true&&native.unchanged(source.original,stopped.payload.after?.invoice,'Invoice')&&native.unchanged(estimate.original,stopped.payload.after?.estimate,'Estimate')&&actionId===native.replacementId(rootId,stopped.contentHash),'Replacement requires exact unchanged no-effect evidence');
+    const consumed=await one(models.Authorities,{_id:hash({actionId:previousId,phase:'replacement-admitted'}).slice(0,24),...scope});
+    check(consumed&&consumed.contentHash===hash(consumed.payload)&&consumed.payload.phase==='replacement-admitted'&&consumed.payload.authorityHash===previous.contentHash&&consumed.payload.noEffectHash===stopped.contentHash&&consumed.payload.successorActionId===actionId&&consumed.payload.successorAuthorityHash===authorityHash,'Replacement proof was not atomically consumed for this child');
     check(!await one(models.Authorities,{_id:hash({actionId:rootId,phase:'verified'}).slice(0,24),...scope}),'A saved root never admits replacement');
   }
   const policy=await one(models.Policies,scope);
@@ -46,7 +61,7 @@ async function validateNativeLaunch({models,access,actionId,authorityHash,runId,
     const agent=await one(models.Agents,{_id:plan.agentAuthority.agentId,...scope,ownerId:plan.ownerId});
     check(agent?.settings?.monitoring===true&&agent.settings.autonomous===true&&agent.grant?.ownerId===plan.ownerId&&require('../../backend/src/modules/business-agent-authority').ownsAgentWork(plan.agentAuthority,agent),'Native accountant grant changed');
   }else check(plan.actorProvenance==='codex-cli under exact owner-targeted request','Native coding authorization differs');
-  return {invoiceId:plan.invoiceId,estimateId:plan.estimateId};
+  return {invoiceId:plan.invoiceId,estimateId:plan.estimateId,...(plan.assignedMissingDocNumber?{assignedMissingDocNumber:plan.assignedMissingDocNumber}:{})};
 }
 async function claimNativeLaunch(directory,body){await fs.writeFile(path.join(directory,'native-launch-consumed.json'),JSON.stringify(body),{flag:'wx'});}
 async function main(argv) {
@@ -70,7 +85,7 @@ async function main(argv) {
     const access=require('../../backend/src/modules/business-runtime-access').createBusinessRuntimeAccess({ownerId:plan.ownerId,actorId:plan.actorId});
     const result=await validateNativeLaunch({models,access,actionId,authorityHash,runId,task:await fs.readFile(target,'utf8'),leaseOwner});
     await claimNativeLaunch(path.dirname(target),{version:1,actionId,authorityHash,runId,promptHash:plan.promptHash,leaseHash:hash(leaseOwner),claimedAt:new Date().toISOString()});
-    process.stdout.write(result.invoiceId+' '+result.estimateId+'\n');
+    process.stdout.write(result.invoiceId+' '+result.estimateId+' '+(result.assignedMissingDocNumber||'none')+'\n');
   }finally{await mongoose.disconnect();}
 }
 if(require.main===module)main(process.argv.slice(2)).catch(()=>{process.stderr.write('Exact native repair authority validation failed\n');process.exitCode=4;});

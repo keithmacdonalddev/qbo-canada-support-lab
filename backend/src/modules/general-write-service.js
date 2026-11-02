@@ -174,7 +174,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
         if (!source) continue;
         const snapshot = await recoveryFence.start(scope,run,bound,{invoiceId:source.item.qboId,estimateId:source.estimateId});
         const loadEstimate = id => recoveryHelper.loadEstimateCreation({ Runs, Receipts:models.Receipts, scope, ownerId:run.ownerId, id });
-        const recovered = await recoveryHelper.assessSavedEstimate({ run, ref, receipt, copy: recoveryCopy, scope, now, snapshot, loadEstimate });
+        const recovered = await recoveryHelper.assessSavedEstimate({ run, ref, receipt, copy: recoveryCopy, scope, now, snapshot, loadEstimate,loadAssignment:(source,estimateOriginal)=>recoveryHelper.loadNativeAssignment({models,scope,source,estimateOriginal}) });
         if (recovered?.reconciliation && recovered.outcome === 'saved') snapshots.push(snapshot);
         if (recovered) items[ref] = recovered;
         continue;
@@ -203,7 +203,9 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
         const batch=run.batches.find(row=>row.attempt===item.attempt&&row.items.some(sent=>sent.ref===ref));
         const receipt=await models.Receipts.findOne({_id:batch.transport.receiptId,...scope,kind:'general-write',state:'saved'}).session(session).maxTimeMS(3000).lean();
         const source=recoveryHelper.sourceOf(run,ref,receipt),quote=await recoveryHelper.loadEstimateCreation({Runs,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:item.reconciliation.estimate.Id,session});
-        if(!source||!quote||hash(quote.original)!==item.reconciliation.sourceEstimate.recordHash||quote.receiptId!==item.reconciliation.sourceEstimate.receiptId||!recoveryHelper.assertRepairedPair(source,item.record,item.reconciliation.estimate,quote.original)) fail('The original estimate recovery sources changed.');
+        const assignment=await recoveryHelper.loadNativeAssignment({models,scope,source,estimateOriginal:quote?.original,session});
+        if(item.reconciliation.nativeAssignment&&canonical(item.reconciliation.nativeAssignment)!==canonical(recoveryHelper.nativeAssignmentRef(assignment)))fail('The completed native number authority changed.');
+        if(!source||!quote||hash(quote.original)!==item.reconciliation.sourceEstimate.recordHash||quote.receiptId!==item.reconciliation.sourceEstimate.receiptId||!recoveryHelper.assertRepairedPair(source,item.record,item.reconciliation.estimate,quote.original,assignment)) fail('The original estimate recovery sources changed.');
       }
       return save(run,changes,session);
     }});
@@ -392,7 +394,13 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     }
     return { reverifyDates: result.plan.reverifyDates };
   }
-  return { prepare, execute, guardBatch, dispatchEnabled: () => Boolean(dispatchEnabled() && transport) };
+  async function reconcileSaved(bound,runId){
+    const scope=scopeOf(bound.scope);if(typeof authorizeRecovery!=='function')fail('Read-only saved recovery authority is unavailable');await authorizeRecovery(scope,bound);
+    const run=await Runs.findOne({_id:runId,...scope}).maxTimeMS(3000).lean();
+    if(!run||String(run.ownerId)!==String(bound.ownerId)||String(run.actorId)!==String(bound.actorId)||run.caseAuthority||bound.caseAuthority)fail('The original owner-scoped saved write is unavailable');
+    return report(run.status==='needs-correction'?await recheckSavedMismatch(run,scope,bound):run);
+  }
+  return { prepare, execute,reconcileSaved, guardBatch, dispatchEnabled: () => Boolean(dispatchEnabled() && transport) };
 }
 // The published business context the guards need: open day, protected and verified dates,
 // published tax codes and their total percentages (from the copy's TaxCode/TaxRate).

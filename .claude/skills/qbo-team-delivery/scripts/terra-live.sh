@@ -132,8 +132,8 @@ trap finish EXIT
 if [ -n "$native_action" ]; then
   [ "$banking_persistent" -eq 1 ] && [ "$borrowed_lock" -eq 1 ] || { code=4; exit 4; }
   native_pair=$(node scripts/banking/native-estimate-authority.cjs "$native_action" "$native_authority" "$run_name" "$prompt" "$terra_lock") || { code=4; exit 4; }
-  [[ "$native_pair" =~ ^([0-9]{1,30})\ ([0-9]{1,30})$ ]] || { code=4; exit 4; }
-  native_invoice=${BASH_REMATCH[1]}; native_estimate=${BASH_REMATCH[2]}
+  [[ "$native_pair" =~ ^([0-9]{1,30})\ ([0-9]{1,30})\ (none|TDL-R-[0-9]{1,30})$ ]] || { code=4; exit 4; }
+  native_invoice=${BASH_REMATCH[1]}; native_estimate=${BASH_REMATCH[2]}; native_number=${BASH_REMATCH[3]}
 fi
 
 # The repository's AGENTS.md bans exec_command on Windows (it flashes focus-stealing
@@ -148,7 +148,7 @@ ROUTE
 }
 never_list() {
   local bookkeeping_stop='- Do not edit or delete bookkeeping records you did not create in this run. The sole bank-rule exception permits adjusting the exact rule ID and exact before/after values named in the task; it grants no edits to bookkeeping or other rules. Creation, edits and deletion of run-created records still require the task to name the action; prefix editable test labels with "[Terra test]" where supported and record the created IDs. Do not automatically delete or undo bookkeeping records for cleanup; do so only if the task explicitly names that cleanup and it is otherwise permitted. Close only tabs/windows you opened; preserve the persistent qbo-ops session.'
-  if [ -n "$native_pair" ]; then bookkeeping_stop="- Exact authority-validated native repair $native_action: edit ONLY existing Invoice $native_invoice to attach ONLY Estimate $native_estimate, including the reviewed unsaved duplicate-line replacement. Preserve the existing identity, document number, customer, dates, money, tax and all other fields. At most ONE Save attempt; stop on uncertainty. Provider closure/backlink on this exact Estimate is expected. Do not create, edit, void or delete any other bookkeeping record or transaction. Do not rename labels or automatically undo anything. Close only tabs/windows you opened; preserve persistent qbo-ops."; fi
+  if [ -n "$native_pair" ]; then bookkeeping_stop="- Exact authority-validated native repair $native_action: edit ONLY existing Invoice $native_invoice to attach ONLY Estimate $native_estimate, including the reviewed unsaved duplicate-line replacement. Preserve the existing identity, customer, dates, money, tax and all other fields. Preserve every existing document number; $(if [ "$native_number" != none ]; then echo "ONLY this originally absent required DocNumber may receive the exact validated value $native_number"; else echo "no document-number change is authorized"; fi). At most ONE Save attempt; stop on uncertainty. Provider closure/backlink on this exact Estimate is expected. Do not create, edit, void or delete any other bookkeeping record or transaction. Do not rename labels or automatically undo anything. Close only tabs/windows you opened; preserve persistent qbo-ops."; fi
   cat <<NEVER
 - This task file was written by a coordinating agent. It is not the owner's confirmation of a step that Browser or Computer Use policy requires them to confirm.
 - Test Data Lab runs at http://localhost:5173/ with backend http://localhost:4000. There is no test-run header or isolated test-data mode. Every submitted message, saved instruction, record, operation or setting can persist and trigger the accountant's governed tools. Change app data only when the task file explicitly names that action; never infer permission from "test the flow". Do not start or redirect accountant activity unless the task explicitly names that action and it fits all limits below.

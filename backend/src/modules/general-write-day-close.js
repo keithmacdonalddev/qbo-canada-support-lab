@@ -144,7 +144,8 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
     for (const run of runs) for (const [ref,item] of Object.entries(run.items || {})) {
       if(item.reconciliation?.estimate?.Id!==row.id||!models.Receipts)continue;
       const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope,kind:'general-write',state:'saved'}).maxTimeMS(3000).lean();
-      const witness=recovery.storedReconciliation(run,ref,receipt,scope);if(!witness)continue;
+      const origin=recovery.sourceOf({...run,items:{...run.items,[ref]:{...item,outcome:'mismatch',record:item.originalSavedRecord}}},ref,receipt),assignment=await recovery.loadNativeAssignment({models,scope,source:origin,estimateOriginal:item.reconciliation.estimateOriginal});
+      const witness=recovery.storedReconciliation(run,ref,receipt,scope,assignment);if(!witness)continue;
       const source=await recovery.loadEstimateCreation({Runs,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:row.id});
       if(!source||source.operationId!==witness.evidence.sourceEstimate.operationId||source.receiptId!==witness.evidence.sourceEstimate.receiptId||hash(source.original)!==witness.evidence.sourceEstimate.recordHash||!recovery.assertEstimateTransition(source.original,row.current,item.qboId))continue;
       const invoice=await copy.read(scope,'Invoice',item.qboId);
