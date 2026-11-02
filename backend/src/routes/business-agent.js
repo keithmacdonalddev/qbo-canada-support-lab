@@ -13,6 +13,7 @@ function createBusinessAgentRouter({records={},service=()=>require('../modules/b
     return { ...state, usage: { ...state.usage, providerStatus: health.providerStatus, codex: health.codex } };
   };
   router.get('/',action(async req=>withProvider(await service().status(req.user))));
+  router.get('/review-requests/:requestKey',action(req=>service().reviewRequestReceipt(req.user,req.params.requestKey)));
   router.get('/blockers',action(req=>service().blockers(req.user)));
   router.get('/live',action(req=>service().live(req.user)));
   // Review session transcripts. The cursor travels in the path (polling) or Last-Event-ID (stream), never a query.

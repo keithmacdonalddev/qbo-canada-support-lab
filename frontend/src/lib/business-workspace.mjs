@@ -21,7 +21,9 @@ export function syncPresentation(sync, settings, now = Date.now()) {
   const windowMs = Math.max(120, (settings?.syncIntervalSeconds || 30) * 4) * 1000
   const individuallyFresh = sources.length > 0 && sources.every(source => { const until = Date.parse(source.freshUntil); const observed = Date.parse(source.lastSuccessAt); return Number.isFinite(until) && until > now && Number.isFinite(observed) && observed <= now })
   const summary = Date.parse(sync?.summaryAt)
-  const recent = Number.isFinite(last) && last <= now && (individuallyFresh ? Number.isFinite(summary) && summary <= now && now - summary <= windowMs : now - last <= windowMs)
+  const summaryUntil = Date.parse(sync?.summaryFreshUntil)
+  const summaryFresh = Number.isFinite(summaryUntil) ? summaryUntil > now && Number.isFinite(summary) && summary <= now : now - summary <= windowMs
+  const recent = sync?.status !== 'stale' && Number.isFinite(last) && last <= now && (individuallyFresh ? Number.isFinite(summary) && summary <= now && summaryFresh : now - last <= windowMs)
   const incomplete = !sources.length || sources.some(source => source.complete !== true && !['current', 'complete', 'ready'].includes(source.status) || ['error', 'blocked', 'saturated', 'bootstrap', 'catching-up', 'initializing', 'resync-required'].includes(source.status))
   if (!settings?.monitoring) return { label: 'Monitoring off', tone: 'quiet', detail: 'Start monitoring to keep this workspace aligned with QuickBooks.', sources }
   if (['attention', 'error', 'blocked', 'saturated', 'failed'].includes(sync?.status) || sources.some(source => ['error', 'blocked', 'saturated'].includes(source.status))) return { label: 'Sync needs attention', tone: 'attention', detail: 'Some company data could not be updated. Earlier observations remain visible.', sources }

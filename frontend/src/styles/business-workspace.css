@@ -374,3 +374,13 @@
 .bw-record-form pre { max-height: 300px; overflow: auto; padding: 10px; background: var(--canvas); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .bw-record-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; }
 .bw-record-form :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+.bw-review-receipt{border-color:var(--line);background:var(--surface)}
+.bw-review-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:12rem;overflow:auto}
+.bw-recovered-history{padding:1rem 1.25rem;border-bottom:1px solid var(--line)}
+.bw-recovered-history a{display:inline-flex;align-items:center;gap:.3rem;margin-right:1rem}
+
+.bw-attention-records{display:flex;flex-wrap:wrap;gap:.4rem 1rem;margin:.5rem 0}
+.bw-attention-records a{display:inline-flex;align-items:center;gap:.25rem}
+.bw-notice details{margin:.6rem 0;max-width:70rem}
+.bw-notice details summary{cursor:pointer;font-weight:600}

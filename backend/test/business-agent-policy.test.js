@@ -32,3 +32,9 @@ test('populated history and unresolved original work cannot look like an empty s
   const blockers=businessBlockers({calendar:{authorityHash,verifiedThrough:null},writer:{populationDelegation:{jobId:'saved'},unresolved:{key:'possible'}},job:{status:'populated'},run:{status:'blocked',lastError:'Keep original records'},policy:{state:'active'}});
   assert.deepEqual(blockers.map(row=>row.code),['uncertain-write','population-owned','current-operation','history-uncommitted']);assert.match(blockers.at(-1).detail,/do not rebuild/);
 });
+
+test('review requests require an exact server-owned company agent identifier',()=>{
+ assert.throws(()=>validateControl(command('run-now')),/exact/);
+ assert.throws(()=>validateControl(command('run-now',{expectedAgentId:'other'})),/selected company/);
+ assert.equal(validateControl(command('run-now',{expectedAgentId:row._id})).expectedAgentId,row._id);
+});

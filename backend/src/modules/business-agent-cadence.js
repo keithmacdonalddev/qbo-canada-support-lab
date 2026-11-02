@@ -287,6 +287,7 @@ function nextClose(business, todayDay) {
 // Returns { kind, callModel, nextReviewAt, reason, state } where state is the new durable cadence state.
 // requests: requestBudget(...) for today; when reached, no new discretionary slice is scheduled.
 // management: see managementDue; after recovery and catch-up, before slices and even while work is held.
+const hasUnsentRemainder=(business,agent)=>!business?.diagnosticsUnavailable&&(business?.errorBlockers||[]).some(blocker=>blocker.recovery?.state==='replan-remaining'&&blocker.recovery.agentId===agent?.id&&String(blocker.recovery.ownerId)===String(agent?.ownerId));
 function decide({ now, settings = {}, business = {}, agent = {}, today = null, owned = [], obligations = null, requests = null, state = {}, ownerRequested = false, ceiling = REVIEW_CEILING, management = null }) {
   const local = localParts(now), day = local.date, interval = Math.max(5, Number(settings.decisionIntervalMinutes) || 60) * MINUTE, recheck = Math.min(interval, PAUSE_RECHECK_MINUTES * MINUTE);
   let s = { ...(state || {}) };
@@ -352,6 +353,10 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   if (!kind && !held && blockers.length) {
     held = result('held', false, Math.min(now + recheck, midnight), 'held: ' + String(blockers[0].title || 'business work is blocked').replace(/^./, c => c.toLowerCase()));
   }
+  // An audited partial write may have saved its Payment but retired only the
+  // definitely-unsent Deposit. That remainder needs a model replan, not replay of
+  // the retired operation, and must not disappear between activity slots.
+  if (!kind && !held && !requests?.reached && hasUnsentRemainder(business,agent)) { kind='recovery'; reason='replanning unsent work while keeping its already saved records'; }
   if (!kind && !held && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
   const budgetSpent = Boolean(requests?.reached), budgetReason = requestBudgetReason(requests, '');
   if (!kind && !budgetSpent && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
@@ -379,7 +384,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const nextSlot = today?.nextSlotAt && !today.unavailable && !today.ceilingReached && today.remaining > 0 && !budgetSpent ? Date.parse(today.nextSlotAt) : Infinity;
   const hours = open;
   const hourReset = today && !today.unavailable && today.hourResetAt && !budgetSpent ? Date.parse(today.hourResetAt) : Infinity;
-  const why = capped ? limit : !capacity ? 'three operations are already prepared, queued or executing; new activity resumes as capacity frees' : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s target is met' : Number.isFinite(hourReset) ? 'the hourly limit of ' + (today.hourCap || HOURLY_CAP) + ' new records is reached; work continues at ' + localTime(hourReset) : '') : '';
+  const why = capped ? limit : budgetSpent && hasUnsentRemainder(business,agent) ? 'the unsent remainder is waiting: '+budgetReason : !capacity ? 'three operations are already prepared, queued or executing; new activity resumes as capacity frees' : budgetSpent && rhythm.target && today && !today.unavailable && today.remaining > 0 ? budgetReason : !rhythm.target ? '' : today && !today.unavailable ? (today.ceilingReached ? 'today’s activity ceiling is reached' : today.remaining === 0 ? 'today’s target is met' : Number.isFinite(hourReset) ? 'the hourly limit of ' + (today.hourCap || HOURLY_CAP) + ' new records is reached; work continues at ' + localTime(hourReset) : '') : '';
   if (hours) {
     // An all-day rhythm (v3) runs to the close just after midnight. Paused: nothing is due, so saved state is
     // re-checked at the next share, the hourly window or within 15 minutes.
@@ -418,4 +423,4 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
 }
 
 module.exports = { MAX_IN_FLIGHT, MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
-  localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };
+  hasUnsentRemainder, localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

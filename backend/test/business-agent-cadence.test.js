@@ -369,3 +369,16 @@ test('a failed earlier close alternates with today activity while the cursor rem
   const next = c.decide({ now, settings, agent, business, today, state });
   assert.equal(next.kind, 'slice'); assert.equal(next.callModel, true); assert.ok(c.nextClose(business, day)); assert.equal(business.verifiedThrough, '2026-10-31');
 });
+test('audited unsent remainder is actionable between activity slots without replaying saved work',()=>{
+ const day='2026-11-01',now=at(day,'20:20'),today={...todayAt(now),dueSlot:null,remaining:0,saved:220,inFlight:0,open:[]};
+ const recovery={state:'replan-remaining',agentId:agent.id,ownerId:agent.ownerId,operationId:'original',saved:[{entity:'Payment',qboId:'501'}],remaining:[{entity:'Deposit',ref:'unsent'}]};
+ const business=current(day,{errorBlockers:[{recovery}]});
+ const result=c.decide({now,settings,business,today,agent});assert.equal(result.kind,'recovery');assert.equal(result.callModel,true);assert.match(result.reason,/replanning unsent work/);
+ for(const mode of ['already-recovered','unknown-diagnostics','wrong-agent','manual-owner-work','request-budget','day-limit']){
+  const b=structuredClone(business),input={now,settings,business:b,today,agent};
+  if(mode==='already-recovered')b.errorBlockers=[];if(mode==='unknown-diagnostics')b.diagnosticsUnavailable=true;if(mode==='wrong-agent')b.errorBlockers[0].recovery.agentId='other';if(mode==='manual-owner-work')b.errorBlockers[0].recovery.agentId=null;if(mode==='request-budget')input.requests={reached:true};if(mode==='day-limit'){input.ceiling=1;input.state={day,reviews:1};}
+  const d=c.decide(input);assert.notEqual(d.kind,'recovery',mode);assert.equal(d.callModel,false,mode);if(mode==='request-budget')assert.match(d.reason,/unsent remainder is waiting/);
+ }
+ const throttled=c.decide({now,settings,business,today,agent,state:{day,reviews:1,lastKind:'recovery',lastReviewAt:new Date(now).toISOString(),misses:3}});assert.equal(throttled.kind,'recovery');assert.equal(throttled.callModel,false);assert.match(throttled.reason,/waiting/);
+ const slice=c.decide({now,settings,business,today:{...today,remaining:20,behind:20,dueSlot:{records:20},inFlight:0},agent,state:{day,lastKind:'recovery',misses:1,lastReviewAt:new Date(now-10*MIN).toISOString()}});assert.equal(slice.kind,'slice');
+});

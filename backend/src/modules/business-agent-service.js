@@ -69,12 +69,13 @@ function createBusinessAgentService(options={}) {
   // The daily management review (business-management-review.js): the latest saved plan; null turns the review off.
   async function managementFor(row){if(!row||typeof store.latestDailyPlan!=='function')return null;try{const plan=await store.latestDailyPlan(row);return {lastPlanDay:plan?.day||null,plan};}catch{return null;}}
   async function blockerView(scope){try{return await businessBlockersFor({models:store.models,scope,now:now()});}catch{return {blockers:[],unavailable:true,error:'Saved blocker diagnostics could not be read; no blocked work was cleared.'};}}
-  async function capabilityRequestsFor(row){if(!row)return [];try{const view=await blockerView(scopeOf(row)),saved=typeof store.capabilityRequests==='function'?await store.capabilityRequests(row):[];return [...view.blockers.filter(b=>b.overdue).map(blockerBuild),...saved.filter(b=>!String(b.key||'').startsWith('business-blocker-'))];}catch{return [];}}
+  async function capabilityRequestsFor(row){if(!row)return [];try{const view=await blockerView(scopeOf(row)),saved=typeof store.capabilityRequests==='function'?await store.capabilityRequests(row):[];return view.unavailable||view.truncated?saved:[...view.blockers.filter(b=>b.overdue).map(blockerBuild),...saved.filter(b=>!String(b.key||'').startsWith('business-blocker-'))];}catch{return [];}}
   const decideCadence=(row,business,today,ownerRequested,owned=[],obligations=null,requests=null,daily=null)=>cadence.decide({now:now(),settings:row.settings,business,agent:{id:String(row._id),ownerId:String(row.ownerId),grant:row.grant||null},today,owned,obligations,requests,state:row.cadence||{},ownerRequested,management:daily});
   // Today's enforced QuickBooks request budget from the Phase 0 meter (unreadable counts as reached).
+  const businessFor=async scope=>{const business=await store.business(scope),diagnostics=await blockerView(scope);return {...business,errorBlockers:diagnostics.blockers,recoveries:diagnostics.recovered||[],diagnosticsUnavailable:diagnostics.unavailable===true||diagnostics.truncated===true};};
   const requestsFor=async scope=>cadence.requestBudget(await requestMeter.summary(scope).catch(()=>null));
   // An owner request (run now, instructions, a decision response) outranks the cadence once.
-  const ownerAsked=row=>at(row.reviewRequestedAt)>at(row.cadence?.lastReviewAt);
+  const ownerAsked=row=>row.reviewRequest?.state==='queued'||at(row.reviewRequestedAt)>at(row.cadence?.lastReviewAt);
   const cadenceRecord=decision=>({...decision.state,kind:decision.kind,reason:decision.reason,decidedAt:new Date(now()).toISOString()});
   // The management review's measures, from the local company copy (no QuickBooks calls); a failure is stated, never fatal.
   async function managementContextFor(scope,row,today,events,decisions){
@@ -114,7 +115,7 @@ function createBusinessAgentService(options={}) {
   async function workspace(bound,row) {
     let business;try{business=await store.business(bound.scope);}catch{business={scope:bound.scope,published:null,unavailable:true,verifiedThrough:null,recordsThrough:null,recordCount:null,currentOperation:null,blockers:[{code:'business-state-unavailable',title:'Business state needs another read',detail:'Saved business evidence could not be read. Current controls and monitoring state remain available.',href:'/company/manage'}]};}
     const diagnosticView = await blockerView(bound.scope);
-    business = { ...business, errorBlockers: diagnosticView.blockers, diagnosticsUnavailable: diagnosticView.unavailable === true };
+    business = { ...business, errorBlockers: diagnosticView.blockers, recoveries: diagnosticView.recovered||[], diagnosticsUnavailable: diagnosticView.unavailable === true || diagnosticView.truncated === true };
     const settings={...DEFAULT_SETTINGS,...(row?.settings||{}),specialists:[...(row?.settings?.specialists||[])]};
     const sync=publicSync(row,now()),usageState=await usageView(bound.scope,row);
     let qboRequests;try{qboRequests=await requestMeter.summary(bound.scope);}catch{qboRequests={unavailable:true};}
@@ -130,11 +131,17 @@ function createBusinessAgentService(options={}) {
     if(!options.coverageFor&&business.published&&store.models?.Records)management.warm(bound.scope,store.models.Records,now());
     const today=row&&business.published?await todayFor(bound.scope,row):null,calendarClose=business.published?cadence.nextClose(business,cadence.localParts(now()).date):null,owned=row&&business.published?await ownedFor(bound.scope,row):[];
     const lastScore=row&&typeof store.latestScorecard==='function'?await store.latestScorecard(row).catch(()=>null):null;
+    const recoveredError=Boolean(row?.errorDetail?.operationId&&(diagnosticView.recovered||[]).some(r=>r.operationId===row.errorDetail.operationId));
+    const savedAgentError=recoveredError?null:row?.lastError;
+    const savedAgentDetail=recoveredError?null:row?.errorDetail;
+    const recordedStatus=recoveredError&&row?.status==='attention'&&!diagnosticView.blockers.length&&!business.blockers?.length&&!business.diagnosticsUnavailable&&!lastScanError?'ready':row?.status;
+    const reviewRequest=await require('./business-review-request').reviewRequestView(row,{outcomeFor:store.reviewRequestOutcome,usagePause:usageState.pause,now:now()});
     const reviewState={scorecard:lastScore?.scorecard?.day===cadence.localParts(now()).date?lastScore.scorecard:null,recentResolutions:row?management.recentResolutions(await capabilityRequestsFor(row)):[]};
-    return {scope:bound.scope,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
-      agent:{id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':row.status||'ready',summary:reconcileRetained(row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),business),memory:reconcileRetained(row?.memory,business),currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:diagnosticView.blockers[0]?.errorDetail?.message||row?.lastError||lastScanError,errorDetail:diagnosticView.blockers[0]?.errorDetail||row?.errorDetail||null,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
+    return {scope:bound.scope,viewerId:bound.actorId,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
+      controlReceipt:row?.controlReceipt||null,
+      agent:{reviewRequest,attention:diagnosticView.blockers[0]?.recovery||null,id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':recordedStatus||'ready',summary:reconcileRetained(row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),business),memory:reconcileRetained(row?.memory,business),currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:diagnosticView.blockers[0]?.summary||diagnosticView.blockers[0]?.errorDetail?.message||savedAgentError||lastScanError,errorDetail:diagnosticView.blockers[0]?.errorDetail||savedAgentDetail||null,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
       management:{...managementView(daily,buildList,today),...reviewState},sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business:{...business,currentStateUpdates:currentStateUpdates(business)},events,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),capabilities:businessAgentCapabilities(),
-      work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,ownerId:row?String(row.ownerId):null,grant:row?.grant||null,lastError:row?.lastError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
+      work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,ownerId:row?String(row.ownerId):null,grant:row?.grant||null,lastError:savedAgentError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
       rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today,calendarClose,requests,cadence:row?.cadence||null})};
   }
   // Today's plan and the build list for the first page: the plan only for today, progress from today's counted activity.
@@ -254,9 +261,17 @@ function createBusinessAgentService(options={}) {
     if(operation?.agentAuthority?.agentId===String(row._id)&&!retained.some(run=>String(run._id)===operation.operationId))retained.push({_id:operation.operationId,status:operation.status});
     for(const run of retained)if(!['verified','retired','stopped','previewed'].includes(run.status))await execution.stop({id:bound.ownerId,actorId:bound.actorId},String(run._id));
   }
+  async function reviewRequestReceipt(user,requestKey){
+    if(typeof requestKey!=='string'||!/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))fail('Choose the exact saved review request.',400);
+    const bound=await bind(user,'operations.read');
+    if(bound.actorId!==bound.ownerId)fail('Only the company owner can inspect review request receipts.',403);
+    const row=await store.get(bound.scope),receipt=row&&store.reviewControlReceipt?await store.reviewControlReceipt(row,requestKey):null;
+    return {scope:bound.scope,requestKey,receipt:receipt?{requestId:receipt.data.reviewRequestId,disposition:receipt.data.disposition,at:iso(receipt.at)}:null};
+  }
   async function control(user,input){
     validateControl(input);const stopping=['pause','stop-monitoring'].includes(input.command),bound=await bind(user,stopping?'operations.stop':'operations.execute');
     if(bound.ownerId!==bound.actorId)fail('Only the connected company owner can change business-agent controls.',403);
+    if(input.command==='run-now'&&input.expectedAgentId!==hash(bound.scope).slice(0,24))fail('The selected company changed. Refresh before requesting a review.');
     if(['enable-monitoring','enable-autonomy'].includes(input.command)&&bound.scope.environment==='production'&&input.confirmProduction!==true)fail('Explicit consent for this Production company is required.',400);
     if(input.command==='enable-monitoring')await store.setup();
     const business=stopping?{scope:bound.scope,authorityHash:null}:await store.business(bound.scope);
@@ -264,7 +279,7 @@ function createBusinessAgentService(options={}) {
       if(input.command==='enable-autonomy'||input.command==='resume')await checkGrant(bound,business,session);
       return reduceControl(row,input,business,now(),bound.ownerId);
     });
-    const currentJob=jobs.get(String(saved._id));if(currentJob)currentJob.controller.abort();
+    const currentJob=jobs.get(String(saved._id));if(currentJob&&input.command!=='run-now')currentJob.controller.abort();
     if(stopping){try{await stopOwnedWork(bound,saved);}catch(error){await store.event(saved,'attention','Agent paused; retained work needs review',safeError(error),{href:'/company/manage'},null,input.requestKey,'owner');}}
     if(saved.settings.monitoring)kick(String(saved._id));
     return workspace(bound,saved);
@@ -331,7 +346,7 @@ function createBusinessAgentService(options={}) {
     let finalized=false,usageRecord=null;
     const finalize=async({outcome,role='accountant',event=null,apply=null,error=null})=>{
       if(finalized)return;finalized=true;let final=outcome,terminalRecorded=false;
-      const evidence=()=>({...(error?{errorDetail:businessErrorDetail(error)}:{}),passId:pass?.id||null,attemptId,usageId,outcome:final,refresh:{...refresh}});
+      const evidence=()=>({...(error?{errorDetail:businessErrorDetail(error)}:{}),passId:pass?.id||null,attemptId,usageId,reviewRequestId:(row.reviewRequest?.state==='queued'||row.reviewRequest?.passId===pass?.id)?row.reviewRequest?.id||null:null,outcome:final,refresh:{...refresh}});
       if(event){
         try{await store.event(row,event.kind,event.title,event.detail,{...evidence(),...(event.data||{})},null,event.key||hash({attemptId,kind:event.kind}),role);terminalRecorded=true;}
         catch{
@@ -431,7 +446,7 @@ function createBusinessAgentService(options={}) {
       try{await store.event(row,'plan-decision',pendingClose?'Main accountant retried an open calendar close':'Main accountant continued its recovered work',pendingClose?'The earlier day remains open and unverified while its original report close retries. Independent current-day activity can continue.':`The uncertain QuickBooks request was resolved automatically; the operation's remaining records are being sent.`,{operationId:run.operationId,planHash:run.planHash,grantId:row.grant.id,approvalSource:'standing-owner-grant'},null,hash({operationId:run.operationId,phase:'auto-recovery-continued',at:check.at}),'accountant');}catch{/* The execution audit is the durable record. */}
       return true;
     };
-    const failedState=error=>({errorDetail:businessErrorDetail(error),status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
+    const failedState=error=>({...((row.reviewRequest?.state==='queued')?{reviewRequest:{...row.reviewRequest,state:'failed',finishedAt:new Date(now()).toISOString(),error:safeError(error)}}:{}),errorDetail:businessErrorDetail(error),status:'attention',lastError:safeError(error),nextSyncAt:new Date(now()+Math.max(30000,row.settings.syncIntervalSeconds*1000)),nextDecisionAt:new Date(now()+5*60000)});
     try{
       await guard();pulse=setInterval(()=>{heartbeatPending=heartbeatPending.then(async()=>{if(!controller.signal.aborted)await store.update(row,token,{leaseExpiresAt:new Date(now()+leaseMs)});}).catch(error=>{heartbeatFailure=error;controller.abort();});},20000);pulse.unref?.();
       try { await escalateBusinessBlockers({store,row,scope,now:now()}); } catch { lastScanError='Blocker attention could not be refreshed. Saved business work is retained.'; }
@@ -445,7 +460,7 @@ function createBusinessAgentService(options={}) {
         if(!row.settings.autonomous)return;
         // Reviews inspect provisional monitoring; each operation gates writes on its own sources.
         let dueMain=at(row.nextDecisionAt)<=now();const dueSpecialist=row.settings.specialists.find(role=>at(row.specialists?.[role]?.nextDecisionAt)<=now());
-        let role=null,decision=null,business=await store.business(scope),today=await todayFor(scope,row),owned=await ownedFor(scope,row),obligations=await obligationsFor(scope),requests=await requestsFor(scope),daily=await managementFor(row);
+        let role=null,decision=null,business=await businessFor(scope),today=await todayFor(scope,row),owned=await ownedFor(scope,row),obligations=await obligationsFor(scope),requests=await requestsFor(scope),daily=await managementFor(row);
         // Recovery is operation-scoped and runs on every wake, including during new-activity reviews.
         // Only unknown-request attribution is throttled; already recovered work continues between reviews.
         const recoveryDue=now()-at(row.cadence?.recoveryCheckedAt)>=60000;
@@ -468,11 +483,12 @@ function createBusinessAgentService(options={}) {
         decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);
         if(!['slice','obligations'].includes(decision.kind)){
           const changed=await recoveryTask;
-          if(changed){business=await store.business(scope);owned=await ownedFor(scope,row);if(typeof store.forgetToday==='function')store.forgetToday();today=await todayFor(scope,row,{fresh:true});row.cadence={...(row.cadence||{}),misses:0,reviewSignature:null,lastSignature:null};decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);}
+          if(changed){business=await businessFor(scope);owned=await ownedFor(scope,row);if(typeof store.forgetToday==='function')store.forgetToday();today=await todayFor(scope,row,{fresh:true});row.cadence={...(row.cadence||{}),misses:0,reviewSignature:null,lastSignature:null};decision=decideCadence(row,business,today,ownerAsked(row),owned,obligations,requests,daily);}
         }
         // A recovery retry time cannot hold a newly due independent slice. Same-kind retries
         // (including source-refresh yields) still respect their own saved retry time.
         if(!dueMain&&['slice','obligations'].includes(decision.kind)&&row.cadence?.lastKind&&row.cadence.lastKind!==decision.kind)dueMain=true;
+        if(!dueMain&&decision.kind==='recovery'&&decision.callModel&&row.cadence?.kind!=='recovery'&&cadence.hasUnsentRemainder(business,{id:String(row._id),ownerId:String(row.ownerId)}))dueMain=true;
         if(dueMain){
           if(decision.callModel)role='accountant';
           else await update({cadence:cadenceRecord(decision),nextDecisionAt:new Date(decision.nextReviewAt),currentWork:''});
@@ -487,7 +503,7 @@ function createBusinessAgentService(options={}) {
         const usageState=await usageView(scope,row);
         if(usageState.pause){await update({status:'usage-paused',summary:usageState.pause.detail,currentWork:''});return;}
         await guard('authority');
-        if(!business)business=await store.business(scope);
+        if(!business)business=await businessFor(scope);
         if(!today)today=await todayFor(scope,row);
         pass={id:randomUUID(),role,startedAt:new Date(now()).toISOString()};
         // Every model review counts toward today's ceiling when it starts; a main review also fixes its progress baseline.
@@ -499,7 +515,7 @@ function createBusinessAgentService(options={}) {
         const transcripts=store.transcripts||null;
         transcript=require('./business-agent-transcript').createTranscriptRecorder({agentId:String(row._id),attemptId,passId:pass.id,role,scope,now,write:transcripts?rows=>transcripts.save(rows):null});
         if(transcripts)transcripts.prune(String(row._id)).catch(()=>{});
-        business=await store.business(scope);const decisions=await store.decisions(row),events=await store.events(row);
+        business=await businessFor(scope);const decisions=await store.decisions(row),events=await store.events(row);
         const calendarClose=cadence.nextClose(business,cadence.localParts(now()).date);
         const tools=createBusinessAgentTools({usageFor:()=>usageView(scope,row),todayFor:options=>todayFor(scope,row,options),lease:{token,now},requestsFor:()=>requestMeter.summary(scope),row,role,passId:pass.id,attemptId,scope,store,access,user,guard,signal:controller.signal,now,governanceFor,execution,coverageFor,managementFor:async()=>({todaysPlan:management.planContext((await managementFor(row))?.plan||null,cadence.localParts(now()).date),...await managementContextFor(scope,row,today,events,decisions)}),persistMemory:async memory=>{if(role==='accountant')await update({memory});else await update({specialists:{...(row.specialists||{}),[role]:{...(row.specialists?.[role]||{}),memory}}});}});
         const executeScoped = async (name, input) => {
@@ -520,7 +536,7 @@ function createBusinessAgentService(options={}) {
         };
         const key=options.userApiKey?await options.userApiKey(ownerId):await store.models.Users.findOne({_id:ownerId}).select('anthropicApiKey').maxTimeMS(3000).lean();
         const diagnosticState=await blockerView(scope),reviewBlockers=diagnosticState.blockers;
-        business={...business,errorBlockers:reviewBlockers,diagnosticsUnavailable:diagnosticState.unavailable===true};
+        business={...business,errorBlockers:reviewBlockers,recoveries:diagnosticState.recovered||[],diagnosticsUnavailable:diagnosticState.unavailable===true||diagnosticState.truncated===true};
         const reviewState=role==='accountant'?await reviewEvidence(row,business,today,{persist:true}).catch(()=>({evidenceUnavailable:true})):{};
         const context={...reviewState,blockers:reviewBlockers,usage:usageState,ownerInstructions:row.settings.instructions,memory:require('./business-agent-beliefs').memoryForReview(reconcileRetained(role==='accountant'?row.memory:row.specialists?.[role]?.memory,business),reviewState.beliefChecks),currentStateUpdates:currentStateUpdates(business),company:row.syncView?.company||null,sync:row.syncView?{status:row.syncView.status,lastSuccessAt:row.syncView.lastSuccessAt,sources:row.syncView.sources}:null,business,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),specialistReports:events.filter(event=>event.kind==='specialist-report').slice(0,8),capabilities:businessAgentCapabilities(),businessDate:require('./business-activity-preview').businessDate(new Date(now())),cadence:role==='accountant'?{kind:decision.kind,reason:decision.reason}:null,todaysPlan:role==='accountant'?management.planContext((daily||await managementFor(row))?.plan||null,cadence.localParts(now()).date):null,...(role==='accountant'&&decision?.kind==='management'?{management:await managementContextFor(scope,row,today,events,decisions)}:{}),today:todayContext(today),calendarClose,unfinishedOperations:owned.filter(run=>run.disposition!=='unsent').map(({agentAuthority,...run})=>run),dueObligations:obligations,qboRequestBudget:requests,work:businessWork({usage:usageState,settings:row.settings,agent:{id:String(row._id),ownerId:String(row.ownerId),grant:row.grant||null,lastError:row.lastError||null},business,sync:publicSync(row,now()),coverage:coverageFor(scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,today,calendarClose,owned,requests,cadence:row.cadence||null}).items};
         let result;try{result=await engine.run({role,context,tools:tools.definitions,execute:progress.wrap(executeScoped),userApiKey:typeof key==='string'?key:key?.anthropicApiKey,transcript,signal:controller.signal,timeoutMs:REVIEW_LIMITS.ms,maxRounds:REVIEW_LIMITS.rounds,maxCalls:REVIEW_LIMITS.calls,deferOutcome:true,usage:{begin:async details=>{const record=await usage.begin(scope,{...details,attemptId,passId:pass.id});usageRecord=record||null;usageId=record?._id||attemptId;return record;},save:usage.save},beforeFinish:async()=>{await guard('authority');},beforeModel:async()=>{
@@ -535,7 +551,7 @@ function createBusinessAgentService(options={}) {
           if(final!==outcome){row=await store.update(row,token,failedState(new Error('The review result could not be recorded.')));return;}
           if(role==='accountant'){
             // The next review time comes from the cadence with fresh saved state; this also records whether the review made progress.
-            let after=null,schedulingError=null;try{after=decideCadence(row,await store.business(scope),await todayFor(scope,row,{fresh:true}),false,await ownedFor(scope,row),await obligationsFor(scope),await requestsFor(scope),await managementFor(row));}catch(error){schedulingError=businessErrorDetail(Object.assign(new Error('The next business review could not read its saved state. Retrying in one minute; saved work is retained.'),{code:'BUSINESS_CADENCE_READ_FAILED',businessDetail:{causeCode:String(error?.code||'unknown').slice(0,80),causeCheck:businessErrorDetail(error).check}}));}
+            let after=null,schedulingError=null;try{after=decideCadence(row,await businessFor(scope),await todayFor(scope,row,{fresh:true}),false,await ownedFor(scope,row),await obligationsFor(scope),await requestsFor(scope),await managementFor(row));}catch(error){schedulingError=businessErrorDetail(Object.assign(new Error('The next business review could not read its saved state. Retrying in one minute; saved work is retained.'),{code:'BUSINESS_CADENCE_READ_FAILED',businessDetail:{causeCode:String(error?.code||'unknown').slice(0,80),causeCheck:businessErrorDetail(error).check}}));}
             await update({summary:result.summary,lastDecisionAt:new Date(now()),// While work is due the next review starts about a minute after this one finished (continuous operation).
             nextDecisionAt:after?new Date(Math.max(Date.parse(after.nextReviewAt),after.callModel?now()+60000:0)):new Date(now()+60000),...(after?{cadence:cadenceRecord(after)}:{}),status:business.blockers.length?'attention':'ready',activePass:null,lastError:schedulingError?.message||null,errorDetail:schedulingError,reviewYields:0});
           }
@@ -580,7 +596,7 @@ function createBusinessAgentService(options={}) {
   function start(){if(closed||interval)return;bankingLoop?.start();interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
   function close(){closed=true;bankingLoop?.close();if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
   async function drain(){await bankingLoop?.drain();await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
-  return {status,blockers,live,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
+  return {status,blockers,live,reviewRequestReceipt,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
 }
 let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService();}
 module.exports={createBusinessAgentService,getBusinessAgentService,publicSync};

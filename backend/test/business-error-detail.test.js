@@ -145,3 +145,23 @@ test('write denials retain the actual reason, stage and caller through saved and
  const arbitrary=businessErrorDetail(new Error('untrusted provider payload'));
  assert.equal(arbitrary.message,'Business work could not finish. Saved progress is retained.');
 });
+
+test('diagnostic build history resolves, reopens on recurrence, then resolves again without deleting evidence',async()=>{
+ const {model}=require('./replay/memory.cjs'),{fold}=require('../src/modules/business-capability-review');
+ let clock=now;const runs=[],saved=new Map(),d=businessErrorDetail(error(),{operationId:op});
+ const failed=()=>({_id:op,...scope,status:'blocked',...failureFields(null,d,{},clock-20*60000)});
+ const models={Runs:model(runs),Steps:model([]),GeneralWriteRuns:model([]),Agents:model([]),GeneralDayCloses:model([]),Events:{updateOne:async(f,u)=>{const row=saved.get(f._id);if(row)Object.assign(row,u.$set)}}};
+ const store={models,capabilityRequests:async()=>[...saved.values()].filter(e=>e.kind==='capability-request'||e.kind==='capability-review').map(e=>({id:e._id,kind:e.kind,at:e.at,...e.data})),event:async(row,kind,title,detail,data,session,key)=>{const id=kind+':'+key;if(!saved.has(id))saved.set(id,{_id:id,...scope,kind,title,detail,data,at:new Date(clock).toISOString()});return{id,...saved.get(id)};}};
+ const agent={_id:'c'.repeat(24)};runs.push(failed());await escalateBusinessBlockers({store,row:agent,scope,now:clock});
+ assert.equal(fold(await store.capabilityRequests())[0].status,'open');
+ clock+=1000;runs.splice(0);await escalateBusinessBlockers({store,row:agent,scope,now:clock});assert.equal(fold(await store.capabilityRequests())[0].status,'resolved');
+ clock+=1000;runs.push(failed());await escalateBusinessBlockers({store,row:agent,scope,now:clock});assert.equal(fold(await store.capabilityRequests())[0].status,'reopened');
+ clock+=1000;runs.splice(0);await escalateBusinessBlockers({store,row:agent,scope,now:clock});assert.equal(fold(await store.capabilityRequests())[0].status,'resolved');
+ assert.equal([...saved.values()].filter(e=>e.kind==='capability-request').length,1);assert.equal([...saved.values()].filter(e=>e.kind==='capability-review').length,3);
+ const before=saved.size;await escalateBusinessBlockers({store,row:agent,scope,now:clock});assert.equal(saved.size,before);
+});
+test('incomplete diagnostic stores cannot close historical build requests',async()=>{
+ const d=businessErrorDetail(error(),{operationId:op}),{fingerprint}=require('../src/modules/business-error-detail');let changes=0;
+ const store={models:{Runs:query([]),Steps:query([]),GeneralWriteRuns:query([])},capabilityRequests:async()=>[{kind:'capability-request',key:'business-blocker-'+fingerprint(d),status:'open',errorDetail:d}],event:async()=>{changes++;}};
+ await escalateBusinessBlockers({store,row:{_id:'agent'},scope,now});assert.equal(changes,0);
+});

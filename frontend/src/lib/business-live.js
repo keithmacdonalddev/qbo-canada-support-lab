@@ -51,6 +51,7 @@ function merge(list, incoming) {
 export function useTranscript(api, scope, enabled) {
   const [attempts, setAttempts] = useState([])
   const [selected, setSelected] = useState(null)
+  const [savedRead, setSavedRead] = useState(null), [savedVersion, setSavedVersion] = useState(0)
   const [byAttempt, setByAttempt] = useState({})
   const [mode, setMode] = useState('connecting')
   const [latest, setLatest] = useState(null)
@@ -139,13 +140,14 @@ export function useTranscript(api, scope, enabled) {
   useEffect(() => {
     if (!enabled || !selected || !ATTEMPT.test(selected)) return
     const controller = new AbortController()
+    setSavedRead({ attemptId: selected, state: 'loading' })
     api.get(BASE + '/transcripts/' + selected + '/after/0', { signal: controller.signal, timeout: 8000 })
-      .then(response => { const page = workspaceScope(response.data?.data, scope); if (!controller.signal.aborted) add(selected, page.entries || []) })
-      .catch(() => {})
+      .then(response => { const page = workspaceScope(response.data?.data, scope); if (!controller.signal.aborted) { add(selected, page.entries || []); setSavedRead({ attemptId: selected, state: page.entries?.length ? 'ready' : 'empty' }) } })
+      .catch(() => { if (!controller.signal.aborted) setSavedRead({ attemptId: selected, state: 'error' }) })
     return () => controller.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, enabled, scopeKey, selected])
+  }, [api, enabled, scopeKey, selected, savedVersion])
 
   const attemptId = selected || latest
-  return { attempts, attemptId, following: !selected, entries: attemptId ? byAttempt[attemptId] || [] : [], mode, select: value => setSelected(value && ATTEMPT.test(value) ? value : null) }
+  return { attempts, attemptId, selectedStatus: selected ? savedRead?.attemptId === selected ? savedRead.state : 'loading' : null, retrySelected: () => setSavedVersion(value => value + 1), following: !selected, entries: attemptId ? byAttempt[attemptId] || [] : [], mode, select: value => setSelected(value && ATTEMPT.test(value) ? value : null) }
 }

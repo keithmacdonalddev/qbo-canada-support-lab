@@ -59,6 +59,25 @@ function definitionDifferences(approved, current, prefix = '', out = []) {
   }
   return bounded(redact(out));
 }
+function generalAttention(row){
+  const entries=Object.entries(row.items||{}),saved=entries.filter(([,item])=>item.outcome==='saved'&&item.qboId),mismatches=entries.filter(([,item])=>item.outcome==='mismatch'&&item.qboId);
+  const remaining=require('./general-write-resolution').retiredRemainder(row);
+  if(remaining){
+    const payments=saved.filter(([,item])=>item.entity==='Payment');
+    const depositOnly=remaining.every(op=>op.op==='create'&&op.entity==='Deposit');
+    const summary=depositOnly&&payments.length?payments.length+' customer payment'+(payments.length===1?' is':'s are')+' already saved. The remaining bank deposit was not sent and needs a fresh plan.':saved.length+' records are already saved. '+remaining.length+' remaining actions were not sent and need a fresh plan.';
+    return {summary,recovery:{state:'replan-remaining',agentId:row.agentAuthority?.agentId||null,ownerId:String(row.ownerId||''),operationId:String(row._id),saved:saved.map(([,i])=>({entity:i.entity,qboId:i.qboId})),remaining:remaining.map(op=>({ref:op.ref,entity:op.entity,op:op.op})),next:'Keep the saved records. The accountant must recheck current evidence and prepare only the unsent work with a new decision identifier.'}};
+  }
+  if(mismatches.length){
+    const differences=[];
+    for(const [ref,item]of mismatches){
+      const compare=require('./qbo-semantic-compare').matchesQboRequest;
+      for(const [key,value]of Object.entries(item.request||{}))if(!compare({[key]:value},item.record||{},{entity:item.entity}))differences.push({entity:item.entity,qboId:item.qboId,ref,field:key,reason:Object.hasOwn(item.record||{},key)?'Saved values differ from the request.':'The requested field was not returned.'});
+    }
+    return {summary:mismatches.length+' records were saved in QuickBooks, but their verification needs attention. Check those existing records; do not recreate them.',recovery:{state:'check-saved',operationId:String(row._id),saved:mismatches.map(([,i])=>({entity:i.entity,qboId:i.qboId})),differences:differences.slice(0,20),next:'Inspect the saved record differences and retain the existing QuickBooks identities before any further action.'}};
+  }
+  return {};
+}
 const stamp = value => { const n=new Date(value || 0).getTime(); return Number.isFinite(n) ? n : 0; };
 function savedDayRefusal(row) {
   const error = row.errorDetail;
@@ -77,7 +96,7 @@ function collectBusinessBlockers({runs=[],steps=[],generalRuns=[],now=Date.now()
     const errorDetail=saved ? businessErrorDetail(saved) : businessErrorDetail({code:'BUSINESS_PROGRESS_STALLED',message:row.lastError || 'Business work has not progressed for more than fifteen minutes.'},{operationId:String(row.operationId || row._id),logicalKey:row.logicalKey,entity:row.entity,recordId:row.qboId,check:{module:'business-error-detail',function:'collectBusinessBlockers',file:'backend/src/modules/business-error-detail.js',line:null},detail:{state:row.state || row.status,nextOrdinal:row.nextOrdinal ?? null}});
     const key=fingerprint(errorDetail), prior=groups.get(key), count=last?.count || 1, overdue=Boolean(since && now-since>STUCK_MS);
     if(prior){prior.count+=count;prior.overdue ||= overdue;prior.firstAt=new Date(Math.min(stamp(prior.firstAt),since || now)).toISOString();prior.lastAt=new Date(Math.max(stamp(prior.lastAt),stamp(last?.lastAt)||since||now)).toISOString();prior.sources.push({kind,id:String(row._id)});return;}
-    groups.set(key,{key,errorDetail,count,firstAt:new Date(since || now).toISOString(),lastAt:last?.lastAt || new Date(since || now).toISOString(),overdue,state:row.state || row.status,sources:[{kind,id:String(row._id)}]});
+    groups.set(key,{key,errorDetail,...(kind==='general'?generalAttention(row):{}),count,firstAt:new Date(since || now).toISOString(),lastAt:last?.lastAt || new Date(since || now).toISOString(),overdue,state:row.state || row.status,sources:[{kind,id:String(row._id)}]});
   };
   const stepKeys=new Set(steps.filter(row=>row.state!=='verified'&&row.errorDetail).map(row=>String(row.operationId)+':'+fingerprint(row.errorDetail)));
   for(const row of runs)if(!row.errorDetail || !stepKeys.has(String(row._id)+':'+fingerprint(row.errorDetail)))add(row,'operation');
@@ -116,9 +135,12 @@ async function businessBlockersFor({models,scope,now=Date.now()}) {
   async function rows(Model,filter,fields){return Model?.find ? Model.find({...scope,...filter}).select(fields).sort({_id:1}).limit(201).maxTimeMS(3000).lean() : [];}
   const [runs,generalRuns,agents]=await Promise.all([
     rows(models?.Runs,{status:{$nin:['verified','retired','stopped','previewed']}},'_id status nextOrdinal errorDetail errorHistory progressAt createdAt updatedAt executionRequest'),
-    rows(models?.GeneralWriteRuns,{status:{$nin:['complete','expired-unsent']}},'_id status errorDetail errorHistory progressAt createdAt updatedAt lastError'),
+    rows(models?.GeneralWriteRuns,{status:{$nin:['complete','expired-unsent']}},'_id environment realmId connectionId ownerId actorId agentAuthority status errorDetail errorHistory progressAt createdAt updatedAt lastError retirement plan items'),
     rows(models?.Agents,{},'_id settings.monitoring status leaseToken leaseExpiresAt activePass reviewProgress errorDetail syncView.amountReconciliation syncView.sources'),
   ]);
+  const retired=generalRuns.filter(row=>require('./general-write-resolution').retiredRemainder(row));
+  const candidates=retired.length&&models?.GeneralWriteRuns?.find?await models.GeneralWriteRuns.find({...scope,status:'complete',ownerId:{$in:retired.map(r=>r.ownerId)},createdAt:{$gte:new Date(Math.min(...retired.map(r=>stamp(r.createdAt))))},'plan.operations.entity':{$in:[...new Set(retired.flatMap(r=>r.plan.operations.map(op=>op.entity)))]}}).select('_id environment realmId connectionId ownerId actorId agentAuthority status createdAt updatedAt plan items').sort({createdAt:-1}).limit(201).maxTimeMS(3000).lean():[];
+  const recovery=require('./general-write-resolution').recoverRetiredRuns(generalRuns,candidates,{truncated:generalRuns.length>200||candidates.length>200});
   // Only the newest attempt for each period is current; a later passing proof
   // clears its failure without erasing historical evidence.
   const closes = models?.GeneralDayCloses?.find ? await models.GeneralDayCloses.find({ ...scope, kind: 'period' }).select('_id fromDate throughDate ok errorDetail verifiedAt failures').sort({ verifiedAt: -1, _id: -1 }).limit(201).maxTimeMS(3000).lean() : [];
@@ -141,9 +163,9 @@ async function businessBlockersFor({models,scope,now=Date.now()}) {
       errorHistory: [{ key, errorDetail, count: same.length, firstAt: new Date(same.at(-1).verifiedAt).toISOString(), lastAt: new Date(latest.verifiedAt).toISOString() }] });
   }
   const steps=await rows(models?.Steps,{$or:[{operationId:{$in:runs.map(row=>row._id)},state:{$ne:'verified'}},{state:{$in:['dispatched','unknown']}}]},'_id operationId logicalKey entity qboId state errorDetail errorHistory progressAt createdAt updatedAt verification dispatch.at');
-  return {blockers:[...collectBusinessBlockers({runs:[...runs.slice(0,200), ...closeRuns],steps:steps.slice(0,200),generalRuns:generalRuns.slice(0,200),now}),...agents.flatMap(row=>agentBlockers(row,now))],truncated:[runs,steps,generalRuns,closes].some(rows=>rows.length>200)};
+  return {blockers:[...collectBusinessBlockers({runs:[...runs.slice(0,200), ...closeRuns],steps:steps.slice(0,200),generalRuns:recovery.pending.slice(0,200),now}),...agents.flatMap(row=>agentBlockers(row,now))],recovered:recovery.recovered,complete:[models?.Runs,models?.Steps,models?.GeneralWriteRuns,models?.Agents,models?.GeneralDayCloses].every(Model=>typeof Model?.find==='function'),truncated:[runs,steps,generalRuns,candidates,closes].some(rows=>rows.length>200)};
 }
-function blockerWork(blocker) { return {key:'business-blocker-'+blocker.key,owner:'accountant',state:'blocked',title:blocker.overdue?'Business work has been stuck for over fifteen minutes':'Business work needs attention',detail:blocker.errorDetail.message,next:'Inspect the failed check and continue independent work.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,href:'/company/live'}; }
+function blockerWork(blocker) { return {key:'business-blocker-'+blocker.key,owner:'accountant',state:'blocked',title:blocker.overdue?'Business work has been stuck for over fifteen minutes':'Business work needs attention',detail:blocker.summary||blocker.errorDetail.message,next:blocker.recovery?.next||'Inspect the failed check and continue independent work.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,href:'/company/live'}; }
 function blockerBuild(blocker) {return {key:'business-blocker-'+blocker.key,kind:'capability-request',priority:'high',requirement:'R11',status:'open',title:'Fix blocked business work',missing:blocker.errorDetail.message,feature:'Business execution diagnostics',why:'Saved business work has not progressed for over fifteen minutes.',errorDetail:blocker.errorDetail,count:blocker.count,firstAt:blocker.firstAt,lastAt:blocker.lastAt,at:blocker.lastAt};}
 async function escalateBusinessBlockers({store,row,scope,now=Date.now()}) {
   const view=await businessBlockersFor({models:store.models,scope,now});
@@ -155,6 +177,19 @@ async function escalateBusinessBlockers({store,row,scope,now=Date.now()}) {
       if(store.models?.Events?.updateOne)await store.models.Events.updateOne({_id:event.id,agentId:String(row._id),...scope},{$set:{data,detail:blocker.errorDetail.message}});
     }
   }
+  // Resolve only diagnostic build items from a complete current read. Append a
+  // review event; the original failure, request and operation remain unchanged.
+  if(view.complete&&!view.truncated&&typeof store.capabilityRequests==='function'){
+    const current=new Set(view.blockers.map(b=>'business-blocker-'+b.key));
+    const requests=require('./business-capability-review').fold(await store.capabilityRequests(row));
+    for(const request of requests.filter(r=>r.errorDetail&&r.key==='business-blocker-'+fingerprint(r.errorDetail)&&r.status==='resolved'&&current.has(r.key))){
+      const blocker=view.blockers.find(b=>'business-blocker-'+b.key===request.key);
+      await store.event(row,'capability-review','Business blocker returned',blocker.errorDetail.message,{key:request.key,status:'reopened',evidence:['The same diagnostic is present in the current complete scoped read.'],errorDetail:blocker.errorDetail,firstAt:blocker.firstAt,lastAt:blocker.lastAt},null,'diagnostic-reopened:'+request.key+':'+String(request.history?.at(-1)?.id||request.at)+':'+blocker.lastAt,'accountant');
+    }
+    for(const request of requests.filter(r=>r.errorDetail&&r.key==='business-blocker-'+fingerprint(r.errorDetail)&&r.status!=='resolved'&&!current.has(r.key))){
+      await store.event(row,'capability-review','Earlier business blocker resolved','Current scoped diagnostics no longer report this blocker. Original failures remain in history.',{key:request.key,status:'resolved',evidence:['Complete scoped diagnostic read',...view.recovered.map(r=>'Saved replacement for '+r.operationId)],reviewedAt:new Date(now).toISOString()},null,'diagnostic-resolved:'+request.key+':'+String(request.at||''),'accountant');
+    }
+  }
   return view;
 }
-module.exports={businessErrorDetail,attachBusinessError,failureFields,definitionDifferences,fingerprint,collectBusinessBlockers,agentBlockers,businessBlockersFor,blockerWork,blockerBuild,escalateBusinessBlockers,MAX_BYTES,STUCK_MS};
+module.exports={businessErrorDetail,attachBusinessError,failureFields,definitionDifferences,fingerprint,collectBusinessBlockers,generalAttention,agentBlockers,businessBlockersFor,blockerWork,blockerBuild,escalateBusinessBlockers,MAX_BYTES,STUCK_MS};

@@ -31,7 +31,7 @@ function wanted(value, out = []) {
 }
 // A synchronous view of the copy for the pure guards: prefetch every record the proposal
 // names, the records those link to, and the accounts and items their lines use.
-async function loadCopy(copy, scope, operations, owned, extras = [], stale = new Set()) {
+async function loadCopy(copy, scope, operations, owned, extras = [], stale = new Set(), requiredRecords = []) {
   const map = new Map(), seen = new Set();
   // Records this write already saved (from their complete responses) count as current,
   // unless a later saved item of this write changed them (a payment changes its invoice's
@@ -47,6 +47,9 @@ async function loadCopy(copy, scope, operations, owned, extras = [], stale = new
     map.set(key, record); seen.add(key);
   }
   const fetch = async pairs => { for (const [entity, id] of pairs) { const key = entity + ':' + id; if (seen.has(key)) continue; seen.add(key); const record = await copy.read(scope, entity, id); if (record) map.set(key, record); } };
+  // Protected-period traversal can reach beyond the proposal's three reference rounds.
+  // Load every authenticated proof dependency; native sidecars only fill absent mirror rows.
+  await fetch(requiredRecords);
   await fetch(operations.filter(op => op?.id).map(op => [op.entity, String(op.id)]));
   for (let round = 0; round < 3; round++) await fetch([...operations.map(op => op?.payload), ...map.values()].flatMap(value => wanted(value)));
   for (const code of [...map.values()].filter(record => record.SalesTaxRateList || record.PurchaseTaxRateList)) await fetch([...(code.SalesTaxRateList?.TaxRateDetail || []), ...(code.PurchaseTaxRateList?.TaxRateDetail || [])].map(row => ['TaxRate', String(row.TaxRateRef?.value)]));
@@ -97,12 +100,12 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     }
     return owned;
   }
-  async function guard(scope, operations, extras = [], stale = new Set(), session, runId, fresh = new Map()) {
+  async function guard(scope, operations, extras = [], stale = new Set(), session, runId, fresh = new Map(), requiredRecords = []) {
     const owned = await ownedSet(scope, operations, session);
     for (const { entity, record } of extras) if (record?.Id) owned.add(entity + ':' + String(record.Id));
     const currentCopy = session && copy.forSession ? copy.forSession(session) : copy;
     const readOnlyCopy = { ...currentCopy, read: async (readScope, entity, id) => (await currentCopy.read(readScope, entity, id)) || fresh.get(entity + ':' + id) || null };
-    const local = await loadCopy(readOnlyCopy, scope, operations, owned, extras, stale), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
+    const local = await loadCopy(readOnlyCopy, scope, operations, owned, extras, stale, requiredRecords), context = await contextFor(scope, local, { session, runId, operations, salesTaxCodes: [...new Set(operations.filter(op => require('./qbo-entity-schema').ENTITIES[op?.entity]?.direction === 'sales').flatMap(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return (Array.isArray(record.Line) ? record.Line : []).map(line => line?.SalesItemLineDetail?.TaxCodeRef?.value); }).filter(id => typeof id === 'string'))] });
     const result = checkGeneralWrite({ proposal: { operations }, local, context, scope, runId });
     // A later posting day is independent; changing an earlier pending day's records,
     // names or links would change the close's exact readback evidence and must wait.
@@ -338,10 +341,11 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     }
 
     const operations = batch.items.map(item => { const { Id, SyncToken, sparse, ...payload } = item.payload; return { ref: item.ref, op: item.op, entity: item.entity, ...(item.id ? { id: item.id } : {}), payload, ...(run.plan.operations.find(op => op.ref === item.ref)?.reason ? { reason: run.plan.operations.find(op => op.ref === item.ref).reason } : {}) }; });
-    const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id), fresh);
+    const { result, local, context } = await guard(scope, operations, [], new Set(), session, String(run._id), fresh, (periodProof?.proofs || []).flatMap(proof => proof.evidence.records.map(record => [record.entity, record.id])));
     for (const proof of periodProof?.proofs || []) for (const record of proof.evidence.records) {
       const current = local.get(record.entity, record.id);
-      if (!current || (hash(current) !== record.recordHash && (!record.meaningHash || hash(require('./qbo-semantic-compare').canonicalQboValue(current, { entity: record.entity, metadata: true })) !== record.meaningHash))) {
+      if (!current) throw Object.assign(new Error(record.entity + ' ' + record.id + ' could not be loaded for linked-record validation. Nothing was sent; refresh the required company evidence before retrying.'), { status: 409, code: 'GENERAL_WRITE_EVIDENCE_MISSING', qboStage: 'write_admission', outcomeUnknown: false, businessDetail: { entity: record.entity, recordId: record.id, missingEvidence: true } });
+      if ((hash(current) !== record.recordHash && (!record.meaningHash || hash(require('./qbo-semantic-compare').canonicalQboValue(current, { entity: record.entity, metadata: true })) !== record.meaningHash))) {
         throw Object.assign(new Error(record.entity + ' ' + record.id + ' changed in the fresh linked-record evidence. Nothing was sent; replan the still-needed work against its current balance and identity.'), { status: 409, code: 'GENERAL_WRITE_REPLAN_REQUIRED', qboStage: 'write_admission', outcomeUnknown: false, businessDetail: { entity: record.entity, recordId: record.id, mirrorHash: current ? hash(current) : null, freshHash: record.recordHash } });
       }
     }

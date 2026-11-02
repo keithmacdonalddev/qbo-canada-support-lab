@@ -35,6 +35,8 @@ const schema = new mongoose.Schema({
   // no-progress count, progress baseline, frozen day rhythm, and the last decision's kind and reason.
   cadence: { type: mongoose.Schema.Types.Mixed, default: null },
   // Set when the owner asks for a review (run now, instructions, a decision response); it outranks the cadence.
+  // Latest owner review request; outcome is joined to its exact durable pass event.
+  reviewRequest: { type: mongoose.Schema.Types.Mixed, default: null },
   reviewRequestedAt: { type: Date, default: null },
   codexQuotaClearedAt: { type: Date, default: null },
   codexQuota: { type: mongoose.Schema.Types.Mixed, default: null },

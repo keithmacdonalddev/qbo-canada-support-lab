@@ -46,3 +46,11 @@ test('backend attention and individual source failure are reported as attention'
   assert.equal(syncPresentation({...current,status:'attention'},settings,now).label,'Sync needs attention')
   assert.equal(syncPresentation({...current,sources:[{entity:'Invoice',status:'error'}]},settings,now).label,'Sync needs attention')
 })
+
+test('monitoring honors the server adaptive summary lifetime and explicit stale state',()=>{
+ const now=Date.parse('2026-11-01T20:00:00Z'),stamp=new Date(now-180000).toISOString();
+ const sync={status:'current',summaryAt:stamp,lastSuccessAt:stamp,summaryFreshUntil:new Date(now+60000).toISOString(),sources:[{entity:'Invoice',status:'current',complete:true,lastSuccessAt:stamp,freshUntil:new Date(now+60000).toISOString()}]};
+ assert.equal(syncPresentation(sync,{monitoring:true,syncIntervalSeconds:30},now).tone,'good');
+ assert.equal(syncPresentation({...sync,status:'stale'},{monitoring:true},now).tone,'attention');
+ assert.equal(syncPresentation({...sync,summaryFreshUntil:new Date(now-1).toISOString()},{monitoring:true},now).tone,'attention');
+});

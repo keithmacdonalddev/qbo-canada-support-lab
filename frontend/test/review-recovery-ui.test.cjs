@@ -1,0 +1,53 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path');
+const {chromium}=require('playwright-core');
+test('desktop retry journey gives durable feedback, prevents repeat clicks, reconciles lost responses and preserves recovered history',{timeout:60000},async()=>{
+ const root=path.resolve(__dirname,'../..'),{build}=await import('rolldown');
+ const bundle=await build({input:path.join(__dirname,'review-recovery-fixture.jsx'),platform:'browser',transform:{jsx:{runtime:'automatic'},define:{'process.env.NODE_ENV':JSON.stringify('production'),'import.meta.env.DEV':'false'}},output:{format:'esm'},write:false,plugins:[{name:'fixture-css',async resolveId(id){if(id.startsWith('@/')){const base=path.join(root,'frontend/src',id.slice(2));for(const suffix of ['', '.jsx', '.js', '.mjs']){try{await fs.access(base+suffix);return base+suffix;}catch{}}}},load(id){if(id.endsWith('.css'))return {code:'',moduleType:'js'};}}]});
+ const assets=await fs.readdir(path.join(root,'frontend/dist/assets')),css=(await Promise.all(assets.filter(f=>f.endsWith('.css')).map(f=>fs.readFile(path.join(root,'frontend/dist/assets',f),'utf8')))).join('\n');
+ const dir=path.join(root,'artifacts/review-recovery/desktop');await fs.mkdir(dir,{recursive:true});
+ const html='<html class="dark" data-theme="dark"><head><meta charset="utf-8"><style>'+css+'</style></head><body><div id="root"></div><script type="module">'+bundle.output[0].code.replace(/<\/script/gi,'<\\/script')+'</script></body></html>';
+ let browser,page;const errors=[];
+ try{
+  browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+  const context=await browser.newContext({viewport:{width:1440,height:1000},colorScheme:'dark'});
+  await context.route('**/*',route=>route.request().url()==='http://localhost:5173/__review_recovery_fixture__'?route.fulfill({status:200,contentType:'text/html',body:html}):route.abort());
+  page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('http://localhost:5173/__review_recovery_fixture__');await page.getByRole('button',{name:'Retry review',exact:true}).waitFor();
+  await page.getByRole('link',{name:'Inspect unfinished business work',exact:false}).waitFor();await page.getByText('What happened and what remains',{exact:true}).click();await page.getByRole('link',{name:'Payment 501',exact:false}).waitFor();assert.equal(await page.getByText('Check AI and connection settings').count(),0);
+  await page.getByText('Waiting for scheduled work',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Retry review',exact:true}).evaluate(button=>{button.click();button.click()});
+  await page.getByText('Your review is queued',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>window.reviewFixture.api.calls.length),1);
+  assert.equal(await page.getByRole('button',{name:'Review requested',exact:true}).first().isDisabled(),true);
+  await page.evaluate(()=>{window.reviewFixture.api.start();window.reviewFixture.refresh()});await page.getByText('Your review is running',{exact:true}).waitFor();
+  await page.screenshot({path:path.join(dir,'running.png')});
+  await page.evaluate(()=>{window.reviewFixture.api.finish();window.reviewFixture.refresh()});await page.getByText('Review completed',{exact:true}).waitFor();
+  await page.getByText('Confirmed the existing payments and deposit. No new transactions were needed.',{exact:true}).waitFor();
+  assert.equal(await page.getByText('The accountant needs attention',{exact:true}).count(),0);
+  await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(dir,'completed.png')});
+  await page.evaluate(()=>{window.reviewFixture.api.state.recentAttempts=false;window.reviewFixture.refresh()});
+  await page.getByRole('button',{name:'View this review',exact:true}).click();await page.waitForFunction(()=>window.reviewFixture.selected==='fixture-attempt-123');
+  await page.getByText('No transcript entries are available for this review. Its recorded result and audit history remain available.',{exact:true}).waitFor();
+  assert.equal(await page.locator('select#business-live-review').inputValue(),'fixture-attempt-123');
+  assert.equal(await page.locator('#business-live-review').count(),1);
+  await page.getByRole('button',{name:'Activity & monitoring',exact:true}).click();await page.getByText('Earlier posting recovered',{exact:true}).waitFor();await page.getByRole('link',{name:'Deposit 600',exact:false}).waitFor();
+  await page.screenshot({path:path.join(dir,'recovered-history.png')});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  // Full reload while the POST response is absent: exact pending key is retained.
+  await page.evaluate(()=>window.reviewFixture.reset('held-response'));await page.getByRole('button',{name:'Retry review',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Retry review',exact:true}).click();await page.waitForFunction(()=>window.reviewFixture.api.calls.length===1);
+  const original=await page.evaluate(()=>window.reviewFixture.api.calls[0].requestKey);
+  await page.reload();await page.getByText('Your review is queued',{exact:true}).waitFor();
+  await page.waitForFunction(key=>window.reviewFixture.api.receiptReads.includes(key),original);
+  assert.equal(await page.evaluate(()=>window.reviewFixture.api.calls.length),1);assert.equal(await page.getByRole('button',{name:'Review requested',exact:true}).first().isDisabled(),true);
+  await page.evaluate(()=>window.reviewFixture.reset('unrecorded'));await page.getByRole('button',{name:'Retry review',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Retry review',exact:true}).click();await page.getByText('Confirming your review request',{exact:true}).waitFor();
+  await page.getByText(/No saved receipt was found yet/).waitFor();
+  await page.getByRole('button',{name:'Retry the same request',exact:true}).click();await page.getByText('Your review is queued',{exact:true}).waitFor();
+  const calls=await page.evaluate(()=>window.reviewFixture.api.calls);assert.equal(calls.length,2);assert.equal(calls[0].requestKey,calls[1].requestKey);assert.equal(calls[0].expectedRevision,calls[1].expectedRevision);
+  await page.evaluate(()=>{window.reviewFixture.api.finish('incomplete');window.reviewFixture.refresh()});await page.getByText('Review ended with work remaining',{exact:true}).waitFor();assert.equal(await page.getByText('Review completed',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'View this review',exact:true}).focus();await page.keyboard.press('Tab');assert.notEqual(await page.evaluate(()=>document.activeElement.tagName),'BODY');
+  await page.screenshot({path:path.join(dir,'incomplete.png')});
+  assert.deepEqual(errors,[]);await context.close();
+ }catch(error){if(page){await page.screenshot({path:path.join(dir,'failure.png')}).catch(()=>{});console.error(JSON.stringify({pageErrors:errors,fixture:await page.evaluate(()=>({calls:window.reviewFixture?.api.calls,request:window.reviewFixture?.api.state.agent.reviewRequest,text:document.body.innerText.slice(0,2500)})).catch(()=>null)}));}throw error;}finally{await browser?.close();}
+});

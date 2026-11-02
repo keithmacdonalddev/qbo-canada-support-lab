@@ -51,7 +51,7 @@ function nowLine(feed, rightNow, clock) {
       // The accountant works back to back while anything is due; otherwise it is paused, with the exact reason.
       const due = next === null ? 'next step is queued' : next <= clock ? 'next step starting now' : 'next step in ' + minutes(next - clock)
       if (CONTINUOUS.has(rightNow?.cadence?.kind)) return { tone: 'working', Icon: Activity, title: 'Working continuously', detail: due + (reason ? ' · ' + reason : '') }
-      return { tone: 'idle', Icon: Clock3, title: 'Paused', detail: (reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Nothing is due right now') + (next === null ? '' : next <= clock ? ' · checking again now' : ' · checks again at ' + when(next, clock)) }
+      return { tone: 'idle', Icon: Clock3, title: 'Waiting for scheduled work', detail: (reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : 'Nothing is due right now') + (next === null ? '' : next <= clock ? ' · checking again now' : ' · checks again at ' + when(next, clock)) }
     }
   }
 }
@@ -68,7 +68,9 @@ function timeline(feed, transcript) {
   const items = Array.isArray(feed?.items) ? feed.items : []
   const first = entries.length ? stamp(entries[0].at) : null, last = entries.length ? stamp(entries.at(-1).at) : null
   const inWindow = item => {
-    if (transcript?.following !== false || first === null) return true
+    if (transcript?.following !== false) return true
+    if (item.attemptId) return item.attemptId === transcript.attemptId
+    if (first === null) return false
     const at = stamp(item.at)
     return at !== null && at >= first - 60000 && at <= last + 600000
   }
@@ -157,16 +159,17 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
   const live = line.tone === 'working'
   const sending = feed?.state === 'sending' && feed.sending?.total ? Math.min(100, Math.round(100 * feed.sending.done / feed.sending.total)) : null
   const attempts = transcript?.attempts || []
+  const selectedMissing = transcript?.following === false && transcript?.attemptId && !attempts.some(row => row.attemptId === transcript.attemptId)
   const onScroll = event => { const node = event.currentTarget; const atStart = node.scrollTop < 24; stick.current = atStart; setBehind(!atStart) }
   const pauseForDetails = () => { stick.current = false; setBehind(true) }
   const jump = () => { const node = list.current; if (node) { node.scrollTop = 0; stick.current = true; setBehind(false) } }
-  const status = failed ? 'Reconnecting…' : transcript?.mode === 'streaming' ? 'Streaming' : transcript?.mode === 'polling' ? 'Updating every 2 s' : feed?.asOf ? 'Updated ' + clockTime(feed.asOf, clock) : ''
+  const status = transcript?.following === false ? 'Saved review' : failed ? 'Reconnecting…' : transcript?.mode === 'streaming' ? 'Streaming' : transcript?.mode === 'polling' ? 'Updating every 2 s' : feed?.asOf ? 'Updated ' + clockTime(feed.asOf, clock) : ''
   return <section className={'bwl bwl--' + line.tone} aria-labelledby="business-live-title">
     <header className="bwl-head">
       <h2 id="business-live-title"><span className={'bwl-pulse' + (live ? ' bwl-pulse--on' : '')} aria-hidden="true" />Live</h2>
       <p className="bwl-now" aria-live="polite"><NowIcon aria-hidden="true" className={line.spin ? 'animate-spin' : ''} /><strong>{line.title}</strong>{line.detail && <span> · {line.detail}</span>}</p>
       <div className="bwl-tools">
-        {attempts.length > 0 && <><label className="bw-sr-only" htmlFor="business-live-review">Review to show</label><select id="business-live-review" value={transcript.following ? '' : transcript.attemptId || ''} onChange={event => transcript.select(event.target.value || null)}><option value="">Follow the latest review</option>{attempts.map(row => <option key={row.attemptId} value={row.attemptId}>{attemptLabel(row, clock)}</option>)}</select></>}
+        {(attempts.length > 0 || selectedMissing) && <><label className="bw-sr-only" htmlFor="business-live-review">Review to show</label><select id="business-live-review" value={transcript.following ? '' : transcript.attemptId || ''} onChange={event => transcript.select(event.target.value || null)}><option value="">Follow the latest review</option>{selectedMissing && <option value={transcript.attemptId}>Requested review</option>}{attempts.map(row => <option key={row.attemptId} value={row.attemptId}>{attemptLabel(row, clock)}</option>)}</select></>}
         <span className="bwl-updated">{status}</span>
       </div>
     </header>
@@ -175,9 +178,10 @@ export default function BusinessLive({ feed, failed, transcript, rightNow, now }
       {sending !== null && <span className="bwl-bar" role="progressbar" aria-label="Records sent" aria-valuemin={0} aria-valuemax={100} aria-valuenow={sending}><span style={{ width: sending + '%' }} /></span>}
     </div>
     <div className="bwl-feed" ref={list} onScroll={onScroll} tabIndex={0} aria-label="Accountant activity, newest first">
+      {transcript?.following === false && transcript.selectedStatus === 'error' && <p className="bwl-stale" role="status">This review’s transcript could not be read. Its recorded result and audit history remain available. <button type="button" className="bw-text-button" onClick={transcript.retrySelected}>Retry transcript</button></p>}
       {rows.length ? <ol>
         {rows.map(row => row.entry ? <EntryRow key={row.id} entry={row.entry} clock={clock} metadata={row.metadata} onOpen={pauseForDetails} /> : <FeedRow key={row.id} item={row.item} clock={clock} onOpen={pauseForDetails} />)}
-      </ol> : <p className="bwl-empty">{!feed ? failed ? 'Live activity could not be read yet. Retrying automatically.' : 'Loading the latest activity…' : 'Nothing recorded yet. The accountant’s next review appears here as it happens: what it reads, what it decides and every record it sends to QuickBooks.'}</p>}
+      </ol> : <p className="bwl-empty">{transcript?.following === false ? transcript.selectedStatus === 'loading' ? 'Reading this saved review…' : transcript.selectedStatus === 'error' ? 'Saved transcript unavailable.' : 'No transcript entries are available for this review. Its recorded result and audit history remain available.' : !feed ? failed ? 'Live activity could not be read yet. Retrying automatically.' : 'Loading the latest activity…' : 'Nothing recorded yet. The accountant’s next review appears here as it happens: what it reads, what it decides and every record it sends to QuickBooks.'}</p>}
     </div>
     {behind && <button type="button" className="bwl-jump" onClick={jump}><ArrowUp aria-hidden="true" />Scrolling paused · jump to latest</button>}
     {feed?.stale && <p className="bwl-stale">Showing the last activity read. New activity appears once the next read succeeds.</p>}

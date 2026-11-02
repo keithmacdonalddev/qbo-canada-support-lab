@@ -556,7 +556,7 @@ for(const mode of ['scope','run','batch','requestId','requestHash','proofHash','
    return h.service.guardBatch(input);
  }});
  const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
- await assert.rejects(h.begin(gate),/Fresh linked-record|changed in the fresh linked-record|not in the synced company copy/);assert.equal(h.data.Receipts.length,0);
+ await assert.rejects(h.begin(gate),/Fresh linked-record|changed in the fresh linked-record|not in the synced company copy|could not be loaded for linked-record validation/);assert.equal(h.data.Receipts.length,0);
 });
 test('a disjoint direct Payment claim still blocks Deposit through their shared transitive Invoice',async()=>{
  const h=depositRecoveryFixture();h.native.get('Invoice:100').Balance=20;h.native.get('Invoice:100').TotalAmt=110;
@@ -569,4 +569,23 @@ test('a disjoint direct Payment claim still blocks Deposit through their shared 
  const ticket=await later.begin({request:otherRequest,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId:otherId,batchIndex:0,sends:1},periodEvidence:otherEvidence});assert.equal(ticket.kind,'general-write');
  await assert.rejects(deposit.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence}),/conflicting or unresolved/);
  assert.equal(h.data.Receipts.length,1);assert.equal(h.data.Receipts[0].general.runId,otherId);
+});
+
+// Protected-period dependency graphs may exceed loadCopy's proposal traversal.
+for(const mode of ['native-sidecar','mirror-only','missing','changed'])test('deep protected-period dependency: '+mode,async()=>{
+ const h=depositRecoveryFixture();
+ h.native.get('Invoice:100').LinkedTxn=[{TxnType:'Payment',TxnId:'502'}];
+ const secondPayment={...clone(h.native.get('Payment:501')),Id:'502',Line:[{Amount:90,LinkedTxn:[{TxnType:'Invoice',TxnId:'101'}]}]};
+ const deep={...clone(h.native.get('Invoice:100')),Id:'101',LinkedTxn:[]};
+ h.native.set('Payment:502',secondPayment);h.native.set('Invoice:101',deep);
+ if(mode==='mirror-only'||mode==='changed')h.records.set('Invoice:101',{...clone(deep),...(mode==='changed'?{Balance:30}:{})});
+ const transport=createGeneralGateTransport({models:h.models,scope,runId,batchIndex:0,now:()=>h.clock,admissionGuard:input=>{
+  if(mode==='mirror-only'||mode==='missing')input.preflightReads.records=input.preflightReads.records.filter(r=>r.entity!=='Invoice'||r.id!=='101');
+  return h.service.guardBatch(input);
+ }});
+ const gate=createQboWriteGate({...h.models,transaction:h.transaction,assertReady:async()=>{},now:()=>h.clock,generalTransport:transport});
+ if(mode==='missing')await assert.rejects(h.begin(gate),e=>e.code==='GENERAL_WRITE_EVIDENCE_MISSING'&&e.outcomeUnknown===false);
+ else if(mode==='changed')await assert.rejects(h.begin(gate),e=>e.code==='GENERAL_WRITE_REPLAN_REQUIRED');
+ else assert.equal((await h.begin(gate)).kind,'general-write');
+ if(['missing','changed'].includes(mode))assert.equal(h.data.Receipts.length,0);
 });

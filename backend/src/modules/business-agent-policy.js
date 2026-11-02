@@ -10,10 +10,12 @@ function exact(value, keys) { if (!value || Object.getPrototypeOf(value) !== Obj
 function validateControl(input) {
   if (!input || !COMMANDS.includes(input.command)) fail('Choose a supported business-agent control.', 400);
   const keys = ['command','expectedRevision','requestKey'];
+  if (input.command === 'run-now') keys.push('expectedAgentId');
   if (['enable-monitoring','enable-autonomy'].includes(input.command)) keys.push('confirmProduction');
   if (['save-instructions','configure-specialists','configure','configure-usage'].includes(input.command)) keys.push('settings');
   if (input.command === 'respond-decision') keys.push('decisionId','choice','note');
   exact(input, keys);
+  if (input.command === 'run-now' && !ID.test(input.expectedAgentId || '')) fail('Refresh the selected company before requesting its review.',400);
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || typeof input.requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestKey)) fail('Refresh the current control version and retain its request identifier.', 400);
   if (keys.includes('confirmProduction') && typeof input.confirmProduction !== 'boolean') fail('Confirm the selected company explicitly.', 400);
   if (input.command === 'save-instructions') { exact(input.settings,['instructions']); if (typeof input.settings.instructions !== 'string' || input.settings.instructions.length > 6000) fail('Keep the owner instructions within 6000 characters.',400); }
@@ -54,7 +56,7 @@ function reduceControl(row, input, business, clock, ownerId) {
   // A review the owner asked for runs ahead of the cadence's actionable-work filter (never past the
   // daily ceiling). Settings changes only re-check the cadence; they are not review requests.
   if (changes.nextDecisionAt && REVIEW_REQUESTS.has(input.command)) changes.reviewRequestedAt = now;
-  return { ...changes, settings, nextWakeAt: now, lastError: null };
+  return { ...changes, settings, nextWakeAt: now };
 }
 function businessBlockers({ calendar, writer, job, run, policy }) {
   const blockers=[];

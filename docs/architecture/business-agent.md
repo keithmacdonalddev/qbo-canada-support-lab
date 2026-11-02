@@ -124,3 +124,13 @@ Until the accountant can adopt the imported history, it cannot prepare any new p
 - **Other gaps:**
   - `inspectBusinessOperation` reports the retained seven-report approval evidence as unavailable for this operation (not yet investigated).
   - The adopted open invoices and bills still need a settlement workflow.
+
+## Review request and recovery feedback — 2026-11-01
+
+An owner run-now command includes expectedAgentId from the displayed workspace as a company precondition, together with expectedRevision and requestKey. It never chooses a company from client input. Repeated requests coalesce with an active main-accountant review, or queue one main review behind synchronization/specialist work, without revoking the worker lease or changing its execution revision. Pause, stop and consequential settings changes retain their cancellation fences.
+
+The persistent reviewRequest identifies its exact pass/attempt. The read-only review-requests/:requestKey receipt route distinguishes accepted requests from unknown acknowledgements; the workspace joins exact terminal events to show completion, incomplete work, failure, cancellation, freshness yield and limits. The frontend retains uncertain request identifiers per authenticated viewer/company session and reuses the original body for explicit retry. Acceptance is never presented as completed bookkeeping.
+
+Diagnostic attention is separate from immutable failure history. A retired partial run may be classified as financially recovered only when a unique later complete Deposit exactly accounts for every original saved Payment identity, date, account, currency and allocation; only non-posting PrivateNote differences are permitted, with the original note retained. Identical unrelated invoice/bill creates cannot discharge old work. Missing, ambiguous, mismatching or truncated evidence keeps the issue actionable. Current diagnostic build requests resolve/reopen through appended review events. An unresolved, audited unsent remainder owned by this accountant also activates the existing recovery cadence between activity slots; the model must replan it under current evidence rather than replaying the retired operation. Review ceilings, request budgets, backoff, independent work and normal write admission still apply.
+
+Partial-work notices distinguish records already saved from unsent work and link the existing records. Missing protected-period dependencies receive an evidence-missing refusal; genuine changed-record and receipt-conflict admission barriers remain. See [review and recovery evidence](../plans/accountant-review-recovery-feedback-2026-11-01.md) for focused regression and rendered acceptance.

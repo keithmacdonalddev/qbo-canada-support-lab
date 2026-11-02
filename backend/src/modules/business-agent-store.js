@@ -36,12 +36,13 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function control(bound,input,reduce){
     const id=hash(bound.scope).slice(0,24),requestHash=hash(input),eventId=hash({agentId:id,kind:'control',key:input.requestKey}).slice(0,24);
     return transaction(async session=>{
+      if(input.command==='run-now'&&input.expectedAgentId!==id)fail('The selected company changed. Refresh before requesting a review.');
       await fenceAccess(bound,session);
       const prior=await Events.findOne({_id:eventId,agentId:id}).session(session).maxTimeMS(3000).lean();
-      if(prior){if(prior.data.requestHash!==requestHash)fail('This request identifier already belongs to another decision.');return get(bound.scope,session);}
+      if(prior){if(prior.data.requestHash!==requestHash)fail('This request identifier already belongs to another decision.');const current=await get(bound.scope,session);return {...current,controlReceipt:{command:input.command,requestId:prior.data.reviewRequestId||null,disposition:'replayed'}};}
       let row=await get(bound.scope,session);
       if(!row&&input.command!=='enable-monitoring')fail('Enable company monitoring first.');
-      if((row?.revision||0)!==input.expectedRevision)fail('Another decision changed the business controls. Refresh before trying again.');
+      if(input.command!=='run-now'&&(row?.revision||0)!==input.expectedRevision)fail('Another decision changed the business controls. Refresh before trying again.');
       if(row&&String(row.ownerId)!==bound.ownerId)fail('The saved workspace owner changed.');
       if(!row)row={_id:id,version:1,...bound.scope,ownerId:bound.ownerId,revision:0,settings:{...DEFAULT_SETTINGS,specialists:[]},grant:null};
       if(input.command==='respond-decision'){
@@ -49,17 +50,18 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
         if(!decision)fail('The selected owner decision is unavailable.');
         if(await Events.findOne({agentId:id,kind:'decision-response','data.decisionId':input.decisionId}).session(session).maxTimeMS(3000).lean())fail('This decision already has an owner response.');
       }
-      const changes={...(await reduce(row,session)),leaseToken:null,leaseExpiresAt:null,currentWork:''};
+      const reduced=await reduce(row,session),review=input.command==='run-now'?require('./business-review-request').requestReview(row,input,now()):null;
+      const changes=review?review.changes:{...reduced,leaseToken:null,leaseExpiresAt:null,currentWork:''};
       let saved;
-      if(row.createdAt)saved=await Agents.findOneAndUpdate({_id:id,...bound.scope,revision:input.expectedRevision},{$set:changes,$inc:{revision:1}},{new:true,session}).lean();
+      if(row.createdAt)saved=await Agents.findOneAndUpdate({_id:id,...bound.scope,revision:row.revision},{$set:changes,...(review?{}:{$inc:{revision:1}})},{new:true,session}).lean();
       else { const docs=await Agents.create([{...row,...changes,revision:1}],{session}); saved=docs[0].toObject?docs[0].toObject():docs[0]; }
       if(!saved)fail('The agent control changed while saving.');
       const controlDescriptions={ 'enable-monitoring':'Continuous read-only company monitoring is enabled.', 'enable-autonomy':'The owner granted ongoing business-management authority.', pause:'The accountant is paused. Company monitoring continues.', 'stop-monitoring':'Company monitoring and autonomous work are stopped.', resume:'The accountant can continue under its retained authority.', 'sync-now':'A fresh company read was requested.', 'run-now':'A business review was requested.', 'configure-specialists':'Specialist responsibilities were updated.', configure:'Monitoring and review frequency were updated.', 'configure-usage':'Monthly AI usage limits were updated.', 'retry-plan-limit':'The owner requested another check of the ChatGPT plan limit.', 'respond-decision':'The owner response is saved for the next review.' };
-    const data={command:input.command,requestHash,revision:saved.revision,...(input.command==='enable-autonomy'?{grant:saved.grant,approvalSource:'standing-owner-grant'}:{})};
+    const data={command:input.command,requestHash,revision:saved.revision,...(review?{reviewRequestId:review.request.id,disposition:review.disposition,passId:review.request.passId||null}:{}),...(input.command==='enable-autonomy'?{grant:saved.grant,approvalSource:'standing-owner-grant'}:{})};
       await event(saved,'control',input.command==='enable-autonomy'?'Owner enabled autonomous business management':'Owner changed business controls',input.command==='save-instructions'?'Owner instructions updated. They apply to the next business decision.':controlDescriptions[input.command],data,session,input.requestKey,'owner');
       if(input.command==='respond-decision')await event(saved,'decision-response','Owner '+(input.choice==='accept'?'accepted':'declined')+' a decision',input.note,{decisionId:input.decisionId,choice:input.choice},session,input.requestKey,'owner');
-      await models.Audits.create([{_id:eventId,userId:bound.ownerId,realmId:bound.scope.realmId,action:input.command==='enable-autonomy'?'Business agent standing authority granted':'Business agent control changed',actionType:'manual',outcome:'success',inputParams:{...bound.scope,agentId:id,command:input.command,requestHash},afterState:{revision:saved.revision,monitoring:saved.settings.monitoring,autonomous:saved.settings.autonomous,...(saved.grant?{grantId:saved.grant.id,authorityHash:saved.grant.authorityHash}:{})}}],{session});
-      return saved;
+      await models.Audits.create([{_id:eventId,userId:bound.ownerId,realmId:bound.scope.realmId,action:input.command==='enable-autonomy'?'Business agent standing authority granted':'Business agent control changed',actionType:'manual',outcome:'success',inputParams:{...bound.scope,agentId:id,command:input.command,requestHash},afterState:{...(review?{reviewRequestId:review.request.id,disposition:review.disposition}:{}),revision:saved.revision,monitoring:saved.settings.monitoring,autonomous:saved.settings.autonomous,...(saved.grant?{grantId:saved.grant.id,authorityHash:saved.grant.authorityHash}:{})}}],{session});
+      return {...saved,...(review?{controlReceipt:{command:input.command,requestId:review.request.id,disposition:review.disposition}}:{})};
     });
   }
   async function business(scope){
@@ -257,8 +259,28 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function due(limit=20){return Agents.find({'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]}).select('_id').sort({nextWakeAt:1,_id:1}).limit(limit).maxTimeMS(3000).lean();}
   async function claim(id,token,leaseMs){return Agents.findOneAndUpdate({_id:id,'settings.monitoring':true,nextWakeAt:{$lte:new Date(now())},$or:[{leaseToken:null},{leaseExpiresAt:{$lte:new Date(now())}}]},{$set:{leaseToken:token,leaseExpiresAt:new Date(now()+leaseMs),currentWork:'Checking the current business state'}},{new:true}).lean();}
   async function current(row,token){const value=await Agents.findOne({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}}).maxTimeMS(3000).lean();if(!value)fail('The business worker was paused, changed or lost its lease.');return value;}
-  async function update(row,token,changes){const saved=await Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}},{$set:changes},{new:true}).lean();if(!saved)fail('The business worker changed before its progress was saved.');return saved;}
-  async function release(row,token,changes){return Agents.findOneAndUpdate({_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token},{$set:{...changes,leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true}).lean();}
+  async function update(row,token,changes){
+    const filter={_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token,'settings.monitoring':true,leaseExpiresAt:{$gt:new Date(now())}};
+    const save=async(session)=>{
+      let patch=changes;
+      if(changes.activePass?.role==='accountant'||changes.nextDecisionAt){
+        const current=await Agents.findOne(filter).session(session).maxTimeMS(3000).lean();
+        if(!current)fail('The business worker changed before its review started.');
+        patch={...changes,...(changes.activePass?.role==='accountant'?require('./business-review-request').startRequestedReview(current,changes.activePass,changes.reviewProgress?.attemptId):{})};
+        if(current.reviewRequest?.state==='queued'&&!patch.reviewRequest&&changes.cadence?.kind!=='ceiling'&&changes.status!=='usage-paused')patch.nextDecisionAt=new Date(Math.min(new Date(changes.nextDecisionAt).getTime(),now()));
+      }
+      const saved=await Agents.findOneAndUpdate(filter,{$set:patch},{new:true,...(session?{session}:{})}).lean();
+      if(!saved)fail('The business worker changed before its progress was saved.');return saved;
+    };
+    // A request racing review start joins that exact pass, in the same transaction.
+    return changes.activePass?.role==='accountant'||changes.nextDecisionAt?transaction(save):save();
+  }
+  async function release(row,token,changes){return transaction(async session=>{
+    const filter={_id:row._id,...scopeOf(row),revision:row.revision,leaseToken:token};
+    const current=await Agents.findOne(filter).session(session).maxTimeMS(3000).lean();if(!current)return null;
+    const queued=current.reviewRequest?.state==='queued'&&current.settings.autonomous&&current.settings.monitoring&&current.status!=='usage-paused'&&current.cadence?.kind!=='ceiling';
+    return Agents.findOneAndUpdate(filter,{$set:{...changes,...(queued?{nextDecisionAt:new Date(now()),nextWakeAt:new Date(now()+1000)}:{}),leaseToken:null,leaseExpiresAt:null,currentWork:''}},{new:true,session}).lean();
+  });}
   // Best-effort live review steps: fenced to the live lease and its exact pass, never bumps the owner revision.
   async function progress(row,token,passId,steps){return Agents.updateOne({_id:row._id,...scopeOf(row),leaseToken:token,'reviewProgress.passId':passId,leaseExpiresAt:{$gt:new Date(now())}},{$set:{'reviewProgress.steps':require('./business-agent-progress').cleanSteps(steps)}}).maxTimeMS(2000);}
   // Recent runs, their latest record steps and mirrored names for the live feed (bounded, read-only).
@@ -266,6 +288,8 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function liveActivity(scope,options){liveReader||=require('./business-agent-live').createLiveActivityReader({models,now});return liveReader(scope,options);}
   async function ownedRuns(scope,agentId){return models.Runs.find({...scope,'agentAuthority.agentId':agentId,status:{$nin:['verified','retired','stopped']}}).select('_id status').limit(100).maxTimeMS(3000).lean();}
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.decisionKey activityBatch.activities.type').maxTimeMS(3000).lean();}
-  return {models,get,setup,control,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,recoverReviews,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
+  const reviewControlReceipt=(row,key)=>Events.findOne({_id:hash({agentId:String(row._id),kind:'control',key}).slice(0,24),agentId:String(row._id),...scopeOf(row),'data.command':'run-now'}).maxTimeMS(3000).lean();
+  const reviewRequestOutcome=(row,request)=>Events.findOne({agentId:String(row._id),...scopeOf(row),'data.passId':request.passId,...(request.attemptId?{'data.attemptId':request.attemptId}:{}),'data.outcome':{$in:require('./business-review-request').TERMINAL}}).sort({at:-1}).maxTimeMS(3000).lean();
+  return {models,get,setup,control,reviewControlReceipt,reviewRequestOutcome,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,recoverReviews,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};
