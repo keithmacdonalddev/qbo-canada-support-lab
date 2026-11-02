@@ -1,14 +1,16 @@
 # Current implementation session assignment
 
-Updated: 2026-11-02T00:20:44.353Z. Assignment: BANK-1. Status: READY FOR REMAINING APPLICATION VERIFICATION. Shared agent app sign-in is now installed and verified; the fixed BANK-1 acceptance scope is unchanged.
+Updated: 2026-11-02T05:33:37.024Z. Assignment: BANK-1. Status: DELIVERED. All five fixed acceptance conditions are directly verified; stop this session. BANK-2/BANK-3 remain separate, unstarted assignments.
 
 ## Current BANK-1 evidence
+
+2026-11-02T05:33:37.024Z — **DELIVERED.** Actual1440×1000 account overview/history/transaction detail/return verified for bank123/Sep2023 (37 rows, CAD21,292.25) and card85/Apr2025 (3 rows, CAD300 owed). Four real CSV/PDF control downloads completed and match the retained hashes; downloaded contents/PDF pages, original row/event identity, balances and both normal authenticated reload/reopen paths passed. Loading, genuine empty month, unavailable period and recovery inspected. Main/origin/main code98ded95 (contrast fix) plus prior0281720/1d8d24f/2871cef; final evidence/docs closeout is this task’s final commit. Private proof: artifacts/bank-1/verified-20261102/verification-summary.json. [Full acceptance ledger](bank-1-evidence-2026-11-01.md). No owner action remains for BANK-1. Full SB01/SB02/D01 and BANK-2/BANK-3 remain OPEN beyond this bounded slice.
 
 **Historical — superseded by S03 automatic app login:** the 23:16 UTC attempt could not attach the existing Chrome tab. That attachment is no longer required for BANK-1; use the verified private app helper below. Original attempt evidence remains in the dated BANK-1 record.
 
 **Historical — superseded by S03 automatic app login:** the 23:10 UTC isolated browser reached /login without an app credential. The shared private credential now resolves that dependency; do not repeat the password, saved-profile, Chrome-sharing or CDP question.
 
-2026-11-01T21:23:48.369Z: frontend `0281720` and backend `1d8d24f` / `2871cef` are committed/pushed on `main` to `origin/main`. The account workflow is at `/company/bank`. Acceptance is **not complete** while actual desktop/download/reload evidence remains open. See [BANK-1 evidence](bank-1-evidence-2026-11-01.md).
+2026-11-01T21:23:48.369Z: frontend `0281720` and backend `1d8d24f` / `2871cef` are committed/pushed on `main` to `origin/main`. The account workflow is at `/company/bank`. Historical source milestone only; the actual desktop/download/reload proof is now complete as recorded above. See [BANK-1 evidence](bank-1-evidence-2026-11-01.md).
 
 Chosen acceptance scope (fixed once): production connected company ending 2856, existing CAD bank account **123**, **2023-09**, package `a86a4c4ff040c2ffed87384754e044446b8f8835433df3a5fd106a2c5a8abe65` revision 1; existing CAD credit-card account **85**, **2025-04**, package `87d08dcbc5ffd16ed2fce19f1aa15c206b4e711c067af9d53d79b48c32338a33` revision 1.
 

@@ -1,8 +1,8 @@
 # BANK-1 delivery evidence — 2026-11-01
 
-Updated: 2026-11-02T00:20:44.353Z. Status: APP SIGN-IN VERIFIED / BANK-1 APPLICATION ACCEPTANCE OPEN. Earlier browser/authentication blockers below are historical; the current shared login procedure supersedes them.
+Updated: 2026-11-02T05:33:37.024Z. Status: **DELIVERED — all five BANK-1 acceptance conditions directly verified**. BANK-2/BANK-3 and full SB/D outcomes remain OPEN.
 
-The canonical checkout is C:\Projects\qbo on main, configured upstream origin/main. Frontend commit 0281720 and backend commits 1d8d24f and 2871cef are pushed. Normal business services were left running; no explicit service control, QBO call, persistent database write, storage preparation, accepted-file change or native banking action was performed by this BANK-1 work.
+The canonical checkout is C:\Projects\qbo on main, configured upstream origin/main. Frontend commit0281720, backend commits1d8d24f/2871cef and the observed desktop contrast correction98ded95 are pushed. Normal business services were left running. No service control, QBO mutation, financial-data write, storage preparation, accepted-package revision or native reconciliation action was performed. Normal shared-agent login exchanges and their audit records are authorized separately.
 
 ## Fixed acceptance selection
 
@@ -17,13 +17,25 @@ This is explicitly a **historical QBO reconstruction baseline**, not an independ
 
 ## Acceptance ledger
 
-| Condition | Observed result | Status / remaining proof |
+| Condition | Direct observed proof | Result |
 | --- | --- | --- |
-| 1. Durable account identity, CAD, evidenced opening, history, derived balance, stable lineage | Read-only Mongo inspection found existing bankingevents/bankingpackages and 208 registered periods. The production account service, without injected persistence, passed current company/membership checks and returned 12 account summaries and both selected histories. All 40 selected rows match source account/transaction/date/native amount, stable event/revision and row crosswalk. | State and retained arithmetic verified. This does not establish independent future bank operation. |
-| 2. Usable desktop overview/detail/transaction/return and states | Source adds protected /company/bank, sidebar Bank, fictional Maple Harbour Bank, account cards, dated balances, month picker, transaction detail/focus return, loading, empty, error/retry and missing-evidence labels. | Authorized direct isolated agent-browser reached the actual app but redirected to /login. No reusable authenticated session or saved auth profile was available. Account interaction remains unverified pending normal app sign-in. |
-| 3. Actual CSV/PDF downloads, exact signs/arithmetic/lineage/hashes | Retained CSV/PDF/manifest hashes all match. Reusing the existing CSV generator reproduces both CSVs byte for byte. Bank: 0 +24,340.90 inflows −3,048.65 outflows =21,292.25. Card: 200 +500 charges −400 payments =300 owed; CSV rows +300,−500,+100. Original PDFs rendered and all three pages inspected. | Retained artifact contents verified; all six original files re-hashed unchanged on resume. Zero actual feature downloads: controls remain behind normal app authentication. |
-| 4. Reload/reopen same durable state/artifacts through normal app | Data already exists in provisioned MongoDB and retained hashed files, not UI fixtures. No migration/write needed. | A fresh MongoDB connection and fresh production service returned the exact same package IDs, content hashes, all 40 event payloads/transactions and balances. All four downloads through the production download service matched retained hashes. Normal authenticated HTTP/browser reload/reopen remains unverified; the fresh unauthenticated account request correctly returns401. |
-| 5. Actual desktop/artifact inspection, checks, independent reviews, commit/push | Distinct harness-reviewer and harness-security-reviewer completed; no remaining material source findings. Excluded-row status correction rechecked. Workspace24/24 and integration10/10; touched backend syntax; frontend build/lint; diff checks pass. Code pushed. Readable transaction labels reuse the exact CSV formatter (2871cef), independently re-reviewed. | Account desktop proof still open. Prior source checks/reviews are reused: git diff dc097f6..HEAD shows no changes to the reviewed BANK-1 implementation. |
+| 1. Durable identity, evidenced opening, CAD history/balance and lineage | Actual authenticated account reads return the original package IDs/content hashes, bank123/Sep2023 opening0/closing2129225 with37 rows, and card85/Apr2025 opening20000/closing30000 owed with3 rows. All40 downloaded CSV rows match the original event/revision/row identities and exact native amounts. The card opening anchor and selected carry are visible separately. Historical baseline and unobserved pending activity are explicit. | VERIFIED for the fixed two-account/period slice. |
+| 2. Usable desktop overview, account/history/detail/return and states | Actual1440×1000 app overview -> account123 -> month2023-09 and overview -> card85 -> month2025-04; all37 bank rows paginated, all3 card rows inspected. Transaction clicks expose original event/CSV/source identities; Close detail restores row focus for both. Screenshots show loading with retained balance/downloads disabled, genuine quiet card2025-03 empty history, unavailable1999-01 error and return to accounts, then recovery to the selected periods. No horizontal overflow. | VERIFIED. |
+| 3. Four real CSV/PDF control downloads | The actual on-screen CSV and statement-PDF controls produced four completed browser downloads: bank1303-byte CSV/13444-byte PDF, card120-byte CSV/2904-byte PDF. Every byte hash matches the retained package table below. All40 CSV rows, signs, event crosswalks and opening+movement=closing pass. Both downloaded PDFs were extracted/rendered and all3 pages visually inspected. | VERIFIED. No service-only or synthetic readiness download substituted. |
+| 4. Normal authenticated reload/reopen persistence | Both selected views reloaded and reopened through the running app. Supporting same-origin authenticated GETs returned200 and the exact original package IDs/content hashes, histories, balances and files across two bank/two card observations. Private normal-api-reads.json and financial-and-persistence-checks.json retain the comparisons. | VERIFIED. No component-only state or fixture. |
+| 5. Rendered inspection, checks/reviews and Git closeout | Existing backend24/integration10, syntax and independent implementation/safety reviews remain valid: relevant route/account/API source is unchanged. CSS-only contrast correction98ded95 passed frontend build/lint and independent source/final rendered review. Final desktop/card/error/empty/PDF screenshots inspected. Owned browser/controller is inactive/no PID and temporary authenticated profile removed; unrelated sessions preserved. Code is pushed on main/origin/main; this evidence/assignment/task/handoff closeout is committed/pushed at task completion. | VERIFIED. |
+
+## Final actual application evidence — 2026-11-02T05:33:37.024Z
+
+Use the shared app-agent-login helper; no owner password/token, Chrome sharing or CUA restoration was needed. All feature actions ran in owned helper-authenticated agent-browser sessions. Initial native download capture canceled files; the bounded alternative reused the existing check-app-browser.mjs hidden launcher (not its synthetic probe), attached an owned agent-browser session and used the same private helper. Setting the owned temporary download destination through the existing browser connection with native Windows backslashes produced completed real control downloads. No download generator, reader, retained bytes or application download code changed.
+
+Actual bank123 September2023: CAD0 + CAD24,340.90 inflows − CAD3,048.65 outflows = **CAD21,292.25**,37 rows. Actual card85 April2025: CAD200 opening owed + CAD500 charges − CAD400 payments = **CAD300 owed**,3 rows; CSV signs are +300,−500,+100. The Purchase detail shows −CAD500 native amount and +CAD500 debt movement, tied to its original event/row identity.
+
+The complete private evidence is under **artifacts/bank-1/verified-20261102/**: verification-summary.json, download-receipts.json, downloads/, normal-api-reads.json, financial-and-persistence-checks.json, actions-final.json, bank-all-visible-history.json, both transaction-detail records, state-checks.json, screenshots01–11, PDF-content checks and the three rendered downloaded-statement pages. Screenshot/file hashes are retained in the summary. These contain private local evidence and remain Git-ignored; tracked docs contain only the scoped IDs/amounts/hashes required for acceptance.
+
+Only three text/status-color rules changed for actual dark-theme readability; full bank/company future operation was not expanded. The previously retained bank PDF opening-basis sentence is still truncated; its full basis is visible in the app/manifest and all financial rows/totals remain legible. Accepted revision1 files and all native import/reconciliation evidence remain unchanged.
+
+A temporary browser-only delayed-read callback failed after the loading screenshot was captured; its requests had been released and no business data changed. The owned page was restored through the shared helper. Final empty/failure/recovery checks used real retained quiet/missing periods without fabricated persistent data. Earlier canceled-download and callback records remain supporting diagnostic evidence, not successful feature-download claims. Investigation stopped once the four real completed downloads and final states passed; no general browser framework, platform repair or broad test rerun was added.
 
 ## Retained opening proof
 
@@ -42,15 +54,15 @@ The bank PDF's retained opening-basis sentence is truncated by the existing gene
 
 Private local evidence: artifacts/bank-1/selected-files.json, arithmetic-and-lineage.json, durable-service-reads.json, reopen-and-service-downloads.json, PDF page PNGs/text and work-value.json. These are ignored local evidence, not substitute app fixtures. Raw company records and credentials do not enter this tracked record.
 
-## Checks and work-value checkpoint
+## Earlier foundation checks and historical work-value checkpoint
 
 Workers ran node --test test/banking-workspace.test.js and node --test test/banking-integration.test.js from backend/ (24 and10 passes), touched-file node --check, Vite build and ESLint from frontend/ (exit0). An initial integration invocation from repository root failed its cwd-dependent module lookup; correct backend cwd passed. Existing frontend chunk-size and three AICommandCenter hook warnings remain. Hidden Node REPL/child-process execution was used throughout. No persistent service command or live mutation check was run. Two local REPL reopen attempts stopped on a missing binding and cross-realm object-prototype comparison; the final canonical JSON content comparison passed with fresh connections closed after every attempt.
 
-The essential outcome and smallest direct proof are in artifacts/bank-1/work-value.json. This milestone delivered usable source, real durable reads and exact retained-file evidence. Independent work continued while the browser capability boundary remained open; no historical repair or new banking framework was attempted. Next proof: authorized existing headless browser against the running localhost:5173 app, normal authenticated account selection/transaction/return/download/reload, desktop states and artifact hash comparison. Keep full SB01/SB02/D01 OPEN beyond this bounded slice; SB03–SB07 and BANK-2/BANK-3 remain OPEN.
+The essential outcome and smallest direct proof are in artifacts/bank-1/work-value.json. That earlier milestone delivered source, durable reads and retained-file evidence while application proof was still pending. The final actual control-download, journey/reload and rendered proof above now completes that missing BANK-1 evidence. Keep full SB01/SB02/D01 OPEN beyond this bounded slice; SB03–SB07 and BANK-2/BANK-3 remain OPEN.
 
 Historical browser capability boundary (superseded for this task by the owner’s explicit isolated-agent-browser authorization): the first-party computer-use tool reports both native pipe and browser host unavailable. Its instruction requires explicit user permission before another UI automation technology is used. The pending question requests the existing headless browser solely for the running app; no fallback automation, app-session minting, credential recovery or new service was used. The exact remaining owner action is to answer that request (or restore the browser tool). Acceptance2 and normal-route portions of3/4/5 remain unverified.
 
-## Resumed actual-application attempt — 2026-11-01T23:10:29.629Z
+## Historical resumed actual-application attempt — 2026-11-01T23:10:29.629Z
 
 The owner explicitly authorized direct isolated headless agent-browser for localhost:5173, account journeys, four real file downloads and reload/reopen. No Terra task, synthetic readiness check, CUA-host probe, QuickBooks page, owner Chrome profile or desktop-app launch was used.
 
@@ -64,7 +76,7 @@ Work-value checkpoint: the existing browser-route uncertainty is resolved for th
 
 Owned-browser cleanup: `close` confirmed closed; supported `session info` then returned active:false and pid:null. The session list retained a stale name, so absence from that list is not claimed. Other sessions were untouched.
 
-## Existing authenticated Chrome authorization — 2026-11-01T23:16:40.963Z
+## Historical existing authenticated Chrome authorization — 2026-11-01T23:16:40.963Z
 
 The owner reports Test Data Lab is already signed in on Chrome and explicitly authorizes that existing app tab for BANK-1. The earlier isolated-session authentication gap is not a request to sign in again. Current dependency: this session must be able to control that existing tab.
 
@@ -78,4 +90,4 @@ A final bounded read-only Chrome process-metadata check confirmed running Chrome
 
 The owner requested permanent local agent app credentials. The same existing account/company now supports automatic private sign-in through [the shared helper](../agent-harness/APP_AGENT_LOGIN.md), documented in AGENTS.md for Codex and Claude. Two fresh independent browsers and one repeated session verified account/company and opened the real bank page. The desktop overview was inspected. No password/token or manual Chrome attachment is needed for normal local agent login.
 
-This removes the prior sign-in/attachment dependency. Both selected-period account journeys, four actual CSV/PDF feature clicks and authenticated reload remain OPEN; this authentication task does not claim those checks were performed. Continue BANK-1 using the helper-returned session.
+This removes the prior sign-in/attachment dependency. At that sign-in installation milestone, the selected-period journeys, four feature clicks and authenticated reload remained OPEN. They are now directly verified by the final BANK-1 delivery above.
