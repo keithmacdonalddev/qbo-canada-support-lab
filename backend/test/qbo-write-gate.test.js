@@ -327,7 +327,7 @@ test('original v1 transport receipts remain readable when current preferences wo
 function populationRepairFixture(){
  let h;const transport={admit:async({writer,receiptId,dispatchKey,request,session})=>{assert.ok(session);assert.equal(writer.populationDelegation.jobId,operationId);assert.equal(writer.unresolved,null);if(h.data.Receipts.some(r=>r._id===receiptId))throw Error('repair already consumed');return{kind:'population-link-repair',key:dispatchKey,requestHash:request.requestHash,transportConsumed:{receiptId}};},settle:async()=>{h.settled=(h.settled||0)+1;}};
  h=harness(false,{populationRepairTransport:transport});h.writer().populationDelegation={jobId:operationId};h.input={request:freezeWriteRequest(scope,'POST','invoice',{Id:'100',SyncToken:'0',sparse:true,LinkedTxn:[{TxnId:'10',TxnType:'Estimate'}]}),ownerId,actorId:ownerId,workflow:{version:1,kind:'population-link-repair',authorityHash:hash('exact repair')}};
- h.periodClient.read=async(entity,id)=>({[entity==='invoice'?'Invoice':'Estimate']:{Id:id,SyncToken:'0',TxnDate:'2026-10-06'}});return h;
+ h.periodClient.read=async(entity,id)=>({[entity==='invoice'?'Invoice':'Estimate']:{Id:id,SyncToken:'0',TxnDate:'2026-10-06'}});h.periodClient.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false,UsingProgressInvoicing:false}}]}});return h;
 }
 test('dedicated population repair keeps saved or unknown updates held and preserves native receipts',async()=>{for(const response of [{status:200,json:{Invoice:{Id:'100',SyncToken:'1'}}},{status:503,json:{}}]){const h=populationRepairFixture(),ticket=await h.gate.begin(h.input);assert.equal(ticket.kind,'population-link-repair');assert.equal(h.data.Receipts[0].operation,'update');assert.equal(h.data.Receipts[0].workflow.authorityHash,h.input.workflow.authorityHash);await h.gate.complete(ticket,h.input.request,response);assert.ok(h.writer().unresolved);assert.equal(h.settled,1);assert.equal(h.data.Audits.length,response.status===200?2:3);await assert.rejects(h.gate.begin(h.input));assert.equal(h.data.Receipts.length,1);}});
 test('population repair needs a dedicated adapter, exact owner and Invoice update; ordinary writes stay fenced',async()=>{
@@ -382,4 +382,11 @@ test('successful full response is retained privately without entering observed f
  assert.ok(!JSON.stringify(h.data.Audits).includes('Empty'));assert.equal(h.data.Receipts[0].observed.savedResponse,undefined);
  const Model=require('../src/models/QboWriteReceipt');const doc=new Model(h.data.Receipts[0]);
  assert.deepEqual(doc.toObject().savedResponse.Invoice.Empty,{});assert.equal(Model.schema.path('savedResponse').options.select,false);
+});
+
+test('the common single-record SDK gate also refuses known unsupported Estimate conversions',async()=>{
+  const h=harness(),wanted=freezeWriteRequest(scope,'POST','invoice',{TxnDate:'2026-10-15',CustomerRef:{value:'1'},Line:[{Amount:250,DetailType:'SalesItemLineDetail',SalesItemLineDetail:{ItemRef:{value:'40'}}}],LinkedTxn:[{TxnId:'11217',TxnType:'Estimate'}]});
+  h.periodClient.read=async()=>({Estimate:{Id:'11217',SyncToken:'0',TxnDate:'2026-10-14'}});
+  h.periodClient.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false,UsingProgressInvoicing:true}}]}});
+  await assert.rejects(h.gate.begin({...h.input,request:wanted}),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);
 });

@@ -69,12 +69,12 @@ function generalAttention(row){
     return {summary,recovery:{state:'replan-remaining',agentId:row.agentAuthority?.agentId||null,ownerId:String(row.ownerId||''),operationId:String(row._id),saved:saved.map(([,i])=>({entity:i.entity,qboId:i.qboId})),remaining:remaining.map(op=>({ref:op.ref,entity:op.entity,op:op.op})),next:'Keep the saved records. The accountant must recheck current evidence and prepare only the unsent work with a new decision identifier.'}};
   }
   if(mismatches.length){
-    const differences=[];
+    const differences=[],native=mismatches.map(([,item])=>item.next?.recovery).filter(packet=>packet?.kind==='saved-invoice-estimate-recovery');
     for(const [ref,item]of mismatches){
       const compare=require('./qbo-semantic-compare').matchesQboRequest;
       for(const [key,value]of Object.entries(item.request||{}))if(!compare({[key]:value},item.record||{},{entity:item.entity}))differences.push({entity:item.entity,qboId:item.qboId,ref,field:key,reason:Object.hasOwn(item.record||{},key)?'Saved values differ from the request.':'The requested field was not returned.'});
     }
-    return {summary:mismatches.length+' records were saved in QuickBooks, but their verification needs attention. Check those existing records; do not recreate them.',recovery:{state:'check-saved',operationId:String(row._id),saved:mismatches.map(([,i])=>({entity:i.entity,qboId:i.qboId})),differences:differences.slice(0,20),next:'Inspect the saved record differences and retain the existing QuickBooks identities before any further action.'}};
+    return {summary:native.length===mismatches.length?native.length+' invoices are saved, but their estimate conversions are unfinished. The accountant needs a native QuickBooks repair; the saved invoices must be kept.':mismatches.length+' records were saved in QuickBooks, but their verification needs attention. Check those existing records; do not recreate them.',recovery:{state:native.length?'native-repair-required':'check-saved',operationId:String(row._id),saved:mismatches.map(([,i])=>({entity:i.entity,qboId:i.qboId})),differences:differences.slice(0,20),...(native.length?{native}:{}),next:native.length?'Finish the exact estimate links on the existing invoices through the native QuickBooks workflow. Automatic native execution for these records is not installed. A repeated API conversion cannot repair them; retain this recovery task and continue independent business work.':'Inspect the saved record differences and retain the existing QuickBooks identities before any further action.'}};
   }
   return {};
 }

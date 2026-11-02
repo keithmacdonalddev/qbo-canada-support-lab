@@ -91,7 +91,7 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
     for (const link of links) if (!records.has(link.entity + ':' + link.id)) pending.push(link);
   }
   const affectedDates = postingDates(request, payload, [...records.values()], directDates);
-  let qboClosedThrough = null, preferencesHash = null;
+  let qboClosedThrough = null, preferencesHash = null, estimateConversion = null;
   // Closing dates and automatic-credit settings can change outside CDC. Keep
   // this independent live dispatch check even while the local mirror is current.
   if (affectedDates.length) {
@@ -101,9 +101,10 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
     const raw = preferences[0].AccountingInfoPrefs.BookCloseDate;
     if (raw !== undefined && raw !== null && raw !== '') qboClosedThrough = day(raw);
     preferencesHash = hash(preferences[0]);
+    if (request.entity === 'invoice' && require('./estimate-conversion-policy').estimateIds(payload).length) estimateConversion = { usingProgressInvoicing: preferences[0].SalesFormsPrefs?.UsingProgressInvoicing ?? null, preferencesHash };
   }
   if (now() < started || now() - started > 180000) throw denied('Protected-period evidence expired during reading. Nothing was sent.');
-  const evidence = { version: creditControl ? 2 : 1, ...(creditControl ? { autoApplyCredit: false } : {}), scope, coordination, requestHash: request.requestHash, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), directDates, affectedDates, records: [...records.values()].sort((a, b) => (a.entity + ':' + a.id).localeCompare(b.entity + ':' + b.id)), preferencesHash, qboClosedThrough };
+  const evidence = { version: creditControl ? 2 : 1, ...(creditControl ? { autoApplyCredit: false } : {}), scope, coordination, requestHash: request.requestHash, startedAt: new Date(started).toISOString(), observedAt: new Date(now()).toISOString(), directDates, affectedDates, records: [...records.values()].sort((a, b) => (a.entity + ':' + a.id).localeCompare(b.entity + ':' + b.id)), preferencesHash, qboClosedThrough, ...(estimateConversion ? { estimateConversion } : {}) };
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { ...evidence, evidenceHash: hash(evidence) };
 }

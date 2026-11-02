@@ -169,6 +169,8 @@ function checkGeneralWriteImplementation({ proposal, local, context }) {
     const after = effectiveRecord(op.op, existing, payload);
     entry.after = after;
     for (const message of billableWriteProblems(op.entity, op.op, payload, existing)) say(ref, message);
+    const conversions = require('./estimate-conversion-policy');
+    if (conversions.needsConversion(op.entity, op.op, payload, allLinks(existing).map(link => ({ entity: link.TxnType, id: link.TxnId }))) && context.estimateConversion?.apiWritable !== true) problems.push({ ref, code: conversions.CODE, message: conversions.NATIVE_REASON });
     // 1. Shape of what is sent.
     for (const key of readOnlyFields(op.entity)) if (payload[key] !== undefined) say(ref, key + ' is set by QuickBooks; leave it out.');
     if (op.op === 'create') for (const key of spec.required) if (payload[key] === undefined) say(ref, op.entity + ' needs ' + key + '.');

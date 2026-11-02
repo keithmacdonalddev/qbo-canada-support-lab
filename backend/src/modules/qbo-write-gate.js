@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { assertAccountEligible } = require('./account-policy');
 const { hash } = require('./business-calendar');
 const { assertRunApproval } = require('./business-period-store');
-const { denied, scoped, classifyWriteResponse, responsePayload } = require('./qbo-write-contract');
+const { denied, scoped, classifyWriteResponse, responsePayload, freezeWriteRequest } = require('./qbo-write-contract');
 const { normalizePermissions } = require('./rebuild-permissions');
 const { readWritePeriodEvidence, assertWritePeriod, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE } = require('./qbo-write-period');
 const { normalizeWorkflow } = require('./qbo-write-workflow');
@@ -107,6 +107,15 @@ function createQboWriteGateImplementation({ Policies, Writers, Receipts, Audits,
       const fence = periodEvidence?.coordination;
       if (!fence || fence.policyRevision !== policy.revision || (!resourceScoped && fence.writerRevision !== writer.revision) || fence.controlHash !== policy.periodControl?.contentHash) throw denied('Company activity or protected-period choices changed during reading. Read fresh evidence before retrying.');
       const periodProof = general ? generalTransport.assertPeriod({ request, evidence: periodEvidence, controls: policy.periodControl, ownerId, clock: now() }) : (population || (populationRepair&&request.entity==='batch')) ? (population?populationTransport:populationRepairTransport).assertPeriod({ request, evidence: periodEvidence, controls: policy.periodControl, ownerId, clock: now() }) : assertWritePeriod(request, periodEvidence, policy.periodControl, now(), ownerId);
+      // Only the authenticated general replay adapter can reuse old admission.
+      // Native UI and historical period checks never pass through this SDK gate.
+      if (!(general && periodProof.replay)) {
+        const assertSupport = require('./estimate-conversion-policy').assertApiEstimateSupport;
+        if (request.entity === 'batch') {
+          const rows = JSON.parse(request.body).BatchItemRequest;
+          for (const [index, row] of rows.entries()) if (row.Invoice && ['create', 'update'].includes(row.operation)) assertSupport(freezeWriteRequest(scope, 'POST', 'invoice', row.Invoice), periodProof.proofs?.[index]);
+        } else assertSupport(request, periodProof);
+      }
       let unresolved;
       if (general) {
         unresolved = await generalTransport.admit({ scope, ownerId, actorId, workflow, request, receiptId, dispatchKey, writer, policy, periodProof, startAuditId, session });

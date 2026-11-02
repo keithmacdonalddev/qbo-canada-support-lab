@@ -136,7 +136,8 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         // after an owned Deposit. Its original request still described Undeposited Funds.
         const proof = row.evidence?.accountant, ownDeposit = ['Payment', 'SalesReceipt'].includes(row.entity) && explainedByOwnSettlements(proof?.record, row.current, ownSettlements, row.entity)
           && headerLinks(row.current).some(key => key.startsWith('Deposit:') && ownSettlements.has(key));
-        const requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
+        let requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : row.current;
+        if(row.entity==='Estimate'&&proof.estimateConversion) requestedView={...requestedView,TxnStatus:proof.estimateConversion.originalStatus};
         if (!row.deleted && !require('./qbo-semantic-compare').matchesQboRequest(accountingRecord(row.entity, row.evidence?.accountant?.request || {}), accountingRecord(row.entity, requestedView), { entity: row.entity })) throw new Error('Its current fields differ from the requested account, item, tax or other values.');
         const inPeriod = !fromDate || row.current?.TxnDate >= fromDate && row.current?.TxnDate <= throughDate;
         const comparison = compareLedger(postingsOf(row.entity, row.deleted || !inPeriod ? null : row.current, { ...ctx, postingSources: proof?.postingSources }), ledger[key] || []);

@@ -22,6 +22,7 @@ async function setup(){
  h.plan.lineReplacement={originalInvoiceLineId:h.after.invoice.record.Line[0].Id,originalLineHash:hash(h.after.invoice.record.Line[0]),estimateSourceLineId:h.after.estimate.record.Line[0].Id,estimateSourceLineHash:hash(h.after.estimate.record.Line[0]),allowIdChange:true,allowExactOriginalEstimateLink:true};
  for(const e of h.entries)e.observed=clone(h.plan.before[e.step.entity==='TimeActivity'?'time':e.step.entity.toLowerCase()]);
  h.ui=createBusinessUiLinkCorrection({models:h.models,transaction:h.transaction,assertReady:async()=>{},access:{authorize:async()=>{if(!h.allowed)throw Error('permission revoked');return{actorId:h.ownerId,ownerId:h.ownerId};}},assertBusinessAuthority:async()=>{if(h.authorityChanged)throw Error('publication changed');},loadTaxPolicy:async(_scope,compiled)=>clone(h.entries.find(e=>e.step.logicalKey===compiled.logicalKey).taxPolicy),now:()=>h.clock});
+ h.progressInvoicing=true; // Native protection remains valid while API conversion is unavailable.
  h.period=()=>readWritePeriodEvidence(uiPeriodGuardRequest(h.plan),h.client,()=>h.clock);
  h.admit=async()=>h.admission=await h.ui.admission(h.plan,await h.period());
  h.gesture=async(name,phase='started',extra={})=>h.ui.gesture({scope,authorityHash:h.admission.authorityHash,name,phase,uiEvidence:{...clone(h.plan.uiEvidence),...(h.browserTargetId?{browserTargetId:h.browserTargetId}:{}),observedAt:new Date(h.clock).toISOString(),...extra},periodEvidence:phase==='started'?await h.period():undefined});

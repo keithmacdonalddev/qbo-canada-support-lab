@@ -60,7 +60,20 @@ function createBlockerInspection({ models, scope, signal, now = () => Date.now()
     if (!ID.test(operationId || '')) throw Object.assign(new Error('Choose an exact saved operation identifier.'), { status: 400 });
     check();
     const run = await one(models.Runs, { _id: operationId });
-    if (!run) return { success: false, notFound: true, error: 'No saved accounting operation has this identifier in the selected company.' };
+    if (!run) {
+      const general = models.GeneralWriteRuns && await one(models.GeneralWriteRuns, { _id: operationId, contract: 'general-write-v1' });
+      if (!general) return { success: false, notFound: true, error: 'No saved accounting operation has this identifier in the selected company.' };
+      const recovery = [];
+      for (const [ref,item] of Object.entries(general.items || {}).slice(0,60)) {
+        check();
+        if (item.outcome !== 'mismatch' || item.entity !== 'Invoice') continue;
+        const batch = general.batches?.find(row => row.attempt === item.attempt && row.items?.some(sent => sent.ref === ref));
+        const receipt = batch?.transport?.receiptId && models.Receipts ? await one(models.Receipts, { _id: batch.transport.receiptId, kind: 'general-write', state: 'saved' }) : null;
+        const helper = require('./general-estimate-recovery'), source = helper.sourceOf(general,ref,receipt);
+        if (source) recovery.push(helper.packetOf(general,source));
+      }
+      return { success:true, data:{ operationId,contract:general.contract,status:general.status,readOnly:true,qboRequests:0,estimateRecovery:recovery,capabilityKey:recovery.length?'general-native-estimate-conversion':null,...require('./business-error-detail').generalAttention(general),limitations:['Inspection authenticates retained saves only. Native execution and current accounting proof remain separate.'],nextAction:recovery.length?'Keep the exact saved Invoice IDs. Use one general-native-estimate-conversion capability request for the missing governed native operator; do not resubmit these creates. Continue independent work.':'Use the recorded general-write error; inspection grants no retry or write authority.' } };
+    }
     const result = run.executionRequest?.result || {}, diagnostic = bounded(result.diagnostic && typeof result.diagnostic === 'object' ? Object.fromEntries(Object.entries(result.diagnostic).filter(([key]) => ['name', 'code', 'message', 'error', 'stack', 'source', 'file', 'line', 'column', 'status', 'qboStatus', 'intuit_tid', 'operationId', 'logicalKey', 'ordinal', 'entity', 'qboId', 'reason', 'cause', 'expectedSyncToken', 'actualSyncToken'].includes(key))) : result.diagnostic || null);
     // A refusal before claim has no OperationStep yet; nextOrdinal still names
     // its immutable intent. Needs-check work may have been deferred past it.

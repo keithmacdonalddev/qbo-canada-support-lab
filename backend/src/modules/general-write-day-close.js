@@ -67,7 +67,7 @@ async function readGeneralRuns(Runs, scope, { day = null, session = null } = {})
   const out = [], size = 500;
   let after = null;
   for (;;) {
-    let query = Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(day ? {day} : {}), ...(after ? { _id: { $gt: after } } : {}) }).select('items plan dirty batches status revision updatedAt day retirement ownerId actorId').sort({ _id: 1 }).limit(size).maxTimeMS(3000);
+    let query = Runs.find({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(day ? {day} : {}), ...(after ? { _id: { $gt: after } } : {}) }).select('environment realmId connectionId contract agentAuthority caseAuthority items plan dirty batches status revision updatedAt day retirement ownerId actorId').sort({ _id: 1 }).limit(size).maxTimeMS(3000);
     if(session)query=query.session(session);
     const rows=await query.lean();
     if (!Array.isArray(rows) || after && rows.some(row => String(row._id) <= after)) fail('General-write enumeration did not advance; close is incomplete.');
@@ -135,6 +135,26 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
       if (!require('./general-write-close').sameProvenRecord(row.key.split(':')[0], row.record, row.current, hash(row.record)) && !explainedByOwnSettlements(row.record, row.current, trusted, row.key.split(':')[0])) continue;
       trusted.set(row.key, { targets: row.targets, record: row.current }); changed = true;
     }
+  }
+  // A native estimate correction has a distinct, receipt-authenticated derived
+  // state. It is not payment arithmetic and must not broaden settlement rules.
+  const recovery = require('./general-estimate-recovery');
+  for (const row of records.filter(record => record.entity === 'Estimate')) {
+    const witnesses=[];
+    for (const run of runs) for (const [ref,item] of Object.entries(run.items || {})) {
+      if(item.reconciliation?.estimate?.Id!==row.id||!models.Receipts)continue;
+      const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope,kind:'general-write',state:'saved'}).maxTimeMS(3000).lean();
+      const witness=recovery.storedReconciliation(run,ref,receipt,scope);if(!witness)continue;
+      const source=await recovery.loadEstimateCreation({Runs,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:row.id});
+      if(!source||source.operationId!==witness.evidence.sourceEstimate.operationId||source.receiptId!==witness.evidence.sourceEstimate.receiptId||hash(source.original)!==witness.evidence.sourceEstimate.recordHash||!recovery.assertEstimateTransition(source.original,row.current,item.qboId))continue;
+      const invoice=await copy.read(scope,'Invoice',item.qboId);
+      if(!require('./general-write-close').sameProvenRecord('Invoice',item.record,invoice,hash(item.record))&&!explainedByOwnSettlements(item.record,invoice,trusted,'Invoice'))continue;
+      witnesses.push({source,item,witness});
+    }
+    if(witnesses.length!==1)continue;
+    const {source,witness}=witnesses[0],proof=row.evidence.accountant;
+    if(hash(proof.record)!==hash(source.original))continue;
+    row.evidence={...row.evidence,accountant:{...proof,record:row.current,versionHash:hash(row.current),estimateConversion:{evidenceHash:witness.evidence.evidenceHash,originalRecord:source.original,originalStatus:source.original.TxnStatus,sourceOperationId:source.operationId}}};
   }
   const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets })).sort((a, b) => a.key.localeCompare(b.key));
   settlementVersions.sort((a, b) => a.key.localeCompare(b.key));

@@ -103,7 +103,7 @@ test('wake filters answered, owner and revoked-grant rows before applying its bo
   h.models.GeneralWriteRuns.find = filter => {
     queries++;const uncertain=typeof filter.status==='object';
     if(uncertain){assert.deepEqual(filter.status,{$in:['unknown','sending']});assert.deepEqual(filter.batches,{$elemMatch:{state:{$ne:'answered'}}});}
-    else{assert.equal(filter.status,'needs-correction');assert.deepEqual(filter.batches,{$elemMatch:{state:'answered','transport.outcome':'saved','items.entity':'PurchaseOrder'}});}
+    else{assert.equal(filter.status,'needs-correction');assert.deepEqual(filter.batches,{$elemMatch:{state:'answered','transport.outcome':'saved','items.entity':{$in:['PurchaseOrder','Invoice']}}});}
     for(const key of ['realmId','environment','connectionId'])assert.equal(filter[key],scope[key]);assert.equal(filter['agentAuthority.ownerId'],fixture.run.ownerId);
     assert.equal(filter['agentAuthority.grantId'], fixture.run.agentAuthority.grantId);
     assert.equal(filter['agentAuthority.agentId'], fixture.run.agentAuthority.agentId);

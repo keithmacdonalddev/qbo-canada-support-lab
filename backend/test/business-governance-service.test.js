@@ -134,3 +134,10 @@ test('unavailable historical approval reports are audit-only and never shown as 
  const result=await readApprovalReports({models:{Audits:model([])},run,ownerId});
  assert.equal(result.status,'unavailable');assert.equal(result.authorization,false);assert.equal(result.available,undefined);
 });
+
+test('known unsupported field-service chains are refused before preparation saves any source records',async()=>{
+ for(const flag of [true,undefined]){const h=fixture();await h.publish();h.progressInvoicing=flag;const posts=h.posts;await assert.rejects(h.service.prepare(h.user,{requestKey:'unsupported-estimate-chain',throughDate:'2026-10-15'}),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(h.posts,posts);assert.equal(h.data.Runs.length,0);assert.equal(h.data.Steps.length,0);}
+});
+test('a plan approved before a progress-setting change cannot dispatch its first Estimate or TimeActivity',async()=>{
+ const h=fixture();await h.publish();const prepared=await h.service.prepare(h.user,{requestKey:'pre-guard-approved-chain',throughDate:'2026-10-15'});await h.service.approve(h.user,prepared.operationId,{planHash:prepared.planHash});const posts=h.posts;h.progressInvoicing=true;await assert.rejects(h.runtime(prepared.operationId).execute(),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(h.posts,posts);assert.equal(h.data.Receipts.length,0);
+});

@@ -24,7 +24,7 @@ function loadModels() {
   const registered = require('mongoose').models;
   const legacy = new Set(['User', 'Connection', 'CompanyMembership', 'AuditLog']);
   for (const name of legacy) if (!registered[name]) fail('The existing application models must be registered before runtime composition.');
-  return Object.fromEntries(Object.entries({ Users: 'User', Connections: 'Connection', Memberships: 'CompanyMembership', Audits: 'AuditLog', Policies: 'CompanyWritePolicy', Writers: 'CompanyWriter', Calendars: 'BusinessCalendar', GeneralWriteRuns: 'GeneralWriteRun', Runs: 'OperationRun', Plans: 'OperationPlan', Intents: 'OperationIntent', Steps: 'OperationStep', Receipts: 'QboWriteReceipt', Evidence: 'OperationEvidence', Authorities: 'BusinessAuthority', Versions: 'BlueprintVersion', Baselines: 'BusinessBaseline' }).map(([key, name]) => [key, legacy.has(name) ? registered[name] : require('../models/' + name)]));
+  return Object.fromEntries(Object.entries({ Users: 'User', Connections: 'Connection', Memberships: 'CompanyMembership', Audits: 'AuditLog', Policies: 'CompanyWritePolicy', Writers: 'CompanyWriter', Calendars: 'BusinessCalendar', Records: 'CompanySyncRecord', GeneralWriteRuns: 'GeneralWriteRun', Runs: 'OperationRun', Plans: 'OperationPlan', Intents: 'OperationIntent', Steps: 'OperationStep', Receipts: 'QboWriteReceipt', Evidence: 'OperationEvidence', Authorities: 'BusinessAuthority', Versions: 'BlueprintVersion', Baselines: 'BusinessBaseline' }).map(([key, name]) => [key, legacy.has(name) ? registered[name] : require('../models/' + name)]));
 }
 // Internal server composition for one SAVED operation. No construction-time reads,
 // startup, activation, plan approval, migration or scheduler. Actor/owner/scope
@@ -47,6 +47,12 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     if (!policy || policy.contractVersion !== 1 || String(policy.connectionId) !== scope.connectionId || !['active', 'preparing'].includes(policy.state) || !HASH.test(policy.preparationEvidenceHash || '') || !Number.isSafeInteger(policy.revision) || policy.revision < 0) fail('Company-wide write coordination must be explicitly prepared.');
     if (['reserve', 'claim', 'dispatch'].includes(phase)) {
       const run = await models.Runs.findOne({ _id: operationId, ...scope }).session(session).maxTimeMS(3000).lean();
+      // Recheck old unstarted plans before any new source record is dispatched.
+      if ((run.nextOrdinal ?? 0) === 0) {
+        const plan = await models.Plans.findOne({ _id: run.planId, ...scope, planHash: run.planHash }).session(session).maxTimeMS(3000).lean();
+        const estimatePolicy = require('./estimate-conversion-policy');
+        estimatePolicy.assertPlanSupport(plan?.manifest, await estimatePolicy.readSyncedSupport({ Records: models.Records || models.Mirror, scope, session, now: now() }));
+      }
       await require('./business-agent-authority').fenceAgentAuthority({ run, scope, ownerId, actorId, Agents: models.Agents, session });
       await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: run, session, fence: true });
       if (policy.state !== 'active' || !session?.inTransaction?.()) fail('New operation work requires active write coordination.');

@@ -589,3 +589,29 @@ for(const mode of ['native-sidecar','mirror-only','missing','changed'])test('dee
  else assert.equal((await h.begin(gate)).kind,'general-write');
  if(['missing','changed'].includes(mode))assert.equal(h.data.Receipts.length,0);
 });
+
+// Regression: the ordinary accountant must not repeat the historical missing-link
+// incident. The actual SDK gate, not a prompt, owns the final support decision.
+function estimateGate(flag) {
+  const h=harness(),payload={TxnDate:'2026-12-02',CustomerRef:{value:'1'},Line:[{Amount:250,DetailType:'SalesItemLineDetail',SalesItemLineDetail:{ItemRef:{value:'40'},Qty:2,UnitPrice:125,TaxCodeRef:{value:'7'}}}],LinkedTxn:[{TxnId:'11217',TxnType:'Estimate'}]};
+  h.run().batches[0].items=[{bId:'1',ref:'invoice',op:'create',operation:'create',entity:'Invoice',payload}];
+  h.run().plan={operations:[{ref:'invoice',op:'create',entity:'Invoice',payload}],layers:[['invoice']]};
+  h.service.guardBatch=async()=>({reverifyDates:[]}); // Isolate final admission from unchanged accounting guards.
+  h.client.read=async()=>({Estimate:{Id:'11217',SyncToken:'0',TxnDate:'2026-12-01'}});
+  h.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false,...(flag===undefined?{}:{UsingProgressInvoicing:flag})}}]}});
+  return h;
+}
+test('new ordinary estimate conversion is refused before any receipt when progress invoicing is on or unknown',async()=>{
+  for(const flag of [true,undefined,null,'false',0]){const h=estimateGate(flag),gate=h.gateFor();await assert.rejects(h.begin(gate),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);}
+});
+test('observed progress-off permits a new conversion, while a forged missing capability observation cannot admit',async()=>{
+  const h=estimateGate(false),gate=h.gateFor(),ticket=await h.begin(gate);assert.equal(ticket.kind,'general-write');assert.equal(h.data.Receipts[0].periodProof.proofs[0].evidence.estimateConversion.usingProgressInvoicing,false);
+  const other=estimateGate(false),otherGate=other.gateFor(),request=other.request(),evidence=await otherGate.preflight({request,client:other.client});
+  const proof=evidence.proofs[0];delete proof.estimateConversion;const {evidenceHash,...body}=proof;proof.evidenceHash=require('../src/modules/business-calendar').hash(body);
+  await assert.rejects(otherGate.begin({request,ownerId,actorId:ownerId,workflow:{version:1,kind:'general-write',runId,batchIndex:0,sends:1},periodEvidence:evidence}),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(other.data.Receipts.length,0);
+});
+test('a previously admitted lost conversion keeps the original request identity when the setting later turns on',async()=>{
+  const h=estimateGate(false),gate=h.gateFor(),first=await h.begin(gate);await gate.failTransport(first,h.request(),{responseReceived:false});
+  const before=clone(h.request());h.run().batches[0].sends=2;h.client.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false,UsingProgressInvoicing:true}}]}});
+  const replayGate=h.gateFor(),replay=await h.begin(replayGate,2);assert.deepEqual(h.request(),before);assert.notEqual(replay.receiptId,first.receiptId);assert.equal(h.data.Receipts.length,2);assert.ok(h.data.Receipts[1].periodProof.replay);
+});
