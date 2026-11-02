@@ -27,6 +27,17 @@ async function validateNativeLaunch({models,access,actionId,authorityHash,runId,
   const receipt=await one(models.Receipts,{_id:batch.transport.receiptId,...scope}),source=recovery.sourceOf(run,plan.ref,receipt);
   const estimate=source&&await recovery.loadEstimateCreation({Runs:models.GeneralWriteRuns,Receipts:models.Receipts,scope,ownerId:run.ownerId,id:source.estimateId});
   check(source&&estimate&&source.item.qboId===plan.invoiceId&&source.estimateId===plan.estimateId&&source.receiptId===plan.source.invoiceReceiptId&&source.requestHash===plan.source.invoiceRequestHash&&hash(source.original)===plan.source.invoiceOriginalHash&&estimate.receiptId===plan.source.estimateReceiptId&&estimate.requestHash===plan.source.estimateRequestHash&&hash(estimate.original)===plan.source.estimateOriginalHash,'Native original receipts differ');
+  const native=require('../../backend/src/modules/general-estimate-native'),rootId=native.actionId(scope,run,source);
+  if((plan.attempt||1)===1)check(actionId===rootId&&(plan.rootActionId||actionId)===rootId&&!plan.predecessor,'Invalid root native launch');
+  else{
+    check(plan.attempt===2&&plan.rootActionId===rootId&&plan.predecessor?.actionId===rootId,'Native lineage launch limit exceeded');
+    const root=await one(models.Authorities,{_id:rootId.slice(0,24),...scope}),before=root?.payload?.plan;
+    const noEffect=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope}),consumed=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'replacement-admitted'}).slice(0,24),...scope});
+    check(root&&root.contentHash===hash(root.payload)&&root.contentHash===plan.predecessor.authorityHash&&(before?.attempt||1)===1&&!before.predecessor&&canonical(before.source)===canonical(plan.source)&&before.ownerId===plan.ownerId&&before.invoiceId===plan.invoiceId&&before.estimateId===plan.estimateId,'Replacement root differs');
+    check(noEffect&&noEffect.contentHash===hash(noEffect.payload)&&noEffect.contentHash===plan.predecessor.noEffectHash&&noEffect.payload.phase==='no-effect'&&noEffect.payload.reason==='native-executable-unavailable'&&noEffect.payload.authorityHash===root.contentHash&&noEffect.payload.noDraft?.onlyHomepage===true&&native.unchanged(source.original,noEffect.payload.after?.invoice,'Invoice')&&native.unchanged(estimate.original,noEffect.payload.after?.estimate,'Estimate')&&actionId===native.replacementId(rootId,noEffect.contentHash),'Replacement requires exact unchanged no-effect evidence');
+    check(consumed&&consumed.contentHash===hash(consumed.payload)&&consumed.payload.phase==='replacement-admitted'&&consumed.payload.authorityHash===root.contentHash&&consumed.payload.noEffectHash===noEffect.contentHash&&consumed.payload.successorActionId===actionId&&consumed.payload.successorAuthorityHash===authorityHash,'Replacement proof was not atomically consumed for this child');
+    check(!await one(models.Authorities,{_id:hash({actionId:rootId,phase:'verified'}).slice(0,24),...scope}),'A saved root never admits replacement');
+  }
   const policy=await one(models.Policies,scope);
   check(policy?.state==='active'&&policy.revision===plan.policyRevision+2&&policy.periodControl?.contentHash===plan.controlHash,'Native period control changed');
   const semantic=freezeWriteRequest(scope,'POST','invoice',{Id:plan.invoiceId,SyncToken:plan.before.invoice.SyncToken,sparse:true,LinkedTxn:[{TxnId:plan.estimateId,TxnType:'Estimate'}]});

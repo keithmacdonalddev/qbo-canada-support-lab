@@ -26,6 +26,20 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     if(activeSession)throw require('./qbo-browser-login').failure('QBO_SESSION_BUSY');
     return sessions().withSession(context,async lease=>{activeSession=lease;try{return await work();}finally{activeSession=null;}});
   }
+  async function assertAvailable(){
+    const browser=path.join(process.env.APPDATA || path.join(os.homedir(),'AppData','Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
+    check((await fs.stat(browser)).isFile() && (await fs.stat(path.join(root,SCRIPT))).isFile(),'Installed native browser helper is unavailable');
+  }
+  async function assertNoDraft(){
+    const ownsLease=!activeSession,lease=activeSession||await require('./qbo-browser-session').acquireSessionLease({root});
+    try{
+      const browser=path.join(process.env.APPDATA || path.join(os.homedir(),'AppData','Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
+      const raw=await require('./qbo-browser-transport').privateRun(process.execPath,[browser,'--session','qbo-ops','tab','list','--json'],{onChild:lease.trackChild});
+      const result=JSON.parse(raw),tabs=result?.data?.tabs;
+      check(result.success===true && Array.isArray(tabs) && tabs.length===1 && tabs[0].url==='https://qbo.intuit.com/app/homepage','Native no-effect recovery requires the sole browser page to be the unchanged homepage, with no draft');
+      return {onlyHomepage:true,tabCount:1,observedAt:new Date().toISOString()};
+    }catch(error){if(error.code==='QBO_SESSION_UNCERTAIN')lease.retain();throw error;}finally{if(ownsLease)await lease.release();}
+  }
   async function retainInput(file,bytes) {
     check(digest(bytes)===file.sha256,'Input artifact hash changed');
     await createArtifactReader(bankingRoot)({path:file.path,sha256:file.sha256});
@@ -104,7 +118,7 @@ function createTerraRunner({root=ROOT,bankingRoot=path.join(root,'artifacts/bank
     await require('./banking-operator-recovery').verifyRetainedRunStopped(root,{runId});
     return execution;
   }
-  return {run,retainInput,retainEvidence,withSession,readExecution,sessionProof:()=>activeSession?.environment?.TDL_QBO_SESSION_OWNER?require('./business-calendar').hash(activeSession.environment.TDL_QBO_SESSION_OWNER):null};
+  return {run,retainInput,retainEvidence,withSession,readExecution,assertAvailable,assertNoDraft,sessionProof:()=>activeSession?.environment?.TDL_QBO_SESSION_OWNER?require('./business-calendar').hash(activeSession.environment.TDL_QBO_SESSION_OWNER):null};
 }
 // Importing starts nothing; caller injects authorized BF4 and sync/report readers.
 function createDefaultBankingOperator({root=ROOT,workspace,getAccount,readVerification,authorize,resolveRows,...options}) {

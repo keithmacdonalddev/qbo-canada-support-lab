@@ -37,7 +37,9 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 codex_bin=$(command -v codex.cmd || ls "${APPDATA:-}/npm/codex.cmd" 2>/dev/null || true)
 [ -n "$codex_bin" ] || { echo "Codex CLI not found" >&2; exit 2; }
 # A fresh folder per run, so old screenshots never pass as new evidence.
-ab_js="${APPDATA:-}/npm/node_modules/agent-browser/bin/agent-browser.js"; ab_js=$(cygpath -m "$ab_js" 2>/dev/null || echo "$ab_js")
+ab_js=$(node -p "require('node:path').join(process.env.APPDATA || require('node:path').join(require('node:os').homedir(), 'AppData', 'Roaming'), 'npm', 'node_modules', 'agent-browser', 'bin', 'agent-browser.js')") || exit 2
+ab_js=$(cygpath -m "$ab_js" 2>/dev/null || echo "$ab_js")
+[ -f "$ab_js" ] || { echo "Installed agent-browser executable is unavailable" >&2; exit 2; }
 out="artifacts/terra-live/$run_name-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 
 # Each run passes a unique marker (an unused config key) so this run's processes

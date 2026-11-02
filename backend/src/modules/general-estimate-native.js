@@ -41,6 +41,7 @@ function reportShape(report,dates){
   return {columns:report.Columns,rows:report.Rows};
 }
 function actionId(scope,run,source){return hash({version:1,kind:KIND,scope,operationId:String(run._id),ref:source.ref,invoiceId:source.item.qboId,estimateId:source.estimateId,receiptId:source.receiptId});}
+function replacementId(rootActionId,noEffectHash){return hash({version:1,kind:KIND,rootActionId,noEffectHash});}
 function promptFor(plan){
   const i=plan.before.invoice,e=plan.before.estimate,line=i.Line.filter(l=>l.DetailType!=='SubTotalLineDetail')[0];
   return [
@@ -116,9 +117,34 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       await retain(plan,{authorityHash,execution,at:new Date(now()).toISOString()},'returned',session);
     });
   }
+  function noEffectOf(authority,event,initial){
+    check(event&&event.contentHash===hash(event.payload)&&event.payload.phase==='no-effect'&&event.payload.authorityHash===authority.contentHash&&event.payload.actionId===authority.payload.actionId&&event.payload.reason==='native-executable-unavailable','The retained no-effect proof is invalid.');
+    const plan=authority.payload.plan,after=event.payload.after;
+    check(plan.source.invoiceOriginalHash===hash(initial.source.original)&&plan.source.estimateOriginalHash===hash(initial.estimate.original)&&unchanged(initial.source.original,after.invoice,'Invoice')&&unchanged(initial.estimate.original,after.estimate,'Estimate')&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'})&&event.payload.noDraft?.onlyHomepage===true&&canonical(reportShape(plan.beforeReport,plan.reportScope.dates))===canonical(reportShape(event.payload.afterReport,plan.reportScope.dates)),'No-effect evidence no longer authenticates the original documents.');
+    return event;
+  }
+  async function verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads){
+    check(runner.readExecution&&runner.assertNoDraft,'No-effect native evidence adapters are required.');
+    const retained=await runner.readExecution({runId:plan.runId,promptHash:plan.promptHash,nativeRepair:{actionId:plan.actionId,authorityHash}});
+    check(retained&&hash(retained)===hash(execution),'No-effect execution evidence changed.');
+    const noDraft=await runner.assertNoDraft();check(noDraft?.onlyHomepage===true,'An open draft or pending submit prevents replacement.');
+    const read=async()=>({invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId),customer:await reads.get('Customer',plan.before.customer.Id)});
+    const after=await read();check(unchanged(source.original,after.invoice,'Invoice')&&unchanged(estimate.original,after.estimate,'Estimate')&&completeCustomer(after.customer,plan.before.customer.Id)&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'}),'Original native records changed; no-effect cannot be established.');
+    await reads.prefs();const firstReport=await reads.report(plan.reportScope),stable=await read(),afterReport=await reads.report(plan.reportScope);
+    check(canonical(after)===canonical(stable)&&canonical(reportShape(plan.beforeReport,plan.reportScope.dates))===canonical(reportShape(firstReport,plan.reportScope.dates))&&canonical(reportShape(firstReport,plan.reportScope.dates))===canonical(reportShape(afterReport,plan.reportScope.dates)),'Stable unchanged native records and full TrialBalance are required for no-effect.');
+    await transaction(async session=>{
+      await workspace(bound,session,true);await load(bound,plan.operationId,plan.ref,session);
+      const writer=await one(models.Writers,plan.scope,session),policy=await one(models.Policies,plan.scope,session);
+      check(writer?.unresolved?.actionId===plan.actionId&&writer.unresolved.authorityHash===authorityHash&&policy?.state==='active'&&policy.periodControl?.contentHash===plan.controlHash,'No-effect settlement fence changed.');
+      await retain(plan,{authorityHash,reason:'native-executable-unavailable',after,afterReport,noDraft,executionHash:hash(execution),sdkReads:reads.reads(),verifiedAt:new Date(now()).toISOString()},'no-effect',session);
+      check(await models.Writers.findOneAndUpdate({_id:writer._id,...plan.scope,revision:writer.revision,'unresolved.actionId':plan.actionId,'unresolved.authorityHash':authorityHash},{$set:{unresolved:null},$inc:{revision:1}},{new:true,session}).lean(),'No-effect retains its exact writer until settlement.');
+    });
+    return {status:'not-repaired',actionId:plan.actionId,noEffectVerified:true,retryAvailable:(plan.attempt||1)===1,note:'Fresh unchanged records and complete accounting prove the missing-executable attempt made no change. Its original launch remains consumed.'};
+  }
   async function verify(plan,authorityHash,source,estimate,execution,bound,reads) {
     check(execution.exitCode===0&&execution.cleanupConfirmed===true&&execution.model==='gpt-6.1-terra'&&execution.commandAudit?.flagged===0,'Native runner result or cleanup is uncertain; keep the original action barrier.');
     let reply;try{reply=JSON.parse(execution.reply.replace(/^\s*```(?:json)?/,'').replace(/```\s*$/,''));}catch{fail('Native result is not an inspectable structured result; retain its action barrier.');}
+    if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===false&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/MODULE_NOT_FOUND/.test(reply.notes||''))return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads);
     check(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===true&&reply.saveAttempts===1&&reply.saveOutcome==='saved','Native submission is not explicitly known saved; retain its action barrier.');
     const beforeShot=await runner.retainEvidence(execution,reply.beforeSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId}),afterShot=await runner.retainEvidence(execution,reply.afterSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId});
     const after={invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId),customer:await reads.get('Customer',plan.before.customer.Id)};
@@ -138,12 +164,19 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     return {status:'verified',actionId:plan.actionId,invoiceId:plan.invoiceId,estimateId:plan.estimateId,sdkReads:reads.reads(),accountingUnchanged:true,originalIdsPreserved:true,reconciled};
   }
   async function repair({bound,operationId,ref}) {
-    const initial=await load(bound,operationId,ref),id=actionId(initial.scope,initial.run,initial.source);
-    const prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
+    const initial=await load(bound,operationId,ref),rootId=actionId(initial.scope,initial.run,initial.source);
+    let id=rootId,prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope}),attempt=1,predecessor=null;
+    if(prior){
+      check(prior.contentHash===hash(prior.payload)&&prior.payload.kind===KIND&&prior.payload.actionId===rootId,'Root native authority changed.');
+      const noEffect=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...initial.scope});
+      if(noEffect){noEffectOf(prior,noEffect,initial);predecessor={actionId:rootId,authorityHash:prior.contentHash,noEffectHash:noEffect.contentHash,plan:prior.payload.plan};attempt=2;id=replacementId(rootId,noEffect.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});}
+    }
     if(prior){
       check(prior.contentHash===hash(prior.payload)&&prior.payload.kind===KIND&&prior.payload.actionId===id,'Retained native action identity is invalid.');
       const outcome=await one(models.Authorities,{_id:hash({actionId:id,phase:'verified'}).slice(0,24),...initial.scope});
       if(outcome){check(outcome.contentHash===hash(outcome.payload)&&outcome.payload.authorityHash===prior.contentHash&&outcome.payload.phase==='verified','Retained native outcome is invalid.');const after=outcome.payload.after;return {status:'verified',actionId:id,reused:true,invoiceId:initial.source.item.qboId,estimateId:initial.source.estimateId,reconciled:reconcile?await reconcile(bound,operationId,new Map([['Invoice:'+after.invoice.Id,after.invoice],['Estimate:'+after.estimate.Id,after.estimate]])):null};}
+      const ended=await one(models.Authorities,{_id:hash({actionId:id,phase:'no-effect'}).slice(0,24),...initial.scope});
+      if(ended){noEffectOf(prior,ended,initial);return {status:'not-repaired',actionId:id,noEffectVerified:true,retryAvailable:false,note:'The bounded replacement also had no effect. No further native launch is available.'};}
       const plan=prior.payload.plan,started=await one(models.Authorities,{_id:hash({actionId:id,phase:'started'}).slice(0,24),...initial.scope});
       check(plan?.actionId===id&&plan.promptHash===hash(plan.prompt)&&plan.operationId===operationId&&plan.ref===ref&&plan.source.invoiceOriginalHash===hash(initial.source.original)&&plan.source.estimateOriginalHash===hash(initial.estimate.original),'Retained native plan changed.');
       if(!started)return {status:'held',actionId:id,reused:true,note:'The admitted action was not confirmed started. Never launch it again automatically.'};
@@ -158,6 +191,7 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
         catch(error){return {status:'held',actionId:id,reused:true,note:error.message};}
       }catch(error){return {status:'held',actionId:id,reused:true,note:error.message};}finally{await release();}
     }
+    if(runner.assertAvailable)await runner.assertAvailable();
     check(initial.run.items[ref].outcome==='mismatch','The saved relationship is already reconciled; no native repair is needed.');
     const release=await lease();
     try{return await runner.withSession({actor:bound.agentAuthority?'accountant':'codex-cli',scope:initial.scope},()=>withReads(bound,initial.scope,false,async reads=>{
@@ -174,11 +208,14 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       const policy=await one(models.Policies,scope),periodProof=assertWritePeriod(semantic,period,policy?.periodControl,now(),String(bound.ownerId));
       const dates={from:[invoice.TxnDate,quote.TxnDate].sort()[0].slice(0,4)+'-01-01',through:require('./business-activity-preview').businessDate(new Date(now()))};
       const reportScope={endpoint:'reports/TrialBalance?'+new URLSearchParams({start_date:dates.from,end_date:dates.through,accounting_method:'Accrual'}),dates},beforeReport=await reads.report(reportScope);
-      const plan={version:1,kind:KIND,actionId:id,runId:'bf7-'+require('node:crypto').randomUUID(),scope,ownerId:String(bound.ownerId),actorId:String(bound.actorId),agentAuthority:bound.agentAuthority||null,browserLeaseHash:runner.sessionProof?.()||null,policyRevision:policy.revision,actorProvenance:bound.agentAuthority?'accountant under current standing grant':'codex-cli under exact owner-targeted request',operationId,ref,invoiceId:invoice.Id,estimateId:quote.Id,source:{invoiceReceiptId:source.receiptId,invoiceRequestHash:source.requestHash,invoiceOriginalHash:hash(source.original),estimateReceiptId:estimate.receiptId,estimateRequestHash:estimate.requestHash,estimateOriginalHash:hash(estimate.original)},before:{invoice,estimate:quote,customer},preferences,periodProof,controlHash:policy.periodControl.contentHash,reportScope,beforeReport,reviewedAt:new Date(now()).toISOString(),deadlineAt:new Date(now()+300000).toISOString()};
+      const plan={version:1,kind:KIND,actionId:id,rootActionId:rootId,attempt,predecessor:predecessor?{actionId:predecessor.actionId,authorityHash:predecessor.authorityHash,noEffectHash:predecessor.noEffectHash}:null,runId:'bf7-'+require('node:crypto').randomUUID(),scope,ownerId:String(bound.ownerId),actorId:String(bound.actorId),agentAuthority:bound.agentAuthority||null,browserLeaseHash:runner.sessionProof?.()||null,policyRevision:policy.revision,actorProvenance:bound.agentAuthority?'accountant under current standing grant':'codex-cli under exact owner-targeted request',operationId,ref,invoiceId:invoice.Id,estimateId:quote.Id,source:{invoiceReceiptId:source.receiptId,invoiceRequestHash:source.requestHash,invoiceOriginalHash:hash(source.original),estimateReceiptId:estimate.receiptId,estimateRequestHash:estimate.requestHash,estimateOriginalHash:hash(estimate.original)},before:{invoice,estimate:quote,customer},preferences,periodProof,controlHash:policy.periodControl.contentHash,reportScope,beforeReport,reviewedAt:new Date(now()).toISOString(),deadlineAt:new Date(now()+300000).toISOString()};
       plan.prompt=promptFor(plan);plan.promptHash=hash(plan.prompt);let authorityHash;
       await fence.commit({scope,run,bound,snapshots:[snapshot],work:async session=>{
         await workspace(bound,session);const fresh=await load(bound,operationId,ref,session);check(fresh.source.receiptId===source.receiptId&&hash(fresh.source.original)===plan.source.invoiceOriginalHash&&hash(fresh.estimate.original)===plan.source.estimateOriginalHash,'Original native repair sources changed.');
-        await touchPolicy(plan,semantic,period,session);authorityHash=await retain(plan,{plan},'admitted',session);
+        await touchPolicy(plan,semantic,period,session);
+        if(predecessor){const previous=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...scope},session);check(previous?.contentHash===predecessor.noEffectHash&&previous.contentHash===hash(previous.payload),'Replacement predecessor proof changed.');}
+        authorityHash=await retain(plan,{plan},'admitted',session);
+        if(predecessor)await retain(predecessor.plan,{authorityHash:predecessor.authorityHash,noEffectHash:predecessor.noEffectHash,successorActionId:id,successorAuthorityHash:authorityHash},'replacement-admitted',session);
         check(await models.Writers.findOneAndUpdate({...scope,_id:snapshot.writerId,revision:snapshot.revision+1,operationId:null,planHash:null,unresolved:null},{$set:{unresolved:{kind:KIND,actionId:id,authorityHash,operationId,invoiceId:invoice.Id,estimateId:quote.Id}},$inc:{revision:1}},{new:true,session}).lean(),'Native writer admission changed.');
       }});
       await transaction(async session=>{
@@ -200,4 +237,4 @@ function createDefaultGeneralEstimateNative({access,guard,now=()=>Date.now(),cod
   const runner=require('./banking-terra-runner').createTerraRunner({timeoutMs:MAX_NATIVE_MS});
   return createGeneralEstimateNative({models,transaction,access,guard,now,codingAuthority,runner,lease:()=>require('./banking-terra-runner').acquireOperatorLease(),reconcile:async(bound,operationId,hints)=>require('./general-write-service').createDefaultGeneralWrite({access,now,recoveryHints:hints}).execute(bound,operationId)});
 }
-module.exports={KIND,EVENT,MAX_READS,actionId,promptFor,unchanged,reportShape,createGeneralEstimateNative,createDefaultGeneralEstimateNative};
+module.exports={KIND,EVENT,MAX_READS,actionId,replacementId,promptFor,unchanged,reportShape,createGeneralEstimateNative,createDefaultGeneralEstimateNative};
