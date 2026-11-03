@@ -56,6 +56,7 @@ function createMongoBankingStore({ Events, Packages, connection }) {
       }
     },
     async transaction(work) { const session = await connection.startSession(); try { let result; await session.withTransaction(async () => { result = await work(session); }); return result; } finally { await session.endSession(); } },
+    getLedger: (scope, accountId, session) => query(Events, { ...scope, kind: 'ledger-account', eventId: '@ledger:' + accountId, revision: 0 }, session),
     get: (scope, packageId, session) => query(Packages, { ...scope, _id: packageId }, session),
     async list(scope, filter = {}, session, { all = false } = {}) { let q = Packages.find({ ...scope, ...filter }).sort({ accountId: 1, period: -1, revision: -1 }).maxTimeMS(5000); if (!all) q = q.limit(2000); if (session) q = q.session(session); return q.lean(); },
     async putEvent(row, session) { const old = await query(Events, { ...scoped(Object.fromEntries(SCOPE_KEYS.map(k => [k, String(row[k])]))), _id: row._id }, session); if (old) { check(old.contentHash === row.contentHash, 'Event revision already has different content.', 409); return; } await Events.create([row], { session }); },
@@ -104,6 +105,10 @@ function createBankingWorkspaceService(dependencies = {}) {
     if (field || row.length) { row.push(field.replace(/\r$/, '')); rows.push(row); }
     check(canonical(rows.shift()) === canonical(['Date','Description','Amount']), 'Use the Canadian three-column CSV profile.'); return rows;
   }
+  async function authorizeBound(bound, action, session) {
+    if (dependencies.authorize) return dependencies.authorize({ ...bound, action, session });
+    return require('./business-runtime-access').createBusinessRuntimeAccess({actorId:bound.actorId,ownerId:bound.ownerId}).authorize(bound.scope,action,{session});
+  }
   async function bind(user, write = false) {
     check(user && /^[a-f0-9]{24}$/.test(String(user.id || '')) && /^[a-f0-9]{24}$/.test(String(user.actorId || user.id)), 'Authentication required.', 401);
     const context = await resolve(user);
@@ -127,7 +132,9 @@ function createBankingWorkspaceService(dependencies = {}) {
     check(id(packageId), 'Invalid banking package id.');
     const row = await store().get(bound.scope, packageId);
     check(row && sameScope(row, bound.scope), 'Banking package not found.', 404, 'BANKING_NOT_FOUND');
-    await account(bound, row.accountId, row.accountCurrency);
+    const ledger = await readLedger(bound, row.accountId);
+    if (ledger) check(ledger.account.accountCurrency === row.accountCurrency, 'Retained package currency differs from independent account.', 409);
+    else await account(bound, row.accountId, row.accountCurrency);
     return row;
   }
   function view(row) {
@@ -207,6 +214,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     bounded(command);
     check(id(command.requestId) && integer(command.expectedVersion) && command.expectedVersion >= 0, 'Idempotent request id and current state version are required.');
     const bound = await bind(user, true), row = await load(bound, packageId), commandHash = hash(command);
+    await account(bound,row.accountId,row.accountCurrency);
     const prior = row.state.history.find(h => h.requestId === command.requestId);
     if (prior) { check(prior.commandHash === commandHash && prior.actorId === bound.actorId, 'Request id was already used for a different decision.', 409); return view(row); }
     check(row.stateVersion === command.expectedVersion, 'Banking evidence changed. Refresh before recording this decision.', 409, 'BANKING_CONFLICT');
@@ -359,6 +367,51 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   // Read-only bank-style projection of immutable retained statement packages.
   // It does not treat the synced QBO balance as an independently observed bank balance.
+  async function readLedger(bound, accountId) {
+    const row = await store().getLedger?.(bound.scope, accountId);
+    if (!row) return null;
+    check(sameScope(row, bound.scope) && row.accountId === accountId && sameScope(row.payload.scope, bound.scope), 'Independent bank scope mismatch.', 409);
+    const ledger = require('./independent-bank-ledger').verifyLedger(clone(row.payload));
+    check(ledger.account.accountId === accountId && row.contentHash === ledger.contentHash, 'Independent account identity changed.', 409);
+    return ledger;
+  }
+  async function ledgerBaseline(user, accountId, throughPeriod) {
+    const bound = await bind(user);
+    check(id(accountId) && /^\d{4}-(0[1-9]|1[0-2])$/.test(throughPeriod || ''), 'Exact baseline account and cutoff month required.');
+    const family = await store().list(bound.scope, { accountId }, null, { all:true });
+    const rows = currentPeriods(family).filter(row => row.period <= throughPeriod).reverse();
+    check(rows.length && rows.at(-1).period === throughPeriod, 'No retained baseline at this cutoff.', 404, 'BANKING_NOT_FOUND');
+    for (const row of rows) {
+      check(sameScope(row,bound.scope) && row.accountId === accountId && hash(row.snapshot) === row.contentHash, 'Retained package content changed.', 409);
+      for (const file of row.snapshot.files) await artifact({path:file.path, sha256:file.sha256}, bound, accountId);
+    }
+    const manifests = [];
+    for (const row of rows) manifests.push(await retainedManifest(bound,row));
+    const record = await account(bound, accountId, rows[0].accountCurrency);
+    return require('./independent-bank-ledger').buildLedgerBaseline({scope:bound.scope,account:record,packages:rows,manifests});
+  }
+  async function adoptLedger(user, accountId, command) {
+    check(exact(command,['throughPeriod','baselineHash','packageIds']) && HASH.test(command.baselineHash || '') && Array.isArray(command.packageIds) && command.packageIds.every(id), 'Adoption needs the exact reviewed baseline hash and package IDs.');
+    const bound = await bind(user,true), old = await readLedger(bound,accountId);
+    if (old) { check(old.contentHash === command.baselineHash && canonical(old.packages.map(p=>p.id)) === canonical(command.packageIds) && old.throughPeriod === command.throughPeriod, 'Independent bank baseline is already frozen; QBO refresh cannot replace it.', 409, 'BANKING_LEDGER_FROZEN'); return old; }
+    const ledger = await ledgerBaseline(user,accountId,command.throughPeriod);
+    check(sameScope(ledger.scope,bound.scope), 'Company changed during baseline preparation.',409,'BANKING_SCOPE_BOUNDARY');
+    check(ledger.contentHash === command.baselineHash && canonical(ledger.packages.map(p=>p.id)) === canonical(command.packageIds), 'Baseline changed since review. Read the exact preview again.', 409, 'BANKING_CONFLICT');
+    await store().assertReady();
+    try { return await store().transaction(async session => {
+      await authorizeBound(bound,'periods.manage',session);
+      await account(bound,accountId,ledger.account.accountCurrency);
+      await store().fenceAccount(bound.scope,accountId,ledger.account.accountCurrency,session);
+      const existing = await store().getLedger(bound.scope,accountId,session);
+      if (existing) { check(existing.contentHash === ledger.contentHash, 'Independent bank baseline was adopted concurrently.',409,'BANKING_CONFLICT'); return require('./independent-bank-ledger').verifyLedger(clone(existing.payload)); }
+      const current = currentPeriods(await store().list(bound.scope,{accountId},session,{all:true})).filter(p=>p.period <= command.throughPeriod).reverse();
+      check(canonical(current.map(p=>[p._id,p.contentHash,p.stateVersion])) === canonical(ledger.packages.map(p=>[p.id,p.contentHash,p.stateVersion])), 'Baseline package evidence changed concurrently.',409,'BANKING_CONFLICT');
+      check(current.every(p=>!p.state.needsReview), 'Baseline requires review before adoption.',409,'BANKING_CONFLICT');
+      ledger.adoption = {actorId:bound.actorId,ownerId:bound.ownerId,at:stamp(),action:'explicit-bank-baseline-adoption'};
+      await store().putEvent({...bound.scope,_id:hash({scope:bound.scope,kind:'ledger-account',accountId}),kind:'ledger-account',eventId:'@ledger:'+accountId,revision:0,accountId,accountCurrency:ledger.account.accountCurrency,sourceHash:ledger.contentHash,contentHash:ledger.contentHash,payload:ledger},session);
+      return ledger;
+    }); } catch(error) { if(error.code === 11000) fail('Independent baseline was adopted concurrently. Refresh and compare.',409,'BANKING_CONFLICT'); throw error; }
+  }
   const bankName = 'Maple Harbour Bank';
   const evidenceLabel = 'Historical reconstruction baseline — not independent bank confirmation.';
   const pendingActivity = () => ({ availability: 'not-observed', count: null, note: 'Independent pending bank activity is not observed. Retained statement timing items are shown separately.' });
@@ -388,8 +441,20 @@ function createBankingWorkspaceService(dependencies = {}) {
     }
     return [...periods.values()].sort((a, b) => b.period.localeCompare(a.period));
   }
-  async function accountSummary(bound, rows, selected = rows[0]) {
-    const record = await account(bound, selected.accountId, selected.accountCurrency);
+  function ledgerPeriods(ledger, family) {
+    if (!ledger) return currentPeriods(family);
+    const pinned = ledger.packages.map(ref => {
+      const row = family.find(p=>p._id === ref.id);
+      check(row && row.contentHash === ref.contentHash && hash(row.snapshot) === ref.contentHash, 'Frozen bank baseline package is unavailable or changed.',409,'BANKING_EVIDENCE_UNAVAILABLE');
+      return row;
+    });
+    // Keep other retained statement periods accessible; they are not adopted.
+    return [...pinned, ...currentPeriods(family).filter(row=>!ledger.packages.some(ref=>ref.period === row.period))].sort((a,b)=>b.period.localeCompare(a.period));
+  }
+  async function accountSummary(bound, rows, selected) {
+    const ledger = await readLedger(bound,rows[0].accountId);
+    selected ||= ledger ? rows.find(row=>row._id === ledger.packages.at(-1).id) : rows[0];
+    const record = ledger ? {Name:ledger.account.accountName,AccountType:ledger.account.accountType} : await account(bound, selected.accountId, selected.accountCurrency);
     let manifest = null; const unavailableEvidence = [];
     try { manifest = await retainedManifest(bound, selected); }
     catch (error) { if (!error.code?.startsWith('BANKING_')) throw error; unavailableEvidence.push(error.message); }
@@ -401,7 +466,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       period: selected.period, packageId: selected._id, revision: selected.revision, openingMinor: selected.snapshot.openingMinor,
       postedCount: selected.snapshot.events.filter(e => e.expectedResolution !== 'exclude').length,
       availablePeriods: rows.map(row => ({ period: row.period, packageId: row._id, revision: row.revision })),
-      openingEvidence, pendingActivity: pendingActivity(), unavailableEvidence };
+      openingEvidence, pendingActivity: pendingActivity(), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
   }
   async function accounts(user) {
     const bound = await bind(user), rows = await store().list(bound.scope);
@@ -409,14 +474,15 @@ function createBankingWorkspaceService(dependencies = {}) {
     const groups = new Map();
     for (const row of rows) { if (!groups.has(row.accountId)) groups.set(row.accountId, []); groups.get(row.accountId).push(row); }
     const summaries = [];
-    for (const family of groups.values()) { const periods = currentPeriods(family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
+    for (const family of groups.values()) { const ledger = await readLedger(bound,family[0].accountId); const periods = ledgerPeriods(ledger,family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
     return { bankName, evidenceLabel, accounts: summaries, truncated: rows.length === 2000, qboCalls: 0 };
   }
   async function accountDetail(user, accountId, filters = {}) {
     check(id(accountId) && exact(filters, ['period']) && (!filters.period || /^\d{4}-(0[1-9]|1[0-2])$/.test(filters.period)), 'Exact account and optional statement month required.');
     const bound = await bind(user), family = await store().list(bound.scope, { accountId });
     check(family.every(row => sameScope(row, bound.scope) && row.accountId === accountId), 'Stored banking account scope mismatch.', 409);
-    const periods = currentPeriods(family), row = filters.period ? periods.find(value => value.period === filters.period) : periods[0];
+    const ledger = await readLedger(bound,accountId);
+    const periods = ledgerPeriods(ledger,family), row = filters.period ? periods.find(value => value.period === filters.period) : ledger ? periods.find(value=>value._id === ledger.packages.at(-1).id) : periods[0];
     check(row, 'No retained statement is available for this account/month.', 404, 'BANKING_NOT_FOUND');
     const summary = await accountSummary(bound, periods, row), snapshot = row.snapshot;
     let balance = snapshot.openingMinor;
@@ -445,6 +511,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { list, detail, accounts, accountDetail, register, recordImport, recordRow, recordReconciliation, download };
+  return { list, detail, accounts, accountDetail, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
 }
 module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };

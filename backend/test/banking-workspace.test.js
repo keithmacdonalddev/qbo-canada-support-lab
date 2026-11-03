@@ -18,6 +18,7 @@ function fixture() {
   const store = {
     assertReady: async () => { if (!ready) throw Object.assign(new Error('Storage not prepared'), { code: 'BANKING_STORAGE_NOT_READY', status: 409 }); },
     transaction: async work => { const before = clone([...packages]), beforeEvents = clone([...events]); try { return await work('fake-session'); } catch (e) { packages.clear(); for (const row of before) packages.set(...row); events.clear(); for (const row of beforeEvents) events.set(...row); throw e; } },
+    getLedger: async (s, accountId) => clone([...events.values()].find(row => row.kind === 'ledger-account' && row.accountId === accountId && Object.keys(scope).every(k=>row[k] === s[k])) || null),
     get: async (s, packageId) => { const row = packages.get(packageId); return row && Object.keys(scope).every(k => String(row[k]) === String(s[k])) ? clone(row) : null; },
     list: async (s, filter = {}) => [...packages.values()].filter(row => Object.keys(scope).every(k => String(row[k]) === String(s[k])) && Object.entries(filter).every(([k,v]) => row[k] === v)).map(value => clone(value)),
     putEvent: async row => { const old = events.get(row._id); if (old && old.contentHash !== row.contentHash) throw Object.assign(new Error('Event revision already has different content'), { status: 409, code: 'BANKING_CONFLICT' }); events.set(row._id, clone(row)); },
@@ -174,6 +175,10 @@ test('authenticated unmounted routes reject unauthenticated calls and company ov
   assert.equal((await fetch(base + '/packages', { method: 'POST', headers, body: JSON.stringify({ ...h.input(), ownerId: 'attacker' }) })).status, 400);
   assert.equal((await fetch(base + '/packages/' + row.id + '/files/unknown', { headers })).status, 404);
   assert.equal((await fetch(base + '/accounts')).status, 401);
+  assert.equal((await fetch(base + '/accounts/60/ledger-baseline?throughPeriod=2026-10')).status,401);
+  assert.equal((await fetch(base + '/accounts/60/ledger',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
+  assert.equal((await fetch(base + '/accounts/60/ledger-baseline?throughPeriod=2026-10&realmId=99',{headers})).status,400);
+  assert.equal((await fetch(base + '/accounts/60/ledger',{method:'POST',headers,body:JSON.stringify({realmId:'99'})})).status,400);
   assert.equal((await fetch(base + '/accounts?realmId=99', { headers })).status, 400);
   const accounts = await fetch(base + '/accounts', { headers }); assert.equal(accounts.status, 200); assert.equal((await accounts.json()).data.accounts[0].accountId, '60');
   const detail = await fetch(base + '/accounts/60?period=2026-10', { headers }); assert.equal(detail.status, 200); assert.equal((await detail.json()).data.package.id, row.id);
@@ -305,5 +310,110 @@ test('account transaction labels reuse the human-readable bank CSV descriptions'
     await h.service.register(user, input);
     const detail = await h.service.accountDetail(user, '60');
     assert.equal(detail.transactions[0].description, expected);
+  }
+});
+
+// BANK-2.1: production service/store contract, isolated storage and artifacts only.
+async function evidencedBaseline(h, accountId = '60', card = false) {
+  h.accounts.set(accountId, {Id:accountId,Name:card ? 'Retained card' : 'Retained bank',AccountType:card ? 'Credit Card' : 'Bank',CurrencyRef:{value:'CAD'}});
+  const input = h.input({accountId,openingMinor:1000,closingMinor:6000,balanceConvention:card ? 'card-amount-owed' : 'bank-balance'});
+  Object.assign(input.events[0],{accountId,amountMinor:card ? -5000 : 5000});
+  // Rebuild CSV after changing account/native signs.
+  const value = h.input(input); value.files = value.files.slice(-3);
+  const file = value.files.find(f=>f.kind === 'manifest');
+  const manifest = JSON.parse(h.artifacts.get(file.path));
+  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:{period:'2026-10',amountMinor:1000,basis:'Retained exact opening reconstruction',evidenceRef:'retained-source',evidenceHash:hash('opening')}});
+  Object.assign(file,h.retain('ledger-manifest-'+accountId,JSON.stringify(manifest),accountId));
+  return h.service.register(user,value);
+}
+test('independent bank/card adoption is inserts-only, exact, idempotent and survives reopen and changed QBO', async () => {
+  for (const card of [false,true]) {
+    const h = fixture(), accountId = card ? '85' : '123';
+    const pkg = await evidencedBaseline(h,accountId,card), before = clone([...h.packages]), files = [...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]);
+    const preview = await h.service.ledgerBaseline(user,accountId,'2026-10');
+    assert.equal(h.events.size,2,'preview does not write');
+    const command = {throughPeriod:'2026-10',baselineHash:preview.contentHash,packageIds:preview.packages.map(p=>p.id)};
+    const accepted = await h.service.adoptLedger(user,accountId,command);
+    assert.equal(accepted.openingMinor,1000); assert.equal(accepted.balance.balanceMinor,6000);
+    assert.equal(accepted.events[0].eventId,pkg.snapshot.events[0].eventId);
+    assert.equal(accepted.events[0].state,'posted'); assert.equal(accepted.adoption.actorId,user.actorId);
+    assert.deepEqual([...h.packages],before); assert.deepEqual([...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]),files);
+    assert.deepEqual(await h.service.adoptLedger(user,accountId,command),accepted);
+    const beforeRead = await h.service.accountDetail(user,accountId);
+    h.accounts.get(accountId).Name = 'Changed QBO name'; h.accounts.get(accountId).CurrencyRef.value = 'USD';
+    h.synced.set('Invoice:486',{...scope,record:{Id:'486',TotalAmt:999999,TxnDate:'2026-11-01'}});
+    const reopen = createBankingWorkspaceService({store:h.store,resolveContext:async()=>h.context,authorize:async()=>{},getAccount:async()=>{throw Error('Independent reads must not access QBO mirror');},readArtifact:async file=>{const bytes=h.artifacts.get(file.path);assert.equal(digest(bytes),file.sha256);return bytes;}});
+    assert.deepEqual(await reopen.accountDetail(user,accountId),beforeRead);
+    assert.equal((await reopen.accounts(user)).accounts[0].accountName,card ? 'Retained card' : 'Retained bank');
+    assert.equal((await reopen.download(user,pkg.id,'feed-1')).sha256,pkg.snapshot.files[0].sha256);
+    h.accounts.delete(accountId);
+    assert.deepEqual((await reopen.accountDetail(user,accountId)).independentLedger,accepted);
+    // Later package revision must not silently replace the frozen accepted history.
+    h.packages.get(pkg.id).state.supersededBy = 'new-qbo-reconstruction';
+    const changed = clone(h.packages.get(pkg.id)); changed._id = hash('changed package'); changed.revision = 2; changed.state.supersededBy = null;
+    changed.snapshot.events[0].amountMinor *= 2; changed.snapshot.closingMinor = 11000; changed.contentHash = hash(changed.snapshot); h.packages.set(changed._id,changed);
+    assert.equal((await reopen.accountDetail(user,accountId)).package.id,pkg.id);
+    assert.deepEqual((await reopen.accountDetail(user,accountId)).independentLedger,accepted);
+    const later=clone(changed);later._id=hash('later package');later.period='2026-11';later.snapshot.period='2026-11';later.contentHash=hash(later.snapshot);h.packages.set(later._id,later);
+    assert.equal((await reopen.accounts(user)).accounts[0].balanceMinor,6000);
+    assert.equal((await reopen.accountDetail(user,accountId)).package.id,pkg.id);
+    assert.equal((await reopen.accountDetail(user,accountId)).selectedPeriodAdopted,true);
+    assert.ok((await reopen.accountDetail(user,accountId)).availablePeriods.some(p=>p.period==='2026-11'));
+    await assert.rejects(h.service.adoptLedger(user,accountId,{...command,baselineHash:hash('changed source')}),/frozen/);
+    assert.equal(h.events.size,3);
+  }
+});
+test('independent baseline rejects unproved openings, altered files, discontinuities, stale review and unauthorized adoption', async () => {
+  for(const failure of ['opening','file','gap','scope','balance','review','hash','denied']) {
+    const h = fixture(); const pkg = await evidencedBaseline(h);
+    const preview = await h.service.ledgerBaseline(user,'60','2026-10');
+    if(failure === 'file') h.artifacts.set(pkg.snapshot.files[0].path,Buffer.from('changed bytes'));
+    if(failure === 'gap') {const other=clone(h.packages.get(pkg.id));other._id=hash('gap');other.period='2026-12';other.snapshot.period='2026-12';other.contentHash=hash(other.snapshot);h.packages.set(other._id,other);}
+    if(failure === 'scope') h.packages.get(pkg.id).realmId='99';
+    if(failure === 'balance') h.packages.get(pkg.id).snapshot.closingMinor++;
+    if(failure === 'review') h.packages.get(pkg.id).state.needsReview={reason:'Changed predecessor'};
+    if(failure === 'opening') {const file=pkg.snapshot.files.find(f=>f.kind==='manifest');const manifest=JSON.parse(h.artifacts.get(file.path));manifest.openingEvidence.evidenceHash=null;const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);h.packages.get(pkg.id).snapshot.files.find(f=>f.kind==='manifest').sha256=digest(bytes);h.packages.get(pkg.id).contentHash=hash(h.packages.get(pkg.id).snapshot);}
+    if(failure === 'denied') h.deny();
+    await assert.rejects(h.service.adoptLedger(user,'60',{throughPeriod:failure === 'gap'?'2026-12':'2026-10',baselineHash:failure === 'hash'?hash('wrong'):preview.contentHash,packageIds:preview.packages.map(p=>p.id)}));
+    assert.equal([...h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
+  }
+});
+test('native pending, posted and reversed arithmetic retains state history and rejects malformed states', () => {
+  const {balances} = require('../src/modules/independent-bank-ledger');
+  const event = {eventId:'stable',accountId:'123',accountCurrency:'CAD',amountMinor:1234,disposition:'included',state:'pending',stateHistory:[{state:'pending',date:'2026-11-02',evidenceRef:'instruction'}]};
+  const ledger={account:{accountId:'123',accountCurrency:'CAD',balanceConvention:'bank-balance'},openingMinor:10000,events:[event]};
+  assert.equal(balances(ledger).balanceMinor,10000);assert.equal(balances(ledger).pendingNativeMinor,1234);
+  event.state='posted';event.stateHistory.push({state:'posted',date:'2026-11-03',evidenceRef:'settlement'});assert.equal(balances(ledger).balanceMinor,11234);
+  event.state='reversed';event.stateHistory.push({state:'reversed',date:'2026-11-04',evidenceRef:'return'});assert.equal(balances(ledger).balanceMinor,10000);assert.equal(balances(ledger).reversedCount,1);assert.equal(event.stateHistory.length,3);
+  ledger.account.balanceConvention='card-amount-owed';event.state='posted';event.stateHistory.pop();assert.equal(balances(ledger).balanceMinor,8766);
+  event.state='mystery';assert.throws(()=>balances(ledger),/Unknown/);
+});
+
+test('adoption renews write authority transactionally and frozen reads do not loosen native evidence writes', async () => {
+  const h=fixture(), pkg=await evidencedBaseline(h), preview=await h.service.ledgerBaseline(user,'60','2026-10');
+  const command={throughPeriod:'2026-10',baselineHash:preview.contentHash,packageIds:preview.packages.map(p=>p.id)};
+  const tx=h.store.transaction;h.store.transaction=work=>tx(async session=>{h.deny();return work(session);});
+  await assert.rejects(h.service.adoptLedger(user,'60',command),/permission/);
+  assert.equal(h.events.size,2);
+  const a=fixture(), original=await evidencedBaseline(a), p=await a.service.ledgerBaseline(user,'60','2026-10');
+  await a.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)});
+  a.accounts.delete('60');assert.equal((await a.service.accountDetail(user,'60')).balanceMinor,6000);
+  await assert.rejects(a.service.recordImport(user,original.id,a.command(original,'start',{fileId:'feed-1',attemptId:'attempt',fileHash:original.snapshot.files[0].sha256,accountId:'60',accountCurrency:'CAD'})),/Account is missing/);
+  assert.equal(a.packages.get(original.id).stateVersion,0);
+});
+test('bounded carried baseline preserves original anchor and does not invent earlier events or pending observations', async () => {
+  const h=fixture(), pkg=await evidencedBaseline(h,'85',true), row=h.packages.get(pkg.id), file=row.snapshot.files.find(f=>f.kind==='manifest');
+  const manifest=JSON.parse(h.artifacts.get(file.path));const {hash:proofHash}=require('../src/modules/bank-settlement-contract');
+  const source={accountId:'85',currency:'CAD',retainedOpening:0};const evidenceHash=proofHash(source);
+  manifest.openingEvidence={period:'2026-09',amountMinor:0,basis:'Original retained anchor',evidenceRef:'retained-origin',evidenceHash,source:{...source,evidenceHash},crossCheck:{derivedOpeningMinor:0}};
+  const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);row.contentHash=hash(row.snapshot);
+  const preview=await h.service.ledgerBaseline(user,'85','2026-10');
+  assert.equal(preview.openingMinor,1000);assert.equal(preview.openingEvidence.amountMinor,0);assert.equal(preview.openingEvidence.acceptedOpening.period,'2026-10');assert.match(preview.openingEvidence.acceptedOpening.basis,/earlier activity is not adopted/);
+  assert.equal(preview.events.length,1);assert.deepEqual(preview.events[0].stateHistory.map(s=>s.state),['posted']);
+  for(const [key,value] of [['accountId','other'],['currency','USD']]) {
+    const swapped={...source,[key]:value}, swappedHash=proofHash(swapped);
+    manifest.openingEvidence.source={...swapped,evidenceHash:swappedHash};manifest.openingEvidence.evidenceHash=swappedHash;
+    const altered=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,altered);file.sha256=digest(altered);row.contentHash=hash(row.snapshot);
+    await assert.rejects(h.service.ledgerBaseline(user,'85','2026-10'),/Carried opening/);
   }
 });

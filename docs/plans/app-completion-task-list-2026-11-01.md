@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-03T05:46:44.487Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-03T06:12:22.588Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -14,7 +14,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
 
-**Next recommended implementation assignment: BANK-2.1 — independent bank ledger (OPEN; unassigned).** Read the ten BANK-2 acceptance steps below and select one bounded assignment. This recommendation does not start implementation or expand live-action authority. Keep business continuity, ready historical work and C01/C02 corrections in view alongside the bank feature.
+**Next recommended assignment: finish BANK-2.1 direct acceptance (IMPLEMENTED / PROOF OPEN; current bounded implementation closed).** Explicit authority for the two prepared insert-only financial-state adoptions is required; then inspect actual adopted ledger/reload proof. BANK-2.2 follows only after that dependency. Read the ten BANK-2 acceptance steps below and select one bounded assignment. This recommendation does not start implementation or expand live-action authority. Keep business continuity, ready historical work and C01/C02 corrections in view alongside the bank feature.
 
 | Outstanding workstream | Task IDs / location | Remaining owner outcome |
 |---|---|---|
@@ -130,7 +130,7 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 
 | ID / status | Deliverable | Direct pass/fail proof | Dependencies / parent scope |
 |---|---|---|---|
-| BANK-2.1 — OPEN | Independent durable bank/card ledger with evidenced openings, balances, stable event identities and pending/posted/reversed state; retain the labelled historical baseline. QBO edits must not silently rewrite bank history. | Actual scoped bank state survives reload/reopen with identical balances and identities; opening evidence is traceable; accepted BANK-1 packages/files remain unchanged. Re-reading QBO alone does not prove independence. | First assignment; reuse BANK-1. SB01. |
+| BANK-2.1 — IMPLEMENTED / PROOF OPEN | Independent durable bank/card ledger with evidenced openings, balances, stable event identities and pending/posted/reversed state; retain the labelled historical baseline. QBO edits must not silently rewrite bank history. | Actual scoped bank state survives reload/reopen with identical balances and identities; opening evidence is traceable; accepted BANK-1 packages/files remain unchanged. Re-reading QBO alone does not prove independence. | Source +48 focused checks + both real read-only previews + six original file hashes verified Nov3. Actual adoption/reopen proof remains OPEN under explicit no-financial-write boundary. See latest progress entry. SB01. |
 | BANK-2.2 — OPEN | Business payment, deposit and card instructions produce separate bank events with source lineage and duplicate-safe admission. | An actual authorized business instruction appears once in bank history; repeated delivery/recovery of the same instruction creates no duplicate economic event. | 2.1. SB01/SB03. |
 | BANK-2.3 — OPEN | Governed pending-to-posted settlement lifecycle, including posting delays and weekend rules. | Observe the same event pending, then posted when due, with exactly one balance change; rerunning the due cutoff changes nothing already settled. | 2.1–2.2. SB03. |
 | BANK-2.4 — OPEN | Paired transfers, reversals and returned/NSF payments that preserve original history. | Both same-currency transfer legs agree; a return reverses only its intended movement, retains original lineage and cannot settle twice. Foreign transfer allocations are completed in BANK-2.8. | 2.3. SB01/SB03. |
@@ -183,6 +183,17 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-03T06:12:22.588Z — **BANK-2.1 IMPLEMENTED / PROOF OPEN.** Explicit insert-only independent-ledger adoption now freezes account identity, a hash-checked bounded opening, native balances and original event/revision identities in existing BankingEvent storage. Pending/posted/reversed contracts use exact integer amounts; reconstructed historical events begin posted without invented pending history. Default adopted reads stay pinned despite changed/deleted QBO mirror data or newer reconstructed packages; other retained statements/files remain accessible. No automatic adoption, QBO write, financial-state write or persistent-service action occurred. Distinct implementation and safety reviews have no remaining findings.
+
+  Actual normal authenticated app on company ending2856 returned both baseline previews200: bank123/Sep2023 opening0 + movement2129225 = closing2129225 (37 events,1 package); card85/May2022–Apr2025 opening20000 + movement10000 = closing30000 owed (3 events,36 packages). Card's original Apr2022 zero anchor is retained separately; the first persisted statement is May2022, so earlier activity is expressly not adopted or fabricated. Six selected BANK-1 CSV/PDF/manifest bytes still equal original hashes; normal authenticated reload returns identical retained identities/balances. Both real1440×1000 account screens visibly say Independent ledger not adopted. This is baseline preparation/preservation proof, not persisted independent-ledger acceptance.
+
+  Acceptance: **1 OPEN** actual independent-ledger adoption not authorized; **2 OPEN** adopted reload/reopen and adopted-state rendering require those rows; **3 VERIFIED for read-only opening/calculation traceability**; **4 VERIFIED** six selected originals unchanged; **5 PASS** focused non-live changed/deleted QBO and newer-package regression.48 focused workspace/integration/UI checks,347-file backend syntax, frontend build/lint and diff checks pass (existing chunk warning/three AICommandCenter hook warnings). Private direct proof: artifacts/bank-2.1/verification-summary.json, final-baseline-previews.json, normal-read-preservation.json, normal-reopened-preservation.json and desktop PNGs.
+
+  **Exact remaining boundary:** this assignment explicitly excludes financial-data changes. Adopting the two prepared baselines is a financial-state database write, even with unchanged amounts. Prepared commands are retained, NOT EXECUTED, under artifacts/bank-2.1/prepared-adoptions-NOT-EXECUTED.json: bank123 through2023-09 baseline hash f5d18e0bc47dbd7084c65f247774b2a081c9e4b763cc490e518c8c910d6ea018 and card85 through2025-04 hash490ef7a6860ae085f701ddb1222a66f89f7b4aa8c675781989a1d0a41d657747. Under explicit target-specific authority, refresh these previews, execute only the two hash-bound insert-only adoptions, then verify actual adopted identity/opening/balance/events across normal reload/reopen and inspect adopted UI. No service restart is currently needed: existing app served the new read paths. BANK-2.2 remains dependent; no BANK-2.2–2.10 or BANK-3 work was started.
+
+  Work-value checkpoint: essential ledger/preservation delivery achieved at the source, isolated regression and real read-only app layers. Required reviewer findings were fixed; no optional investigation was extended. Current bounded session stops after main/origin/main closeout.
+
 
 - 2026-11-03T05:46:44.487Z — Owner requested durable cross-chat tracking of the entire outstanding project scope and the agreed ten-step BANK-2 breakdown. Added the full-work index, BANK-2.1–2.10 OPEN acceptance/dependency rows, next recommendation BANK-2.1 (unassigned), D05 minor PDF follow-up and future-chat routing. No implementation or new live authority granted. Nov3 read-only audit independently confirmed the existing BANK-1 two-period delivery, fresh app sign-in/reuse and activity discovery (HTTP 200; 40 customers/4 services/3 vendors); 106 focused tests plus build/lint passed. Private audit: artifacts/bank-1/audit-20261103-1793682678951/AUDIT.md. Historical bank reconstruction, ongoing bank operation, native reconciliation and sustained trading remain separate.
 
