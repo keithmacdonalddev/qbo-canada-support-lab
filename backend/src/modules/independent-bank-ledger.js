@@ -48,9 +48,19 @@ function buildLedgerBaseline({ scope, account, packages, manifests }) {
   // a carried boundary does not fabricate missing earlier event history.
   requireLedger(/^\d{4}-(0[1-9]|1[0-2])$/.test(evidence.period || '') && evidence.period <= first.period, 'Original opening evidence must precede the bounded baseline.');
   requireLedger(evidence.period !== first.period || evidence.amountMinor === first.snapshot.openingMinor, 'Original opening amount disagrees with its statement.');
-  if (evidence.period !== first.period) {
-    requireLedger(evidence.source?.accountId === first.accountId && evidence.source?.currency === currency && C.hash((({evidenceHash,...body})=>body)(evidence.source)) === evidence.evidenceHash && evidence.crossCheck?.derivedOpeningMinor === evidence.amountMinor, 'Carried opening needs the retained original anchor proof.');
-  }
+  // Original anchor proof is mandatory for both same-month and carried openings.
+  const source = evidence.source, crossCheck = evidence.crossCheck;
+  requireLedger(evidence.accountId === first.accountId && evidence.accountCurrency === currency &&
+    source?.accountId === first.accountId && source?.currency === currency && source.sourceRef === evidence.evidenceRef &&
+    source.evidenceHash === evidence.evidenceHash && C.hash((({evidenceHash,...body})=>body)(source)) === evidence.evidenceHash,
+    'Opening source identity or content hash is invalid.');
+  requireLedger(Number.isSafeInteger(source.storedNativeBookBalanceMinor) &&
+    ['anchorMinor','retainedMovementMinor','derivedOpeningMinor'].every(key => Number.isSafeInteger(crossCheck?.[key])),
+    'Opening arithmetic requires exact native minor units.');
+  requireLedger(crossCheck.derivedOpeningMinor === evidence.amountMinor &&
+    crossCheck.anchorMinor === source.storedNativeBookBalanceMinor &&
+    C.sum([evidence.amountMinor,crossCheck.retainedMovementMinor]) === crossCheck.anchorMinor,
+    'Opening arithmetic contradicts the retained original anchor.');
   const convention = type === 'Credit Card' ? 'card-amount-owed' : 'bank-balance';
   const result = { version: 1, scope: copy(scope), ledgerId: 'bank-ledger-' + C.hash({scope, accountId:first.accountId}),
     basis: 'Historical QBO reconstruction baseline; frozen on explicit adoption, not independent bank confirmation.',

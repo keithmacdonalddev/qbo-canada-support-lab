@@ -58,6 +58,8 @@ function createMongoBankingStore({ Events, Packages, connection }) {
     async transaction(work) { const session = await connection.startSession(); try { let result; await session.withTransaction(async () => { result = await work(session); }); return result; } finally { await session.endSession(); } },
     getLedger: (scope, accountId, session) => query(Events, { ...scope, kind: 'ledger-account', eventId: '@ledger:' + accountId, revision: 0 }, session),
     get: (scope, packageId, session) => query(Packages, { ...scope, _id: packageId }, session),
+    getPackages: (scope, packageIds) => Packages.find({ ...scope, _id: { $in: packageIds } }).maxTimeMS(5000).lean(),
+    ledgerAccountIds: scope => Events.distinct('accountId', { ...scope, kind: 'ledger-account', revision: 0 }).maxTimeMS(5000),
     async list(scope, filter = {}, session, { all = false } = {}) { let q = Packages.find({ ...scope, ...filter }).sort({ accountId: 1, period: -1, revision: -1 }).maxTimeMS(5000); if (!all) q = q.limit(2000); if (session) q = q.session(session); return q.lean(); },
     async putEvent(row, session) { const old = await query(Events, { ...scoped(Object.fromEntries(SCOPE_KEYS.map(k => [k, String(row[k])]))), _id: row._id }, session); if (old) { check(old.contentHash === row.contentHash, 'Event revision already has different content.', 409); return; } await Events.create([row], { session }); },
     async fenceAccount(scope, accountId, accountCurrency, session) {
@@ -441,11 +443,13 @@ function createBankingWorkspaceService(dependencies = {}) {
     }
     return [...periods.values()].sort((a, b) => b.period.localeCompare(a.period));
   }
-  function ledgerPeriods(ledger, family) {
+  async function ledgerPeriods(bound, ledger, family) {
     if (!ledger) return currentPeriods(family);
+    // Fetch immutable references independently of the paginated discovery list.
+    const frozen = await store().getPackages(bound.scope,ledger.packages.map(ref=>ref.id));
     const pinned = ledger.packages.map(ref => {
-      const row = family.find(p=>p._id === ref.id);
-      check(row && row.contentHash === ref.contentHash && hash(row.snapshot) === ref.contentHash, 'Frozen bank baseline package is unavailable or changed.',409,'BANKING_EVIDENCE_UNAVAILABLE');
+      const row = frozen.find(p=>p._id === ref.id);
+      check(row && sameScope(row,bound.scope) && row.accountId === ledger.account.accountId && row.accountCurrency === ledger.account.accountCurrency && row.period === ref.period && row.revision === ref.revision && row.contentHash === ref.contentHash && hash(row.snapshot) === ref.contentHash, 'Frozen bank baseline package is unavailable or changed.',409,'BANKING_EVIDENCE_UNAVAILABLE');
       return row;
     });
     // Keep other retained statement periods accessible; they are not adopted.
@@ -473,8 +477,13 @@ function createBankingWorkspaceService(dependencies = {}) {
     check(rows.every(row => sameScope(row, bound.scope)), 'Stored banking scope mismatch.', 409);
     const groups = new Map();
     for (const row of rows) { if (!groups.has(row.accountId)) groups.set(row.accountId, []); groups.get(row.accountId).push(row); }
+    // Adopted accounts must remain discoverable even if all their packages are outside the list window.
+    for (const accountId of await store().ledgerAccountIds?.(bound.scope) || []) {
+      check(id(accountId), 'Stored independent account identity is invalid.',409);
+      if (!groups.has(accountId)) groups.set(accountId,[]);
+    }
     const summaries = [];
-    for (const family of groups.values()) { const ledger = await readLedger(bound,family[0].accountId); const periods = ledgerPeriods(ledger,family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
+    for (const [accountId,family] of groups) { const ledger = await readLedger(bound,accountId); const periods = await ledgerPeriods(bound,ledger,family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
     return { bankName, evidenceLabel, accounts: summaries, truncated: rows.length === 2000, qboCalls: 0 };
   }
   async function accountDetail(user, accountId, filters = {}) {
@@ -482,7 +491,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     const bound = await bind(user), family = await store().list(bound.scope, { accountId });
     check(family.every(row => sameScope(row, bound.scope) && row.accountId === accountId), 'Stored banking account scope mismatch.', 409);
     const ledger = await readLedger(bound,accountId);
-    const periods = ledgerPeriods(ledger,family), row = filters.period ? periods.find(value => value.period === filters.period) : ledger ? periods.find(value=>value._id === ledger.packages.at(-1).id) : periods[0];
+    const periods = await ledgerPeriods(bound,ledger,family), row = filters.period ? periods.find(value => value.period === filters.period) : ledger ? periods.find(value=>value._id === ledger.packages.at(-1).id) : periods[0];
     check(row, 'No retained statement is available for this account/month.', 404, 'BANKING_NOT_FOUND');
     const summary = await accountSummary(bound, periods, row), snapshot = row.snapshot;
     let balance = snapshot.openingMinor;

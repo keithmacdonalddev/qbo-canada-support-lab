@@ -19,6 +19,8 @@ function fixture() {
     assertReady: async () => { if (!ready) throw Object.assign(new Error('Storage not prepared'), { code: 'BANKING_STORAGE_NOT_READY', status: 409 }); },
     transaction: async work => { const before = clone([...packages]), beforeEvents = clone([...events]); try { return await work('fake-session'); } catch (e) { packages.clear(); for (const row of before) packages.set(...row); events.clear(); for (const row of beforeEvents) events.set(...row); throw e; } },
     getLedger: async (s, accountId) => clone([...events.values()].find(row => row.kind === 'ledger-account' && row.accountId === accountId && Object.keys(scope).every(k=>row[k] === s[k])) || null),
+    getPackages: async (s, ids) => [...packages.values()].filter(row=>ids.includes(row._id) && Object.keys(scope).every(k=>row[k] === s[k])).map(row=>clone(row)),
+    ledgerAccountIds: async s => [...events.values()].filter(row=>row.kind === 'ledger-account' && Object.keys(scope).every(k=>row[k] === s[k])).map(row=>row.accountId),
     get: async (s, packageId) => { const row = packages.get(packageId); return row && Object.keys(scope).every(k => String(row[k]) === String(s[k])) ? clone(row) : null; },
     list: async (s, filter = {}) => [...packages.values()].filter(row => Object.keys(scope).every(k => String(row[k]) === String(s[k])) && Object.entries(filter).every(([k,v]) => row[k] === v)).map(value => clone(value)),
     putEvent: async row => { const old = events.get(row._id); if (old && old.contentHash !== row.contentHash) throw Object.assign(new Error('Event revision already has different content'), { status: 409, code: 'BANKING_CONFLICT' }); events.set(row._id, clone(row)); },
@@ -314,6 +316,12 @@ test('account transaction labels reuse the human-readable bank CSV descriptions'
 });
 
 // BANK-2.1: production service/store contract, isolated storage and artifacts only.
+function ledgerOpening(accountId, period, amountMinor) {
+  const source = {accountId,currency:'CAD',storedNativeBookBalanceMinor:10000,sourceRef:'retained-source'};
+  const evidenceHash = require('../src/modules/bank-settlement-contract').hash(source);
+  return {accountId,accountCurrency:'CAD',period,amountMinor,basis:'Retained exact opening reconstruction',evidenceRef:source.sourceRef,evidenceHash,
+    source:{...source,evidenceHash},crossCheck:{derivedOpeningMinor:amountMinor,anchorMinor:10000,retainedMovementMinor:10000-amountMinor}};
+}
 async function evidencedBaseline(h, accountId = '60', card = false) {
   h.accounts.set(accountId, {Id:accountId,Name:card ? 'Retained card' : 'Retained bank',AccountType:card ? 'Credit Card' : 'Bank',CurrencyRef:{value:'CAD'}});
   const input = h.input({accountId,openingMinor:1000,closingMinor:6000,balanceConvention:card ? 'card-amount-owed' : 'bank-balance'});
@@ -322,7 +330,7 @@ async function evidencedBaseline(h, accountId = '60', card = false) {
   const value = h.input(input); value.files = value.files.slice(-3);
   const file = value.files.find(f=>f.kind === 'manifest');
   const manifest = JSON.parse(h.artifacts.get(file.path));
-  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:{period:'2026-10',amountMinor:1000,basis:'Retained exact opening reconstruction',evidenceRef:'retained-source',evidenceHash:hash('opening')}});
+  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:ledgerOpening(accountId,'2026-10',1000)});
   Object.assign(file,h.retain('ledger-manifest-'+accountId,JSON.stringify(manifest),accountId));
   return h.service.register(user,value);
 }
@@ -404,8 +412,8 @@ test('adoption renews write authority transactionally and frozen reads do not lo
 test('bounded carried baseline preserves original anchor and does not invent earlier events or pending observations', async () => {
   const h=fixture(), pkg=await evidencedBaseline(h,'85',true), row=h.packages.get(pkg.id), file=row.snapshot.files.find(f=>f.kind==='manifest');
   const manifest=JSON.parse(h.artifacts.get(file.path));const {hash:proofHash}=require('../src/modules/bank-settlement-contract');
-  const source={accountId:'85',currency:'CAD',retainedOpening:0};const evidenceHash=proofHash(source);
-  manifest.openingEvidence={period:'2026-09',amountMinor:0,basis:'Original retained anchor',evidenceRef:'retained-origin',evidenceHash,source:{...source,evidenceHash},crossCheck:{derivedOpeningMinor:0}};
+  manifest.openingEvidence=ledgerOpening('85','2026-09',0);
+  const {evidenceHash:originalProofHash,...source}=manifest.openingEvidence.source;
   const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);row.contentHash=hash(row.snapshot);
   const preview=await h.service.ledgerBaseline(user,'85','2026-10');
   assert.equal(preview.openingMinor,1000);assert.equal(preview.openingEvidence.amountMinor,0);assert.equal(preview.openingEvidence.acceptedOpening.period,'2026-10');assert.match(preview.openingEvidence.acceptedOpening.basis,/earlier activity is not adopted/);
@@ -414,6 +422,92 @@ test('bounded carried baseline preserves original anchor and does not invent ear
     const swapped={...source,[key]:value}, swappedHash=proofHash(swapped);
     manifest.openingEvidence.source={...swapped,evidenceHash:swappedHash};manifest.openingEvidence.evidenceHash=swappedHash;
     const altered=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,altered);file.sha256=digest(altered);row.contentHash=hash(row.snapshot);
-    await assert.rejects(h.service.ledgerBaseline(user,'85','2026-10'),/Carried opening/);
+    await assert.rejects(h.service.ledgerBaseline(user,'85','2026-10'),/Opening source/);
   }
+});
+
+function replaceOpening(h,pkg,opening) {
+  const row=h.packages.get(pkg.id),file=row.snapshot.files.find(f=>f.kind==='manifest');
+  const manifest=JSON.parse(h.artifacts.get(file.path));manifest.openingEvidence=opening;
+  const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);row.contentHash=hash(row.snapshot);
+}
+test('same-month and carried adoption reject invalid original opening identity, hashes and native arithmetic', async () => {
+  const proofHash=require('../src/modules/bank-settlement-contract').hash;
+  for (const carried of [false,true]) for(const defect of ['missing-source','hash','source-hash','account','currency','outer-account','outer-currency','derived','movement','anchor','native-anchor','unsafe-money']) {
+    const h=fixture(),pkg=await evidencedBaseline(h);
+    const opening=ledgerOpening('60',carried?'2026-09':'2026-10',carried?0:1000);
+    if(defect==='missing-source')delete opening.source;
+    if(defect==='hash')opening.evidenceHash=hash('bogus');
+    if(defect==='source-hash')opening.source.evidenceHash=hash('bogus');
+    if(defect==='outer-account')opening.accountId='85';
+    if(defect==='outer-currency')opening.accountCurrency='USD';
+    if(defect==='derived')opening.crossCheck.derivedOpeningMinor++;
+    if(defect==='movement')opening.crossCheck.retainedMovementMinor++;
+    if(defect==='anchor')opening.crossCheck.anchorMinor++;
+    if(['account','currency','native-anchor','unsafe-money'].includes(defect)) {
+      if(defect==='account')opening.source.accountId='85';
+      if(defect==='currency')opening.source.currency='USD';
+      if(defect==='native-anchor')opening.source.storedNativeBookBalanceMinor++;
+      if(defect==='unsafe-money')opening.source.storedNativeBookBalanceMinor=Number.MAX_SAFE_INTEGER+1;
+      const {evidenceHash,...body}=opening.source;opening.evidenceHash=proofHash(body);opening.source.evidenceHash=opening.evidenceHash;
+    }
+    replaceOpening(h,pkg,opening);
+    await assert.rejects(async()=>{
+      const preview=await h.service.ledgerBaseline(user,'60','2026-10');
+      await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:preview.contentHash,packageIds:preview.packages.map(p=>p.id)});
+    },undefined,(carried?'carried ':'same-month ')+defect);
+    assert.equal([...h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
+  }
+});
+test('adopted overview and detail fetch frozen packages beyond production pagination', async () => {
+  const h=fixture(),pkg=await evidencedBaseline(h,'123'),p=await h.service.ledgerBaseline(user,'123','2026-10');
+  const accepted=await h.service.adoptLedger(user,'123',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)});
+  const original=await h.service.accountDetail(user,'123');
+  // Sort and limit exactly as the Mongo list adapter, including revision churn.
+  const originalList=h.store.list;
+  h.store.list=async(s,filter={},session,{all=false}={})=>{
+    const rows=(await originalList(s,filter)).sort((a,b)=>a.accountId.localeCompare(b.accountId)||b.period.localeCompare(a.period)||b.revision-a.revision);
+    return all?rows:rows.slice(0,2000);
+  };
+  for(let i=0;i<2001;i++){
+    const row=clone(h.packages.get(pkg.id));row._id=hash('later-'+i);row.period='2026-11';row.revision=i+1;
+    row.snapshot.period=row.period;row.snapshot.revision=row.revision;row.contentHash=hash(row.snapshot);h.packages.set(row._id,row);
+  }
+  assert.equal((await h.store.list(scope,{accountId:'123'})).some(row=>row._id===pkg.id),false);
+  for(const read of [()=>h.service.accounts(user),()=>h.service.accountDetail(user,'123'),()=>h.service.accountDetail(user,'123',{period:'2026-10'})]) {
+    const result=await read(),account=result.accounts?.find(a=>a.accountId==='123')||result;
+    assert.equal(account.packageId,pkg.id);assert.equal(account.balanceMinor,original.balanceMinor);assert.deepEqual(account.independentLedger,accepted);
+  }
+  // Global pagination can omit the adopted account itself, not only its old package.
+  h.accounts.set('100',{Id:'100',AccountType:'Bank',CurrencyRef:{value:'CAD'}});
+  for(const row of h.packages.values())if(row._id!==pkg.id)row.accountId='100';
+  assert.equal((await h.store.list(scope)).some(row=>row.accountId==='123'),false);
+  assert.equal((await h.service.accounts(user)).accounts.find(a=>a.accountId==='123')?.packageId,pkg.id);
+});
+
+test('direct frozen-package retrieval still rejects missing, changed or cross-scope records', async () => {
+  for(const defect of ['missing','scope','account','currency','period','revision','snapshot']) {
+    const h=fixture(),pkg=await evidencedBaseline(h),p=await h.service.ledgerBaseline(user,'60','2026-10');
+    await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)});
+    h.store.getPackages=async()=>{
+      const row=clone(h.packages.get(pkg.id));
+      if(defect==='missing')return [];
+      if(defect==='scope')row.realmId='99';
+      if(defect==='account')row.accountId='85';
+      if(defect==='currency')row.accountCurrency='USD';
+      if(defect==='period')row.period='2026-11';
+      if(defect==='revision')row.revision++;
+      if(defect==='snapshot')row.snapshot.closingMinor++;
+      return [row];
+    };
+    for(const read of [()=>h.service.accounts(user),()=>h.service.accountDetail(user,'60')])await assert.rejects(read,{code:'BANKING_EVIDENCE_UNAVAILABLE'},defect);
+  }
+});
+test('Mongo frozen package/account discovery is scoped and bypasses package-list pagination', async () => {
+  const seen=[];
+  const store=createMongoBankingStore({Packages:{find:filter=>({maxTimeMS:ms=>({lean:async()=>{seen.push({kind:'packages',filter,ms});return [];}})})},
+    Events:{distinct:(field,filter)=>({maxTimeMS:async ms=>{seen.push({kind:'accounts',field,filter,ms});return ['123'];}})},connection:{}});
+  assert.deepEqual(await store.getPackages(scope,['frozen-id']),[]);
+  assert.deepEqual(await store.ledgerAccountIds(scope),['123']);
+  assert.deepEqual(seen,[{kind:'packages',filter:{...scope,_id:{$in:['frozen-id']}},ms:5000},{kind:'accounts',field:'accountId',filter:{...scope,kind:'ledger-account',revision:0},ms:5000}]);
 });
