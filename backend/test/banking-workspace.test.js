@@ -322,6 +322,13 @@ function ledgerOpening(accountId, period, amountMinor) {
   return {accountId,accountCurrency:'CAD',period,amountMinor,basis:'Retained exact opening reconstruction',evidenceRef:source.sourceRef,evidenceHash,
     source:{...source,evidenceHash},crossCheck:{derivedOpeningMinor:amountMinor,anchorMinor:10000,retainedMovementMinor:10000-amountMinor}};
 }
+function manifestCrosswalk(snapshot) {
+  return snapshot.rows.map(spec=>{
+    const event=snapshot.events.find(e=>e.eventId===spec.eventId);
+    return {...spec,date:event.actualPostingDate||event.expectedPostingDate,amountMinor:event.amountMinor,description:require('../src/modules/bank-feed-csv').description(event),
+      source:clone(event.source),qboRefs:clone(event.resolution?.linkedQboIds||[]),...(event.settlementGroupId===undefined?{}:{settlementGroupId:event.settlementGroupId}),...(event.pairedEventId===undefined?{}:{pairedEventId:event.pairedEventId})};
+  });
+}
 async function evidencedBaseline(h, accountId = '60', card = false) {
   h.accounts.set(accountId, {Id:accountId,Name:card ? 'Retained card' : 'Retained bank',AccountType:card ? 'Credit Card' : 'Bank',CurrencyRef:{value:'CAD'}});
   const input = h.input({accountId,openingMinor:1000,closingMinor:6000,balanceConvention:card ? 'card-amount-owed' : 'bank-balance'});
@@ -330,7 +337,7 @@ async function evidencedBaseline(h, accountId = '60', card = false) {
   const value = h.input(input); value.files = value.files.slice(-3);
   const file = value.files.find(f=>f.kind === 'manifest');
   const manifest = JSON.parse(h.artifacts.get(file.path));
-  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:ledgerOpening(accountId,'2026-10',1000),blockers:[],unresolvedEvents:[],outstandingItems:[],balanceCheck:{bookClosingMinor:6000,reconstructedBookClosingMinor:6000,differenceMinor:0,evidenceHash:hash('retained-monthly-proof')}});
+  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:ledgerOpening(accountId,'2026-10',1000),events:clone(value.events),crosswalk:manifestCrosswalk(value),blockers:[],unresolvedEvents:[],outstandingItems:[],balanceCheck:{bookClosingMinor:6000,reconstructedBookClosingMinor:6000,differenceMinor:0,evidenceHash:hash('retained-monthly-proof')}});
   Object.assign(file,h.retain('ledger-manifest-'+accountId,JSON.stringify(manifest),accountId));
   return h.service.register(user,value);
 }
@@ -515,6 +522,8 @@ test('Mongo frozen package/account discovery is scoped and bypasses package-list
 function amendFinancialProof(h,pkg,change) {
   const row=h.packages.get(pkg.id),file=row.snapshot.files.find(f=>f.kind==='manifest');
   const manifest=JSON.parse(h.artifacts.get(file.path));change(row.snapshot,manifest);
+  // Financial-gap tests change both representations; contradiction tests use their own independent manifest.
+  manifest.events=clone(row.snapshot.events);manifest.crosswalk=manifestCrosswalk(row.snapshot);
   const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);row.contentHash=hash(row.snapshot);
 }
 test('preview and adoption reject unresolved financial gaps and a one-cent retained-book mismatch', async () => {
@@ -607,4 +616,108 @@ test('outstanding financial proof cannot duplicate events or cross native accoun
     });
     await assert.rejects(h.service.ledgerBaseline(user,'60','2026-10'),{code:'BANKING_LEDGER_INVALID'});
   }
+});
+
+// Correctly hashed contradictions admitted via the normal registration boundary.
+async function registeredManifestConflict(change) {
+  const original=fixture(),base=await evidencedBaseline(original),input=clone(base.snapshot);
+  const file=input.files.find(f=>f.kind==='manifest'),manifest=JSON.parse(original.artifacts.get(file.path));
+  manifest.events=clone(input.events);
+  change(manifest,input);
+  const h=fixture();for(const [name,bytes] of original.artifacts)h.artifacts.set(name,Buffer.from(bytes));
+  const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);
+  const row=await h.service.register(user,input);
+  return {h,row,manifest};
+}
+for(const [defect,change] of [
+  ['source identity',m=>m.events[0].source.id='different-source-record'],
+  ['hidden manifest financial blocker',m=>m.events[0].resolution={...(m.events[0].resolution||{}),nativeActionBlockers:['unproved-native-amount']}],
+]) test('normal register -> preview -> adoption rejects manifest-only '+defect,async()=>{
+  const {h,row}=await registeredManifestConflict(change);
+  const beforePackages=clone([...h.packages]),beforeEvents=clone([...h.events]),beforeFiles=[...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]);
+  assert.ok(row.id,'normal registration accepted the hash-bound envelope');
+  await assert.rejects(async()=>{
+    const preview=await h.service.ledgerBaseline(user,'60','2026-10');
+    await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:preview.contentHash,packageIds:preview.packages.map(p=>p.id)});
+  });
+  assert.deepEqual([...h.packages],beforePackages);assert.deepEqual([...h.events],beforeEvents);
+  assert.deepEqual([...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]),beforeFiles);
+});
+
+test('manifest event/crosswalk set, provenance and aliases must agree before preview or direct adoption', async () => {
+  const changes={
+    'missing-events':m=>delete m.events,'null-events':m=>m.events=null,'malformed-event':m=>m.events=[null],
+    'extra-event':m=>m.events.push({...clone(m.events[0]),eventId:'extra'}),'duplicate-event':m=>m.events.push(clone(m.events[0])),
+    'missing-event':m=>m.events.pop(),'revision':m=>m.events[0].revision++,'amount':m=>m.events[0].amountMinor++,
+    'account':m=>m.events[0].accountId='85','currency':m=>m.events[0].accountCurrency='USD',
+    'scope':m=>m.events[0].scope={...scope,realmId:'99'},'malformed-scope':m=>m.events[0].scope=null,
+    'posting':m=>m.events[0].actualPostingDate='2026-10-21','posting-evidence':m=>m.events[0].postingBasis='different-evidence',
+    'source-hash':m=>m.events[0].sourceHash=hash('other source'),
+    'conflicting-source-alias':m=>m.events[0].source.sourceHash=hash('other source'),
+    'conflicting-resolution-alias':m=>m.events[0].resolution={action:'Add'},
+    'conflicting-creator-alias':m=>m.events[0].resolution={designatedCreator:'native-add'},
+    'link-provenance':m=>m.events[0].resolution={linkedQboIds:[{entity:'Payment',id:'other'}]},
+    'line-provenance':m=>m.events[0].source.lineIds=['other-line'],
+    'missing-crosswalk':m=>delete m.crosswalk,'extra-crosswalk':m=>m.crosswalk.push(clone(m.crosswalk[0])),
+    'crosswalk-source':m=>m.crosswalk[0].source.id='wrong','crosswalk-qbo':m=>m.crosswalk[0].qboRefs=[{entity:'Invoice',id:'wrong'}],
+    'crosswalk-revision':m=>m.crosswalk[0].eventRevision++,'crosswalk-amount':m=>m.crosswalk[0].amountMinor++,
+    'crosswalk-date':m=>m.crosswalk[0].date='2026-10-21','crosswalk-pair':m=>m.crosswalk[0].pairedEventId='wrong',
+  };
+  for(const [defect,change] of Object.entries(changes)) {
+    const {h,row}=await registeredManifestConflict(change);
+    const before=clone([...h.packages]),events=clone([...h.events]),files=[...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]);
+    await assert.rejects(h.service.ledgerBaseline(user,'60','2026-10'),{code:'BANKING_LEDGER_INVALID'},defect);
+    await assert.rejects(h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:hash('reviewed preview'),packageIds:[row.id]}),{code:'BANKING_LEDGER_INVALID'},defect);
+    assert.deepEqual([...h.packages],before);assert.deepEqual([...h.events],events);assert.deepEqual([...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]),files);
+  }
+});
+test('a manifest-only supported inspection warning stays event-bound and survives adoption', async () => {
+  for(const code of ['existing-reconciled-mark-requires-native-inspection','report-only-adjustment-requires-native-inspection']) {
+    const {h,row}=await registeredManifestConflict(m=>m.events[0].resolution={nativeActionBlockers:[code]});
+    const p=await h.service.ledgerBaseline(user,'60','2026-10');
+    const accepted=await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:[row.id]});
+    assert.deepEqual(accepted.packages[0].financialEvidence.nativeWorkBlockers,[row.snapshot.events[0].eventId+': '+code]);
+    assert.deepEqual(await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:[row.id]}),accepted);
+  }
+});
+async function productionBaseline(count=1) {
+  const C=require('../src/modules/bank-settlement-contract'),{buildBankStatementEvidence}=require('../src/modules/bank-statement-evidence'),{generateBankStatementPackages}=require('../src/modules/bank-statement-package');
+  const records=Array.from({length:count},(_,i)=>({Id:String(486+i),TxnDate:'2026-10-20',TotalAmt:50,DepositToAccountRef:{value:'60'},CurrencyRef:{value:'CAD'}}));
+  const rows=records.map(r=>({type:'Sales Receipt',entity:'SalesReceipt',transactionId:r.Id,accountId:'60',date:r.TxnDate,bankAccountAmountCents:5000,homeAmountCents:5000}));
+  const history={scope,homeCurrency:'CAD',asOf:'2026-10-31',accounts:[{id:'60',name:'Operating CAD',type:'Bank',currency:'CAD',evidenceType:'bank-or-card-statement'}],
+    mirror:records.map(record=>({scope,entity:'SalesReceipt',qboId:record.Id,record,observedAt:now})),ledger:{scope,sourceId:'fixture-ledger',observedAt:now,expectedRowCount:count,rows},
+    provisionalRanges:[{accountId:'60',evidenceType:'bank-or-card-statement',provisionalStartMonth:'2026-10',provisionalEndMonth:'2026-10',periods:1,basis:'fixture retained range'}]};
+  const proof={accountId:'60',currency:'CAD',asOf:history.asOf,storedNativeBookBalanceMinor:1000+count*5000,sourceRef:'fixture-original-ledger',sourceSha256:C.hash('fixture-source'),ledgerRowsHash:C.hash(rows),openingJournalIds:[]};proof.evidenceHash=C.hash(proof);
+  const built=buildBankStatementEvidence(history,{version:1,scope,asOf:history.asOf,ledgerRowsHash:C.hash(rows),accounts:[proof],adjustments:[]});
+  return generateBankStatementPackages(built.dataset,{balanceEvidence:built.evidence}).packages[0];
+}
+test('production generated manifests admit valid raw BF1 events, server aliases, reordered events and quiet months', async () => {
+  for(const count of [0,2]) {
+    const generated=await productionBaseline(count),h=fixture();
+    for(const artifact of generated.artifacts)h.artifacts.set(artifact.path,Buffer.from(artifact.bytes));
+    const input=clone(generated.envelope);
+    if(count) {
+      const file=input.files.find(f=>f.kind==='manifest'),manifest=JSON.parse(h.artifacts.get(file.path));manifest.events.reverse();
+      const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);
+      assert.equal(input.events[0].sourceHash,undefined,'producer carries source hash in source, registration derives alias');
+    }
+    const registered=await h.service.register(user,input),before=clone([...h.packages]);
+    if(count)assert.equal(registered.snapshot.events[0].sourceHash,input.events[0].source.sourceHash);
+    const p=await h.service.ledgerBaseline(user,'60','2026-10');
+    const accepted=await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:[registered.id]});
+    assert.equal(accepted.balance.balanceMinor,1000+count*5000);assert.equal(accepted.events.length,count);assert.deepEqual([...h.packages],before);
+  }
+});
+test('stale previews and transaction-time event changes cannot bypass manifest consistency', async () => {
+  const {h,row}=await registeredManifestConflict(()=>{}),p=await h.service.ledgerBaseline(user,'60','2026-10');
+  const file=h.packages.get(row.id).snapshot.files.find(f=>f.kind==='manifest'),manifest=JSON.parse(h.artifacts.get(file.path));
+  manifest.events[0].source.id='changed-after-preview';
+  const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);h.packages.get(row.id).contentHash=hash(h.packages.get(row.id).snapshot);
+  const before=clone([...h.packages]),events=clone([...h.events]);
+  await assert.rejects(h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:[row.id]}),{code:'BANKING_LEDGER_INVALID'});
+  assert.deepEqual([...h.packages],before);assert.deepEqual([...h.events],events);
+  const a=await registeredManifestConflict(()=>{}),prepared=await a.h.service.ledgerBaseline(user,'60','2026-10'),transaction=a.h.store.transaction;
+  a.h.store.transaction=work=>transaction(async session=>{const stored=a.h.packages.get(a.row.id);stored.snapshot.events[0].source.id='concurrent-change';stored.contentHash=hash(stored.snapshot);return work(session);});
+  await assert.rejects(a.h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:prepared.contentHash,packageIds:[a.row.id]}),{code:'BANKING_CONFLICT'});
+  assert.equal([...a.h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
 });

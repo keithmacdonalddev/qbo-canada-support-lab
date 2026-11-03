@@ -159,14 +159,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     for (const key of ['events','rows','files','outstandingItems','blockers']) check(Array.isArray(value[key]), key + ' must be an array.');
     // Consume BF1 v1 events directly, retaining their source and resolution proof.
     for (const event of value.events || []) {
-      check(event && typeof event === 'object' && !Array.isArray(event), 'Settlement events must be objects.');
-      const derived = { sourceHash: event.source?.sourceHash,
-        expectedResolution: typeof event.resolution?.action === 'string' ? event.resolution.action.toLowerCase() : undefined,
-        creator: { 'existing-qbo': 'none', 'api-accountant': 'api-accountant', 'native-add': 'native-add' }[event.resolution?.designatedCreator] };
-      check(!event.resolution?.designatedCreator || derived.creator, 'Unknown BF1 designated creator.');
-      for (const [key, canonicalValue] of Object.entries(derived)) if (canonicalValue !== undefined) {
-        check(event[key] === undefined || event[key] === canonicalValue, 'Settlement alias conflicts with retained BF1 ' + key + '.'); event[key] = canonicalValue;
-      }
+      Object.assign(event, require('./bank-event-evidence').normalizeEventAliases(event, check));
       if (Array.isArray(value.blockers)) for (const reason of event.resolution?.nativeActionBlockers || []) value.blockers.push(event.eventId + ': ' + reason);
     }
     value.blockers = [...new Set(value.blockers)];
@@ -377,7 +370,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     check(ledger.account.accountId === accountId && row.contentHash === ledger.contentHash, 'Independent account identity changed.', 409);
     return ledger;
   }
-  async function ledgerBaseline(user, accountId, throughPeriod) {
+  async function prepareLedgerBaseline(user, accountId, throughPeriod) {
     const bound = await bind(user);
     check(id(accountId) && /^\d{4}-(0[1-9]|1[0-2])$/.test(throughPeriod || ''), 'Exact baseline account and cutoff month required.');
     const family = await store().list(bound.scope, { accountId }, null, { all:true });
@@ -390,13 +383,17 @@ function createBankingWorkspaceService(dependencies = {}) {
     const manifests = [];
     for (const row of rows) manifests.push(await retainedManifest(bound,row));
     const record = await account(bound, accountId, rows[0].accountCurrency);
-    return require('./independent-bank-ledger').buildLedgerBaseline({scope:bound.scope,account:record,packages:rows,manifests});
+    const ledger = require('./independent-bank-ledger').buildLedgerBaseline({scope:bound.scope,account:record,packages:rows,manifests});
+    return {ledger,manifests:new Map(rows.map((row,i)=>[row._id,manifests[i]]))};
+  }
+  async function ledgerBaseline(user, accountId, throughPeriod) {
+    return (await prepareLedgerBaseline(user,accountId,throughPeriod)).ledger;
   }
   async function adoptLedger(user, accountId, command) {
     check(exact(command,['throughPeriod','baselineHash','packageIds']) && HASH.test(command.baselineHash || '') && Array.isArray(command.packageIds) && command.packageIds.every(id), 'Adoption needs the exact reviewed baseline hash and package IDs.');
     const bound = await bind(user,true), old = await readLedger(bound,accountId);
     if (old) { check(old.contentHash === command.baselineHash && canonical(old.packages.map(p=>p.id)) === canonical(command.packageIds) && old.throughPeriod === command.throughPeriod, 'Independent bank baseline is already frozen; QBO refresh cannot replace it.', 409, 'BANKING_LEDGER_FROZEN'); return old; }
-    const ledger = await ledgerBaseline(user,accountId,command.throughPeriod);
+    const {ledger,manifests} = await prepareLedgerBaseline(user,accountId,command.throughPeriod);
     check(sameScope(ledger.scope,bound.scope), 'Company changed during baseline preparation.',409,'BANKING_SCOPE_BOUNDARY');
     check(ledger.contentHash === command.baselineHash && canonical(ledger.packages.map(p=>p.id)) === canonical(command.packageIds), 'Baseline changed since review. Read the exact preview again.', 409, 'BANKING_CONFLICT');
     await store().assertReady();
@@ -412,10 +409,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       // Recheck admission against current immutable snapshots before the insert.
       // The manifest financial proof was hash-verified during baseline preparation.
       for (const row of current) {
-        const proof = ledger.packages.find(ref=>ref.id === row._id).financialEvidence;
-        require('./independent-bank-ledger').validateFinancialEvidence(row.snapshot, {
-          balanceCheck:proof.balanceCheck,blockers:proof.nativeWorkBlockers,unresolvedEvents:[],outstandingItems:row.snapshot.outstandingItems,
-        });
+        require('./independent-bank-ledger').validateFinancialEvidence(row.snapshot,manifests.get(row._id));
       }
       ledger.adoption = {actorId:bound.actorId,ownerId:bound.ownerId,at:stamp(),action:'explicit-bank-baseline-adoption'};
       await store().putEvent({...bound.scope,_id:hash({scope:bound.scope,kind:'ledger-account',accountId}),kind:'ledger-account',eventId:'@ledger:'+accountId,revision:0,accountId,accountCurrency:ledger.account.accountCurrency,sourceHash:ledger.contentHash,contentHash:ledger.contentHash,payload:ledger},session);

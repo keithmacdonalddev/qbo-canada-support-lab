@@ -38,18 +38,12 @@ function balances(ledger) {
 }
 // Native workflow inspection does not invalidate otherwise proved financial history.
 // Every other blocker, including unknown future codes, prevents adoption.
-const NATIVE_INSPECTION_CODES = new Set(['existing-reconciled-mark-requires-native-inspection', 'report-only-adjustment-requires-native-inspection']);
 function validateFinancialEvidence(snapshot, manifest) {
+  const nativeOnly = new Set(require('./bank-event-evidence').validateEventEvidence(snapshot,manifest));
   requireLedger(Array.isArray(snapshot.blockers) && Array.isArray(manifest.blockers) && Array.isArray(manifest.unresolvedEvents) && manifest.unresolvedEvents.length === 0,
     'Financial evidence is missing or contains unresolved events.');
-  requireLedger(snapshot.events.every(event => event.status === 'resolved' && ['match','add','exclude'].includes(event.expectedResolution)),
+  requireLedger(snapshot.events.every(event => event.status === 'resolved' && ['match','add','exclude'].includes(require('./bank-event-evidence').normalizeEventAliases(event).expectedResolution)),
     'Financial evidence contains unresolved settlement events.');
-  const nativeOnly = new Set(snapshot.events.flatMap(event => {
-    const codes = event.resolution?.nativeActionBlockers === undefined ? [] : event.resolution.nativeActionBlockers;
-    requireLedger(Array.isArray(codes) && codes.every(code => NATIVE_INSPECTION_CODES.has(code)),
-      'Unknown or invalid event-level evidence blockers prevent adoption.');
-    return codes.map(code => event.eventId + ': ' + code);
-  }));
   const blockers = [...new Set([...snapshot.blockers,...manifest.blockers,...nativeOnly])];
   requireLedger(blockers.every(blocker => typeof blocker === 'string' && nativeOnly.has(blocker)),
     'Unresolved financial-evidence blockers prevent independent bank adoption.');
