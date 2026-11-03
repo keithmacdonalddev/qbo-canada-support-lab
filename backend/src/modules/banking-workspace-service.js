@@ -408,7 +408,15 @@ function createBankingWorkspaceService(dependencies = {}) {
       if (existing) { check(existing.contentHash === ledger.contentHash, 'Independent bank baseline was adopted concurrently.',409,'BANKING_CONFLICT'); return require('./independent-bank-ledger').verifyLedger(clone(existing.payload)); }
       const current = currentPeriods(await store().list(bound.scope,{accountId},session,{all:true})).filter(p=>p.period <= command.throughPeriod).reverse();
       check(canonical(current.map(p=>[p._id,p.contentHash,p.stateVersion])) === canonical(ledger.packages.map(p=>[p.id,p.contentHash,p.stateVersion])), 'Baseline package evidence changed concurrently.',409,'BANKING_CONFLICT');
-      check(current.every(p=>!p.state.needsReview), 'Baseline requires review before adoption.',409,'BANKING_CONFLICT');
+      check(current.every(p=>!p.state.needsReview && hash(p.snapshot) === p.contentHash), 'Baseline requires review before adoption.',409,'BANKING_CONFLICT');
+      // Recheck admission against current immutable snapshots before the insert.
+      // The manifest financial proof was hash-verified during baseline preparation.
+      for (const row of current) {
+        const proof = ledger.packages.find(ref=>ref.id === row._id).financialEvidence;
+        require('./independent-bank-ledger').validateFinancialEvidence(row.snapshot, {
+          balanceCheck:proof.balanceCheck,blockers:proof.nativeWorkBlockers,unresolvedEvents:[],outstandingItems:row.snapshot.outstandingItems,
+        });
+      }
       ledger.adoption = {actorId:bound.actorId,ownerId:bound.ownerId,at:stamp(),action:'explicit-bank-baseline-adoption'};
       await store().putEvent({...bound.scope,_id:hash({scope:bound.scope,kind:'ledger-account',accountId}),kind:'ledger-account',eventId:'@ledger:'+accountId,revision:0,accountId,accountCurrency:ledger.account.accountCurrency,sourceHash:ledger.contentHash,contentHash:ledger.contentHash,payload:ledger},session);
       return ledger;

@@ -36,6 +36,45 @@ function balances(ledger) {
     postedCount: ledger.events.filter(e => e.state === 'posted' && e.disposition !== 'excluded').length,
     reversedCount: ledger.events.filter(e => e.state === 'reversed').length };
 }
+// Native workflow inspection does not invalidate otherwise proved financial history.
+// Every other blocker, including unknown future codes, prevents adoption.
+const NATIVE_INSPECTION_CODES = new Set(['existing-reconciled-mark-requires-native-inspection', 'report-only-adjustment-requires-native-inspection']);
+function validateFinancialEvidence(snapshot, manifest) {
+  requireLedger(Array.isArray(snapshot.blockers) && Array.isArray(manifest.blockers) && Array.isArray(manifest.unresolvedEvents) && manifest.unresolvedEvents.length === 0,
+    'Financial evidence is missing or contains unresolved events.');
+  requireLedger(snapshot.events.every(event => event.status === 'resolved' && ['match','add','exclude'].includes(event.expectedResolution)),
+    'Financial evidence contains unresolved settlement events.');
+  const nativeOnly = new Set(snapshot.events.flatMap(event => {
+    const codes = event.resolution?.nativeActionBlockers === undefined ? [] : event.resolution.nativeActionBlockers;
+    requireLedger(Array.isArray(codes) && codes.every(code => NATIVE_INSPECTION_CODES.has(code)),
+      'Unknown or invalid event-level evidence blockers prevent adoption.');
+    return codes.map(code => event.eventId + ': ' + code);
+  }));
+  const blockers = [...new Set([...snapshot.blockers,...manifest.blockers,...nativeOnly])];
+  requireLedger(blockers.every(blocker => typeof blocker === 'string' && nativeOnly.has(blocker)),
+    'Unresolved financial-evidence blockers prevent independent bank adoption.');
+  requireLedger(Array.isArray(snapshot.outstandingItems) && Array.isArray(manifest.outstandingItems) &&
+    C.canonical(snapshot.outstandingItems) === C.canonical(manifest.outstandingItems), 'Outstanding financial evidence differs from its retained statement.');
+  const outstandingIds = new Set();
+  const outstanding = snapshot.outstandingItems.map(item => {
+    requireLedger(typeof item.eventId === 'string' && item.eventId.length > 0 && !outstandingIds.has(item.eventId) && !snapshot.events.some(event => event.eventId === item.eventId), 'Outstanding movement identity is missing, duplicated or already settled.');
+    outstandingIds.add(item.eventId);
+    requireLedger(item.accountId === snapshot.accountId && item.currency === snapshot.accountCurrency && Number.isSafeInteger(item.amountMinor),
+      'Outstanding evidence needs exact account-native currency movements.');
+    C.date(item.bookDate); C.date(item.expectedPostingDate);
+    requireLedger(item.bookDate.slice(0,7) <= snapshot.period && item.expectedPostingDate.slice(0,7) > snapshot.period,
+      'Outstanding movement is outside its statement cutoff.');
+    return C.integer(item.amountMinor * (snapshot.balanceConvention === 'card-amount-owed' ? -1 : 1));
+  });
+  const comparison = manifest.balanceCheck;
+  requireLedger(comparison && /^[a-f0-9]{64}$/.test(comparison.evidenceHash || '') &&
+    ['bookClosingMinor','reconstructedBookClosingMinor','differenceMinor'].every(key => Number.isSafeInteger(comparison[key])),
+    'Retained native book-to-statement comparison is required.');
+  const reconstructed = C.sum([snapshot.closingMinor,...outstanding]);
+  requireLedger(comparison.differenceMinor === 0 && comparison.reconstructedBookClosingMinor === reconstructed && comparison.bookClosingMinor === reconstructed,
+    'Retained native book balance does not equal settled balance plus outstanding movements.');
+  return { balanceCheck:copy(comparison), nativeWorkBlockers:blockers.sort() };
+}
 function buildLedgerBaseline({ scope, account, packages, manifests }) {
   C.validateScope(scope);
   requireLedger(packages.length > 0 && packages.length === manifests.length && packages.length <= 2000, 'Exact baseline packages and manifests are required.');
@@ -73,6 +112,7 @@ function buildLedgerBaseline({ scope, account, packages, manifests }) {
     C.assertScope(pkg.snapshot.scope,scope);
     requireLedger(pkg.accountId === first.accountId && pkg.accountCurrency === currency && pkg.snapshot.balanceConvention === convention, 'Baseline package crosses account/currency/convention.');
     requireLedger(!pkg.state.supersededBy && !pkg.state.needsReview, 'Baseline package has unresolved revision review.');
+    const financialEvidence = validateFinancialEvidence(pkg.snapshot,manifest);
     requireLedger(!previous || nextMonth(previous.period) === pkg.period && previous.snapshot.closingMinor === pkg.snapshot.openingMinor, 'Baseline needs contiguous evidenced carry-forward.');
     requireLedger(manifest.openingMinor === pkg.snapshot.openingMinor && manifest.closingMinor === pkg.snapshot.closingMinor, 'Manifest balance does not agree with retained package.');
     requireLedger(pkg.snapshot.rows.length === pkg.snapshot.events.length, 'Baseline event crosswalk is incomplete.');
@@ -93,7 +133,7 @@ function buildLedgerBaseline({ scope, account, packages, manifests }) {
     }
     requireLedger(C.sum([pkg.snapshot.openingMinor,movement]) === pkg.snapshot.closingMinor, 'Baseline movements do not equal retained closing.');
     result.packages.push({ id:pkg._id, contentHash:pkg.contentHash, stateVersion:pkg.stateVersion, period:pkg.period, revision:pkg.revision,
-      openingMinor:pkg.snapshot.openingMinor, closingMinor:pkg.snapshot.closingMinor, files:copy(pkg.snapshot.files), openingEvidence:copy(manifest.openingEvidence) });
+      openingMinor:pkg.snapshot.openingMinor, closingMinor:pkg.snapshot.closingMinor, financialEvidence, files:copy(pkg.snapshot.files), openingEvidence:copy(manifest.openingEvidence) });
     previous = pkg;
   }
   requireLedger(result.events.length <= 10000, 'Baseline exceeds bounded ledger capacity.');
@@ -109,4 +149,4 @@ function verifyLedger(ledger) {
   requireLedger(C.canonical(balances(ledger)) === C.canonical(ledger.balance), 'Independent ledger balance changed.');
   return ledger;
 }
-module.exports = { buildLedgerBaseline, balances, eventMovement, verifyLedger };
+module.exports = { buildLedgerBaseline, balances, eventMovement, verifyLedger, validateFinancialEvidence };

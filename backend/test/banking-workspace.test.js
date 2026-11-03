@@ -325,12 +325,12 @@ function ledgerOpening(accountId, period, amountMinor) {
 async function evidencedBaseline(h, accountId = '60', card = false) {
   h.accounts.set(accountId, {Id:accountId,Name:card ? 'Retained card' : 'Retained bank',AccountType:card ? 'Credit Card' : 'Bank',CurrencyRef:{value:'CAD'}});
   const input = h.input({accountId,openingMinor:1000,closingMinor:6000,balanceConvention:card ? 'card-amount-owed' : 'bank-balance'});
-  Object.assign(input.events[0],{accountId,amountMinor:card ? -5000 : 5000});
+  Object.assign(input.events[0],{accountId,amountMinor:card ? -5000 : 5000,status:'resolved'});
   // Rebuild CSV after changing account/native signs.
   const value = h.input(input); value.files = value.files.slice(-3);
   const file = value.files.find(f=>f.kind === 'manifest');
   const manifest = JSON.parse(h.artifacts.get(file.path));
-  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:ledgerOpening(accountId,'2026-10',1000)});
+  Object.assign(manifest,{openingMinor:1000,closingMinor:6000,openingEvidence:ledgerOpening(accountId,'2026-10',1000),blockers:[],unresolvedEvents:[],outstandingItems:[],balanceCheck:{bookClosingMinor:6000,reconstructedBookClosingMinor:6000,differenceMinor:0,evidenceHash:hash('retained-monthly-proof')}});
   Object.assign(file,h.retain('ledger-manifest-'+accountId,JSON.stringify(manifest),accountId));
   return h.service.register(user,value);
 }
@@ -510,4 +510,101 @@ test('Mongo frozen package/account discovery is scoped and bypasses package-list
   assert.deepEqual(await store.getPackages(scope,['frozen-id']),[]);
   assert.deepEqual(await store.ledgerAccountIds(scope),['123']);
   assert.deepEqual(seen,[{kind:'packages',filter:{...scope,_id:{$in:['frozen-id']}},ms:5000},{kind:'accounts',field:'accountId',filter:{...scope,kind:'ledger-account',revision:0},ms:5000}]);
+});
+
+function amendFinancialProof(h,pkg,change) {
+  const row=h.packages.get(pkg.id),file=row.snapshot.files.find(f=>f.kind==='manifest');
+  const manifest=JSON.parse(h.artifacts.get(file.path));change(row.snapshot,manifest);
+  const bytes=Buffer.from(JSON.stringify(manifest));h.artifacts.set(file.path,bytes);file.sha256=digest(bytes);row.contentHash=hash(row.snapshot);
+}
+test('preview and adoption reject unresolved financial gaps and a one-cent retained-book mismatch', async () => {
+  for(const defect of ['one-cent','comparison-only','false-zero','missing-comparison','missing-proof-hash','coverage-snapshot','coverage-manifest','unknown-blocker','unresolved-manifest','unresolved-event']) {
+    const h=fixture(),pkg=await evidencedBaseline(h);
+    amendFinancialProof(h,pkg,(snapshot,manifest)=>{
+      if(['one-cent','comparison-only','false-zero'].includes(defect)) {manifest.balanceCheck.bookClosingMinor++;if(defect!=='false-zero')manifest.balanceCheck.differenceMinor++;}
+      if(defect==='one-cent')snapshot.blockers.push('book-statement-balance-mismatch: retained book balance differs by one cent');
+      if(defect==='missing-comparison')delete manifest.balanceCheck;
+      if(defect==='missing-proof-hash')delete manifest.balanceCheck.evidenceHash;
+      if(defect==='coverage-snapshot')snapshot.blockers.push('coverage: retained ledger rows are not fully represented');
+      if(defect==='coverage-manifest')manifest.blockers.push('coverage: retained ledger rows are not fully represented');
+      if(defect==='unknown-blocker')snapshot.blockers.push('unknown-unproved-financial-condition');
+      if(defect==='unresolved-manifest')manifest.unresolvedEvents.push({eventId:'missing',status:'unresolved'});
+      if(defect==='unresolved-event')snapshot.events[0].status='unresolved';
+    });
+    const packagesBefore=clone([...h.packages]),filesBefore=[...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]);
+    await assert.rejects(async()=>{
+      const p=await h.service.ledgerBaseline(user,'60','2026-10');
+      await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)});
+    },undefined,defect);
+    assert.equal([...h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
+    assert.deepEqual([...h.packages],packagesBefore);assert.deepEqual([...h.artifacts].map(([name,bytes])=>[name,digest(bytes)]),filesBefore);
+  }
+});
+test('native-only inspection blockers do not bar financial adoption and remain in its frozen evidence', async () => {
+  const h=fixture(),pkg=await evidencedBaseline(h);
+  const native='existing-reconciled-mark-requires-native-inspection';
+  amendFinancialProof(h,pkg,(snapshot,manifest)=>{
+    snapshot.events[0].resolution={action:'Match',designatedCreator:'api-accountant',nativeActionBlockers:[native]};
+    snapshot.blockers.push(snapshot.events[0].eventId+': '+native);manifest.blockers=clone(snapshot.blockers);manifest.readyForNativeWork=false;
+  });
+  const p=await h.service.ledgerBaseline(user,'60','2026-10');
+  const adopted=await h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)});
+  assert.deepEqual(adopted.packages[0].financialEvidence.nativeWorkBlockers,h.packages.get(pkg.id).snapshot.blockers);
+  assert.equal(adopted.packages[0].financialEvidence.balanceCheck.differenceMinor,0);
+  assert.equal(adopted.balance.balanceMinor,6000);
+  assert.equal(h.packages.get(pkg.id).state.reconciled,null);
+});
+test('financial comparison includes exact native outstanding movements with the card debt sign', async () => {
+  for(const card of [false,true]) {
+    const h=fixture(),pkg=await evidencedBaseline(h,card?'85':'123',card);
+    amendFinancialProof(h,pkg,(snapshot,manifest)=>{
+      snapshot.outstandingItems=[{eventId:'future-settlement',accountId:snapshot.accountId,currency:'CAD',amountMinor:card?-101:101,bookDate:'2026-10-30',expectedPostingDate:'2026-11-02'}];
+      manifest.outstandingItems=clone(snapshot.outstandingItems);manifest.balanceCheck.bookClosingMinor=6101;manifest.balanceCheck.reconstructedBookClosingMinor=6101;
+    });
+    const p=await h.service.ledgerBaseline(user,pkg.accountId,'2026-10');assert.equal(p.balance.balanceMinor,6000);
+    amendFinancialProof(h,pkg,(_s,m)=>m.balanceCheck.reconstructedBookClosingMinor=6000);
+    await assert.rejects(h.service.ledgerBaseline(user,pkg.accountId,'2026-10'));
+  }
+});
+
+test('direct adoption refuses financial gaps introduced after a valid preview without inserting a ledger', async () => {
+  for(const defect of ['comparison','coverage','nested-unknown','nested-malformed']) {
+    const h=fixture(),pkg=await evidencedBaseline(h),p=await h.service.ledgerBaseline(user,'60','2026-10');
+    amendFinancialProof(h,pkg,(snapshot,manifest)=>{
+      if(defect==='comparison'){manifest.balanceCheck.bookClosingMinor++;manifest.balanceCheck.differenceMinor++;}
+      if(defect==='coverage')manifest.blockers.push('coverage: missing native rows');
+      if(defect==='nested-unknown')snapshot.events[0].resolution={nativeActionBlockers:['unknown-financial-gap']};
+      if(defect==='nested-malformed')snapshot.events[0].resolution={nativeActionBlockers:'unknown-financial-gap'};
+    });
+    await assert.rejects(h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)}),{code:'BANKING_LEDGER_INVALID'});
+    assert.equal([...h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
+  }
+});
+test('event-level native warnings are retained even when summary arrays omitted them', async () => {
+  for(const code of ['existing-reconciled-mark-requires-native-inspection','report-only-adjustment-requires-native-inspection']) {
+    const h=fixture(),pkg=await evidencedBaseline(h);
+    amendFinancialProof(h,pkg,snapshot=>snapshot.events[0].resolution={nativeActionBlockers:[code]});
+    const p=await h.service.ledgerBaseline(user,'60','2026-10');
+    assert.deepEqual(p.packages[0].financialEvidence.nativeWorkBlockers,[pkg.snapshot.events[0].eventId+': '+code]);
+  }
+});
+test('admission refuses changed financial snapshots at transaction time', async () => {
+  const h=fixture(),pkg=await evidencedBaseline(h),p=await h.service.ledgerBaseline(user,'60','2026-10');
+  const transaction=h.store.transaction;h.store.transaction=work=>transaction(async session=>{
+    h.packages.get(pkg.id).snapshot.blockers.push('coverage: changed during admission');
+    return work(session);
+  });
+  await assert.rejects(h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:p.contentHash,packageIds:p.packages.map(v=>v.id)}),{code:'BANKING_CONFLICT'});
+  assert.equal([...h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
+});
+test('outstanding financial proof cannot duplicate events or cross native account/currency boundaries', async () => {
+  for(const defect of ['duplicate','already-settled','account','currency']) {
+    const h=fixture(),pkg=await evidencedBaseline(h);
+    amendFinancialProof(h,pkg,(snapshot,manifest)=>{
+      const item={eventId:defect==='already-settled'?snapshot.events[0].eventId:'future-settlement',accountId:defect==='account'?'85':'60',currency:defect==='currency'?'USD':'CAD',amountMinor:100,bookDate:'2026-10-30',expectedPostingDate:'2026-11-02'};
+      snapshot.outstandingItems=defect==='duplicate'?[item,clone(item)]:[item];manifest.outstandingItems=clone(snapshot.outstandingItems);
+      manifest.balanceCheck.bookClosingMinor=6000+snapshot.outstandingItems.length*100;manifest.balanceCheck.reconstructedBookClosingMinor=manifest.balanceCheck.bookClosingMinor;
+    });
+    await assert.rejects(h.service.ledgerBaseline(user,'60','2026-10'),{code:'BANKING_LEDGER_INVALID'});
+  }
 });
