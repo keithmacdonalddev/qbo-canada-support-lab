@@ -4,6 +4,8 @@
 
 # Claude Code - Test Data Lab
 
+For QBO sign-in, follow the imported [standing direct-credential permission](AGENTS.md#dedicated-ai-quickbooks-credentials--standing-permission): read the actual `email`/`password` from `%LOCALAPPDATA%/TestDataLab/qbo-ai-login.json` and use the dedicated AI account without asking again. The old sign-in wrapper is optional for direct login; keep shared-browser coordination. This file grants no additional company/data actions.
+
 This file is for Claude Code sessions in `C:\Projects\qbo`.
 
 The owner's complete product intent is the "Owner intent" section of `AGENTS.md` (imported above). It is the single source: do not restate or summarize it in memory, handoffs or prompts; link to it.

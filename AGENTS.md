@@ -8,6 +8,14 @@ For code or Git work, explicitly read the applicable file under `.agents/rules/`
 
 Read [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) at task start. It defines the common Codex/Claude working contract. Use [the project profile](docs/agent-harness/PROJECT_PROFILE.md) for task-specific instructions, commands, safeguards, and actual harness availability. Detailed project safety and release rules below remain in force.
 
+## Dedicated AI QuickBooks credentials — standing permission
+
+Owner authorization, 2026-11-03: every local Claude Code/Codex project chat and its authorized agents may read and use the actual dedicated AI Intuit email/password in `%LOCALAPPDATA%/TestDataLab/qbo-ai-login.json` (on this computer: `C:/Users/NewAdmin/AppData/Local/TestDataLab/qbo-ai-login.json`). The JSON fields are `email` and `password`. Use them directly to sign into the dedicated AI account for Production My Business, company ID ending 2856, whenever needed for authorized project work, without asking for sign-in permission or credentials again. This standing permission remains until the owner revokes it.
+
+The local file contains the actual saved values, not placeholders, and is outside Git. Read it directly with Node filesystem APIs; the reported-failing `qbo-session.cjs ensure/run` sign-in wrapper and Windows Credential Manager are not prerequisites for direct credential access. Keep the values in process memory and supply them to the observed Intuit sign-in form through browser automation/private stdin; do not print them, place them in argv/task files, or commit them. Read [the exact direct-access procedure](docs/architecture/qbo-browser-access.md#direct-credentials-for-all-local-project-chats). App login uses its separate existing app credential.
+
+Preserve shared-browser coordination and verify the dedicated signed-in identity and target company before company work. Login permission does not broaden financial, company-setting, OAuth, service or data-change authority.
+
 ## Coding-agent models and deterministic checks
 
 Select the coding-agent model for the task under [MODEL_SELECTION.md](docs/agent-harness/MODEL_SELECTION.md). GPT-6 Sol is the starting choice for substantial routine coding, GPT-6 Astra for the hardest cross-cutting reasoning, and Claude Opus 5.5 for demanding Claude Code work when available. These are starting choices, not repository model pins; respect an explicit user choice and verify the effective model and effort. This policy does not change the application's AI provider settings.
@@ -143,7 +151,7 @@ Read only the files needed for the task. Use this routing before broad scanning.
 
 ## Shared native QuickBooks access
 
-Use [the shared browser access workflow](docs/architecture/qbo-browser-access.md) for app, accountant, Claude Code and Codex native tasks. The API OAuth connection is separate. Never retrieve or type saved passwords through a model; use the deterministic helper and retain its shared lease through actual work. A successful sign-in grants no new company mutation authority.
+Use [the shared browser access workflow](docs/architecture/qbo-browser-access.md) and the standing direct-credential permission above for app, accountant, Claude Code and Codex native tasks. The API OAuth connection is separate. The owner explicitly authorizes direct reading/use of the dedicated AI email/password; do not require the old sign-in wrapper or repeat a permission question. Retain the shared browser lease through actual shared-browser work. A successful sign-in grants no new company mutation authority.
 
 ## Provider Architecture
 

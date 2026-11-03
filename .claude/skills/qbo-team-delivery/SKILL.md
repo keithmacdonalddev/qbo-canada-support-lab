@@ -50,7 +50,7 @@ Copy this checklist into the task and tick items as they finish:
 
 For optional screenshot review or an explicitly authorized live UI flow, read [references/terra.md](references/terra.md), then use `bash .claude/skills/qbo-team-delivery/scripts/terra-live.sh [--flow|--desktop|--chrome] <run-name> <prompt-file> [low|medium|high|xhigh]` (default: look only, medium effort). Test Data Lab uses port 5173, backend 3001; there is no test-data header. The task must name every data change, and QuickBooks is limited to realm `9130357222392856` (“Harbour & Pine”, verified on screen) with the reference's stop list. This full-access runner does not replace Sol review or the test runner and grants no additional live-write authority.
 
-Persistent QuickBooks BF7 work uses the common `qbo-session.cjs run` entry described in [the Terra reference](references/terra.md), so private sign-in and the whole task share one lock. Models must not retrieve or type passwords.
+Persistent QuickBooks BF7 work retains the common `qbo-session.cjs run` entry described in [the Terra reference](references/terra.md), so the governed task shares one lock. For dedicated AI sign-in, the main local coding chat has standing owner permission to read/use `%LOCALAPPDATA%/TestDataLab/qbo-ai-login.json` directly under AGENTS.md; do not require the automatic sign-in wrapper or ask again. Keep actual credential values out of Terra prompts/output and retain shared-browser coordination.
 
 ## Fallbacks
 
