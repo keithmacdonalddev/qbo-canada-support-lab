@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-02T05:33:37.024Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-03T05:46:44.487Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -10,9 +10,30 @@ Read this file and [the current handoff](../agent-harness/FULL_GOAL_EXECUTION.md
 
 Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED / PROOF OPEN** = code exists but required outcome proof is missing; **VERIFIED** = the stated bounded outcome has direct evidence; **CONDITIONAL** = optional or awaits its own owner-only decision. A blocked item never blocks unrelated work by default. This is agent-maintained tracking, not an automatic scheduler or guarantee of uninterrupted agent execution.
 
+## Where to resume and full outstanding-work index
+
+Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
+
+**Next recommended implementation assignment: BANK-2.1 — independent bank ledger (OPEN; unassigned).** Read the ten BANK-2 acceptance steps below and select one bounded assignment. This recommendation does not start implementation or expand live-action authority. Keep business continuity, ready historical work and C01/C02 corrections in view alongside the bank feature.
+
+| Outstanding workstream | Task IDs / location | Remaining owner outcome |
+|---|---|---|
+| Continuous business and recovery | [A01–A08](#continuity-and-accounting-recovery) | Resolve remaining saved/held/unsent work safely; prove roughly 220 useful records/day, nightly closes and sustained recovery. A08 discovery and the specifically repaired A01 pairs are verified, not the whole A workstream. |
+| Shared access | [S01–S03](#dedicated-browser-access-and-historical-banking) | Preserve verified native/app sign-in; finish S02's complete governed native task handoff proof. |
+| Historical banking and files | [D01–D05](#dedicated-browser-access-and-historical-banking) | Complete eligible historical files/imports/reconciliations, dependent carry-forward gaps, separate cash-count evidence and the minor statement-PDF correction. |
+| Independent ongoing bank | [SB01–SB07](#simulated-online-bank-and-continuously-current-banking), [BANK-2.1–BANK-2.10](#bank-2-new-chat-implementation-steps) | Complete independent settlement/file automation, all-account/currency coverage, usable freshness and sustained operation. BANK-1 is only the delivered two-account historical slice. |
+| Native QBO banking — BANK-3 | D02/D03, SB05 and native portions of SB06/SB07 | Complete safe QBO uploads, Match/Add/Exclude, statement attachment and native reconciliation through due cycles, then keep them current. |
+| Business breadth and accountant | [B01–B09](#business-breadth-and-accountant-responsibility) | Useful financial decisions/follow-through and deliberate coverage, inventory/returns, billable expenses, fields/classes/locations, corrections, foreign currency and native-only situations. |
+| Owner experience | [C01–C06](#owner-experience-and-truthful-visibility) | Correct saved/verified counts and capability descriptions; complete visibility, owner journeys, landing page and persistent directions/build-list feedback. |
+| Sync, reporting and close | [E01–E03](#sync-reports-close-and-operating-limits) | Sustained QBO parity, meaningful populated reports and completed due month-end evidence. |
+| Operating costs | [F01–F02](#sync-reports-close-and-operating-limits) | Demonstrate <=3 metered QBO calls per saved record and low, honestly measured AI consumption. |
+| Conditional work | [G01–G02](#sync-reports-close-and-operating-limits) | Specialists only with measured benefit; deployment/endurance environment only if needed and separately authorized. |
+
+The status/detail rows below remain authoritative; this index is navigation, not a second completion ledger. After each delivered slice, update its row, evidence, remaining dependencies and next ready assignment here and in the handoff. Preserve unfinished items when changing the primary assignment.
+
 ## Execution order and delivery rules
 
-**Current session boundary: [BANK-1 — DELIVERED](current-session-assignment.md).** Stop this session; managing/review session selects later BANK-2/BANK-3 scope. One existing CAD bank account plus one CAD credit-card account, durable bank state, rendered account views and real CSV/PDF downloads. The assignment contains the fixed acceptance checklist and exact start prompt. Automatic issuance/all-account expansion and full historical reconciliation remain later milestones; the complete SB/D backlog is unchanged. This replaces the earlier oversized single-session prompt.
+**Previous bounded delivery: [BANK-1 — DELIVERED](current-session-assignment.md).** Its assignment retains the completed two-account desktop/download acceptance record. For a new implementation chat, select one [BANK-2 step](#bank-2-new-chat-implementation-steps), beginning with BANK-2.1; BANK-3 retains native imports/reconciliation. The prior BANK-1 stop instruction applies to that completed assignment, not to future separately assigned work. The complete SB/D and wider app backlog remains in force.
 
 1. **Keep the business running.** Protect safe ongoing trading, useful accountant output, collections, purchasing, nightly close and recovery. Interrupt feature work for an active data-safety risk or a failure that actually stops the relevant workflow; an isolated record/feature defect is not automatically a company-wide emergency.
 2. **Build missing features while historical work progresses.** Keep one primary feature moving alongside bounded essential repairs and safely ready historical work. The bounded BANK-1 SB01/SB02 account-view and D01 download slice is now delivered; the managing session selects the next feature assignment separately; D02 historical imports/reconciliation can progress independently where their real dependencies and existing authority permit. C01/C02 remain useful bounded corrections, not prerequisites for starting the bank feature.
@@ -85,6 +106,7 @@ These are dated observations, not permanent present-state claims. The reviewed C
 | D02 | P0 — OPEN | Complete ready historical imports/review/reconciliations oldest first, retaining native evidence and accepted actions without replaying uncertain uploads/Add/Match. | Login alone does not authorize a new banking mutation. Reuse existing valid workflow authority; retain preflight rule and duplicate checks. |
 | D03 | P1 — OPEN | Resolve109 carry-forward deferrals and seven drafts from actual predecessor/native evidence, including report-only tax adjustments and pre-existing reconciliation marks. | Generated balance agreement is not proof of counterpart classification or native reconciliation. Do not invent balancing plugs. |
 | D04 | P1 — OPEN | Complete cash-count evidence separately from bank/card reconciliation; retain native vs app-tracked vs manual evidence labels. | Cash periods and foreign balances are distinct from the324 external statement-period generation baseline. |
+| D05 | P2 — OPEN (minor PDF defect) | Render the full bank statement opening-balance explanation without mid-word truncation; retain readable totals/rows and accepted historical revisions. | Nov3 audit reproduced the fixed 88-character truncation in backend/src/modules/bank-statement-pdf.js:51. Financial content passed. Fold the correction into BANK-2.7 future generation; preserve accepted revision 1 files. |
 
 ## Simulated online bank and continuously current banking
 
@@ -101,6 +123,27 @@ Owner clarification: provide an online banking experience like accessing a simul
 | SB07 | P1 — OPEN | Historical catch-up transitions into sustained automatic future generation/import/reconciliation with restart/logout/lost-reply recovery and independent-account progress. | Retain direct completed account-period chains and repeated due-cycle evidence. Neither scheduled code, tests, one reconciliation nor a saved report proves unattended company-wide operation. |
 
 D02 remains the P0 historical catch-up task; D03 resolves dependent carry-forward gaps and D04 preserves separate cash-count work. These rows add permanent bank operation to the full app goal; they do not replace ordinary trading or situational coverage. A01/A02 block only truly dependent bank records/balances. Do not turn either repair into a blanket prerequisite for this feature work.
+
+## BANK-2 new-chat implementation steps
+
+These ten OPEN steps split the existing BANK-2 milestone into bounded assignments intended for new implementation chats. They do not replace SB01–SB07 or the rest of this backlog, and they are acceptance checkpoints rather than a promise that each takes exactly one chat. Reuse the existing settlement, scenario, storage, CSV/PDF, app sign-in and desktop foundations. Do not redo delivered BANK-1 work.
+
+| ID / status | Deliverable | Direct pass/fail proof | Dependencies / parent scope |
+|---|---|---|---|
+| BANK-2.1 — OPEN | Independent durable bank/card ledger with evidenced openings, balances, stable event identities and pending/posted/reversed state; retain the labelled historical baseline. QBO edits must not silently rewrite bank history. | Actual scoped bank state survives reload/reopen with identical balances and identities; opening evidence is traceable; accepted BANK-1 packages/files remain unchanged. Re-reading QBO alone does not prove independence. | First assignment; reuse BANK-1. SB01. |
+| BANK-2.2 — OPEN | Business payment, deposit and card instructions produce separate bank events with source lineage and duplicate-safe admission. | An actual authorized business instruction appears once in bank history; repeated delivery/recovery of the same instruction creates no duplicate economic event. | 2.1. SB01/SB03. |
+| BANK-2.3 — OPEN | Governed pending-to-posted settlement lifecycle, including posting delays and weekend rules. | Observe the same event pending, then posted when due, with exactly one balance change; rerunning the due cutoff changes nothing already settled. | 2.1–2.2. SB03. |
+| BANK-2.4 — OPEN | Paired transfers, reversals and returned/NSF payments that preserve original history. | Both same-currency transfer legs agree; a return reverses only its intended movement, retains original lineage and cannot settle twice. Foreign transfer allocations are completed in BANK-2.8. | 2.3. SB01/SB03. |
+| BANK-2.5 — OPEN | Scheduled fees/interest and explicit deliberate bank situations, retaining one economic event per counterpart and visible unexplained items. | Due bank-origin activity appears once, changes the correct native balance and identifies any bookkeeping action still needed; duplicate/unknown scenarios are explicitly classified rather than double-counted. | 2.3; 2.4 where applicable. SB03. |
+| BANK-2.6 — OPEN | Automatically retained current transaction CSVs from posted bank events, with explicit incremental/cumulative export windows and revision semantics. | A real app download matches ledger rows/amounts/identities; repeated generation retains correct export boundaries and does not silently duplicate previously exported events. | 2.3; extend to 2.4–2.5 events. SB04/D01. |
+| BANK-2.7 — OPEN | Automatically issued monthly PDF statements, including quiet months, correct carry-forward and controlled revisions. Include D05's opening-explanation correction in future generation without replacing accepted files. | Opening plus movements equals closing across adjacent periods; actual CSV/PDF downloads agree and render correctly; quiet-month statements exist; accepted previous revisions remain intact. | 2.6 and evidenced predecessor balances. SB04/D01/D05. |
+| BANK-2.8 — OPEN | Complete eligible account/currency inventory and coverage, with evidenced openings, exact native/home allocations and governed FX handling. | Every eligible account is listed with its opening/coverage/gaps; foreign amounts, rates and both transfer legs agree. Unknown/unsupported evidence stays explicit; an unexplained gap prevents full coverage acceptance. | 2.1–2.7; D03 only for dependent openings/periods. SB01/SB04/SB06. |
+| BANK-2.9 — OPEN | Automatic due-work scheduling, catch-up and restart/lost-reply recovery, allowing unrelated accounts to progress when one is blocked. | Observe actual scheduled bank/file output, interrupted-work recovery without duplicates, preservation of accepted results and independent-account progress. Isolated restart tests support proof; do not restart owner services without existing authority. | Earlier applicable steps; integrate complete coverage from 2.8. Bank-side SB03/SB04/SB07. |
+| BANK-2.10 — OPEN | Integrated owner/accountant acceptance, desktop pending/posted/detail/download access, per-account freshness/lag/blockers/next actions and repeated operation. Build necessary interfaces/tools in earlier slices, then verify them together. | Actual owner desktop journeys and accountant tools read the same durable bank state; downloads and multiple due cycles agree with retained evidence; each cutoff advances only on its own proof. Record elapsed observation and failures honestly. | 2.1–2.9. SB02, bank-side SB06/SB07. |
+
+**New-chat handoff contract:** name one step, current status, dependencies, exact company/environment and allowed actions, owned files/resources, next observable result and acceptance proof. Apply required implementation/safety reviews, proportionate checks and rendered desktop inspection. Stop at the assigned slice, commit/push coherent owned changes and update this file plus the handoff with evidence, unresolved work and the next ready assignment. Code/tests alone do not pass a direct-outcome condition; missing live authority/proof remains explicit. A "what is next?" question is a status request, not permission to execute financial actions.
+
+**BANK-2 is complete only when all ten acceptance checkpoints pass.** Actual QBO uploads, Match/Add/Exclude, statement attachment, full historical reconciliation and ongoing native reconciliation remain BANK-3 under D02/D03/SB05 and the native portions of SB06/SB07. BANK-2 visibility must keep those stages distinct and unverified until their own evidence exists.
 
 ## Business breadth and accountant responsibility
 
@@ -140,6 +183,8 @@ D02 remains the P0 historical catch-up task; D03 resolves dependent carry-forwar
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-03T05:46:44.487Z — Owner requested durable cross-chat tracking of the entire outstanding project scope and the agreed ten-step BANK-2 breakdown. Added the full-work index, BANK-2.1–2.10 OPEN acceptance/dependency rows, next recommendation BANK-2.1 (unassigned), D05 minor PDF follow-up and future-chat routing. No implementation or new live authority granted. Nov3 read-only audit independently confirmed the existing BANK-1 two-period delivery, fresh app sign-in/reuse and activity discovery (HTTP 200; 40 customers/4 services/3 vendors); 106 focused tests plus build/lint passed. Private audit: artifacts/bank-1/audit-20261103-1793682678951/AUDIT.md. Historical bank reconstruction, ongoing bank operation, native reconciliation and sustained trading remain separate.
 
 - 2026-11-02T05:33:37.024Z — **BANK-1 DELIVERED:** actual desktop account journeys, both transaction details/return focus, four real control downloads with exact retained hashes/40 row-event mappings/financial totals, all3 downloaded PDF pages and both normal reload/reopen paths verified. Genuine empty/missing-period and loading/recovery states inspected. CSS contrast correction98ded95 pushed; build/lint and independent final visual/source review clear; prior backend/safety reviews reused. Existing revisions/books/native evidence preserved, no QBO or service changes. [Five-condition acceptance](bank-1-evidence-2026-11-01.md); private proof artifacts/bank-1/verified-20261102/. Full SB/D outcomes and BANK-2/BANK-3 remain OPEN. Stop after BANK-1 closeout.
 
