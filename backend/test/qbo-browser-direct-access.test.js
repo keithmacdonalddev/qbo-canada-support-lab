@@ -38,3 +38,12 @@ test('every native command retains the exact normalized persistent profile and p
  for(const call of calls){assert.equal(call.file,calls[0].file);assert.equal(call.args.filter(x=>x==='--session').length,1);assert.equal(call.args[call.args.indexOf('--session')+1],'qbo-ops');assert.equal(call.args.filter(x=>x==='--profile').length,1);assert.equal(call.args[call.args.indexOf('--profile')+1],expectedProfile);assert.ok(!call.args.some(x=>x.includes('fixture-profile-secret')||x.includes('fixture@example.invalid')));}
  assert.ok(calls.some(c=>c.input?.includes('fixture-profile-secret')));
 });
+
+test('atomic picker credentials use one private stdin command and discard their transient copy',async()=>{
+ const calls=[],values={username:'robot@example.invalid',password:'synthetic-picker-secret'},browser=T.createBrowserTransport({delay:async()=>{},run:async(file,args,options)=>{calls.push({file,args,input:options.input});return JSON.stringify({success:true,data:{result:{targetVerifiedOnPicker:true,passwordSelected:true,passwordSubmitted:true}}});}});
+ const proof=await browser.enterPasswordFromPicker(values);assert.equal(proof.passwordSubmitted,true);assert.equal(calls.length,1);assert.ok(calls[0].args.includes('--stdin'));assert.ok(calls[0].args.includes('--profile'));assert.ok(!calls[0].args.join(' ').includes('synthetic-picker-secret'));assert.ok(!calls[0].args.join(' ').includes('robot@example'));assert.match(calls[0].input,/password-from-picker/);assert.match(calls[0].input,/synthetic-picker-secret/);assert.deepEqual(values,{username:'',password:''});
+});
+
+test('overview continuation transport uses only the existing fixed home page action',async()=>{
+ const calls=[],browser=T.createBrowserTransport({delay:async()=>{},run:async(file,args,options)=>{calls.push({file,args,input:options.input});return JSON.stringify({success:true,data:{result:true}});}});await browser.navigateHome();assert.equal(calls.length,1);assert.ok(calls[0].args.includes('--stdin'));assert.ok(calls[0].input.endsWith(')("navigate-home","")'));assert.ok(!calls[0].args.some(value=>value.startsWith('https:')));
+});

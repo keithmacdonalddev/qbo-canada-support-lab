@@ -48,10 +48,15 @@ async function pageAction(action,value=''){
  const text=String(document.body?.innerText||'');
  const inputs=[...document.querySelectorAll('input')].filter(visible),buttons=[...document.querySelectorAll('button')].filter(visible);
  const password=inputs.filter(e=>e.type==='password'),username=inputs.filter(e=>e.id==='iux-identifier-first-international-email-user-id-input'||['email','username'].includes(e.autocomplete)||e.type==='email');
- const challenge=inputs.some(e=>e.autocomplete==='one-time-code'||/otp|verification.?code/i.test(e.name+' '+e.id))||[...document.querySelectorAll('iframe')].some(e=>visible(e)&&/captcha/i.test(e.title+' '+e.src))||[...document.querySelectorAll('h1,h2,[role=heading]')].some(e=>visible(e)&&/check your (phone|email)|verify your identity|enter.*code|security check|use your passkey/i.test(e.textContent));
- const rejected=[...document.querySelectorAll('[role=alert]')].some(e=>visible(e)&&/incorrect|invalid password|couldn.t sign|try again/i.test(e.textContent));
+ const captchaNow=()=>[...document.querySelectorAll('iframe')].some(e=>visible(e)&&/captcha/i.test(e.title+' '+e.src));
+ const challengeNow=()=>[...document.querySelectorAll('input')].filter(visible).some(e=>e.autocomplete==='one-time-code'||/otp|verification.?code/i.test(e.name+' '+e.id))||captchaNow()||[...document.querySelectorAll('h1,h2,[role=heading]')].some(e=>visible(e)&&/check your (phone|email)|verify your identity|enter.*code|security check|use your passkey/i.test(e.textContent));
+ const rejectedNow=()=>[...document.querySelectorAll('[role=alert]')].some(e=>visible(e)&&/incorrect|invalid password|couldn.t sign|try again/i.test(e.textContent));
+ const captcha=captchaNow(),challenge=challengeNow(),rejected=rejectedNow();
+ const choices=()=>[...document.querySelectorAll('button,a,[role=button]')].filter(e=>visible(e)&&/^Enter password\s*,?\s*$/.test(String(e.innerText||e.textContent||'').trim()));
+ const enabled=e=>!e.disabled&&e.getAttribute('aria-disabled')!=='true';
+ const passwordChoice=main&&origin==='https://accounts.intuit.com'&&location.pathname==='/app/account-manager'&&!captcha&&choices().length===1&&enabled(choices()[0]);
  const remembered=buttons.find(e=>/^Use a different account/i.test(e.textContent.trim()));
- if(action==='inspect')return {url,challenge,rejected,phase:password.length?'password':username.length?'username':remembered?'remembered':'transition'};
+ if(action==='inspect')return {url,challenge,captcha,rejected,passwordChoice,phase:password.length?'password':username.length?'username':remembered?'remembered':passwordChoice?'password-choice':'transition'};
  if(['identity','identity-open','identity-close'].includes(action)){
   if(!main||origin!=='https://qbo.intuit.com')return {loaded:false,matches:false};
   const menus=[...document.querySelectorAll('button')].filter(e=>visible(e)&&/^Intuit account \([^)]+\)$/.test(e.getAttribute('aria-label')||''));
@@ -71,6 +76,45 @@ async function pageAction(action,value=''){
   const id=rawId?.replace(/\D/g,'');
   return {realmId:id||null,name:text.includes('My Business')?'My Business':null};
  }
+ // Both routes share the existing atomic form guard, but only the live picker
+ // closure can authorize the account-manager password form.
+ async function submitField(field,secret,boundDocument=document,boundPath=location.pathname){
+  const sameContext=()=>window===window.top&&document===boundDocument&&location.origin===origin&&location.pathname===boundPath;
+  if(!sameContext()||challengeNow()||rejectedNow()||field.length!==1||!visible(field[0])||field[0].disabled)throw new Error('QBO_SIGNIN_REQUIRED');
+  const form=field[0].closest('form');if(field[0].form!==form)throw new Error('QBO_SIGNIN_REQUIRED');
+  if(form&&new URL(form.getAttribute('action')||location.href,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
+  const submit=[...document.querySelectorAll('button')].filter(e=>visible(e)&&/^(Sign in|Continue|Next)$/i.test(e.textContent.trim())&&(!form||form.contains(e)));
+  if(submit.length!==1||submit[0].disabled||submit[0].form!==form||(form&&!form.contains(submit[0])))throw new Error('QBO_SIGNIN_REQUIRED');
+  if(submit[0].formAction&&new URL(submit[0].formAction,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
+  // Recheck the original context immediately before placing the secret.
+  if(!sameContext())throw new Error('QBO_SIGNIN_REQUIRED');
+  const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+  setter.call(field[0],secret);field[0].dispatchEvent(new Event('input',{bubbles:true}));field[0].dispatchEvent(new Event('change',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,100));
+  if(!sameContext()||challengeNow()||rejectedNow()||submit[0].disabled||!visible(field[0])||!visible(submit[0])||!field[0].isConnected||!submit[0].isConnected||field[0].closest('form')!==form||field[0].form!==form||submit[0].form!==form||(form&&!form.contains(submit[0])))throw new Error('QBO_SIGNIN_REQUIRED');
+  if(form&&new URL(form.getAttribute('action')||location.href,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
+  if(submit[0].formAction&&new URL(submit[0].formAction,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
+  submit[0].click();return true;
+ }
+ if(action==='password-from-picker'){
+  try{
+   if(!main||origin!=='https://accounts.intuit.com'||location.pathname!=='/app/account-manager'||captcha||rejected||!value||typeof value.username!=='string'||typeof value.password!=='string'||!value.password)throw new Error('QBO_SIGNIN_REQUIRED');
+   const documentBefore=document,pathBefore=location.pathname,target=value.username.trim().toLowerCase();
+   const methods=[...document.querySelectorAll('button,a,[role=button]')].filter(e=>visible(e)&&/^Email a code(?:\s|,|$)/i.test(String(e.innerText||e.textContent||'').trim()));
+   const emails=methods.length===1?(String(methods[0].innerText||methods[0].textContent||'').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[]):[];
+   const options=choices();if(!target||emails.length!==1||emails[0].toLowerCase()!==target||options.length!==1||options[0].isConnected!==true||!enabled(options[0]))throw new Error('QBO_IDENTITY_UNVERIFIED');
+   const href=options[0].getAttribute('href');if(href!==null){const destination=new URL(href,location.href);if(destination.origin!==origin||destination.pathname!==pathBefore||destination.username||destination.password)throw new Error('QBO_SIGNIN_REQUIRED');}
+   if(window!==window.top||document!==documentBefore||location.origin!==origin||location.pathname!==pathBefore||captchaNow()||rejectedNow()||options[0].isConnected!==true||!visible(options[0])||!enabled(options[0]))throw new Error('QBO_SIGNIN_REQUIRED');
+   options[0].click();let field=null;
+   for(let n=0;n<50;n++){
+    if(window!==window.top||document!==documentBefore||location.origin!==origin||location.pathname!==pathBefore||captchaNow()||rejectedNow())throw new Error('QBO_SIGNIN_REQUIRED');
+    const found=[...document.querySelectorAll('input')].filter(e=>visible(e)&&e.type==='password');if(found.length){field=found;break;}await new Promise(resolve=>setTimeout(resolve,100));
+   }
+   if(!field)throw new Error('QBO_SIGNIN_REQUIRED');
+   await submitField(field,value.password,documentBefore,pathBefore);
+   return{targetVerifiedOnPicker:true,passwordSelected:true,passwordSubmitted:true};
+  }finally{if(value&&typeof value==='object'){value.username='';value.password='';}}
+ }
  if(!main||origin!=='https://accounts.intuit.com'||location.pathname!=='/app/sign-in'||challenge||rejected)throw new Error('QBO_SIGNIN_REQUIRED');
  if(action==='username-matches'){
   const target=value.trim().toLowerCase();
@@ -78,21 +122,7 @@ async function pageAction(action,value=''){
  }
  if(action==='different'){if(!remembered)throw new Error('QBO_SIGNIN_REQUIRED');remembered.click();return true;}
  const field=action==='password'?password:action==='username'?username:[];
- if(field.length!==1)throw new Error('QBO_SIGNIN_REQUIRED');
- const form=field[0].closest('form');
- if(field[0].form!==form)throw new Error('QBO_SIGNIN_REQUIRED');
- if(form){const destination=new URL(form.getAttribute('action')||location.href,location.href);if(destination.origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');}
- const submit=buttons.filter(e=>/^(Sign in|Continue|Next)$/i.test(e.textContent.trim())&&(!form||form.contains(e)));
- if(submit.length!==1||submit[0].form!==form||(form&&!form.contains(submit[0])))throw new Error('QBO_SIGNIN_REQUIRED');
- if(submit[0].formAction&&new URL(submit[0].formAction,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
- // The origin, form, field and submit checks cannot be separated by navigation.
- const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
- setter.call(field[0],value);field[0].dispatchEvent(new Event('input',{bubbles:true}));field[0].dispatchEvent(new Event('change',{bubbles:true}));
- await new Promise(resolve=>setTimeout(resolve,100));
- if(submit[0].disabled||window!==window.top||location.origin!==origin||!field[0].isConnected||!submit[0].isConnected||field[0].closest('form')!==form||field[0].form!==form||submit[0].form!==form||(form&&!form.contains(submit[0])))throw new Error('QBO_SIGNIN_REQUIRED');
- if(form&&new URL(form.getAttribute('action')||location.href,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
- if(submit[0].formAction&&new URL(submit[0].formAction,location.href).origin!==origin)throw new Error('QBO_SIGNIN_REQUIRED');
- submit[0].click();return true;
+ return submitField(field,value);
 }
 function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=ms=>new Promise(r=>setTimeout(r,ms))}={}){
  const bin=path.join(process.env.APPDATA||path.join(os.homedir(),'AppData/Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
@@ -115,9 +145,11 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
    throw failure('QBO_SIGNIN_REQUIRED');
   },
   inspect:()=>evaluate('inspect'),
+  navigateHome:async()=>{await evaluate('navigate-home');await delay(500);},
   differentAccount:async()=>{await evaluate('different');await delay(350);},
   enterUsername:async value=>{await evaluate('username',value);await delay(500);},
   enterPassword:async value=>{await evaluate('password',value);await delay(1000);},
+  enterPasswordFromPicker:async value=>{try{const proof=await evaluate('password-from-picker',value);await delay(1000);return proof;}finally{value.username='';value.password='';}},
   usernameMatches:value=>evaluate('username-matches',value),
   settle:()=>delay(500),
   verifyIdentity:async username=>{for(let n=0;n<20;n++){await evaluate('identity-open');const identity=await evaluate('identity',username);if(identity.loaded){await evaluate('identity-close');return identity.matches;}await delay(500);}return false;},

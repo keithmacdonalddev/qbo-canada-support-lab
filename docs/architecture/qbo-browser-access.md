@@ -29,6 +29,14 @@ Use the actual values through the authorized browser's data-entry API or private
 
 **Profile argument consistency:** the common transport normalizes its existing persistent profile to forward slashes and supplies that exact fixed profile on every command, matching the Terra runner. This prevents different entry points from requesting different launch configurations. The Nov4 fix passed29 focused tests and a fresh default coordinator reused the verified session without password/code; complete native task handoff is proved separately.
 
+## Password-first sign-in and watched stages
+
+Owner direction, Nov4: use the saved password whenever authentication is required and watch it through verified identity/company. The observed Intuit account-manager picker offers Enter password; its ensuing password form hides the principal. The shared helper therefore binds the expected visible picker email, chooses password and submits within one guarded document operation, then follows the exact account-manager overview back to QuickBooks. Standalone unbound password forms remain refused.
+
+The existing status/audit now stores only fixed stage enums and messages, including opening-browser, using-saved-password, verifying-identity, verifying-company and a blocked lastStage. Inspect the actual failed stage instead of treating every transport failure as MFA. Valid sessions are verified and reused; stage progress itself never grants company readiness.
+
+Nov4 direct password entry succeeded without a code at20:59:46. The installed normal shared CLI then returned ready at2026-11-04T21:23:01.136Z with dedicated identity and exact company verified; that CLI attempt reused the valid session. Its safe phase audit and81 installed focused passes are retained in artifacts/password-first-login-implementation-20261104. Natural future password-required entry and unattended endurance remain separately observable.
+
 ## Shared browser and company scope
 
 The target is Production **My Business**, company ID ending **2856**, using the owner's dedicated AI Intuit account. Verify the signed-in identity and exact company before company-scoped work. The API OAuth connection is independent. Standing login permission does not authorize new bookkeeping, account administration, OAuth reconnects or service changes.

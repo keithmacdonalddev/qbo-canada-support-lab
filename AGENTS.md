@@ -16,6 +16,9 @@ The local file contains the actual saved values, not placeholders, and is outsid
 
 Preserve shared-browser coordination and verify the dedicated signed-in identity and target company before company work. Login permission does not broaden financial, company-setting, OAuth, service or data-change authority.
 
+
+Owner direction, 2026-11-04: whenever the dedicated Intuit account needs authentication, use the saved password first through the observed Enter password option and watch the attempt until the dedicated identity and exact company are verified. Reuse an already verified session without forcing logout. The shared helper records fixed safe stages in the existing session status/audit; inspect its last stage promptly on failure and distinguish transport uncertainty from an actual verification challenge. Do not request a code merely because a helper failed when the password route is available.
+
 ## Coding-agent models and deterministic checks
 
 Select the coding-agent model for the task under [MODEL_SELECTION.md](docs/agent-harness/MODEL_SELECTION.md). GPT-6 Sol is the starting choice for substantial routine coding, GPT-6 Astra for the hardest cross-cutting reasoning, and Claude Opus 5.5 for demanding Claude Code work when available. These are starting choices, not repository model pins; respect an explicit user choice and verify the effective model and effort. This policy does not change the application's AI provider settings.
