@@ -17,7 +17,17 @@ function postingContext(evidence) {
 }
 function settlementWindow(rows) { return rows.map(row => ({ ...row, record: require('./general-write-postings').accountingView(row.record) })); }
 function createGeneralCloseGate({ models = {}, copy, readValuation = null, now = () => Date.now() }) {
-  const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun'), Closes = models.GeneralDayCloses || require('../models/GeneralDayClose'), Records = models.Records || require('../models/CompanySyncRecord');
+  // Resolve the complete proof stores once, including reloads after replay capture.
+  // Production constructs this gate without injected models; saved AP-omission
+  // proofs still require their original scoped receipt, authority and run.
+  models = { ...models,
+    GeneralWriteRuns: models.GeneralWriteRuns || require('../models/GeneralWriteRun'),
+    GeneralDayCloses: models.GeneralDayCloses || require('../models/GeneralDayClose'),
+    Records: models.Records || require('../models/CompanySyncRecord'),
+    Receipts: models.Receipts || require('../models/QboWriteReceipt'),
+    Authorities: models.Authorities || require('../models/BusinessAuthority'),
+  };
+  const { GeneralWriteRuns: Runs, GeneralDayCloses: Closes, Records } = models;
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId });
   async function pending(scope, { fromDate, throughDate, verifiedThrough }) {
     const gathered = await generalRecordsFor({ Runs, scope, day: fromDate, through: throughDate, copy, models, now });

@@ -373,12 +373,18 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   if (kind) {
     const sameKind = !s.lastKind || s.lastKind === kind;
     const failures = sameKind ? misses : 0;
-    const behindTarget = today && !today.unavailable && today.saved < today.target;
+    // Slow repeated close/recovery failures down even while today is short. Due
+    // independent activity is selected above and keeps its own shorter retry.
+    const behindTarget = ['slice', 'obligations'].includes(kind) && today && !today.unavailable && today.saved < today.target;
     const wait = failures > 0 ? Math.min(behindTarget ? 5 : Infinity, Math.max(SPACING_MINUTES[kind], BACKOFF_MINUTES[Math.min(failures, BACKOFF_MINUTES.length) - 1])) : SPACING_MINUTES[kind];
     if (failures > 0) reason += ' · no progress on the last ' + (misses === 1 ? 'review' : misses + ' reviews') + ', waiting ' + wait + ' min';
     if (capped) return result('ceiling', false, tomorrow, limit);
     const earliest = last ? last + wait * MINUTE : now;
-    return result(kind, earliest <= now, earliest, reason);
+    // Re-check saved state when another activity share or hourly window is due;
+    // that independent work must not wait for the failed close's longer retry.
+    const nextActivity = !requests?.reached && today && !today.unavailable
+      ? Math.min(...[today.nextSlotAt, today.hourResetAt].map(value => Date.parse(value || '')).filter(at => at > now), Infinity) : Infinity;
+    return result(kind, earliest <= now, earliest > now ? Math.min(earliest, nextActivity) : earliest, reason);
   }
   // Nothing actionable: no model call, only a cheap re-check of saved state.
   const nextSlot = today?.nextSlotAt && !today.unavailable && !today.ceilingReached && today.remaining > 0 && !budgetSpent ? Date.parse(today.nextSlotAt) : Infinity;

@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-03T16:56:33.638Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T09:35:10.295Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -14,7 +14,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
 
-**Next recommended assignment: finish BANK-2.1 direct acceptance (IMPLEMENTED / PROOF OPEN; current bounded implementation closed).** Explicit authority for the two prepared insert-only financial-state adoptions is required; then inspect actual adopted ledger/reload proof. BANK-2.2 follows only after that dependency. Read the ten BANK-2 acceptance steps below and select one bounded assignment. This recommendation does not start implementation or expand live-action authority. Keep business continuity, ready historical work and C01/C02 corrections in view alongside the bank feature.
+**Current priority: restore sustained business output and overdue closes (A03/A05), then continue ready work across this full index.** Nov4 owner direction requires continued fixes/improvements rather than stopping after isolated milestones. BANK-2.1 direct acceptance remains IMPLEMENTED / PROOF OPEN with its stated adoption boundary; it does not block independent continuity, historical, coverage or owner-flow work.
 
 | Outstanding workstream | Task IDs / location | Remaining owner outcome |
 |---|---|---|
@@ -184,6 +184,8 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-04T09:35:10.295Z — **A03/A05 continuity priority; IMPLEMENTED / LIVE PROOF OPEN.** Production2856 scoped receipt reads: Nov1 219, Nov2 41, Nov3 82, Nov4 16 at09:30UTC versus220/day; calendar verified throughOct31. Reproduced the >200-repeat Nov1 close TypeError in the production-default factory; restored complete scoped receipt/authority/run proof stores without weakening financial validation. Restored failed close/recovery5→15→30minute backoff, preserving immediate independent activity/obligations/owner/progress and cheap slot wakes.34close/recovery +32cadence checks and348-file syntax pass; distinct implementation/safety reviews clear. Existing worker live result and sustained output remain unverified; no QBO accounting writes, manual completion or service control issued. Continue actual recovery and full backlog; see current handoff work-value ledger.
 
 - 2026-11-03T16:56:33.638Z — **BANK-2.1 manifest/event consistency correction; IMPLEMENTED / PROOF OPEN unchanged.** Independently reproduced manifest-only source-ID and hidden unknown-blocker conflicts through normal in-memory register -> preview -> adoption before correction. A shared validator now requires complete manifest events and crosswalks, unique corresponding stable event IDs/revisions, equal current-producer economic/posting/scope/source/resolution provenance, and matching CSV/source/QBO-reference/paired-leg crosswalks. Shared alias normalization validates sourceHash/expectedResolution/creator before deriving them; conflicting aliases are never overwritten. Full source/resolution objects are compared within an explicit producer-field projection; the sole event-evidence exception is the separately validated/retained union of the two supported native-inspection warnings. Missing/malformed evidence fails closed; accepted artifacts are not repaired.
 

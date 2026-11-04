@@ -154,12 +154,12 @@ test('quiet hours never suppress the calendar close after midnight', () => {
 
 test('catch-up is spaced while it progresses and backs off durably when it does not', () => {
   const day = '2026-10-30', start = at(day, '09:00'), business = current(day, { verifiedThrough: '2026-10-20' });
-  const run = (now, state) => c.decide({ now, settings, agent, business, today: { ...todayAt(now), dueSlot: null }, state });
+  const run = (now, state) => c.decide({ now, settings, agent, business, today: { ...todayAt(now), dueSlot: null, nextSlotAt: null }, state });
   let state = completedReview({}, { now: start, signature: c.progressSignature(business, todayAt(start)), kind: 'catch-up' });
   let next = run(start + MIN, state);
   assert.deepEqual([next.kind, next.callModel, Date.parse(next.nextReviewAt) - start], ['catch-up', false, 5 * MIN], 'no progress: wait 5 minutes');
   assert.match(next.reason, /no progress on the last review, waiting 5 min/);
-  const waits = [5, 5, 5, 5];
+  const waits = [15, 30, 30, 30];
   for (const wait of waits) {
     const now = Date.parse(next.nextReviewAt);
     assert.equal(run(now, next.state).callModel, true);
@@ -381,4 +381,27 @@ test('audited unsent remainder is actionable between activity slots without repl
  }
  const throttled=c.decide({now,settings,business,today,agent,state:{day,reviews:1,lastKind:'recovery',lastReviewAt:new Date(now).toISOString(),misses:3}});assert.equal(throttled.kind,'recovery');assert.equal(throttled.callModel,false);assert.match(throttled.reason,/waiting/);
  const slice=c.decide({now,settings,business,today:{...today,remaining:20,behind:20,dueSlot:{records:20},inFlight:0},agent,state:{day,lastKind:'recovery',misses:1,lastReviewAt:new Date(now-10*MIN).toISOString()}});assert.equal(slice.kind,'slice');
+});
+
+test('stalled close retries back off while the next independent activity wakes on time',()=>{
+ const day='2026-11-04',now=at(day,'05:32'),business=current(day,{verifiedThrough:'2026-10-31'});
+ const today={...todayAt(now),saved:16,verified:0,dueSlot:null,behind:6,nextSlotAt:new Date(now+12*MIN).toISOString()};
+ const state={day,lastKind:'catch-up',misses:13,lastReviewAt:new Date(now-4*MIN).toISOString(),lastSignature:c.progressSignature(business,today)};
+ const waiting=c.decide({now,settings,agent,business,today,state});
+ assert.equal(waiting.callModel,false);assert.equal(waiting.kind,'catch-up');assert.match(waiting.reason,/waiting 30 min/);
+ assert.equal(Date.parse(waiting.nextReviewAt),now+12*MIN,'saved state is checked when independent activity becomes due, before the close retry');
+ const activityAt=Date.parse(waiting.nextReviewAt),due={...today,dueSlot:{records:8,decisionKey:'fresh-independent-slot'},behind:8,expectedNow:24};
+ const activity=c.decide({now:activityAt,settings,agent,business,today:due,state:waiting.state});
+ assert.deepEqual([activity.kind,activity.callModel],['slice',true]);assert.doesNotMatch(activity.reason,/waiting/);
+ const owner=c.decide({now:now+MIN,settings,agent,business,today,state:waiting.state,ownerRequested:true});
+ assert.deepEqual([owner.kind,owner.callModel],['owner',true]);
+});
+
+test('progress and a due obligation bypass a failed-close backoff',()=>{
+ const day='2026-11-04',now=at(day,'05:32'),business=current(day,{verifiedThrough:'2026-10-31'}),today={...todayAt(now),saved:16,verified:0,dueSlot:null};
+ const state={day,lastKind:'catch-up',misses:13,lastReviewAt:new Date(now-MIN).toISOString(),lastSignature:c.progressSignature(business,today)};
+ const duty=c.decide({now,settings,agent,business,today,state,obligations:{count:1}});
+ assert.deepEqual([duty.kind,duty.callModel],['obligations',true]);
+ const advanced=c.decide({now,settings,agent,business:{...business,verifiedThrough:'2026-11-01'},today,state});
+ assert.equal(advanced.state.misses,0);assert.deepEqual([advanced.kind,advanced.callModel],['catch-up',true]);
 });

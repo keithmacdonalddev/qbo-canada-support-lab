@@ -99,3 +99,30 @@ test('ordinary enabled execution verifies its first saved payment batch and retu
   const h=fixture();h.run.plan.operations.push({ref:'later',op:'create',entity:'Customer',payload:{DisplayName:'Fictional unsent customer'}});
   const result=await h.executeFirst();assert.equal(result.status,'prepared');assert.equal(h.run.items.pay0.outcome,'saved');assert.equal(h.run.items.pay1.outcome,'saved');assert.equal(h.run.items.later,undefined);assert.deepEqual(h.counts(),{reads:4,reports:1,sends:1});
 });
+
+test('production close-gate defaults reload saved payment receipts and authority across capture',async t=>{
+  const h=fixture();await h.execute();const closes=[],queries=[];
+  const defaults={GeneralWriteRuns:'GeneralWriteRun',Receipts:'QboWriteReceipt',Authorities:'BusinessAuthority'};
+  for(const [key,file] of Object.entries(defaults)) for(const method of ['find','findOne']) if(h.models[key][method]) {
+    t.mock.method(require('../src/models/'+file),method,filter=>{queries.push({key,filter});return h.models[key][method](filter);});
+  }
+  t.mock.method(require('../src/models/CompanySyncRecord'),'find',()=>chain([]));
+  const Closes=require('../src/models/GeneralDayClose');
+  t.mock.method(Closes,'find',()=>chain(closes));
+  t.mock.method(Closes,'findOne',filter=>chain(closes.find(row=>row.kind===filter.kind&&row.ok===filter.ok&&row.fromDate===filter.fromDate&&row.throughDate===filter.throughDate)||null));
+  t.mock.method(Closes,'create',async rows=>{closes.push(...clone(rows));return clone(rows);});
+  const {createGeneralCloseGate}=require('../src/modules/general-write-close-gate');
+  const gate=createGeneralCloseGate({copy:h.copy,now:()=>clock});
+  let reports=0;
+  const args={fromDate:h.run.day,throughDate:h.run.day,verifiedThrough:'2026-10-31',openingDate:'2026-10-01',mappings:{accountsPayable:'999'},readLedger:async()=>{reports++;return clone(h.report);}};
+  const result=await gate.assertPeriodReady(scope,args);
+  assert.equal(result.results[0].ok,true);
+  assert.equal(closes[0].recordCount,2);
+  await gate.assertPeriodReady(scope,args);
+  assert.equal(reports,1,'unchanged close reuses its proved ledger');
+  for(const key of ['Receipts','Authorities'])assert.ok(queries.some(q=>q.key===key),'default '+key+' was read');
+  assert.ok(queries.filter(q=>['Receipts','Authorities'].includes(q.key)).every(q=>['environment','realmId','connectionId'].every(k=>q.filter[k]===scope[k])),'proof reads keep exact company scope');
+  h.authorities[0].payload.payments[0].apAccountId='999';
+  await assert.rejects(gate.assertPeriodReady(scope,args),/proof is unavailable/);
+  assert.deepEqual(h.counts(),{reads:4,reports:1,sends:0});
+});
