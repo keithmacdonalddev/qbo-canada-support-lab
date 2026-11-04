@@ -64,6 +64,28 @@ function createMongoBankingStore({ Events, Packages, connection }) {
       const filter={...scope,kind:'instruction',accountId,'payload.state':'pending',revision:0};
       const [rows,count]=await Promise.all([Events.find(filter).sort({'payload.receivedAt':-1,_id:1}).limit(200).maxTimeMS(5000).lean(),Events.countDocuments(filter).maxTimeMS(5000)]);return {rows,count};
     },
+    async getSettlementRevisions(scope,eventId,session) {
+      let q=Events.find({...scope,kind:'revision',eventId:'@instruction:'+eventId}).sort({revision:1}).limit(4).maxTimeMS(5000);if(session)q=q.session(session);return q.lean();
+    },
+    async listSettlementInstructions(scope,cutoff,session,accountId) {
+      // Skip already-posted and not-yet-due scheduled instructions. Unscheduled
+      // instructions get a durable policy first, so they cannot starve later work.
+      const dbScope={...scope,connectionId:Events.schema.path('connectionId').cast(scope.connectionId)};
+      let q=Events.aggregate([
+        {$match:{...dbScope,...(accountId?{accountId}:{}),kind:'instruction',revision:0}},
+        {$lookup:{from:Events.collection.name,let:{identity:'$eventId'},pipeline:[{$match:{...dbScope,kind:'revision',$expr:{$eq:['$eventId','$$identity']}}},{$sort:{revision:1}}],as:'lifecycle'}},
+        {$match:{$or:[{lifecycle:{$size:0}},{$and:[{lifecycle:{$size:1}},{$or:[{'lifecycle.0.payload.schedule.expectedPostingDate':{$lte:cutoff}},{'lifecycle.0.payload.schedule.expectedPostingDate':{$exists:false}},{'lifecycle.0.revision':{$ne:1}},{'lifecycle.0.payload.kind':{$ne:'governed-bank-settlement'}}]}]},{$and:[{lifecycle:{$size:2}},{'lifecycle.1.payload.state':{$ne:'posted'}}]},{'lifecycle.2':{$exists:true}}]}},
+        {$sort:{'payload.receivedAt':1,_id:1}},{$limit:100},{$project:{lifecycle:0}}
+      ]).option({maxTimeMS:5000});if(session)q=q.session(session);return q;
+    },
+    async listInstructionActivity(scope,accountId) {
+      const filter={...scope,kind:'instruction',accountId,revision:0};
+      const rows=await Events.find(filter).sort({_id:1}).limit(10001).maxTimeMS(5000).lean();
+      check(rows.length<=10000,'Independent bank activity exceeds the complete projection limit; a full current balance is unavailable.',409,'BANKING_ACTIVITY_INCOMPLETE');
+      const revisions=await Events.find({...scope,kind:'revision',accountId,eventId:{$regex:'^@instruction:'}}).sort({eventId:1,revision:1}).limit(20001).maxTimeMS(5000).lean();
+      check(revisions.length<=20000,'Independent settlement history exceeds the complete projection limit; a full current balance is unavailable.',409,'BANKING_ACTIVITY_INCOMPLETE');
+      return {rows,revisions};
+    },
     get: (scope, packageId, session) => query(Packages, { ...scope, _id: packageId }, session),
     getPackages: (scope, packageIds) => Packages.find({ ...scope, _id: { $in: packageIds } }).maxTimeMS(5000).lean(),
     ledgerAccountIds: scope => Events.distinct('accountId', { ...scope, kind: 'ledger-account', revision: 0 }).maxTimeMS(5000),
@@ -427,14 +449,32 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   const bankName = 'Maple Harbour Bank';
   const evidenceLabel = 'Historical reconstruction baseline — not independent bank confirmation.';
-  async function pendingActivity(bound,accountId,ledger) {
+  function publicInstructionSource(source) {
+    return Object.fromEntries(['entity','id','runId','ref','batchIndex','requestId','bId','requestHash','itemRequestHash','responseHash','recordHash','receiptId','originalActorId','signature'].filter(key=>source?.[key]!==undefined && ['string','number'].includes(typeof source[key])).map(key=>[key,source[key]]));
+  }
+  async function independentActivity(bound,ledger) {
+    if(!ledger || !store().listInstructionActivity)return null;
+    const {rows,revisions}=await store().listInstructionActivity(bound.scope,ledger.account.accountId);
+    return require('./bank-instruction-settlement').projectInstructionActivity({scope:bound.scope,ledger,instructions:rows,revisions});
+  }
+  function publicIndependentActivity(activity) {
+    if(!activity)return null;
+    const events=activity.events.slice(-200).reverse().map(event=>({...event,source:publicInstructionSource(event.source)}));
+    const postedShownCount=events.filter(event=>event.state==='posted').length;
+    return {...activity,events,totalCount:activity.events.length,shownCount:events.length,truncated:activity.events.length>events.length,postedShownCount,postedTruncated:activity.postedCount>postedShownCount};
+  }
+  async function pendingActivity(bound,accountId,ledger,activity) {
+    if(activity) {
+      const all=activity.events.filter(e=>e.state==='pending'),items=all.slice(-200).reverse().map(p=>({eventId:p.eventId,status:p.state,amountMinor:p.amountMinor,currency:p.accountCurrency,bookDate:p.bookDate,receivedAt:p.receivedAt,description:p.description,source:publicInstructionSource(p.source),deliveryActorId:p.deliveryActorId,expectedPostingDate:p.schedule?.expectedPostingDate || null,scheduled:Boolean(p.schedule)}));
+      return {availability:'instruction-only',count:all.length,shownCount:items.length,truncated:all.length>items.length,items,note:'Received business instructions awaiting their banking due date. Pending events do not change the bounded posted balance. Other bank activity and intervening historical months are not established.'};
+    }
     if(!ledger || !store().listInstructions)return {availability:'not-observed',count:null,items:[],note:'Independent pending bank activity is not observed. Retained statement timing items are shown separately.'};
     const {rows,count}=await store().listInstructions(bound.scope,accountId);
     check(Number.isSafeInteger(count) && count>=rows.length,'Pending bank instruction count is unavailable.',409);
     const items=rows.map(row=>{
       const p=row.payload;
       check(sameScope(row,bound.scope) && sameScope(p.scope,bound.scope) && row.kind==='instruction' && row.accountId===accountId && row.contentHash===hash(p) && p.accountId===accountId && p.accountCurrency===ledger.account.accountCurrency && Number.isSafeInteger(p.amountMinor) && p.state==='pending','Pending instruction evidence changed.',409);
-      return {eventId:p.eventId,status:p.state,amountMinor:p.amountMinor,currency:p.accountCurrency,bookDate:p.bookDate,receivedAt:p.receivedAt,description:p.description,source:Object.fromEntries(['entity','id','runId','ref','batchIndex','requestId','bId','requestHash','itemRequestHash','responseHash','recordHash','receiptId','originalActorId','signature'].filter(key=>p.source?.[key]!==undefined).map(key=>[key,p.source[key]])),deliveryActorId:p.deliveryActorId};
+      return {eventId:p.eventId,status:p.state,amountMinor:p.amountMinor,currency:p.accountCurrency,bookDate:p.bookDate,receivedAt:p.receivedAt,description:p.description,source:publicInstructionSource(p.source),deliveryActorId:p.deliveryActorId};
     });
     return {availability:'instruction-only',count,shownCount:items.length,truncated:count>items.length,items,note:'Accepted business instructions received by the independent bank. Pending events do not change the posted balance. Other pending bank activity is not established.'};
   }
@@ -444,6 +484,13 @@ function createBankingWorkspaceService(dependencies = {}) {
   async function recoverInstructions(user,command={}) {
     check(exact(command,['runId']) && (!command.runId || /^[a-f0-9]{24}$/.test(command.runId)),'Retry accepts only an optional exact original run ID.');
     const bound=await bind(user,true);return instructions().recover(bound,command);
+  }
+  let defaultSettlements;
+  const settlements=()=>dependencies.settlements || (defaultSettlements ||= require('./bank-instruction-settlement').createBankInstructionSettlement({store:store(),now,authorize:authorizeBoundAdapter}));
+  async function authorizeBoundAdapter(bound) {return authorizeBound(bound,bound.action,bound.session);}
+  async function settleInstructions(user,command={}) {
+    check(exact(command,['cutoff','eventIds','accountId']),'Settlement accepts only a banking cutoff and exact event identities.');
+    return settlements().settle(await bind(user,true),command);
   }
   function periodEnd(period) { const date = new Date(period + '-01T00:00:00Z'); date.setUTCMonth(date.getUTCMonth() + 1); date.setUTCDate(0); return date.toISOString().slice(0, 10); }
   async function retainedManifest(bound, row) {
@@ -484,7 +531,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     return [...pinned, ...currentPeriods(family).filter(row=>!ledger.packages.some(ref=>ref.period === row.period))].sort((a,b)=>b.period.localeCompare(a.period));
   }
   async function accountSummary(bound, rows, selected) {
-    const ledger = await readLedger(bound,rows[0].accountId);
+    const ledger = await readLedger(bound,rows[0].accountId), activity = await independentActivity(bound,ledger);
     selected ||= ledger ? rows.find(row=>row._id === ledger.packages.at(-1).id) : rows[0];
     const record = ledger ? {Name:ledger.account.accountName,AccountType:ledger.account.accountType} : await account(bound, selected.accountId, selected.accountCurrency);
     let manifest = null; const unavailableEvidence = [];
@@ -498,7 +545,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       period: selected.period, packageId: selected._id, revision: selected.revision, openingMinor: selected.snapshot.openingMinor,
       postedCount: selected.snapshot.events.filter(e => e.expectedResolution !== 'exclude').length,
       availablePeriods: rows.map(row => ({ period: row.period, packageId: row._id, revision: row.revision })),
-      openingEvidence, pendingActivity: await pendingActivity(bound,selected.accountId,ledger), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
+      openingEvidence, pendingActivity: await pendingActivity(bound,selected.accountId,ledger,activity), independentActivity: publicIndependentActivity(activity), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
   }
   async function accounts(user) {
     const bound = await bind(user), rows = await store().list(bound.scope);
@@ -548,6 +595,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { list, detail, accounts, accountDetail, recoverInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
+  return { list, detail, accounts, accountDetail, recoverInstructions, settleInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
 }
 module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };

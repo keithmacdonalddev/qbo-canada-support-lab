@@ -8,6 +8,7 @@ const digest={type:'string',pattern:'^[a-f0-9]{64}$'};
 const DEFINITIONS=[
  {name:'getBankingWorkspace',description:'Read generated banking account-months, blockers and native evidence from saved storage. No QBO calls.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]+$'},period:{type:'string',pattern:'^20[0-9]{2}-[0-9]{2}$'}})},
  {name:'retryBankInstructions',description:'Retry only durable delivery of already accepted business creates to the independent bank. Never calls QuickBooks or resends a financial write. Active financial execution waits; held items need their stated dependency resolved.',input_schema:object({runId:{type:'string',pattern:'^[a-f0-9]{24}$'}})},
+ {name:'settleBankInstructions',description:'Schedule accepted independent bank instructions and post only those whose frozen banking date is due. Halifax calendar, weekend delays, atomic paired transfers and duplicate-safe revisions are enforced. No QuickBooks calls; retained historical statements are unchanged.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},eventIds:{type:'array',minItems:1,maxItems:100,uniqueItems:true,items:{type:'string',pattern:'^bse1_[a-f0-9]{40}$'}},cutoff:{type:'string',pattern:'^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'}})},
  {name:'getBankingPackage',description:'Inspect exact retained CSV/statement metadata and native operator evidence; generated files do not prove reconciliation.',input_schema:object({packageId:digest},['packageId'])},
  {name:'prepareBankingPackage',description:'Register an already generated immutable BF2 package from its exact retained manifest path and hash. Does not generate invented history or execute native work.',input_schema:object({manifest:object({path:{type:'string'},sha256:digest},['path','sha256'])},['manifest'])},
  {name:'getBankingCloseSupport',description:'Read retained native banking evidence for one month for the period-close workflow. Does not attest manually, change protection or certify company-wide reconciliation.',input_schema:object({period:{type:'string',pattern:'^20[0-9]{2}-(0[1-9]|1[0-2])$'}},['period'])},
@@ -16,6 +17,7 @@ function createBankingAccountantTools({workspace=createBankingWorkspaceService()
  async function execute(user,name,input){
   if(name==='getBankingWorkspace'){const list=await workspace.list(user,input),bank=await workspace.accounts(user);return {...list,accounts:bank.accounts,instructionDelivery:bank.instructionDelivery,operatorLoop:await readLoopStatus({packages:list.packages})};}
   if(name==='retryBankInstructions')return workspace.recoverInstructions(user,input);
+  if(name==='settleBankInstructions')return workspace.settleInstructions(user,input);
   if(name==='getBankingPackage'){const pkg=await workspace.detail(user,input.packageId);return {package:pkg,operator:operator?await operator.status(user,pkg.id):null,operatorLoop:await readLoopStatus({packages:[pkg]})};}
   if(name==='getBankingCloseSupport'){
     const list=await workspace.list(user,{period:input.period});

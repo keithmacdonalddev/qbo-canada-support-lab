@@ -25,6 +25,7 @@ const CATEGORIES = Object.freeze({
 const INFO = Object.freeze({
   getBankingWorkspace:{category:'business-read',keywords:['banking','statements','feed','upload','reconciliation','account','month']},
   retryBankInstructions:{category:'banking',keywords:['banking','pending','instructions','retry','recover','delivery']},
+  settleBankInstructions:{category:'banking',keywords:['banking','pending','settle','post','due','instructions']},
   getBankingPackage:{category:'business-read',keywords:['banking','csv','statement','native','operator','blocked']},
   getBankingCloseSupport:{category:'business-read',keywords:['banking','close','reconciliation','evidence']},
   prepareBankingPackage:{category:'quickbooks-write',keywords:['banking','prepare','package','manifest','register']},

@@ -32,6 +32,7 @@ function createBankingWorkspaceRouter(dependencies = {}) {
   }, ['accountId','period']));
   router.get('/accounts', action(req => service().accounts(req.user)));
   router.post('/instructions/retry', action(req => service().recoverInstructions(req.user,req.body)));
+  router.post('/instructions/settle', action(req => service().settleInstructions(req.user,req.body)));
   router.get('/accounts/:accountId', action(req => service().accountDetail(req.user, req.params.accountId, req.query), ['period']));
   router.get('/accounts/:accountId/ledger-baseline', action(req => service().ledgerBaseline(req.user, req.params.accountId, req.query.throughPeriod), ['throughPeriod']));
   router.post('/accounts/:accountId/ledger', action(req => service().adoptLedger(req.user, req.params.accountId, req.body)));

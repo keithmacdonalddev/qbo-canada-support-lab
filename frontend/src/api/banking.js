@@ -19,6 +19,11 @@ export const bankingApi = {
     if (!Array.isArray(data?.results) || data.qboCalls !== 0) throw new Error('Bank-only recovery was not confirmed. Refresh before retrying.')
     return data
   },
+  async settleInstructions(accountId) {
+    const data = (await client.post(base + '/instructions/settle', { accountId })).data?.data
+    if (!Array.isArray(data?.results) || data.qboCalls !== 0) throw new Error('Bank settlement was not confirmed. Refresh before retrying.')
+    return data
+  },
   async resume(packageId, resolution) {
     const data = (await client.post(base + '/operator/resume', { packageId, resolution })).data?.data
     if (data?.resolved !== true || data.packageId !== packageId) throw new Error('The server did not confirm this banking resolution. Refresh and inspect the current pause before retrying.')

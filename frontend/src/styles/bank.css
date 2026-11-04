@@ -91,3 +91,8 @@
 .bank-delivery h2 { font-size: 16px; }
 .bank-delivery-row { display: flex; gap: 20px; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); padding: 12px 0; margin-top: 10px; }
 .bank-delivery-row strong { font-size: 12px; }
+
+.bank-settlement-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.bank-settlement-action p { margin: 0; }
+.bank-settlement-action button { flex-shrink: 0; }
+.bank-posting-date { display: block; margin-top: .45rem; color: var(--bank-muted, #a1a1aa); white-space: nowrap; }
