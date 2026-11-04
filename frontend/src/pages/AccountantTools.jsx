@@ -8,7 +8,7 @@ import '../styles/business-workspace.css'
 import '../styles/accountant-tools.css'
 
 const GROUP_ICONS = { 'quickbooks-read': Search, 'business-read': BookOpen, 'quickbooks-write': FilePen, notes: NotebookPen }
-const CREATE = { yes: ['Yes', 'good'], limited: ['Fixed workflows only', 'working'], no: ['Not built yet', 'attention'], manual: ['QuickBooks only', 'quiet'] }
+const CREATE = { yes: ['Yes', 'good'], limited: ['Fixed workflows only', 'working'], no: ['Unavailable', 'attention'], manual: ['QuickBooks only', 'quiet'] }
 
 // What the accountant can actually do: its tools, in plain English with the
 // exact instructions it receives, and how far they reach into QuickBooks.
@@ -33,8 +33,10 @@ export default function AccountantTools() {
     {catalog && <>
       <p className="act-lead">
         It has <strong>{catalog.counts.tools} tools</strong>; <strong>{catalog.counts.changesQuickBooks}</strong> of them change QuickBooks.
-        It can create <strong>{catalog.counts.canCreate} of {catalog.counts.recordTypes}</strong> record types, only inside fixed, checked workflows.
-        {' '}<strong>{catalog.counts.notBuilt}</strong> record types are not built yet. It cannot edit or void records yet.
+        It can create <strong>{catalog.counts.canCreate} of {catalog.counts.recordTypes}</strong> record types through enabled, checked tools.
+        {' '}It can edit <strong>{catalog.counts.canChange ?? 0}</strong> types and void <strong>{catalog.counts.canVoid ?? 0}</strong> types.
+        {' '}<strong>{catalog.counts.notBuilt}</strong> {catalog.counts.notBuilt === 1 ? 'record type is' : 'record types are'} unavailable through the current tools.
+        {catalog.generalWrite?.note && <>{' '}{catalog.generalWrite.note}</>}
         {catalog.counts.core !== undefined && <>{' '}<strong>{catalog.counts.core}</strong> tools are loaded on every review; the other <strong>{catalog.counts.deferred}</strong> are found by search when needed, and it loads one of its <strong>{catalog.counts.skills} skills</strong> before specialised work.</>}
       </p>
       <div className="act-columns">
@@ -76,7 +78,7 @@ export default function AccountantTools() {
         <section className="bw-panel" aria-labelledby="act-coverage-title">
           <header className="bw-panel-heading"><h2 id="act-coverage-title"><Table2 aria-hidden="true" />What it can do in QuickBooks</h2></header>
           <table className="act-table">
-            <thead><tr><th scope="col">Record</th><th scope="col">Read</th><th scope="col">Create</th><th scope="col">Edit or void</th></tr></thead>
+            <thead><tr><th scope="col">Record</th><th scope="col">Read</th><th scope="col">Create</th><th scope="col">Change</th></tr></thead>
             {[...new Set(catalog.coverage.map(row => row.area))].map(area => <tbody key={area}>
               <tr className="act-area"><th scope="rowgroup" colSpan={4}>{area}</th></tr>
               {catalog.coverage.filter(row => row.area === area).map(row => {
@@ -85,7 +87,7 @@ export default function AccountantTools() {
                   <th scope="row">{row.label}{row.note && <small>{row.note}</small>}</th>
                   <td>{row.read ? 'Yes' : '—'}</td>
                   <td><span className={'act-pill act-pill--' + tone}>{label}</span>{row.via.length > 0 && <small>{row.via.join(' · ')}</small>}</td>
-                  <td>{row.change === 'manual' ? <span className="act-pill act-pill--quiet">QuickBooks only</span> : <span className="act-pill act-pill--attention">Not built yet</span>}</td>
+                  <td>{row.change === 'yes' ? <><span className="act-pill act-pill--good">Yes</span><small>{row.operations?.filter(op => ['update', 'void', 'delete'].includes(op)).map(op => ({update: 'Edit', void: 'Void', delete: 'Delete'}[op])).join(' · ')}</small></> : row.change === 'manual' ? <span className="act-pill act-pill--quiet">QuickBooks only</span> : <span className="act-pill act-pill--attention">Unavailable</span>}</td>
                 </tr>
               })}
             </tbody>)}
