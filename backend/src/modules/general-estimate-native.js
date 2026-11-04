@@ -9,6 +9,7 @@ const recovery=require('./general-estimate-recovery');
 const timeEstimate=require('./general-time-estimate-source');
 const KIND='general-estimate-native-action',EVENT='general-estimate-native-event';
 const MAX_READS=24,MAX_NATIVE_MS=240000;
+const BLANK_DESCRIPTION_STOP='unproved-blank-optional-description';
 function fail(message){throw Object.assign(new Error(message),{status:409,code:'GENERAL_ESTIMATE_NATIVE_HELD'});}
 const check=(ok,message)=>{if(!ok)fail(message);};
 const clone=v=>JSON.parse(JSON.stringify(v));
@@ -43,6 +44,7 @@ function reportShape(report,dates){
 }
 function actionId(scope,run,source){return hash({version:1,kind:KIND,scope,operationId:String(run._id),ref:source.ref,invoiceId:source.item.qboId,estimateId:source.estimateId,receiptId:source.receiptId});}
 function replacementId(rootActionId,noEffectHash){return hash({version:1,kind:KIND,rootActionId,noEffectHash});}
+function blankOptionalDescription(invoice){const lines=(invoice?.Line||[]).filter(line=>line.DetailType==='SalesItemLineDetail');return lines.length===1&&[undefined,null,''].includes(lines[0].Description);}
 function promptFor(plan){
   const i=plan.before.invoice,e=plan.before.estimate,line=i.Line.filter(l=>l.DetailType!=='SubTotalLineDetail')[0];
   return [
@@ -55,7 +57,7 @@ function promptFor(plan){
     'The blue inline informational notice "You have a draft saved. Restore draft" may be present. Leave that stored editor draft untouched: NEVER click Restore draft or delete/discard it. Ignore ONLY this optional notice and use the freshly loaded server-saved Invoice already displayed. BEFORE any input, confirm the visible customer, dates, original line and total match this plan. Actual validation errors, duplicate-number warnings, changed tax/money/company or a restored/changed form are still stop conditions.',
     ...(plan.source.kind===timeEstimate.KIND?['This saved invoice already bills exact TimeActivity '+plan.before.time.Id+'. Preserve its existing TimeActivity link and billed state. Add only Estimate '+e.Id+'; do not replace or rebill the time. Before clicking Add, verify exact Estimate transaction identity '+e.Id+' through native UI/DOM identity or an independently opened native Estimate page. Amount/date/customer alone are insufficient. If the exact candidate ID cannot be verified, stop before Add or Save and report that identity could not be proved. Do not use network or application-state shortcuts.']:[]),
     'Exact source is Estimate '+e.Id+' only. Use the native add/copy whole-estimate procedure into this EXISTING invoice. If copying creates a duplicate financial line, remove only the exact original duplicate line in the UNSAVED draft so one identical source line remains; do not delete any transaction. Exact financial line: '+JSON.stringify(line)+'.',
-    'The Estimate may use a proposed/blank description. In the UNSAVED invoice draft, preserve/restore the invoice original line Description exactly as '+JSON.stringify(line.Description??null)+'. Do not change the saved Estimate description. '+
+    (blankOptionalDescription(i)?'The original invoice optional line Description is absent, null or empty. In the UNSAVED draft, leave or restore its visible Description field blank. Do not type the literal word null. The UI need not prove the underlying null/absent/empty representation; deterministic server readback still enforces the original saved fields. ':'The Estimate may use a proposed/blank description. In the UNSAVED invoice draft, preserve/restore the invoice original line Description exactly as '+JSON.stringify(line.Description)+'. ')+ 'Do not change the saved Estimate description. '+
     'BEFORE Save: inspect and capture the UNSAVED native draft. It must have exactly ONE financial sales line, identical customer, document number, dates, quantity, unit price, amount, tax and totals. Native line ID/source-link representation may change only for the exact quoted line. No extra charges, auto credits, discounts, allocations, payments or links. If any original field cannot be preserved, STOP WITHOUT SAVING.',
     'At most ONE Save attempt. Never retry a click/keyboard submit when its outcome is uncertain. Stop immediately on any uncertainty; do not re-open and save again. A model-driven instruction is not a mechanical click counter: record exactly which Save action was attempted and whether a saved confirmation appeared.',
     'Capture before-save and saved-result screenshots privately in this run output directory. After the one Save, inspect the exact existing Invoice and Estimate in native UI. Stop with a precise result; external deterministic SDK reads will verify accounting. Do not assume UI confirmation proves ledger equality.',
@@ -123,12 +125,13 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     });
   }
   function noEffectOf(authority,event,initial){
-    check(event&&event.contentHash===hash(event.payload)&&event.payload.phase==='no-effect'&&event.payload.authorityHash===authority.contentHash&&event.payload.actionId===authority.payload.actionId&&['native-executable-unavailable','missing-invoice-document-number','unrestored-informational-draft-notice'].includes(event.payload.reason),'The retained no-effect proof is invalid.');
+    check(event&&event.contentHash===hash(event.payload)&&event.payload.phase==='no-effect'&&event.payload.authorityHash===authority.contentHash&&event.payload.actionId===authority.payload.actionId&&['native-executable-unavailable','missing-invoice-document-number','unrestored-informational-draft-notice',BLANK_DESCRIPTION_STOP].includes(event.payload.reason),'The retained no-effect proof is invalid.');
     const plan=authority.payload.plan,after=event.payload.after;
+    if(event.payload.reason===BLANK_DESCRIPTION_STOP)check(plan.attempt===1&&plan.source.kind===timeEstimate.KIND&&blankOptionalDescription(plan.before.invoice)&&event.payload.cleanup?.onlyHomepage===true&&event.payload.cleanup.invoiceId===plan.invoiceId&&event.payload.cleanup.runId===plan.runId&&/^[a-f0-9]{64}$/.test(event.payload.stopEvidence?.sha256||''),'Blank optional Description no-effect needs its exact typed root, original blank field, stop screenshot and journaled cleanup');
     check(plan.source.invoiceOriginalHash===hash(initial.source.original)&&plan.source.estimateOriginalHash===hash(initial.estimate.original)&&(initial.source.sourceKind===timeEstimate.KIND?timeEstimate.unchangedParent(initial.source.original,after.invoice,'Invoice')&&timeEstimate.unchangedParent(initial.estimate.original,after.estimate,'Estimate')&&timeEstimate.unchangedParent(initial.time.original,after.time,'TimeActivity'):unchanged(initial.source.original,after.invoice,'Invoice')&&unchanged(initial.estimate.original,after.estimate,'Estimate'))&&sameQboValue(plan.before.customer,after.customer,{entity:'Customer'})&&event.payload.noDraft?.onlyHomepage===true&&canonical(reportShape(plan.beforeReport,plan.reportScope.dates))===canonical(reportShape(event.payload.afterReport,plan.reportScope.dates)),'No-effect evidence no longer authenticates the original documents.');
     return event;
   }
-  async function discardJournaledDraft(plan,authorityHash,bound){
+  async function discardJournaledDraft(plan,authorityHash,bound,normalizeBlankDescription=false){
     const find=phase=>one(models.Authorities,{_id:hash({actionId:plan.actionId,phase}).slice(0,24),...plan.scope});
     const completed=await find('draft-cleanup-complete');
     if(completed){check(completed.contentHash===hash(completed.payload)&&completed.payload.authorityHash===authorityHash&&completed.payload.proof?.invoiceId===plan.invoiceId&&completed.payload.proof?.runId===plan.runId,'Retained owned cleanup differs');return completed.payload.proof;}
@@ -140,15 +143,16 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       const proof={onlyHomepage:true,invoiceId:plan.invoiceId,runId:plan.runId,witness:started.payload.witness,observation,method:'confirmed-homepage-after-interrupted-owned-discard',observedAt:new Date(now()).toISOString()};
       await retainPhase('draft-cleanup-complete',{proof});return proof;
     }
-    const proof=await runner.discardOwnedDraft({invoiceId:plan.invoiceId,runId:plan.runId,scope:plan.scope,customerName:plan.before.customer.DisplayName,total:plan.before.invoice.TotalAmt,description:plan.before.invoice.Line.find(l=>l.DetailType==='SalesItemLineDetail')?.Description,beforeDiscard:witness=>retainPhase('draft-cleanup-started',{invoiceId:plan.invoiceId,runId:plan.runId,witness,at:new Date(now()).toISOString()})});
+    const proof=await runner.discardOwnedDraft({invoiceId:plan.invoiceId,runId:plan.runId,scope:plan.scope,customerName:plan.before.customer.DisplayName,total:plan.before.invoice.TotalAmt,description:normalizeBlankDescription&&blankOptionalDescription(plan.before.invoice)?'':plan.before.invoice.Line.find(l=>l.DetailType==='SalesItemLineDetail')?.Description,beforeDiscard:witness=>retainPhase('draft-cleanup-started',{invoiceId:plan.invoiceId,runId:plan.runId,witness,at:new Date(now()).toISOString()})});
     await retainPhase('draft-cleanup-complete',{proof});return proof;
   }
   async function verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,reason='native-executable-unavailable',stopScreenshot=null){
     check(runner.readExecution&&runner.assertNoDraft,'No-effect native evidence adapters are required.');
     const retained=await runner.readExecution({runId:plan.runId,promptHash:plan.promptHash,nativeRepair:{actionId:plan.actionId,authorityHash}});
     check(retained&&hash(retained)===hash(execution),'No-effect execution evidence changed.');
-    let stopEvidence=null;if(reason==='unrestored-informational-draft-notice'){check(typeof stopScreenshot==='string'&&stopScreenshot.length>0,'Retained blue-notice stop screenshot is required');stopEvidence=await runner.retainEvidence(execution,stopScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId});}
+    let stopEvidence=null;if(reason==='unrestored-informational-draft-notice'||reason===BLANK_DESCRIPTION_STOP){check(typeof stopScreenshot==='string'&&stopScreenshot.length>0,'Retained blue-notice stop screenshot is required');stopEvidence=await runner.retainEvidence(execution,stopScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId});}
     let cleanup=null;if(reason==='missing-invoice-document-number'){check(plan.attempt===2&&!plan.assignedMissingDocNumber&&recovery.missingDocumentNumber(source)&&runner.discardOwnedDraft,'Only the historical missing-number draft is eligible');cleanup=await discardJournaledDraft(plan,authorityHash,bound);}
+    if(reason===BLANK_DESCRIPTION_STOP){check(plan.attempt===1&&source.sourceKind===timeEstimate.KIND&&blankOptionalDescription(plan.before.invoice)&&runner.discardOwnedDraft,'Only the exact original blank optional Description typed root draft is eligible');cleanup=await discardJournaledDraft(plan,authorityHash,bound,true);}
     const noDraft=await runner.assertNoDraft();check(noDraft?.onlyHomepage===true,'An open draft or pending submit prevents replacement.');
     const typed=source.sourceKind===timeEstimate.KIND;
     const read=async()=>({invoice:await reads.get('Invoice',plan.invoiceId),estimate:await reads.get('Estimate',plan.estimateId),customer:await reads.get('Customer',plan.before.customer.Id),...(typed?{time:await reads.get('TimeActivity',source.timeParent.step.qboId)}:{})});
@@ -170,6 +174,7 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===false&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/MODULE_NOT_FOUND/.test(reply.notes||''))return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads);
     if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===true&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/invoice number.*(blank|required)/i.test(reply.notes||'')&&recovery.missingDocumentNumber(source)&&plan.attempt===2&&!plan.assignedMissingDocNumber)return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,'missing-invoice-document-number');
     if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===false&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&/existing saved draft/i.test(reply.notes||'')&&/not restored or removed/i.test(reply.notes||'')&&/No fields were entered/i.test(reply.notes||'')&&plan.attempt===3&&plan.assignedMissingDocNumber===recovery.missingDocumentNumber(source))return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,'unrestored-informational-draft-notice',reply.beforeSaveScreenshot);
+    if(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===false&&reply.saveAttempts===0&&reply.saveOutcome==='not-attempted'&&plan.attempt===1&&source.sourceKind===timeEstimate.KIND&&blankOptionalDescription(plan.before.invoice)&&/^Stopped at: the native draft shows a blank description, but the UI does not establish whether its underlying value is exactly null\./.test(reply.notes||'')&&/The unsaved draft remains open in the persistent session; it was not removed\./.test(reply.notes||''))return verifyNoEffect(plan,authorityHash,source,estimate,execution,bound,reads,BLANK_DESCRIPTION_STOP,reply.beforeSaveScreenshot);
     check(reply.invoiceId===plan.invoiceId&&reply.estimateId===plan.estimateId&&reply.draftChecked===true&&reply.saveAttempts===1&&reply.saveOutcome==='saved','Native submission is not explicitly known saved; retain its action barrier.');
     const beforeShot=await runner.retainEvidence(execution,reply.beforeSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId}),afterShot=await runner.retainEvidence(execution,reply.afterSaveScreenshot,{scope:plan.scope,accountId:plan.invoiceId,runId:plan.actionId});
     const typed=source.sourceKind===timeEstimate.KIND;
@@ -200,9 +205,9 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
       check(prior.contentHash===hash(prior.payload)&&prior.payload.kind===KIND&&prior.payload.actionId===rootId,'Root native authority changed.');
       const noEffect=await one(models.Authorities,{_id:hash({actionId:rootId,phase:'no-effect'}).slice(0,24),...initial.scope});
       if(noEffect){
-        noEffectOf(prior,noEffect,initial);check(noEffect.payload.reason==='native-executable-unavailable','Only the missing-executable root may have a successor');
-        predecessor={actionId:rootId,authorityHash:prior.contentHash,noEffectHash:noEffect.contentHash,plan:prior.payload.plan};attempt=2;id=replacementId(rootId,noEffect.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
-        if(prior){const next=await one(models.Authorities,{_id:hash({actionId:id,phase:'no-effect'}).slice(0,24),...initial.scope});
+        noEffectOf(prior,noEffect,initial);const blankDescriptionRoot=noEffect.payload.reason===BLANK_DESCRIPTION_STOP;check(noEffect.payload.reason==='native-executable-unavailable'||blankDescriptionRoot,'Only a proved supported root no-effect may have a successor');
+        predecessor={actionId:rootId,authorityHash:prior.contentHash,noEffectHash:noEffect.contentHash,plan:prior.payload.plan,reason:noEffect.payload.reason};attempt=2;id=replacementId(rootId,noEffect.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
+        if(prior&&!blankDescriptionRoot){const next=await one(models.Authorities,{_id:hash({actionId:id,phase:'no-effect'}).slice(0,24),...initial.scope});
           if(next?.payload?.reason==='missing-invoice-document-number'){
             noEffectOf(prior,next,initial);check(prior.payload.plan.attempt===2&&!prior.payload.plan.assignedMissingDocNumber&&prior.payload.plan.predecessor?.actionId===rootId&&next.payload.cleanup?.invoiceId===initial.source.item.qboId&&next.payload.cleanup.runId===prior.payload.plan.runId&&recovery.missingDocumentNumber(initial.source),'Only the exact historical helper-to-missing-number lineage has a final successor');
             predecessor={actionId:id,authorityHash:prior.contentHash,noEffectHash:next.contentHash,plan:prior.payload.plan};attempt=3;id=replacementId(rootId,next.contentHash);prior=await one(models.Authorities,{_id:id.slice(0,24),...initial.scope});
@@ -241,7 +246,7 @@ function createGeneralEstimateNative({models,transaction,access,runner,lease,gua
     try{return await runner.withSession({actor:bound.agentAuthority?'accountant':'codex-cli',scope:initial.scope},()=>withReads(bound,initial.scope,false,async reads=>{
       const state=await load(bound,operationId,ref),{scope,run,source,estimate}=state;
       check(scope.environment===browserScope.environment&&scope.realmId===browserScope.realmId,'The coordinated native browser is restricted to its exact Production company.');
-      let browserReadiness=null;if(attempt>=3){browserReadiness=await runner.assertNoDraft();check(browserReadiness?.onlyHomepage===true,'Final native admission requires a fresh responsive homepage under its verified session');}
+      let browserReadiness=null;if(attempt>=3||predecessor?.reason===BLANK_DESCRIPTION_STOP){browserReadiness=await runner.assertNoDraft();check(browserReadiness?.onlyHomepage===true,'Final native admission requires a fresh responsive homepage under its verified session');}
       const fence=recovery.createRecoveryFence({models,transaction,authorize:async(s,b,session)=>access.authorize(s,'operations.execute',{session}),now});
       const snapshot=await fence.start(scope,run,bound,{invoiceId:source.item.qboId,estimateId:source.estimateId});check(snapshot,'Native repair waits for the idle exact company writer and clear receipt graph.');
       const invoice=await reads.get('Invoice',source.item.qboId),quote=await reads.get('Estimate',source.estimateId);
@@ -291,4 +296,4 @@ function createDefaultGeneralEstimateNative({access,guard,now=()=>Date.now(),cod
     return require('./general-write-service').createDefaultGeneralWrite({access,now,recoveryHints:hints}).reconcileSaved(recoveryBound,operationId);
   }});
 }
-module.exports={KIND,EVENT,MAX_READS,actionId,replacementId,promptFor,unchanged,reportShape,createGeneralEstimateNative,createDefaultGeneralEstimateNative};
+module.exports={KIND,EVENT,MAX_READS,BLANK_DESCRIPTION_STOP,blankOptionalDescription,actionId,replacementId,promptFor,unchanged,reportShape,createGeneralEstimateNative,createDefaultGeneralEstimateNative};

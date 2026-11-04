@@ -17,15 +17,15 @@ const sales=r=>(r?.Line||[]).filter(l=>l.DetailType==='SalesItemLineDetail');
 const allLinks=r=>[...(r?.LinkedTxn||[]),...(r?.Line||[]).flatMap(l=>l.LinkedTxn||[])];
 const nativeId=(scope,run,source)=>hash({version:1,kind:NATIVE,scope,operationId:String(run._id),ref:source.ref,invoiceId:source.item.qboId,estimateId:source.estimateId,receiptId:source.receiptId});
 function invoiceCandidate(item){return item?.entity==='Invoice' && item.op==='create' && item.outcome==='saved' && item.complete===true && item.request?.LinkedTxn?.length===1 && item.request.LinkedTxn[0].TxnType==='TimeActivity' && QID.test(item.request.LinkedTxn[0].TxnId||'');}
-async function managedParent({models,scope,ownerId,step,session}) {
- check(step&&scopeMatches(step,scope)&&step.contractVersion===1&&step.state==='verified'&&QID.test(step.qboId||'')&&step.compilation&&step.receipt&&step.dispatch,'A verified original managed parent is required');
+async function managedParent({models,scope,ownerId,step,session,completedOrigin=false}) {
+ check(step&&scopeMatches(step,scope)&&step.contractVersion===1&&(completedOrigin?['saved','verified','needs-check'].includes(step.state):step.state==='verified')&&QID.test(step.qboId||'')&&step.compilation&&step.receipt&&step.dispatch,'A verified original managed parent is required');
  const intent=await one(models.Intents,{...scope,planHash:step.planHash,logicalKey:step.logicalKey},session),run=await one(models.Runs,{_id:step.operationId,...scope},session),plan=run&&await one(models.Plans,{_id:run.planId,...scope,planHash:step.planHash},session);
  check(intent&&run&&plan&&intent.kind==='create'&&String(plan.createdBy)===ownerId&&String(run.createdBy)===ownerId&&run.status==='verified'&&hash(plan.manifest)===plan.planHash&&plan.planHash===run.planHash&&hash(intent.step)===step.fingerprint&&intent.fingerprint===step.fingerprint&&String(intent.planId)===String(plan._id),'Managed parent original approved intent changed');
  require('./business-period-store').assertRunApproval(run);
  require('./business-operation-plan-store').validateOperationEntry({kind:'create',step:intent.step,policy:intent.policy},scope,plan.manifest.fromDate,plan.manifest.throughDate);
  const entry=plan.manifest.records.filter(r=>r.logicalKey===step.logicalKey);check(entry.length===1&&entry[0].fingerprint===step.fingerprint&&entry[0].kind==='create','Managed parent original manifest differs');
  const request=require('./business-readback').validateCompilation(step.compilation);
- check(step.compilation.logicalKey===step.logicalKey&&step.compilation.intentHash===step.fingerprint&&step.compilation.entity===step.entity&&step.dispatch.requestHash===request.requestHash&&step.dispatch.compilationHash===step.compilation.compilationHash&&step.verification?.compilationHash===step.compilation.compilationHash&&step.verification.syncToken===step.receipt.syncToken,'Managed parent original compilation changed');
+ check(step.compilation.logicalKey===step.logicalKey&&step.compilation.intentHash===step.fingerprint&&step.compilation.entity===step.entity&&step.dispatch.requestHash===request.requestHash&&step.dispatch.compilationHash===step.compilation.compilationHash&&(completedOrigin||(step.verification?.compilationHash===step.compilation.compilationHash&&step.verification.syncToken===step.receipt.syncToken)),'Managed parent original compilation changed');
  const receiptId=hash({scope,dispatchKey:step.dispatch.key}),receipt=await one(models.Receipts,{_id:receiptId,...scope},session),transport=receipt&&require('./business-dispatch-receipt').businessTransportEvidence({...scope,operationId:String(step.operationId),logicalKey:step.logicalKey,entity:step.entity,dispatch:step.dispatch},receipt);
  check(transport&&String(receipt.ownerId)===ownerId&&transport.result.receipt.qboId===step.qboId&&transport.result.receipt.syncToken===step.receipt.syncToken&&transport.result.receipt.evidenceHash===step.receipt.evidenceHash,'Original managed parent transport receipt changed');
  const audits=[];for(const expected of transport.audits)audits.push(await one(models.Audits,{_id:expected.id,realmId:scope.realmId},session));require('./business-dispatch-receipt').assertBusinessTransportAudits(receipt,transport,audits);
@@ -34,26 +34,29 @@ async function managedParent({models,scope,ownerId,step,session}) {
 function bindingRecord(binding,key){const value=binding[key];return typeof value==='string'?value:value?.id;}
 async function nativeLineage({models,scope,root,session}) {
  const rootPlan=root?.payload?.plan;check(root&&root.contentHash===hash(root.payload)&&root.payload.kind===NATIVE&&root.payload.phase==='admitted'&&rootPlan?.source?.kind===KIND&&rootPlan.attempt===1&&rootPlan.actionId===root.payload.actionId,'Typed native root authority changed');
- const nodes=[];let current=root;
+ const nodes=[];let current=root,rootStopReason=null;
  for(let attempt=1;attempt<=4;attempt++){
   const p=current.payload,plan=p.plan;check(current.contentHash===hash(p)&&p.kind===NATIVE&&p.phase==='admitted'&&String(current._id)===plan.actionId.slice(0,24)&&scopeMatches(current,scope)&&scopeMatches(plan.scope,scope)&&plan.attempt===attempt&&plan.rootActionId===rootPlan.actionId&&plan.source.kind===KIND&&same(plan.source,rootPlan.source)&&plan.ownerId===rootPlan.ownerId&&plan.actorId===rootPlan.actorId&&plan.invoiceId===rootPlan.invoiceId&&plan.estimateId===rootPlan.estimateId,'Typed native replacement source changed');await nativeAudit(models,current,'admitted',session);
   const id=plan.actionId,outcome=await one(models.Authorities,{_id:hash({actionId:id,phase:'verified'}).slice(0,24),...scope},session),stop=await one(models.Authorities,{_id:hash({actionId:id,phase:'no-effect'}).slice(0,24),...scope},session);check(!(outcome&&stop),'Native action has conflicting saved/no-effect outcomes');nodes.push({admitted:current,outcome});
   if(outcome||!stop)break;
   const s=stop.payload;check(stop.contentHash===hash(s)&&s.phase==='no-effect'&&s.actionId===id&&s.authorityHash===current.contentHash&&s.noDraft?.onlyHomepage===true&&unchangedParent(plan.before.invoice,s.after?.invoice,'Invoice')&&unchangedParent(plan.before.estimate,s.after?.estimate,'Estimate')&&unchangedParent(plan.before.time,s.after?.time,'TimeActivity')&&same(require('./general-estimate-native').reportShape(plan.beforeReport,plan.reportScope.dates),require('./general-estimate-native').reportShape(s.afterReport,plan.reportScope.dates)),'Typed predecessor no-effect proof changed');await nativeAudit(models,stop,'no-effect',session);
+  const native=require('./general-estimate-native');if(attempt===1)rootStopReason=s.reason;
+  if(s.reason===native.BLANK_DESCRIPTION_STOP){const cleanup=await one(models.Authorities,{_id:hash({actionId:id,phase:'draft-cleanup-complete'}).slice(0,24),...scope},session);check(attempt===1&&native.blankOptionalDescription(plan.before.invoice)&&/^[a-f0-9]{64}$/.test(s.stopEvidence?.sha256||'')&&cleanup&&cleanup.contentHash===hash(cleanup.payload)&&cleanup.payload.authorityHash===current.contentHash&&cleanup.payload.proof?.onlyHomepage===true&&cleanup.payload.proof.invoiceId===plan.invoiceId&&cleanup.payload.proof.runId===plan.runId&&same(cleanup.payload.proof,s.cleanup),'Blank optional Description root lacks exact journaled cleanup');await nativeAudit(models,cleanup,'draft-cleanup-complete',session);}
+
   const used=await one(models.Authorities,{_id:hash({actionId:id,phase:'replacement-admitted'}).slice(0,24),...scope},session);if(!used)break;
-  const nextId=require('./general-estimate-native').replacementId(rootPlan.actionId,stop.contentHash),u=used.payload;check(attempt<4&&u.phase==='replacement-admitted'&&used.contentHash===hash(u)&&u.actionId===id&&u.authorityHash===current.contentHash&&u.noEffectHash===stop.contentHash&&u.successorActionId===nextId&&['native-executable-unavailable','missing-invoice-document-number','unrestored-informational-draft-notice'][attempt-1]===s.reason,'Typed native replacement consumption changed');await nativeAudit(models,used,'replacement-admitted',session);
+  const nextId=require('./general-estimate-native').replacementId(rootPlan.actionId,stop.contentHash),u=used.payload;check(attempt<4&&u.phase==='replacement-admitted'&&used.contentHash===hash(u)&&u.actionId===id&&u.authorityHash===current.contentHash&&u.noEffectHash===stop.contentHash&&u.successorActionId===nextId&&(rootStopReason===native.BLANK_DESCRIPTION_STOP?attempt===1&&s.reason===native.BLANK_DESCRIPTION_STOP:['native-executable-unavailable','missing-invoice-document-number','unrestored-informational-draft-notice'][attempt-1]===s.reason),'Typed native replacement consumption changed');await nativeAudit(models,used,'replacement-admitted',session);
   const next=await one(models.Authorities,{_id:nextId.slice(0,24),...scope},session),np=next?.payload?.plan;check(next&&next.contentHash===u.successorAuthorityHash&&np?.predecessor?.actionId===id&&np.predecessor.authorityHash===current.contentHash&&np.predecessor.noEffectHash===stop.contentHash&&np.actionId===nextId,'Exact consumed native successor is unavailable');current=next;
  }
  return nodes;
 }
-async function loadSource({models,scope,run,ref,session=null,now=Date.now(),retained=null}) {
+async function loadSourceState({models,scope,run,ref,session=null,now=Date.now(),retained=null},completedOrigin=false) {
  const item=run.items?.[ref];if(!invoiceCandidate(item)||run.caseAuthority)return null;
  const batches=run.batches.filter(b=>b.attempt===item.attempt&&b.items?.some(i=>i.ref===ref));check(batches.length===1,'Original time-only Invoice batch is ambiguous');
  const receipt=await one(models.Receipts,{_id:batches[0].transport?.receiptId,...scope},session),source=recovery.creationSourceOf(run,ref,receipt,'Invoice','saved');
  check(source&&item.complete===true&&allLinks(source.original).length===1&&same(header(source.original),header(source.wanted)),'Exact accepted time-only Invoice creation receipt is required');
- const timeId=source.wanted.LinkedTxn[0].TxnId,timeStep=await one(models.Steps,{...scope,entity:'TimeActivity',qboId:timeId},session),time=await managedParent({models,scope,ownerId:String(run.ownerId),step:timeStep,session});
+ const timeId=source.wanted.LinkedTxn[0].TxnId,timeStep=await one(models.Steps,{...scope,entity:'TimeActivity',qboId:timeId},session),time=await managedParent({models,scope,ownerId:String(run.ownerId),step:timeStep,session,completedOrigin});
  check(time.intent.step.dependencies.length===1&&time.intent.step.dependencies[0].entity==='Estimate','Time must belong to one original managed estimate');
- const estimateStep=await one(models.Steps,{...scope,logicalKey:time.intent.step.dependencies[0].logicalKey,entity:'Estimate'},session),estimate=await managedParent({models,scope,ownerId:String(run.ownerId),step:estimateStep,session});
+ const estimateStep=await one(models.Steps,{...scope,logicalKey:time.intent.step.dependencies[0].logicalKey,entity:'Estimate'},session),estimate=await managedParent({models,scope,ownerId:String(run.ownerId),step:estimateStep,session,completedOrigin});
  check(time.intent.step.dependencies[0].fingerprint===estimate.step.fingerprint&&time.plan.manifest.businessKey===estimate.plan.manifest.businessKey,'Original time and estimate chain changed');
  source.estimateId=estimate.step.qboId;source.sourceKind=KIND;
  const rootId=nativeId(scope,run,source);retained ||= await one(models.Authorities,{_id:rootId.slice(0,24),...scope},session);
@@ -79,6 +82,8 @@ async function loadSource({models,scope,run,ref,session=null,now=Date.now(),reta
  const state={scope,run,source,estimate,time,binding,bindingHash:hash(binding)};
  assertBefore(state,{invoice:source.original,estimate:estimate.original,time:time.original});return state;
 }
+// Public source loading is always strict for a new native admission.
+function loadSource(options){return loadSourceState(options);}
 function linksFor(state){return [...header(state.source.original),{TxnId:state.source.estimateId,TxnType:'Estimate'}];}
 function assertBefore(state,before) {
  const {source,estimate,time}=state,i=before.invoice,e=before.estimate,t=before.time;
@@ -109,12 +114,14 @@ async function loadProof({models,scope,run,ref,session=null}) {
  if(!invoiceCandidate(run.items?.[ref])||!models.Authorities?.findOne)return null;
  const admitted=await one(models.Authorities,{...scope,'payload.kind':NATIVE,'payload.phase':'admitted','payload.plan.source.kind':KIND,'payload.plan.operationId':String(run._id),'payload.plan.ref':ref,'payload.plan.attempt':1},session);if(!admitted)return null;
  const p=admitted.payload,plan=p.plan;check(admitted.contentHash===hash(p)&&p.actionId===plan.actionId&&plan.source.bindingHash===hash(plan.source.binding)&&scopeMatches(admitted,scope)&&scopeMatches(plan.scope,scope),'Typed native authority changed');await nativeAudit(models,admitted,'admitted',session);
- const state=await loadSource({models,scope,run,ref,session,retained:admitted});
- check(state&&state.bindingHash===plan.source.bindingHash&&plan.invoiceId===state.source.item.qboId&&plan.estimateId===state.source.estimateId,'Typed native source no longer matches its original work');
  const lineage=await nativeLineage({models,scope,root:admitted,session}),winner=lineage.find(node=>node.outcome);if(!winner)return null;
  const completion=winner.admitted,completionPlan=completion.payload.plan,outcome=winner.outcome;
- check(outcome.contentHash===hash(outcome.payload)&&outcome.payload.kind===EVENT&&outcome.payload.phase==='verified'&&outcome.payload.actionId===completionPlan.actionId&&outcome.payload.authorityHash===completion.contentHash&&outcome.payload.sourceKind===KIND&&outcome.payload.bindingHash===state.bindingHash&&outcome.payload.beforeReportHash===hash(completionPlan.beforeReport),'Typed native completion changed');await nativeAudit(models,outcome,'verified',session);
+ check(outcome.contentHash===hash(outcome.payload)&&outcome.payload.kind===EVENT&&outcome.payload.phase==='verified'&&outcome.payload.actionId===completionPlan.actionId&&outcome.payload.authorityHash===completion.contentHash&&outcome.payload.sourceKind===KIND&&outcome.payload.bindingHash===plan.source.bindingHash&&outcome.payload.beforeReportHash===hash(completionPlan.beforeReport),'Typed native completion changed');await nativeAudit(models,outcome,'verified',session);
  check(same(require('./general-estimate-native').reportShape(completionPlan.beforeReport,completionPlan.reportScope.dates),require('./general-estimate-native').reportShape(outcome.payload.afterReport,completionPlan.reportScope.dates)),'Typed native completion changed TrialBalance');
+ // Only authenticated completed origins may ignore mutable graph-verification state.
+ // Immutable creation receipts, parent compilation/dispatch, binding and native snapshots still authenticate below.
+ const state=await loadSourceState({models,scope,run,ref,session,retained:admitted},true);
+ check(state&&state.bindingHash===plan.source.bindingHash&&plan.invoiceId===state.source.item.qboId&&plan.estimateId===state.source.estimateId,'Typed native source no longer matches its original work');
  if(completionPlan.assignedMissingDocNumber)check(await recovery.loadNativeAssignment({models,scope,source:state.source,estimateOriginal:state.estimate.original,actionId:completionPlan.actionId,authorityHash:completion.contentHash,session}),'Typed native document-number authority changed');
  assertAfter(state,outcome.payload.after,{assignedMissingDocNumber:completionPlan.assignedMissingDocNumber});
  const proof=Object.freeze({kind:KIND,version:1,authorityId:String(completion._id),authorityHash:completion.contentHash,rootAuthorityId:String(admitted._id),rootAuthorityHash:admitted.contentHash,outcomeId:String(outcome._id),outcomeHash:outcome.contentHash,binding:clone(state.binding),bindingHash:state.bindingHash,invoiceId:plan.invoiceId,estimateId:plan.estimateId,timeId:state.time.step.qboId});proofs.set(proof,{after:clone(outcome.payload.after),original:state.source.original});return proof;
