@@ -56,7 +56,7 @@ async function completeOriginContext(Events,scope,session){
   }
  }
 }
-function createMongoBankingStore({ Events, Packages, connection }) {
+function createMongoBankingStore({ Events, Packages, connection, returnModels=null }) {
   const query = (Model, filter, session) => { let q = Model.findOne(filter).maxTimeMS(3000); if (session) q = q.session(session); return q.lean(); };
   return {
     async assertReady() {
@@ -70,6 +70,7 @@ function createMongoBankingStore({ Events, Packages, connection }) {
       }
     },
     async transaction(work) { const session = await connection.startSession(); try { let result; await session.withTransaction(async () => { result = await work(session); }); return result; } finally { await session.endSession(); } },
+    async authenticateReturnSource(bound,eventId,session){const selected=typeof returnModels==='function'?returnModels():returnModels||(Events===require('../models/BankingEvent')?require('./business-runtime').loadModels():null);check(selected?.GeneralWriteRuns&&selected.Receipts,'Return proof stores are unavailable.',409,'BANKING_RETURN_HELD');return require('./bank-origin-service').readPostedReturnSource({models:selected,store:this,bound,eventId,session});},
     getLedger: (scope, accountId, session) => query(Events, { ...scope, kind: 'ledger-account', eventId: '@ledger:' + accountId, revision: 0 }, session),
     async findOriginByDecision(scope,decisionKey,session) {let q=Events.find({...scope,kind:'revision',eventId:{$regex:'^@origin:'},'payload.bookkeeping.decisionKey':decisionKey}).sort({revision:1}).limit(10001).maxTimeMS(5000);if(session)q=q.session(session);const rows=await q.lean();check(rows.length<=10000,'Complete origin decision history unavailable.',409);return rows;},
     listBankOriginContext: (scope,session) => completeOriginContext(Events,scope,session),
@@ -152,20 +153,23 @@ async function loadBankFeedActivity({
       revisions: source.revisions
     }),
     origins = await store.listOriginRows(scope, accountId, session),
+    returnContext=origins.some(r=>r.payload?.kind==='independent-bank-return-v1')?await store.listBankOriginContext(scope,session):null,
     activity = require('./bank-origin-service').projectOriginActivity({
       scope,
       ledger,
       rows: origins,
-      businessActivity
+      businessActivity,returnContext
     });
   const paired = activity.events.filter(e => e.state === 'posted' && e.pairedEventId),
     pairedProofs = {};
   if (paired.length) {
     check(store.loadFeedPeers, 'Complete paired feed source unavailable.', 409, 'BANKING_FEED_INCOMPLETE');
-    const peer = await store.loadFeedPeers(scope, [...new Set(paired.map(e => e.pairedEventId))], session);
+    const peer = await store.loadFeedPeers(scope, [...new Set(paired.filter(e=>!e.source?.returnId).map(e => e.pairedEventId))], session);
     check(peer.rows.length <= 10000 && peer.revisions.length <= 20000, 'Paired feed history exceeds its complete bound.', 409, 'BANKING_FEED_INCOMPLETE');
     const verifier = require('./bank-instruction-settlement');
     for (const event of paired) {
+      if(event.source?.returnId){check(returnContext&&store.authenticateReturnSource,'Return pair proof is unavailable.',409,'BANKING_FEED_PAIR_HELD');const g=require('./bank-origin-service').returnGroup(returnContext,scope,event.source.returnId),original=await store.authenticateReturnSource(bound,g.source.members[0].eventId,session),own=g.legs.find(l=>l.event.eventId===event.eventId),other=g.legs.find(l=>l.event.eventId===event.pairedEventId);check(canonical(original.source)===canonical(g.source)&&own&&other&&other.event.pairedEventId===event.eventId&&other.event.accountId!==event.accountId&&other.event.accountCurrency===event.accountCurrency&&other.event.amountMinor===-event.amountMinor&&other.event.settlementGroupId===event.settlementGroupId&&own.posted.contentHash===event.originHash,'Original and return reciprocal posted groups are unproved.',409,'BANKING_FEED_PAIR_HELD');pairedProofs[event.eventId]=hash({originalSourceHash:g.source.sourceHash,originalMembers:g.source.members.map(m=>({eventId:m.eventId,postedHash:m.postedHash})),returnClaim:g.head.revision===3?returnContext.find(r=>r.eventId===g.claim.eventId&&r.revision===2).contentHash:g.head.contentHash,own:own.posted.contentHash,peer:other.posted.contentHash});continue;}
+
       const rows = peer.rows.filter(r => r.payload?.eventId === event.pairedEventId);
       check(rows.length === 1, 'Paired bank instruction is missing.', 409, 'BANKING_FEED_PAIR_HELD');
       const p = verifier.validateInstruction(rows[0], scope),
@@ -535,7 +539,7 @@ function createBankingWorkspaceService(dependencies = {}) {
   const origins=()=>dependencies.originService||(originRuntime||=require('./bank-origin-service').createDefaultBankOriginService({store:store(),now:()=>Number(new Date(now())),authorize:(bound,session,action)=>authorizeBound(bound,action,session)}));
   function publicOriginPolicy(state){const p=state.policy;return{revision:state.policyRevision,policy:p?{accountId:p.accountId,currency:p.currency,epoch:p.epoch,effectiveFrom:p.effectiveFrom,enabled:p.enabled,feeMinor:p.feeMinor,seriesId:p.seriesId,mapping:{counterpartAccountId:p.mapping.counterpartAccountId,taxTreatment:p.mapping.taxTreatment,...(p.mapping.taxCodeId?{taxCodeId:p.mapping.taxCodeId,netAmountMinor:p.mapping.netAmountMinor}:{})}}:null};}
   function publicOriginBookkeeping(value){return value?Object.fromEntries(['status','creator','decisionKey','bankDate','reason','runId','qboEntity','qboId'].filter(k=>value[k]!==undefined).map(k=>[k,value[k]])):undefined;}
-  async function originPolicy(user,accountId,input={}){check(exact(input,['offset','limit','expectedHash']),'Use exact bank-origin obligation filters.');const offset=input.offset===undefined?0:input.offset,limit=input.limit===undefined?20:input.limit;check(integer(offset)&&offset>=0&&offset<=1000000&&integer(limit)&&limit>=1&&limit<=50&&(input.expectedHash===undefined||HASH.test(input.expectedHash))&&(offset===0||HASH.test(input.expectedHash||'')),'Bank-origin obligations need bounded pagination and their original hash.');const bound=await bind(user),state=await origins().accountState(bound,accountId);let choices=null;try{choices=await origins().choices(bound);}catch(error){if(!['BUSINESS_ACCESS_DENIED','BUSINESS_ACCESS_FORBIDDEN'].includes(error.code))throw error;}const all=state.activity.events.filter(event=>event.source?.entity==='BankOrigin').slice().reverse(),originHash=hash({scope:bound.scope,accountId,events:all});check(input.expectedHash===undefined||input.expectedHash===originHash,'Bank-origin obligations changed. Restart from the latest page.',409,'BANKING_ACTIVITY_CHANGED');const selected=all.slice(offset,offset+limit),nextOffset=offset+selected.length<all.length?offset+selected.length:null,items=selected.map(event=>({...Object.fromEntries(['eventId','accountId','accountCurrency','amountMinor','state','kind','status','bookDate','postingDate','description'].filter(k=>event[k]!==undefined).map(k=>[k,event[k]])),source:publicInstructionSource(event.source),bookkeeping:publicOriginBookkeeping(event.bookkeeping)}));return{...publicOriginPolicy(state),obligations:{items,originHash,total:all.length,neededCount:all.filter(e=>e.bookkeeping.status!=='booked').length,bookedCount:all.filter(e=>e.bookkeeping.status==='booked').length,page:{offset,limit,nextOffset,truncated:nextOffset!==null}},advice:(state.advice||[]).slice(-100).reverse(),adviceTotal:state.advice?.length||0,choices,qboCalls:0};}
+  async function originPolicy(user,accountId,input={}){check(exact(input,['offset','limit','expectedHash']),'Use exact bank-origin obligation filters.');const offset=input.offset===undefined?0:input.offset,limit=input.limit===undefined?20:input.limit;check(integer(offset)&&offset>=0&&offset<=1000000&&integer(limit)&&limit>=1&&limit<=50&&(input.expectedHash===undefined||HASH.test(input.expectedHash))&&(offset===0||HASH.test(input.expectedHash||'')),'Bank-origin obligations need bounded pagination and their original hash.');const bound=await bind(user),state=await origins().accountState(bound,accountId);let choices=null;try{choices=await origins().choices(bound);}catch(error){if(!['BUSINESS_ACCESS_DENIED','BUSINESS_ACCESS_FORBIDDEN'].includes(error.code))throw error;}if(typeof origins().returnChoices==='function')choices={...(choices||{}),returns:await origins().returnChoices(bound,accountId,{offset,limit})};const all=state.activity.events.filter(event=>event.source?.entity==='BankOrigin').slice().reverse(),originHash=hash({scope:bound.scope,accountId,events:all,...(choices?.returns?.choiceHash?{returnChoicesHash:choices.returns.choiceHash}:{})});check(input.expectedHash===undefined||input.expectedHash===originHash,'Bank-origin obligations changed. Restart from the latest page.',409,'BANKING_ACTIVITY_CHANGED');const selected=all.slice(offset,offset+limit),nextOffset=offset+selected.length<all.length?offset+selected.length:null,items=selected.map(event=>({...Object.fromEntries(['eventId','accountId','accountCurrency','amountMinor','state','kind','status','bookDate','postingDate','description'].filter(k=>event[k]!==undefined).map(k=>[k,event[k]])),source:publicInstructionSource(event.source),bookkeeping:publicOriginBookkeeping(event.bookkeeping)}));return{...publicOriginPolicy(state),obligations:{items,originHash,total:all.length,neededCount:all.filter(e=>e.bookkeeping.status!=='booked').length,bookedCount:all.filter(e=>e.bookkeeping.status==='booked').length,page:{offset,limit,nextOffset,truncated:nextOffset!==null}},advice:(state.advice||[]).slice(-100).reverse(),adviceTotal:state.advice?.length||0,choices,qboCalls:0};}
   async function configureOriginPolicy(user,command,context={}){const bound=await bind(user,true);if(context.agentAuthority)bound.agentAuthority=context.agentAuthority;return publicOriginPolicy({policy:await origins().configure(bound,command),policyRevision:command.expectedRevision+1});}
   async function processOriginDue(user,command,context={}){check(exact(command,['accountId','cutoff']),'Use the exact bank-origin due command.');const bound=await bind(user,true);if(context.agentAuthority)bound.agentAuthority=context.agentAuthority;return origins().processDue(bound,command);}
   async function addOriginAdvice(user,command,context={}){const bound=await bind(user,true);if(context.agentAuthority)bound.agentAuthority=context.agentAuthority;return origins().addAdvice(bound,command);}
@@ -544,7 +548,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     if(!ledger || !store().listInstructionActivity)return null;
     const {rows,revisions}=await store().listInstructionActivity(bound.scope,ledger.account.accountId);
     const businessActivity=require('./bank-instruction-settlement').projectInstructionActivity({scope:bound.scope,ledger,instructions:rows,revisions});
-    if(!store().listOriginRows)return businessActivity;return require('./bank-origin-service').projectOriginActivity({scope:bound.scope,ledger,rows:await store().listOriginRows(bound.scope,ledger.account.accountId),businessActivity});
+    if(!store().listOriginRows)return businessActivity;const origins=await store().listOriginRows(bound.scope,ledger.account.accountId),returns=origins.filter(r=>r.payload?.kind==='independent-bank-return-v1'),returnContext=returns.length?await store().listBankOriginContext(bound.scope):null;for(const id of new Set(returns.map(r=>r.payload.returnId))){check(store().authenticateReturnSource,'Return history proof unavailable.',409,'BANKING_RETURN_HELD');const g=require('./bank-origin-service').returnGroup(returnContext,bound.scope,id),proof=await store().authenticateReturnSource(bound,g.source.members[0].eventId);check(canonical(proof.source)===canonical(g.source),'Original return history changed.',409,'BANKING_RETURN_HELD');}return require('./bank-origin-service').projectOriginActivity({scope:bound.scope,ledger,rows:origins,businessActivity,returnContext});
   }
   function publicIndependentActivity(activity) {
     if(!activity)return null;
