@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-04T10:05:09.899Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T10:20:10.041Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -131,7 +131,7 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 
 | ID / status | Deliverable | Direct pass/fail proof | Dependencies / parent scope |
 |---|---|---|---|
-| BANK-2.1 — IMPLEMENTED / PROOF OPEN | Independent durable bank/card ledger with evidenced openings, balances, stable event identities and pending/posted/reversed state; retain the labelled historical baseline. QBO edits must not silently rewrite bank history. | Actual scoped bank state survives reload/reopen with identical balances and identities; opening evidence is traceable; accepted BANK-1 packages/files remain unchanged. Re-reading QBO alone does not prove independence. | Manifest/event/crosswalk consistency now enforced with shared alias validation;72 focused +2 adjacent offline checks pass Nov3. Original files preserved; actual adoption/reopen proof remains OPEN. Fresh validated previews required. See latest progress entry. SB01. |
+| BANK-2.1 — VERIFIED (bounded two-account baseline) | Independent durable bank/card baseline with evidenced openings, balances, stable events and retained history; preserve accepted packages. | Actual normal hash-bound adoptions200; reload and fresh-browser reopen return identical full ledger payloads/40events/balances. Both adopted desktop screens inspected at1440×1000; all76original files match. | Nov4 direct evidence: artifacts/bank-2.1/adoption-20261104/verification-summary.json. Bank123/Sep2023 and card85/May2022–Apr2025 only; ongoing/all-account banking remainsSB01/2.2–2.10. |
 | BANK-2.2 — OPEN | Business payment, deposit and card instructions produce separate bank events with source lineage and duplicate-safe admission. | An actual authorized business instruction appears once in bank history; repeated delivery/recovery of the same instruction creates no duplicate economic event. | 2.1. SB01/SB03. |
 | BANK-2.3 — OPEN | Governed pending-to-posted settlement lifecycle, including posting delays and weekend rules. | Observe the same event pending, then posted when due, with exactly one balance change; rerunning the due cutoff changes nothing already settled. | 2.1–2.2. SB03. |
 | BANK-2.4 — OPEN | Paired transfers, reversals and returned/NSF payments that preserve original history. | Both same-currency transfer legs agree; a return reverses only its intended movement, retains original lineage and cannot settle twice. Foreign transfer allocations are completed in BANK-2.8. | 2.3. SB01/SB03. |
@@ -184,6 +184,8 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-04T10:20:10.041Z — **BANK-2.1 bounded actual acceptance VERIFIED.** Normal guarded hash-bound adoptions persisted the two prepared Production2856 ledgers; no QBO/accepted-package/file changes. Bank123 closingCAD21,292.25/37events; card85 CAD300owed/3events, boundedMay2022–Apr2025. Normal reload plus actual fresh-browser login/reopen preserve identical full payloads; both1440×1000 adopted screens inspected; all76original file hashes match. Reused unchanged prior source/tests/reviews rather than rerunning broad checks. Continue2.2 business-instruction events; full ongoing/all-account bank and native reconciliation remainOPEN. Latest accountant21/220, full Nov1 proof now returns exact tax blocker in40.66seconds; calendarOct31.
 
 - 2026-11-04T10:05:09.899Z — **A03/F01 progress: actual close crash cleared, fresh-window batching installed.** Nov1 actual preparation09:53UTC now fails only on exact tax-account attribution,118general records; no TypeError and no calendar advance. Reused exact native50-ID reader without cross-window reuse; original51GET fixture now2requests/window (query+singletonGET), before/after changes and all financial barriers preserved. InactiveCustomer/Vendor/Item remainGET.37initial focused checks/349syntax plus7finalbatch cases,adapter syntax/diff and distinct final implementation/safety reviews pass. Actual Production2856 five-record/two-window query proof gives stable exact11559–11563 IDs in1.542s,0writes; native retry count/full close performance and3calls/record endurance remainunverified. A05 latest21/220; continue exact tax proof and independent ready full-backlog work.
 
