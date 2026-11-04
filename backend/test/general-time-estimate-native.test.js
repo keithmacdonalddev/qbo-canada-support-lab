@@ -1,0 +1,27 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {hash}=require('../src/modules/business-calendar');
+const native=require('../src/modules/general-estimate-native'),typed=require('../src/modules/general-time-estimate-source');
+const {fixture,scope,ownerId,clock,bound,clone}=require('./helpers/general-time-estimate-native-fixture');
+test('typed saved-time source authenticates original receipts, preserves accepted item and verifies native-only union',async t=>{
+ const f=fixture(t),originalRun=clone(f.run),originalReceipts=clone(f.data.Receipts),source=await f.load();assert.equal(source.source.sourceKind,typed.KIND);assert.equal(source.binding.calendar.logicalKey,f.logicalKey);
+ const result=await f.repair();assert.equal(result.status,'verified');assert.equal(result.accountingUnchanged,true);assert.equal(f.counters.runs,1);assert.ok(f.counters.timeReads>=3);assert.deepEqual(f.run,originalRun);assert.deepEqual(f.data.Receipts,originalReceipts);assert.equal(f.data.Writers[0].unresolved,null);assert.equal((await f.repair()).status,'verified');assert.equal(f.counters.runs,1);
+ const proof=await typed.loadProof({models:f.models,scope,run:f.run,ref:'timeInvoice'});assert.equal(proof.bindingHash,source.bindingHash);assert.equal(typed.derivedRecord(proof).Id,'2000');assert.deepEqual(typed.requestView(f.current.Invoice,proof).LinkedTxn,[{TxnId:'1001',TxnType:'TimeActivity'}]);assert.equal(typed.requestView(f.current.Invoice,clone(proof)),null);
+});
+for(const mode of ['lost-time','extra-estimate','money-change','source-change','report-change'])test('typed native completion retains barrier for '+mode,async t=>{const f=fixture(t,mode);await assert.rejects(f.repair());assert.equal(f.counters.runs,1);assert.ok(f.data.Writers[0].unresolved);assert.equal(f.run.items.timeInvoice.outcome,'saved');assert.equal(f.data.Authorities.some(a=>a.payload.phase==='verified'),false);});
+test('parent audit/receipt, planned dispatch and published binding changes refuse before native launch',async t=>{
+ const f=fixture(t);f.data.Audits[0].afterState.state='changed';await assert.rejects(f.repair());assert.equal(f.counters.runs,0);
+});
+test('already retained planned Invoice dispatch cannot acquire an alternate native binding',async t=>{const f=fixture(t);f.data.Steps.push({...scope,logicalKey:f.logicalKey,state:'unknown',entity:'Invoice'});await assert.rejects(f.repair(),/retained intent or dispatch/);assert.equal(f.counters.runs,0);});
+test('native launcher authenticates typed original parents and union period proof',async t=>{
+ const f=fixture(t),launch=f.config.runner.run;f.config.runner.run=async args=>{const admitted=f.data.Authorities.find(a=>a.payload.phase==='admitted'),plan=admitted.payload.plan,validate=require('../../scripts/banking/native-estimate-authority.cjs').validateNativeLaunch,opts={models:f.models,access:f.config.access,actionId:plan.actionId,authorityHash:admitted.contentHash,runId:plan.runId,task:args.task.prompt,leaseOwner:'terra-live-qbo-signin-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa-123-123',now:clock,browserScope:scope};assert.deepEqual(await validate(opts),{invoiceId:'2000',estimateId:'1000'});assert.deepEqual(plan.periodProof.evidence.records.filter(r=>['Estimate','TimeActivity'].includes(r.entity)).map(r=>r.entity).sort(),['Estimate','TimeActivity']);return launch(args);};assert.equal((await f.repair()).status,'verified');
+});
+
+test('root no-effect followed by a verified replacement retains exact lineage and supplies the close witness',async t=>{
+ const f=fixture(t,'missing-helper'),before=clone(f.run);const first=await f.repair();assert.equal(first.noEffectVerified,true);assert.equal(first.retryAvailable,true);assert.equal(f.counters.runs,1);assert.equal(f.data.Writers[0].unresolved,null);
+ const result=await f.repair();assert.equal(result.status,'verified');assert.equal(f.counters.runs,2);assert.notEqual(result.actionId,first.actionId);
+ const proof=await typed.loadProof({models:f.models,scope,run:f.run,ref:'timeInvoice'});assert.ok(proof);assert.notEqual(proof.authorityId,proof.rootAuthorityId);assert.equal(proof.authorityHash,f.data.Authorities.find(a=>a.payload.actionId===result.actionId&&a.payload.phase==='admitted').contentHash);
+ const child=f.data.Authorities.find(a=>a.payload.actionId===result.actionId&&a.payload.phase==='admitted');const source=await typed.loadSource({models:f.models,scope,run:f.run,ref:'timeInvoice',retained:child,now:clock});assert.equal(source.bindingHash,proof.bindingHash);
+ const gathered=await require('../src/modules/general-write-day-close').generalRecordsFor({Runs:f.models.GeneralWriteRuns,models:f.models,scope,day:'2026-10-07',copy:{read:async(_scope,entity)=>clone(f.current[entity])},now:()=>clock});const row=gathered.records.find(r=>r.entity==='Invoice');assert.ok(row.evidence.accountant.nativeTimeEstimate);assert.equal(require('../src/modules/general-write-close').classifyRecord({entity:'Invoice',current:row.current,evidence:row.evidence}).kind,'accountant');assert.equal(require('../src/modules/qbo-semantic-compare').matchesQboRequest(f.run.items.timeInvoice.request,typed.requestView(row.current,row.evidence.accountant.nativeTimeEstimate),{entity:'Invoice'}),true);assert.deepEqual(f.run,before);
+ const consumed=f.data.Authorities.find(a=>a.payload.phase==='replacement-admitted');consumed.payload.successorAuthorityHash='f'.repeat(64);await assert.rejects(typed.loadProof({models:f.models,scope,run:f.run,ref:'timeInvoice'}));
+});

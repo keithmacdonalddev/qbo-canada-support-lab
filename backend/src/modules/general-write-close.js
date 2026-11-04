@@ -139,6 +139,7 @@ function evaluateDay({ records, ledger, ownSettlements = new Set(), ctx, fromDat
         const apProof=proof?.apOmission,apView=apProof?require('./general-billpayment-recovery').accountingView(row.current,apProof):null;if(apProof&&!apView)throw Error('The proved omitted payable account no longer matches this payment');
         const accountingCurrent=apView||row.current;
         let requestedView = ownDeposit ? { ...row.current, DepositToAccountRef: proof.record.DepositToAccountRef } : accountingCurrent;
+        if(proof.nativeTimeEstimate){const view=require('./general-time-estimate-source').requestView(row.current,proof.nativeTimeEstimate);if(!view)throw Error('The native time/estimate link proof is unavailable or changed');requestedView=view;}
         if(row.entity==='Estimate'&&proof.estimateConversion) requestedView={...requestedView,TxnStatus:proof.estimateConversion.originalStatus};
         if(row.entity==='TimeActivity'&&proof.timeBilling){
           const billed=require('./general-time-billing').requestView(row.current,proof.timeBilling);

@@ -130,9 +130,11 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
     let apOmission=null;if(item.entity==='BillPayment'&&item.reconciliation?.kind===require('./general-billpayment-recovery').KIND){const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope}).maxTimeMS(3000).lean();apOmission=await require('./general-billpayment-recovery').loadProof({models,scope,run,ref,receipt,current});if(!apOmission)fail('Saved bill-payment account proof is unavailable or changed');}
+    const nativeTimeEstimate=item.entity==='Invoice'?await require('./general-time-estimate-source').loadProof({models,scope,run,ref}):null;
+    const nativeInvoice=nativeTimeEstimate?require('./general-time-estimate-source').derivedRecord(nativeTimeEstimate):null;
     const deleted = item.outcome === 'deleted';
     records.push({ entity: item.entity, id, current: current || null, deleted, unavailable: !deleted && !current, before: item.op === 'create' ? null : before,
-      evidence: { accountant: { versionHash: hash(item.record || {}), record: item.record || null, deleted, operation: item.op, request, ...(apOmission?{apOmission}:{}),postingSources: item.postingSources || {} } } });
+      evidence: { accountant: { versionHash: hash(nativeInvoice || item.record || {}), record: nativeInvoice || item.record || null, deleted, operation: item.op, request, ...(nativeTimeEstimate?{nativeTimeEstimate}:{}), ...(apOmission?{apOmission}:{}),postingSources: item.postingSources || {} } } });
   }
   // Ownership is target-specific and must still explain the current settlement,
   // including settlements dated outside this close. Resolve deposits/credit applications
