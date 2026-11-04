@@ -593,10 +593,11 @@ function createBusinessAgentService(options={}) {
   async function scan(){if(closed||scanPromise)return scanPromise;scanPromise=(async()=>{if(typeof store.recoverReviews==='function')await store.recoverReviews();const rows=await store.due();for(const row of rows)kick(String(row._id));lastScanError=null;})().catch(()=>{lastScanError='Business monitoring storage is unavailable.';}).finally(()=>{scanPromise=null;});return scanPromise;}
   // Opt-in only: source publication does not activate native banking work.
   const bankingLoop=options.bankingLoop || (process.env.BANKING_OPERATOR_ENABLED==='true' ? require('./banking-accountant-tools').createBankingRuntime().loop : null);
-  function start(){if(closed||interval)return;bankingLoop?.start();interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
-  function close(){closed=true;bankingLoop?.close();if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
-  async function drain(){await bankingLoop?.drain();await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
+  const bankInstructionLoop=options.bankInstructionLoop || null;
+  function start(){if(closed||interval)return;bankInstructionLoop?.start();bankingLoop?.start();interval=setInterval(()=>void scan(),scanMs);interval.unref?.();void scan();}
+  function close(){closed=true;bankInstructionLoop?.close();bankingLoop?.close();if(interval)clearInterval(interval);interval=null;for(const job of jobs.values())job.controller.abort();}
+  async function drain(){await bankInstructionLoop?.drain();await bankingLoop?.drain();await Promise.allSettled([...jobs.values()].map(job=>job.promise));}
   return {status,blockers,live,reviewRequestReceipt,transcripts,transcript,transcriptStream,control,start,close,drain,scan,diagnostics:()=>({workers:jobs.size,error:lastScanError}),_worker:worker};
 }
-let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService();}
+let singleton;function getBusinessAgentService(){return singleton||=createBusinessAgentService({bankInstructionLoop:require('./bank-instruction-loop').getBankInstructionLoop()});}
 module.exports={createBusinessAgentService,getBusinessAgentService,publicSync};

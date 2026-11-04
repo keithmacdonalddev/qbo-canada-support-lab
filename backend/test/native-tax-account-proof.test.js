@@ -92,3 +92,15 @@ test('native evidence preserves uncovered agencies without granting a control ac
  f.records.set('TaxRate:22',{Id:'22',AgencyRef:{value:'3'}});await assert.rejects(P.contextFor({proof:p,scope,rateIds:['22'],copy:f.copy}),/no retained native/);
  p.uncoveredAgencyIds.push('1');f.rows[0].payload.uncoveredAgencyIds=p.uncoveredAgencyIds;f.rows[0].contentHash=hash(f.rows[0].payload);f.audits[0].afterState.proofHash=f.rows[0].contentHash;await assert.rejects(f.proof(),/uncovered native agencies/);
 });
+
+test('ordinary Account balance timestamps do not invalidate retained native control identity or either ledger window',async()=>{
+ const f=await closeFixture(),old='2026-11-04T02:34:29-08:00',next='2026-11-04T03:15:33-08:00';
+ // Authenticated legacy admissions retained this timestamp. Keep their original payload and audit hashes.
+ for(const a of f.rows[0].payload.associations){a.account.configurationUpdatedAt=old;f.records.get('Account:'+a.accountId).MetaData={LastUpdatedTime:old};}
+ f.rows[0].contentHash=hash(f.rows[0].payload);f.audits[0].afterState.proofHash=f.rows[0].contentHash;
+ const originalProof=clone(f.rows[0]),originalAudit=clone(f.audits[0]);
+ const result=await f.gate.assertPeriodReady(scope,{...f.args,readLedger:async()=>{f.records.get('Account:75').MetaData.LastUpdatedTime=next;f.records.get('Account:75').CurrentBalance+=427.50;return clone(f.report);}});
+ assert.equal(result.results[0].ok,true);assert.deepEqual(f.rows[0],originalProof);assert.deepEqual(f.audits[0],originalAudit);
+ assert.equal(P.configuration('Account',f.records.get('Account:75'),'75').configurationUpdatedAt,undefined);
+ assert.equal(P.configuration('TaxAgency',{...f.records.get('TaxAgency:1'),MetaData:{LastUpdatedTime:next}},'1').configurationUpdatedAt,next);
+});

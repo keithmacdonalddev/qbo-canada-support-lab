@@ -447,6 +447,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       return ledger;
     }); } catch(error) { if(error.code === 11000) fail('Independent baseline was adopted concurrently. Refresh and compare.',409,'BANKING_CONFLICT'); throw error; }
   }
+  const instructionProcessing=bound=>require('./bank-instruction-loop').readBankInstructionLoopStatus(bound.scope,bound.ownerId);
   const bankName = 'Maple Harbour Bank';
   const evidenceLabel = 'Historical reconstruction baseline — not independent bank confirmation.';
   function publicInstructionSource(source) {
@@ -559,7 +560,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     }
     const summaries = [];
     for (const [accountId,family] of groups) { const ledger = await readLedger(bound,accountId); const periods = await ledgerPeriods(bound,ledger,family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
-    return { bankName, evidenceLabel, accounts: summaries, instructionDelivery:await instructionDelivery(bound), truncated: rows.length === 2000, qboCalls: 0 };
+    return { bankName, evidenceLabel, accounts: summaries, instructionProcessing:instructionProcessing(bound), instructionDelivery:await instructionDelivery(bound), truncated: rows.length === 2000, qboCalls: 0 };
   }
   async function accountDetail(user, accountId, filters = {}) {
     check(id(accountId) && exact(filters, ['period']) && (!filters.period || /^\d{4}-(0[1-9]|1[0-2])$/.test(filters.period)), 'Exact account and optional statement month required.');
@@ -584,7 +585,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     });
     check(balance === snapshot.closingMinor, 'Retained transaction movements do not equal the statement closing balance.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
     const retained = view(row);
-    return { bankName, evidenceLabel, ...summary, instructionDelivery:await instructionDelivery(bound), transactions, outstandingItems: clone(snapshot.outstandingItems),
+    return { bankName, evidenceLabel, ...summary, instructionProcessing:instructionProcessing(bound), instructionDelivery:await instructionDelivery(bound), transactions, outstandingItems: clone(snapshot.outstandingItems),
       package: { id: retained.id, contentHash: retained.contentHash, stateVersion: retained.stateVersion, summary: retained.summary, files: clone(snapshot.files), blockers: clone(snapshot.blockers) }, qboCalls: 0 };
   }
   async function list(user, filters = {}) {

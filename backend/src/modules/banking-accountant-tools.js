@@ -15,7 +15,7 @@ const DEFINITIONS=[
 ];
 function createBankingAccountantTools({workspace=createBankingWorkspaceService(),operator=null,readArtifact=createArtifactReader(),readLoopStatus=require('./banking-operator-loop').readBankingLoopStatus}={}) {
  async function execute(user,name,input){
-  if(name==='getBankingWorkspace'){const list=await workspace.list(user,input),bank=await workspace.accounts(user);return {...list,accounts:bank.accounts,instructionDelivery:bank.instructionDelivery,operatorLoop:await readLoopStatus({packages:list.packages})};}
+  if(name==='getBankingWorkspace'){const list=await workspace.list(user,input),bank=await workspace.accounts(user);return {...list,accounts:bank.accounts,instructionProcessing:bank.instructionProcessing,instructionDelivery:bank.instructionDelivery,operatorLoop:await readLoopStatus({packages:list.packages})};}
   if(name==='retryBankInstructions')return workspace.recoverInstructions(user,input);
   if(name==='settleBankInstructions')return workspace.settleInstructions(user,input);
   if(name==='getBankingPackage'){const pkg=await workspace.detail(user,input.packageId);return {package:pkg,operator:operator?await operator.status(user,pkg.id):null,operatorLoop:await readLoopStatus({packages:[pkg]})};}

@@ -55,7 +55,8 @@ function configuration(entity, record, expectedId) {
   need(record && String(record.Id) === String(expectedId) && record.sparse !== true, 'Fresh tax configuration identity is missing or partial.');
   const fields = entity === 'Account' ? ['Id','SyncToken','Active','AccountType','AccountSubType','CurrencyRef','ParentRef','SubAccount'] : entity === 'TaxAgency' ? ['Id','SyncToken','DisplayName','TaxTrackedOnPurchases','TaxTrackedOnSales','LastFileDate','SalesTaxReturnRef'] : ['Id','SyncToken','Active','AgencyRef','RateValue','DisplayType','SpecialTaxType','EffectiveTaxRate','TaxReturnLineRef'];
   const value=Object.fromEntries(fields.filter(k=>record[k] !== undefined).map(k=>[k,clone(record[k])]));
-  if (record.MetaData?.LastUpdatedTime) value.configurationUpdatedAt=record.MetaData.LastUpdatedTime;
+  // Account metadata time also changes with ordinary postings; it does not identify a control-account configuration change.
+  if (entity !== 'Account' && record.MetaData?.LastUpdatedTime) value.configurationUpdatedAt=record.MetaData.LastUpdatedTime;
   if (entity === 'Account') need(record.Active === true && record.AccountType === 'Other Current Liability' && record.AccountSubType === 'GlobalTaxPayable' && record.CurrencyRef?.value === 'CAD', 'Observed native tax control is no longer an active CAD global-tax payable account.');
   return value;
 }
@@ -114,7 +115,8 @@ async function contextFor({proof,scope,rateIds,copy}) {
     const row=proof.associations.find(a=>a.agencyId===agencyId);need(row,'The tax rate agency has no retained native control-account association.');
     if(!seenAgencies.has(agencyId)) {
       const agency=configuration('TaxAgency',await copy.read(scope,'TaxAgency',agencyId),agencyId),account=configuration('Account',await copy.read(scope,'Account',row.accountId),row.accountId);
-      need(canonical(agency)===canonical(row.agency)&&canonical(account)===canonical(row.account),'Native tax agency/control configuration changed; retain a fresh native association proof.');
+      const {configurationUpdatedAt: _postingTimestamp,...retainedAccount}=row.account;
+      need(canonical(agency)===canonical(row.agency)&&canonical(account)===canonical(retainedAccount),'Native tax agency/control configuration changed; retain a fresh native association proof.');
       seenAgencies.add(agencyId);agencies.push(agency);accounts.push(account);
     }
     rates.push(rate);map.set(rateId,row.accountId);

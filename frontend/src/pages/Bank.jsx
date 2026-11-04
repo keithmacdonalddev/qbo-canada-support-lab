@@ -60,6 +60,12 @@ function InstructionDelivery({ delivery, stale, refresh }) {
   return <section className="bank-basis bank-delivery" aria-label="Bank instruction delivery"><h2>Bank delivery needs attention · {delivery.count}{delivery.truncated ? '+' : ''}</h2><p>QuickBooks records are already accepted. Retry delivers only their saved bank instructions and makes no QuickBooks calls.</p>{delivery.runs.slice(0, 5).map(run => <div className="bank-delivery-row" key={run.runId}><div><strong>{run.status === 'held' ? 'Waiting for a dependency' : run.status === 'failed' ? 'Bank delivery interrupted' : 'Bank delivery queued'}</strong>{(run.results || []).filter(row => row.reason).slice(0, 3).map((row, index) => <p key={index}>{row.reason}</p>)}<span className="bank-code">Run {run.runId}</span></div><Button variant="outline" disabled={stale || Boolean(busy)} onClick={() => retry(run.runId)}>{busy === run.runId ? 'Retrying…' : 'Retry bank delivery'}</Button></div>)}{error && <p role="alert" className="bank-caution">{error}</p>}{message && <p role="status">{message}</p>}</section>
 }
 
+function BankClockStatus({ status }) {
+  if (!status) return null
+  if (!status.lastTickAt) return <p className="bank-history-note">Automatic bank checks have not been observed since this app process started. Use Post due activity to inspect pending work.</p>
+  return <p className="bank-history-note" role={status.status === 'unavailable' ? 'status' : undefined}>Last automatic bank check: {new Date(status.lastTickAt).toLocaleString('en-CA')}. {status.status === 'stopped' ? 'Automatic checks are stopped.' : ['unavailable','attention','unobserved'].includes(status.status) ? 'Automatic processing needs attention. Use the due-activity action to inspect the current result.' : 'Due work follows its retained banking dates.'}</p>
+}
+
 function NewBankActivity({ account }) {
   const activity = account.independentActivity
   if (!activity) return null
@@ -121,6 +127,7 @@ function AccountDetail({ id, period, scope, refresh, retry, navigate }) {
     <div className="bank-detail-heading"><div><p className="bank-eyebrow">{account.accountType} · #{account.accountId} · {account.accountCurrency}</p><h1>{account.accountName}</h1></div><label className="bank-period-label">Statement period<select value={account.period} onChange={event => navigate(id, event.target.value)}>{(account.availablePeriods || [{ period: account.period }]).map(item => <option key={item.period} value={item.period}>{item.period}</option>)}</select></label></div>
     <div className="bank-account-balance"><div><span>{balanceLabel(account)}</span><strong>{bankMoney(account.balanceMinor, account.accountCurrency)}</strong><p>As of {account.balanceAsOf || 'date unavailable'} · retained statement</p></div><div><span>Opening</span><strong>{bankMoney(account.openingMinor, account.accountCurrency)}</strong></div><div><span>Posted transactions</span><strong>{account.postedCount}</strong><p>{account.pendingActivity?.availability === 'instruction-only' ? account.pendingActivity.count + ' pending instructions' : 'Pending activity: not independently observed'}</p></div></div>
     <IndependentLedger account={account} />
+    <BankClockStatus status={account.instructionProcessing} />
     <InstructionDelivery delivery={account.instructionDelivery} stale={load.loading || Boolean(load.error)} refresh={retry} />
     <PendingActivity account={account} stale={load.loading || Boolean(load.error)} refresh={retry} />
     <NewBankActivity account={account} />
@@ -140,6 +147,7 @@ function AccountOverview({ scope, refresh, retry, navigate }) {
   return <ReadState load={load} retry={retry}>{load.data && <>
     <div className="bank-overview-heading"><h1>Your accounts</h1><p>Retained statement balances · {load.data.accounts.length} accounts</p></div>
     {!load.data.accounts.length ? <div className="bank-empty"><h2>No retained bank accounts yet</h2><p>Accounts appear when evidenced bank or card statement history is retained for this company. No sample balances are substituted.</p></div> : <div className="bank-account-grid">{load.data.accounts.map(account => <button type="button" className="bank-account-card" key={account.accountId} onClick={() => navigate(account.accountId)}><span className="bank-card-top"><AccountIcon type={account.accountType} /><span>{account.accountType} · {account.accountCurrency}</span><ArrowRight size={17} aria-hidden="true" /></span><h2>{account.accountName}</h2><span className="bank-card-number">Account #{account.accountId}</span><span className="bank-card-balance-label">{balanceLabel(account)}</span><strong>{bankMoney(account.balanceMinor, account.accountCurrency)}</strong><span>As of {account.balanceAsOf || 'date unavailable'}</span><span className="bank-card-footer">{account.period} · {account.postedCount} posted{account.pendingActivity?.availability === 'instruction-only' ? ' · ' + account.pendingActivity.count + ' pending' : ''} · View account</span></button>)}</div>}
+    <BankClockStatus status={load.data.instructionProcessing} />
     <InstructionDelivery delivery={load.data.instructionDelivery} stale={load.loading || Boolean(load.error)} refresh={retry} />
     {load.data.truncated && <p className="bank-caution">Some retained packages were omitted from this response. Account coverage may be incomplete.</p>}
     <p className="bank-baseline-note">{load.data.evidenceLabel || 'Historical reconstruction baseline — not independent bank confirmation.'} Balances describe the displayed retained periods. Eligible accepted instructions and their due settlements are tracked separately on adopted accounts. Complete account history and automatic operation remain open.</p>
