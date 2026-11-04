@@ -122,11 +122,13 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
   }
   const grouped = typeof copy.readMany === 'function' ? await copy.readMany(scope, identities) : null;
   if (typeof copy.readMany === 'function' && (!(grouped instanceof Map) || grouped.size !== identities.length || identities.some(row => !grouped.has(row.entity + ':' + row.qboId) || grouped.get(row.entity + ':' + row.qboId)?.Id !== row.qboId))) fail('Grouped close reads omitted or changed an exact saved identity.');
-  const records = [], settlementVersions = [];
+  const records = [], settlementVersions = [], countCurrent = new Map(), countEffective = new Map();
   for (const { run,ref,item, op, before, id, dates, request } of candidates.values()) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
     const current = item.outcome === 'deleted' ? null : grouped ? grouped.get(item.entity + ':' + id) : await copy.read(scope, item.entity, id);
+    countCurrent.set(item.entity + ':' + id, current);
+    countEffective.set(item.entity + ':' + id, { run, ref, item, revision:run.revision ?? 0, outcome:item.outcome });
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
     let apOmission=null;if(item.entity==='BillPayment'&&item.reconciliation?.kind===require('./general-billpayment-recovery').KIND){const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope}).maxTimeMS(3000).lean();apOmission=await require('./general-billpayment-recovery').loadProof({models,scope,run,ref,receipt,current});if(!apOmission)fail('Saved bill-payment account proof is unavailable or changed');}
@@ -176,7 +178,10 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
   }
   const ownSettlements = [...trusted].map(([key, value]) => ({ key, targets: value.targets })).sort((a, b) => a.key.localeCompare(b.key));
   settlementVersions.sort((a, b) => a.key.localeCompare(b.key));
-  return { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
+  const gathered = { records, dirty, ownSettlements, settlementVersions, runVersions: runs.map(run => ({ id: String(run._id), revision: run.revision ?? 0, items: run.items || {}, batches: run.batches || [] })) };
+  // Non-enumerable sidecar: count provenance cannot alter accounting snapshots,
+  // replay inputs or operational cadence. A count claim is made only after close succeeds.
+  return require('./business-record-count-proof').rememberGeneralCountInputs(gathered,{scope,runs,current:countCurrent,effective:countEffective});
 }
 // Keep the public ownership/target list stable. Runtime consumers also require the
 // exact current body and valid settlement arithmetic before explaining a parent.

@@ -191,6 +191,8 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
       throw error;
     }
     const row = { _id: hash({ scope: company(scope), fromDate, throughDate, snapshotHash, at: now(), ledger: hash(report) }).slice(0, 24), contract: 'general-write-v1', ...company(scope), fromDate, throughDate, kind: 'period', ok: closed.ok, snapshotHash, ledgerHash: hash(report), recordCount: closed.records.length, failures: closed.failures, records: closed.records.map(row => ({ key: row.key, kind: row.kind })), markers: [], ...(ctx.stockEvidence ? {stock:ctx.stockEvidence} : {}), verifiedAt: new Date(now()) };
+    // Financial, identity and source failures above are never downgraded by counts.
+    row.countProof = await require('./business-record-count-proof').captureGeneralCountProof({ scope, fromDate, throughDate, snapshotHash, ledgerHash:row.ledgerHash, before:preview, after, closed, Receipts:models.Receipts, now });
     await Closes.create([row]);
     return row;
   }

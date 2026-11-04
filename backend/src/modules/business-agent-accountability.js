@@ -31,7 +31,7 @@ async function savedSteps(Steps,scope,operationId){
 function scorecard({day,today,snapshot,prior,blockers,business,decisions=[]}){
  const situations=snapshot?.situations?.rows||[],covered=situations.filter(r=>r.evidence?.complete&&r.presentAtAll).map(r=>r.key),old=prior?.coveredKeys;
  const rows=snapshot?.weekly?.rows||[];
- return {day,asOf:snapshot?.asOf||null,records:today&&!today.unavailable?{saved:today.saved,verified:today.verified,target:today.target}:null,
+ return {day,asOf:snapshot?.asOf||null,records:today&&!today.unavailable?{saved:today.saved,verified:today.verified,proofCounts:today.proofCounts||null,target:today.target}:null,
   situations:{covered:covered.length,newlyCovered:Array.isArray(old)?covered.filter(k=>!old.includes(k)).length:null,baselineAvailable:Array.isArray(old),coveredKeys:covered,weeklyGaps:rows.filter(r=>r.status==='missing').length,unknown:rows.filter(r=>r.status==='unknown').length},
   collections:snapshot?.collections||null,closes:{verifiedThrough:business?.verifiedThrough||null,manualReconciliation:'Not established by calendar close'},blockers:blockers?.unavailable?null:(blockers?.blockers||[]).length,decisions:decisions.length,
   limits:'Records are saved outcomes, not a test count. New coverage compares with the previous saved daily baseline; unknown source data is never counted as a gap or proof. Collections are dated payments, not a claim that every overdue invoice was collected.'};

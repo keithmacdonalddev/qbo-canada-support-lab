@@ -148,6 +148,15 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     if(!session)todayCache.set(key,{at:now(),value});
     return value;
   }
+  // Display/review evidence only; operational admission continues to use the
+  // unchanged todayActivity/summarizeToday saved and reservation calculations.
+  async function proofCounts(scope,agentId,ownerId,day,{fresh=false}={}){
+    const activity=await todayActivity(scope,agentId,day,{fresh}),key=hash({scope,agentId,day}),cached=todayCache.get(key);
+    if(!fresh&&cached?.proofCounts)return cached.proofCounts;
+    const value=await require('./business-record-count-proof').readLocalProofCounts({models,scope,agentId,ownerId,day,activity,now});
+    const current=todayCache.get(key);if(current)current.proofCounts=value;
+    return value;
+  }
   // Drop cached counts after a same-day batch is prepared or queued, so the page and the next check see it.
   function forgetToday(){todayCache.clear();}
   // Unfinished operations this agent approved, independently of whether they hold the calendar slot:
@@ -290,6 +299,6 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function run(scope,id){return models.Runs.findOne({_id:id,...scope}).select('_id planHash status createdBy agentAuthority fromDate throughDate recordCount executionRevision activityBatch.day activityBatch.decisionKey activityBatch.activities.type').maxTimeMS(3000).lean();}
   const reviewControlReceipt=(row,key)=>Events.findOne({_id:hash({agentId:String(row._id),kind:'control',key}).slice(0,24),agentId:String(row._id),...scopeOf(row),'data.command':'run-now'}).maxTimeMS(3000).lean();
   const reviewRequestOutcome=(row,request)=>Events.findOne({agentId:String(row._id),...scopeOf(row),'data.passId':request.passId,...(request.attemptId?{'data.attemptId':request.attemptId}:{}),'data.outcome':{$in:require('./business-review-request').TERMINAL}}).sort({at:-1}).maxTimeMS(3000).lean();
-  return {models,get,setup,control,reviewControlReceipt,reviewRequestOutcome,business,workFacts,todayActivity,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,recoverReviews,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
+  return {models,get,setup,control,reviewControlReceipt,reviewRequestOutcome,business,workFacts,todayActivity,proofCounts,forgetToday,unfinishedRuns,dueObligations,events,decisions,decision,latestDailyPlan,capabilityRequests,writeDecisions,latestScorecard,event,recoverReviews,due,claim,current,update,release,progress,run,ownedRuns,liveActivity,transcripts,scopeOf};
 }
 module.exports={createBusinessAgentStore,loadModels,scopeOf,publicEvent};

@@ -233,7 +233,7 @@ test('today’s activity states planned, saved, verified and in-progress counts 
   const work = businessWork({ ...running, today: friday, cadence: { kind: 'slice', reason: 'today is 78 records behind schedule', nextReviewAt: '2026-10-30T17:16:00.000Z' } });
   const item = byKey(work, 'todays-activity');
   assert.equal(item.owner, 'accountant');assert.equal(item.state, 'on-duty');
-  assert.equal(item.facts, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
+  assert.equal(item.facts, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 fixed-workflow completions) · 4 in progress');
   assert.equal(item.detail, 'Working continuously: today is 78 records behind schedule; the next batch of about 60 records of genuine business work is prepared now. Independent batches continue while other operations run or recover.');
   assert.equal(item.next, 'Working continuously (today is 78 records behind schedule).');
   const paused = byKey(businessWork({ ...running, today: friday, cadence: { kind: 'idle', reason: 'nothing is due right now', nextReviewAt: '2026-10-30T17:30:00.000Z' } }), 'todays-activity');
@@ -255,7 +255,7 @@ test('a calendar behind yesterday shows what is closed, what is closing and when
 });
 test('rightNow carries the Today line, the cadence reason and any calendar lag', () => {
   const view = rightNow({ ...live, today: friday, cadence: { kind: 'idle', reason: 'business hours' } });
-  assert.equal(view.today.line, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 verified) · 4 in progress');
+  assert.equal(view.today.line, 'Today (Fri Oct 30): 150 planned · 8 in QuickBooks (7 fixed-workflow completions) · 4 in progress');
   assert.deepEqual(view.cadence, { kind: 'idle', reason: 'business hours' });assert.equal(view.calendar, null);
   const behind = rightNow({ ...live, calendarClose: cadenceModule.nextClose({ verifiedThrough: '2026-10-28' }, '2026-10-30') });
   assert.deepEqual(behind.calendar, { closedThrough: 'Oct 28', closing: 'Oct 29', behindDays: 1 });
@@ -267,4 +267,10 @@ test('current collection eligibility is plain in the work list and never claims 
  const work=businessWork({...running,business:{...running.business,collectionReadiness:readiness}});
  const item=work.items.find(row=>row.key==='collections-eligible');assert.equal(item.state,'on-duty');assert.match(item.detail,/6 overdue imported invoices are currently eligible/);assert.match(item.detail,/normal writer\/calendar checks/);assert.match(item.detail,/decisions.*stale/);assert.match(item.next,/next review/);
  for(const collectionReadiness of [{...readiness,unavailable:true},{...readiness,eligibleInvoiceCount:0},{...readiness,reusableDecisionKeys:[]}])assert.equal(businessWork({...running,business:{...running.business,collectionReadiness}}).items.some(row=>row.key==='collections-eligible'),false);
+});
+
+test('current count proof separates independent readback and books from incomplete legacy evidence',()=>{
+ const today={...friday,proofCounts:{readbackValidated:6,accountingVerified:4,status:'partial'}};
+ assert.match(byKey(businessWork({...running,today}),'todays-activity').facts,/6 read back checked · 4 books checked \(remaining evidence incomplete\)/);
+ assert.equal(rightNow({...live,today}).today.proofCounts,today.proofCounts);assert.equal(today.saved,8);
 });

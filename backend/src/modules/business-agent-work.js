@@ -60,7 +60,8 @@ function todayLine(today){
   if(!today||!today.label)return null;
   if(today.unavailable)return 'Today ('+today.label+'): '+(today.target?today.target+' planned · ':'')+'count unavailable right now';
   if(!today.target)return 'Today ('+today.label+'): closed'+(today.saved?' · '+today.saved+' in QuickBooks':'');
-  return 'Today ('+today.label+'): '+today.target+' planned · '+today.saved+' in QuickBooks'+(today.verified<today.saved?' ('+today.verified+' verified)':'')+(today.reserved?' · '+today.reserved+' in progress':'');
+  const proof=today.proofCounts;
+  return 'Today ('+today.label+'): '+today.target+' planned · '+today.saved+' in QuickBooks'+(proof?' · '+proof.readbackValidated+' read back checked · '+proof.accountingVerified+' books checked'+(proof.status!=='current'?' (remaining evidence incomplete)':''):(today.verified<today.saved?' ('+today.verified+' fixed-workflow completions)':''))+(today.reserved?' · '+today.reserved+' in progress':'');
 }
 // Cadence kinds that mean the accountant is working now or straight after the current review.
 const CONTINUOUS=new Set(['slice','obligations','recovery','catch-up','management','owner','poll']);
@@ -183,7 +184,7 @@ const SHOWN_STEPS=8;
 function rightNow({configured=false,settings={},usage=null,reviewing=false,recovering=false,activePass=null,progress=null,nextDecisionAt=null,lastDecisionAt=null,events=[],sync={},today=null,calendarClose=null,cadence=null,requests=null}={}){
   settings=settings||{};
   // Today's counts, why the next review is when it is, and any calendar lag, for the "Today" line.
-  const extra={today:today&&today.label?{label:today.label,target:today.target,saved:today.saved??null,verified:today.verified??null,reserved:today.reserved??null,ceiling:today.ceiling,ceilingReached:Boolean(today.ceilingReached),unavailable:Boolean(today.unavailable),line:todayLine(today)}:null,
+  const extra={today:today&&today.label?{label:today.label,target:today.target,saved:today.saved??null,verified:today.verified??null,proofCounts:today.proofCounts||null,reserved:today.reserved??null,ceiling:today.ceiling,ceilingReached:Boolean(today.ceilingReached),unavailable:Boolean(today.unavailable),line:todayLine(today)}:null,
     cadence:cadence&&cadence.kind?{kind:cadence.kind,reason:String(cadence.reason||'')}:null,
     requests:requests?{used:requests.used,limit:requests.limit,reached:Boolean(requests.reached),unavailable:Boolean(requests.unavailable),scope:requests.scope||null,sync:requests.sync??null,meteredToday:requests.meteredToday??null,meteredMonth:requests.meteredMonth??null,monthlyLimit:requests.monthlyLimit??null,allowance:requests.allowance??null}:null,
     calendar:calendarClose?{closedThrough:shortDate(calendarClose.closedThrough||null)||null,closing:shortDate(calendarClose.fromDate)+(calendarClose.throughDate!==calendarClose.fromDate?'–'+shortDate(calendarClose.throughDate):''),behindDays:calendarClose.behindDays}:null};

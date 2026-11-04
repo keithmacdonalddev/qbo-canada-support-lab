@@ -130,6 +130,12 @@ function createBusinessAgentService(options={}) {
     const daily=row?await managementFor(row):null,buildList=row?management.openRequests(await capabilityRequestsFor(row)):[];
     if(!options.coverageFor&&business.published&&store.models?.Records)management.warm(bound.scope,store.models.Records,now());
     const today=row&&business.published?await todayFor(bound.scope,row):null,calendarClose=business.published?cadence.nextClose(business,cadence.localParts(now()).date):null,owned=row&&business.published?await ownedFor(bound.scope,row):[];
+    let proofCounts=null;
+    if(today&&!today.unavailable&&typeof store.proofCounts==='function'){
+      try{proofCounts=await store.proofCounts(bound.scope,String(row._id),String(row.ownerId),today.day);}
+      catch(error){const counts=require('./business-record-count-proof');if(!counts.isCountAvailability(error))throw error;proofCounts=counts.unknownCounts({saved:today.saved},'local-count-read-unavailable',now);}
+    }
+    const displayToday=today?{...today,proofCounts}:today;
     const lastScore=row&&typeof store.latestScorecard==='function'?await store.latestScorecard(row).catch(()=>null):null;
     const recoveredError=Boolean(row?.errorDetail?.operationId&&(diagnosticView.recovered||[]).some(r=>r.operationId===row.errorDetail.operationId));
     const savedAgentError=recoveredError?null:row?.lastError;
@@ -140,16 +146,16 @@ function createBusinessAgentService(options={}) {
     return {scope:bound.scope,viewerId:bound.actorId,owner:bound.actorId===bound.ownerId,companyName:bound.companyName,usage:usageState,qboRequests:qboRequests&&!qboRequests.unavailable?{...qboRequests,budget:requests}:qboRequests,configured:Boolean(row),revision:row?.revision||0,settings,
       controlReceipt:row?.controlReceipt||null,
       agent:{reviewRequest,attention:diagnosticView.blockers[0]?.recovery||null,id:row?String(row._id):null,status:!row?'not-configured':!settings.monitoring?'stopped':!settings.autonomous?'paused':usageState.pause?'usage-paused':expired?'recovering':recordedStatus||'ready',summary:reconcileRetained(row?.summary||(!settings.monitoring?'Enable monitoring to establish a current view of the company.':settings.autonomous?'Company monitoring is enabled. The accountant will review the business after its sources are current.':'Company monitoring is enabled. The accountant is paused until you enable autonomous operation.'),business),memory:reconcileRetained(row?.memory,business),currentWork:row?.currentWork||'',lastDecisionAt:iso(row?.lastDecisionAt),nextDecisionAt:iso(row?.nextDecisionAt),specialists:settings.specialists.map(role=>({role,...(row?.specialists?.[role]||{}),status:settings.autonomous?row?.specialists?.[role]?.status||'scheduled':'paused'})),lastError:diagnosticView.blockers[0]?.summary||diagnosticView.blockers[0]?.errorDetail?.message||savedAgentError||lastScanError,errorDetail:diagnosticView.blockers[0]?.errorDetail||savedAgentDetail||null,standingAuthority:row?.grant?{issuedAt:row.grant.issuedAt,authorityHash:row.grant.authorityHash,activityPolicyHash:row.grant.activityPolicyHash||null}:null},
-      management:{...managementView(daily,buildList,today),...reviewState},sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business:{...business,currentStateUpdates:currentStateUpdates(business)},events,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),capabilities:businessAgentCapabilities(),
-      work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,ownerId:row?String(row.ownerId):null,grant:row?.grant||null,lastError:savedAgentError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
-      rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today,calendarClose,requests,cadence:row?.cadence||null})};
+      management:{...managementView(daily,buildList,displayToday),...reviewState},sync:{...sync,nextSyncAt:iso(row?.nextSyncAt)},company:sync.company||{counts:{},totals:{currency:'CAD'},recent:[]},business:{...business,currentStateUpdates:currentStateUpdates(business)},events,decisions:decisions.map(item=>({...item,currentStateUpdates:currentStateUpdates(business)})),capabilities:businessAgentCapabilities(),
+      work:businessWork({usage:usageState,settings,agent:{id:row?String(row._id):null,ownerId:row?String(row.ownerId):null,grant:row?.grant||null,lastError:savedAgentError||null},business,sync,coverage:coverageFor(bound.scope),activityPolicyHash:require('./business-activity-batch').POLICY_HASH,facts,today:displayToday,calendarClose,owned,requests,cadence:row?.cadence?{...row.cadence,nextReviewAt:iso(row.nextDecisionAt)}:null}),
+      rightNow:rightNow({configured:Boolean(row),settings,usage:usageState,reviewing,recovering:Boolean(expired),activePass:row?.activePass||null,progress:row?.reviewProgress||null,nextDecisionAt:iso(row?.nextDecisionAt),lastDecisionAt:iso(row?.lastDecisionAt),events,sync,today:displayToday,calendarClose,requests,cadence:row?.cadence||null})};
   }
   // Today's plan and the build list for the first page: the plan only for today, progress from today's counted activity.
   function managementView(daily,buildList,today){
     const day=cadence.localParts(now()).date,plan=daily?.plan&&daily.plan.day===day?daily.plan:null;
     return {available:Boolean(daily),day,label:cadence.dayLabel(day),reviewAt:new Date(cadence.managementAt(day)).toISOString(),
       plan:plan?{id:plan.id,at:plan.at,title:plan.title,note:plan.detail,findings:plan.findings||[],changes:plan.changes||[]}:null,lastPlanDay:daily?.lastPlanDay||null,
-      progress:today&&!today.unavailable?{target:today.target,saved:today.saved,verified:today.verified,reserved:today.reserved,slotCount:today.slotCount,currentSlot:today.currentSlot}:null,
+      progress:today&&!today.unavailable?{target:today.target,saved:today.saved,verified:today.verified,proofCounts:today.proofCounts||null,reserved:today.reserved,slotCount:today.slotCount,currentSlot:today.currentSlot}:null,
       capabilityRequests:buildList.slice(0,40)};
   }
   async function blockers(user){const bound=await bind(user);const view=await blockerView(bound.scope);await bound.access.authorize(bound.scope,'operations.read');return {scope:bound.scope,...view};}

@@ -23,6 +23,7 @@ export default function BusinessTodayPlan({ management }) {
         <span className="bpl-meter" aria-hidden="true"><span style={{ width: share + '%' }} /></span>
       </div>}
       {progress && progress.target === 0 && <span className="bpl-progress-note">No activity target today</span>}
+      {progress?.proofCounts && <p className="bpl-progress-note" aria-label="Record evidence">{progress.proofCounts.readbackValidated} read back checked · {progress.proofCounts.accountingVerified} books checked<span className="sr-only">. Read back means reread from QuickBooks.</span>{progress.proofCounts.status !== 'current' && <span> · Remaining evidence incomplete</span>}<small> Read back means reread from QuickBooks; saved-response checks alone do not count. {progress.proofCounts.nonfinancial > 0 && <>{progress.proofCounts.nonfinancial} list or non-posting records do not require ledger verification. </>}Older saved records retain their original evidence.</small></p>}
     </header>
     {scorecard && <div className="bpl-note" aria-label="Daily business scorecard">
       <strong>Business results today</strong>

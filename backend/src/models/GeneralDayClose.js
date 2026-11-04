@@ -15,6 +15,8 @@ const schema = new mongoose.Schema({
   errorDetail: fixed(mongoose.Schema.Types.Mixed, false),
   failures: { type: [mongoose.Schema.Types.Mixed], immutable: true, default: [] },
   records: { type: [mongoose.Schema.Types.Mixed], immutable: true, default: [] },
+  // Optional v1 per-create membership; legacy closes are not retroactively upgraded.
+  countProof: fixed(mongoose.Schema.Types.Mixed, false),
   // Dirty markers ('runId:date') this verification covered.
   markers: { type: [String], immutable: true, default: [] },
   // Fresh daily sources and accounting proof that supersede invalidated history.

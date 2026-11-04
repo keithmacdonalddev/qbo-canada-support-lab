@@ -673,3 +673,22 @@ test('truncated diagnostics remain unknown in the actual model review context',a
 });
 
 test('injected independent bank clock follows service start, close and drain without model execution',async()=>{const calls=[];const h=fixture({autonomous:false,bankInstructionLoop:{start:()=>calls.push('start'),close:()=>calls.push('close'),drain:async()=>calls.push('drain')}});h.service.start();h.service.start();h.service.close();await h.service.drain();assert.deepEqual(calls,['start','close','drain']);assert.equal(h.engineCalls,0);});
+
+test('independent count proof is owner visibility only and preserves admission counts',async()=>{
+ const h=fixture();h.today={day:'2026-10-23',runs:[{id:'fixed1',status:'verified',createCount:2},{id:'fixed2',status:'running',createCount:8}],receipts:Array.from({length:7},(_,i)=>({operationId:i<2?'fixed1':'fixed2',logicalKey:'created-'+i,entity:'invoice'}))};
+ const counts={version:1,saved:7,readbackValidated:5,accountingVerified:3,nonfinancial:1,status:'partial'};let reads=0;
+ h.store.proofCounts=async(gotScope,gotAgent,gotOwner,gotDay)=>{reads++;assert.deepEqual(gotScope,scope);assert.equal(gotAgent,agentId);assert.equal(gotOwner,ownerId);assert.equal(gotDay,h.today.day);return counts;};
+ const result=await h.service.status({id:ownerId});assert.equal(reads,1);assert.deepEqual(result.management.progress.proofCounts,counts);assert.equal(result.management.progress.saved,7);assert.equal(result.management.progress.verified,2);assert.equal(result.management.progress.reserved,3);
+ assert.equal(h.today.proofCounts,undefined,'original operational activity remains untouched');assert.equal(h.engineCalls,0);assert.equal(h.syncCalls,0);h.service.close();
+});
+
+test('optional count storage timeout leaves accountant status available with unknown evidence',async()=>{
+ const h=fixture();h.today={runs:[],receipts:[]};h.store.proofCounts=async()=>{throw Object.assign(Error('count storage selection failed'),{name:'MongoServerSelectionError'});};
+ try{const result=await h.service.status({id:ownerId});assert.equal(result.management.progress.proofCounts.status,'unknown');assert.equal(result.management.progress.saved,0);assert.equal(h.engineCalls,0);assert.equal(h.syncCalls,0);}finally{h.service.close();}
+});
+
+test('optional count fallback never hides authorization or company scope failures',async()=>{
+ for(const error of [Object.assign(Error('denied'),{name:'MongoServerError',code:13}),Object.assign(Error('scope changed'),{code:'COUNT_SCOPE_CHANGED',status:409})]){
+  const h=fixture();h.store.proofCounts=async()=>{throw error;};try{await assert.rejects(h.service.status({id:ownerId}),e=>e===error);}finally{h.service.close();}
+ }
+});
