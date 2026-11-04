@@ -87,8 +87,11 @@ function createBankInstructionService(options={}) {
         for(const [ref,item] of Object.entries(run.items || {})) {
           if(item.outcome!=='saved' || item.complete!==true)continue;
           if(run.caseAuthority || item.op!=='create') { results.push({ref,status:'excluded',reason:'Only governed business creates enter ongoing bank activity.'});continue; }
+          if(/^bank_origin_/.test(run.decisionKey) || /\[bank-origin:/.test(item.request?.PrivateNote || '') || /\[bank-origin:/.test(item.record?.PrivateNote || '')) {
+            try {const service=options.bankOrigins||require('./bank-origin-service').createDefaultBankOriginService({store:store(),authorize:(b,s)=>authorize({...b,session:s,action:'periods.manage'}),now});const linked=await service.linkAccepted(bound,run,ref,session);results.push({ref,status:'linked-bank-origin',eventId:linked.eventId||null,qboId:linked.qboId,accountId:linked.accountId||null});}
+            catch(error){if(!/^(BANKING_ORIGIN_|BANKING_INSTRUCTION_)/.test(error.code||''))throw error;results.push({ref,status:'held',reason:'Original bank-origin linkage is held; no second bank movement was created.',code:error.code});}continue;
+          }
           if(!SUPPORTED.has(item.entity))continue;
-          if(/^bank_origin_/.test(run.decisionKey) || /\[bank-origin:/.test(item.request?.PrivateNote || '') || /\[bank-origin:/.test(item.record?.PrivateNote || '')) {results.push({ref,status:'held',reason:'Existing bank-origin activity needs its original event linkage; no second bank event was created.'});continue;}
           const source=await proveSource({models:models(),scope:bound.scope,run,ref,session}),r=source.record;
           C.date(r.TxnDate);
           if(['Payment','SalesReceipt'].includes(item.entity) && [...(r.LinkedTxn || []),...(r.Line || []).flatMap(l=>l.LinkedTxn || [])].some(l=>l.TxnType==='Deposit')) {results.push({ref,status:'excluded',reason:'Receipt is contained in a deposit; only that deposit enters bank activity.'});continue;}

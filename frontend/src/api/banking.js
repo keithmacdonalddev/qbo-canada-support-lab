@@ -4,6 +4,11 @@ import client from './client'
 const base = '/company/banking-workspace'
 const segment = value => encodeURIComponent(String(value))
 export const bankingApi = {
+  async originPolicy(accountId,{signal,offset,limit,expectedHash}={}) {return (await client.get(base+'/accounts/'+segment(accountId)+'/origin-policy',{signal,params:{offset,limit,expectedHash}})).data?.data},
+  async configureOriginPolicy(input) {return (await client.post(base+'/origins/policy',input)).data?.data},
+  async processOriginDue(accountId) {return (await client.post(base+'/origins/process',{accountId})).data?.data},
+  async addOriginAdvice(input) {return (await client.post(base+'/origins/advice',input)).data?.data},
+  async bookOriginEvent(accountId,eventId) {return (await client.post(base+'/origins/book',{accountId,eventId})).data?.data},
   async accounts({ signal } = {}) {
     const data = (await client.get(base + '/accounts', { signal })).data?.data
     if (!Array.isArray(data?.accounts)) throw new Error('The server did not return retained bank accounts. Try refreshing.')

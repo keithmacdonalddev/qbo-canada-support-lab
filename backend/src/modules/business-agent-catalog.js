@@ -10,6 +10,11 @@ const GROUPS = Object.freeze([
   { key: 'notes', label: 'Notes and handoffs' },
 ]);
 const TOOLS = Object.freeze({
+  getBankOriginPolicy: {group:'business-read',summary:'Reads explicit bank fee policy and current counterpart choices; no policy is enabled by default.'},
+  configureBankOriginPolicy: {group:'notes',summary:'Records an explicit future bank fee policy under current authority; no QuickBooks write.'},
+  processBankOriginDue: {group:'notes',summary:'Posts only due configured bank-origin events once, with a visible bookkeeping obligation; no QuickBooks call.'},
+  addBankOriginAdvice: {group:'notes',summary:'Retains exact simulated interest advice or labelled unknown/duplicate situations without inferring missing balances.'},
+  bookBankOriginEvent: {group:'quickbooks-write',summary:'Books the original bank event through the governed General path and links its exact counterpart without another bank movement.'},
   getBankingActivity: { group: 'business-read', summary: 'Pages pending and posted activity for one independent bank account, with due dates and retained source lineage.' },
   retryBankInstructions: { group: 'notes', summary: 'Retries delivery of already accepted business activity to the independent bank; never resends a QuickBooks write.' },
   settleBankInstructions: { group: 'notes', summary: 'Schedules independent bank activity and posts only due instructions, with duplicate-safe balances and paired transfers; makes no QuickBooks calls.' },

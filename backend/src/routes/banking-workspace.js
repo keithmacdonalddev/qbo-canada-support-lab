@@ -30,6 +30,11 @@ function createBankingWorkspaceRouter(dependencies = {}) {
     if(operatorLoop.resumeAvailable && operatorLoop.packageId){try{canResume=await operator().canResume(req.user,operatorLoop.packageId);}catch(error){if(!['BANKING_RESUME_FORBIDDEN','BUSINESS_ACCESS_DENIED'].includes(error.code))throw error;}}
     return {...list,operatorLoop:{...operatorLoop,canResume}};
   }, ['accountId','period']));
+  router.get('/accounts/:accountId/origin-policy', action(req => service().originPolicy(req.user,req.params.accountId,{...(req.query.offset!==undefined?{offset:/^\d+$/.test(req.query.offset)?Number(req.query.offset):NaN}:{}),...(req.query.limit!==undefined?{limit:/^\d+$/.test(req.query.limit)?Number(req.query.limit):NaN}:{}),...(req.query.expectedHash!==undefined?{expectedHash:req.query.expectedHash}:{})}),['offset','limit','expectedHash']));
+  router.post('/origins/policy', action(req => service().configureOriginPolicy(req.user,req.body)));
+  router.post('/origins/process', action(req => service().processOriginDue(req.user,req.body)));
+  router.post('/origins/advice', action(req => service().addOriginAdvice(req.user,req.body)));
+  router.post('/origins/book', action(req => service().bookOriginEvent(req.user,req.body)));
   router.get('/accounts', action(req => service().accounts(req.user)));
   router.post('/instructions/retry', action(req => service().recoverInstructions(req.user,req.body)));
   router.post('/instructions/settle', action(req => service().settleInstructions(req.user,req.body)));

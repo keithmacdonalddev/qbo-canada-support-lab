@@ -408,6 +408,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
       const today = cadence.summarizeToday({ rhythm: cadence.frozenRhythm(agent.cadence, run.day), ...facts, now: now() });
       if (today.unavailable || !today.target || today.saved + today.reserved > today.ceiling) fail('Today’s activity ceiling does not have room for this general write.');
     }
+    if(/^bank_origin_/.test(run.decisionKey||'')&&session?.inTransaction?.())await require('./bank-origin-service').assertBankOriginAdmission({models,scope,run,batch,session,now});
     return { reverifyDates: result.plan.reverifyDates };
   }
   async function reconcileSaved(bound,runId){

@@ -1,16 +1,19 @@
 'use strict';
 const {hash}=require('./business-calendar');
-const WRITE_TOOLS=new Set(['repairEstimateConversion','manageQboRecord','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordCloseChecklistEvidence']);
+const WRITE_TOOLS=new Set(['configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent','repairEstimateConversion','manageQboRecord','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordCloseChecklistEvidence']);
 function decisionData({name,input,plan,day,passId,operation}){
  const meta=input.decision||{},purpose=input.purpose||input.reason||input.note||'Close the elapsed business period under published policy';
  return {version:1,day,tool:name,goal:meta.goal||'Maintain a coherent, active business with deliberate feature coverage',reason:purpose.slice(0,2000),planItem:meta.planItem||'Independent governed work outside the saved daily changes',planId:plan?.id||null,decisionKey:input.decisionKey||operation?.activityBatch?.decisionKey||operation?.decisionKey||(input.throughDate?'period:'+input.throughDate:passId),operationId:input.operationId||null,passId};
 }
-async function retainOutcome({store,row,scope,decision}){
- const d=decision;
+async function retainOutcome({store,row,scope,decision,result}){
+ if(['configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice'].includes(decision.tool)){const value=result?.data||{},data={decisionId:decision.id,decisionKey:decision.decisionKey,status:'bank-only',qboCalls:0,...(Number.isSafeInteger(value.posted)?{posted:value.posted}:{}),...(Number.isSafeInteger(value.revision)?{policyRevision:value.revision}:{})};await store.event(row,'accountant-write-outcome-complete','Independent bank action retained',decision.reason||'',data,null,'write-outcome:'+hash(data));return;}
+ let d=decision;
+ if(d.tool==='bookBankOriginEvent'){const value=result?.data||{},runId=String(value.runId||'');if(!/^[a-f0-9]{24}$/.test(runId)){const data={decisionId:d.id,decisionKey:d.decisionKey,status:value.status==='booked'?'bank-booked':'bank-held',records:[],reason:value.reason||'Bank-origin bookkeeping has no retained General run yet.'};await store.event(row,'accountant-write-outcome-complete','Bank-origin obligation retained',d.reason||'',data,null,'write-outcome:'+hash(data));return;}d={...d,operationId:runId};}
+
  let fixed=[],general=[];
  if(d.operationId){fixed=await store.models.Runs.find({...scope,_id:d.operationId,'agentAuthority.agentId':String(row._id)}).select('_id status activityBatch.decisionKey').limit(1).maxTimeMS(3000).lean();}
  else if(d.decisionKey){fixed=await store.models.Runs.find({...scope,'activityBatch.decisionKey':d.decisionKey,'agentAuthority.agentId':String(row._id)}).select('_id status').limit(20).maxTimeMS(3000).lean();}
- if(store.models.GeneralWriteRuns)general=await store.models.GeneralWriteRuns.find({...scope,'agentAuthority.agentId':String(row._id),...(d.operationId?{_id:d.operationId}:{decisionKey:d.decisionKey})}).select('_id status items').limit(20).maxTimeMS(3000).lean();
+ if(store.models.GeneralWriteRuns)general=await store.models.GeneralWriteRuns.find({...scope,ownerId:String(row.ownerId),'agentAuthority.agentId':String(row._id),...(d.operationId?{_id:d.operationId}:{decisionKey:d.decisionKey})}).select('_id status items').limit(20).maxTimeMS(3000).lean();
  if(!fixed.length&&!general.length){const data={decisionId:d.id,decisionKey:d.decisionKey,status:'no-retained-operation',records:[]};await store.event(row,'accountant-write-outcome-complete','No retained operation for this attempt',d.reason||'',data,null,'write-outcome:'+hash(data));}
  for(const run of [...fixed,...general]){
   const ids=run.items?Object.values(run.items).filter(i=>i.qboId).map(i=>({entity:i.entity,id:String(i.qboId),outcome:i.outcome})): (await savedSteps(store.models.Steps,scope,String(run._id))).map(i=>({entity:i.entity,id:String(i.qboId),outcome:i.state}));
