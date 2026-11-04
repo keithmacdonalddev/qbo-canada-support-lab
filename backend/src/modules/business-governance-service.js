@@ -188,7 +188,7 @@ function createBusinessGovernanceService(dependencies = {}) {
       await touchCoordination(bound, current, session);
       return { scope, operationId, planHash, actorId, expectedRevision: manifest.expectedRevision, fenceHash: hash({ authorityHash: state.authority.contentHash, manifest, periodControlHash: current.policy.periodControl.contentHash }) };
     };
-    return createBusinessOperationPlanStore({ ...models, agentAuthority: dependencies.agentAuthority, agentLease: dependencies.agentLease || null, Agents: dependencies.Agents, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, loadCandidate: async (_scope, candidateHash, session) => {
+    return createBusinessOperationPlanStore({ ...models, fulfillmentModels:models, agentAuthority: dependencies.agentAuthority, agentLease: dependencies.agentLease || null, Agents: dependencies.Agents, transaction, authorize: access.authorize, assertReady, now, writeAudit, checkCurrent, loadCandidate: async (_scope, candidateHash, session) => {
       const row = await read(models.Candidates, { ...scope, candidateHash }, session);
       if (!row || hash(row.payload) !== candidateHash || !row.auditId) fail('The exact server-prepared candidate is unavailable.');
       await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: row.payload, session, fence: true });
@@ -298,6 +298,8 @@ function createBusinessGovernanceService(dependencies = {}) {
       // seven-report observation as any period, with no writes, and records why it has no activity.
       if (!prepared.steps.length) prepared.limitations = [...(prepared.limitations || []), 'No scheduled activity remains in this period. It closes on its report evidence alone, with no QuickBooks records created.'];
     }
+    const fulfilled=models.GeneralWriteRuns&&models.Authorities?require('./general-calendar-fulfillment').createGeneralCalendarFulfillment({models,transaction,access,assertReady,now}):null;
+    if(fulfilled)prepared=await fulfilled.resolvePrepared({scope,prepared,active});
     const estimatePolicy = require('./estimate-conversion-policy');
     estimatePolicy.assertPlanSupport(prepared, estimatePolicy.supportFor({ SalesFormsPrefs: { UsingProgressInvoicing: setup.completeness?.preferences ? setup.observations?.progressInvoicing : null } }));
     // The owner's published tax choices are resolved structurally here. Their
@@ -317,7 +319,17 @@ function createBusinessGovernanceService(dependencies = {}) {
       requiredAssertions: [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, ...['trial-balance', 'balance-sheet', 'profit-and-loss'].map(key => ({ key, evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' })), ...['receivables', 'payables'].map(key => ({ key, evidenceType: 'open-balances-at-date', currency: 'CAD' }))] };
     const assembly = assembleBusinessOperation({ prepared, history, context, now: now() });
     const policies = await (dependencies.derivePolicies || deriveBusinessPolicies)(assembly, client, active.authority.contentHash, now());
-    const boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
+    let boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
+    const fulfilledEntries=[];
+    for(const entry of boundCandidate.candidate.entries){
+      if(entry.kind!=='fulfilled'){fulfilledEntries.push(entry);continue;}
+      if(!fulfilled)fail('Typed General fulfillment is unavailable.');
+      const origin=await fulfilled.freeze({scope,step:entry.step,policy:entry.policy,active});
+      if(origin.admissionFence.beforeRevision!==current.policy.revision)fail('Company activity changed before the fulfilled origin was frozen.');
+      current.policy.revision=origin.admissionFence.afterRevision;
+      fulfilledEntries.push({...entry,fulfillment:require('./general-calendar-fulfillment').originPointer(origin)});
+    }
+    boundCandidate={...boundCandidate,candidate:{...boundCandidate.candidate,entries:fulfilledEntries}};
     let stockPreparation = null;
     if (active.value.stockRoot) {
       const { state, carry } = await require('./business-stock-history').readCommittedStockOpening(models, active);

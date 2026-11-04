@@ -40,7 +40,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   const authorize = access.authorize;
   const gate = createQboWriteGate({ ...models, transaction, assertReady, now, assertBusinessAuthority: ({ run, session }) => assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: run, session, fence: true }) });
   const writeAudit = createBusinessAuditWriter({ scope, actorId, ownerId, Audits: models.Audits, transaction, access });
-  const plans = createBusinessOperationPlanStore({ ...models, transaction, assertReady, authorize, now, readOnly: true });
+  const plans = createBusinessOperationPlanStore({ ...models, fulfillmentModels:models, transaction, assertReady, authorize, now, readOnly: true });
   const assertCoordination = async ({ session, phase } = {}) => {
     await assertReady();
     const policy = await models.Policies.findOne({ environment: scope.environment, realmId: scope.realmId }).select('contractVersion connectionId state preparationEvidenceHash revision').session(session).maxTimeMS(3000).lean();
@@ -61,9 +61,10 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     }
   };
   const writerFence = createBusinessWriterFence({ ...models, assertIntegration: assertCoordination, now });
-  const state = createBusinessRunState({ ...models, transaction, authorize, assertReady, writeAudit, now });
+  const fulfillments=require('./general-calendar-fulfillment').createProofStore({models,now});
+  const state = createBusinessRunState({ ...models, fulfillments, transaction, authorize, assertReady, writeAudit, now });
   let verification;
-  const steps = createBusinessStepStore({ ...models, transaction, authorize, assertReady, writeAudit, now, loadIntent: plans.loadIntent, fence: writerFence.fenceStep,
+  const steps = createBusinessStepStore({ ...models, transaction, authorize, assertReady, writeAudit, now, loadIntent: plans.loadIntent, fence: writerFence.fenceStep, fulfillments, fenceFulfillment:writerFence.fenceFulfillment,
     loadRecovery: createBusinessDispatchReceiptReader({ ...models, transaction, authorize, assertReady, settleUnsent: gate.releaseUnsent }),
     loadGraphReadback: input => verification.loadGraphReadback(input), graphSnapshot: input => verification.graphSnapshot(input),
   });
@@ -73,10 +74,10 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     const saved = await state.inspect(scope, operationId);
     if (boundPlanHash && saved.planHash !== boundPlanHash) fail('The runtime saved plan changed.');
     boundPlanHash = saved.planHash;
-    if (!verification) verification = createBusinessVerificationRuntime({ scope, operationId, planHash: boundPlanHash, ...models, transaction, assertReady, access, writerFence, plans, now });
+    if (!verification) verification = createBusinessVerificationRuntime({ scope, operationId, planHash: boundPlanHash, ...models, fulfillments, transaction, assertReady, access, writerFence, plans, now });
     return saved;
   };
-  const evidence = createBusinessPeriodEvidence({ ...models, transaction, access, assertReady, writerFence, steps, readStock: require('./business-stock-source').createBusinessStockReader({ access, now }), readReports: createBusinessReportReader({ access, now }), writeAudit, now });
+  const evidence = createBusinessPeriodEvidence({ ...models, transaction, access, assertReady, writerFence, steps, fulfillments, readStock: require('./business-stock-source').createBusinessStockReader({ access, now }), readReports: createBusinessReportReader({ access, now }), writeAudit, now });
   const periods = createBusinessPeriodStore({ ...models, Writer: writerFence, transaction, authorize, assertReady, writeAudit, loadProof: evidence.loadProof, now });
   // Runs when the operation starts and immediately before each write (beforeDispatch
   // passes the step's logicalKey), while this operation holds the company writer.
@@ -122,7 +123,7 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
   }
   async function execute({ signal } = {}) {
     await bind();
-    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, purchaseOrderSources: require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, readRecord: verification.rawRecord, history: plans.history, now }), adoptedSources: require('./business-adopted-settlement').createAdoptedSettlementReader({ Calendars: models.Calendars, PopulationRecords: models.PopulationRecords || require('../models/BusinessPopulationRecord'), readRecord: verification.rawRecord }), now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
+    const dispatch = createBusinessDispatcher({ steps, loadIntent: plans.loadIntent, loadCompilationEvidence: createBusinessCompilationRuntime({ scope, operationId, planHash: boundPlanHash, access, plans, steps, verification, assertReady, loadFulfillment:fulfillments.origin, purchaseOrderSources: require('./business-purchase-order-receipt').createPurchaseOrderReceiptReader({ models, readRecord: verification.rawRecord, history: plans.history, now }), adoptedSources: require('./business-adopted-settlement').createAdoptedSettlementReader({ Calendars: models.Calendars, PopulationRecords: models.PopulationRecords || require('../models/BusinessPopulationRecord'), readRecord: verification.rawRecord }), now }), resolveClient: access.resolveClient, authorize, assertReady, beforeDispatch: validateOpening, now });
     return createBusinessOperationRunner({ state, plans, steps, dispatch, periods, prepareEvidence: evidence.prepareEvidence, validateOpening })(scope, operationId, { signal });
   }
   return Object.freeze({ execute, settleStop: async () => {

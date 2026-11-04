@@ -548,6 +548,18 @@ function createBankingWorkspaceService(dependencies = {}) {
       availablePeriods: rows.map(row => ({ period: row.period, packageId: row._id, revision: row.revision })),
       openingEvidence, pendingActivity: await pendingActivity(bound,selected.accountId,ledger,activity), independentActivity: publicIndependentActivity(activity), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
   }
+  async function activity(user,accountId,input={}) {
+    check(id(accountId)&&exact(input,['state','offset','limit','expectedHash']),'Exact account and supported current-activity filters required.');
+    const state=input.state===undefined?'all':input.state,offset=input.offset===undefined?0:input.offset,limit=input.limit===undefined?20:input.limit;
+    check(['all','pending','posted'].includes(state)&&integer(offset)&&offset>=0&&offset<=1000000&&integer(limit)&&limit>=1&&limit<=50&&(input.expectedHash===undefined||HASH.test(input.expectedHash))&&(offset===0||HASH.test(input.expectedHash||'')),'Current activity needs bounded pagination and the first page activityHash for later pages.');
+    const bound=await bind(user),ledger=await readLedger(bound,accountId);
+    check(ledger&&store().listInstructionActivity,'An adopted baseline and complete independent activity storage are required.',409,'BANKING_ACTIVITY_UNAVAILABLE');
+    const projection=await independentActivity(bound,ledger),activityHash=hash({scope:bound.scope,accountId,baselineHash:ledger.contentHash,events:projection.events});
+    check(input.expectedHash===undefined||input.expectedHash===activityHash,'Independent activity changed. Restart at offset0 with the new activityHash.',409,'BANKING_ACTIVITY_CHANGED');
+    const all=projection.events.filter(event=>state==='all'||event.state===state).slice().reverse(),selected=all.slice(offset,offset+limit),nextOffset=offset+selected.length<all.length?offset+selected.length:null;
+    const items=selected.map(event=>({...Object.fromEntries(['eventId','revision','accountId','accountCurrency','amountMinor','state','disposition','bookDate','receivedAt','description','creator','expectedResolution','settlementGroupId','pairedEventId','postingDate','postingBasis','settledAt','deliveryActorId','settlementActorId'].filter(key=>event[key]!==undefined).map(key=>[key,event[key]])),source:publicInstructionSource(event.source),expectedPostingDate:event.schedule?.expectedPostingDate||null,scheduled:Boolean(event.schedule),stateHistory:clone(event.stateHistory)}));
+    return {accountId,accountCurrency:ledger.account.accountCurrency,availability:'instruction-only',activityHash,state,baselineHash:projection.baselineHash,baselineThroughPeriod:projection.baselineThroughPeriod,baselineBalanceMinor:projection.baselineBalanceMinor,activityMovementMinor:projection.activityMovementMinor,boundedBalanceMinor:projection.boundedBalanceMinor,pendingCount:projection.pendingCount,pendingNativeMinor:projection.pendingNativeMinor,postedCount:projection.postedCount,coverage:clone(projection.coverage),items,page:{offset,limit,totalObserved:all.length,activityTotalObserved:projection.events.length,returned:items.length,nextOffset,truncated:nextOffset!==null,upstreamTruncated:false,completeProjection:true},qboCalls:0};
+  }
   async function accounts(user) {
     const bound = await bind(user), rows = await store().list(bound.scope);
     check(rows.every(row => sameScope(row, bound.scope)), 'Stored banking scope mismatch.', 409);
@@ -596,6 +608,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { list, detail, accounts, accountDetail, recoverInstructions, settleInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
+  return { list, detail, accounts, accountDetail, activity, recoverInstructions, settleInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
 }
 module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };

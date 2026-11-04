@@ -55,6 +55,7 @@ function validatePeriodProof(run, proof, now = Date.now()) {
   const logical = new Set(), physical = new Set();
   for (const record of proof.records) {
     if (!record || !validHash(record.logicalKey) || !validHash(record.fingerprint) || !validHash(record.observedHash) || record.state !== 'verified' || typeof record.entity !== 'string' || !record.entity || typeof record.qboId !== 'string' || !record.qboId || typeof record.syncToken !== 'string' || !record.syncToken || typeof record.auditId !== 'string' || !record.auditId || !fresh(record.observedAt, now) || (!Array.isArray(record.relationships) || record.relationships.length > 20)) throw problem('Every managed record needs fresh saved content, version, relationship and audit evidence');
+    if(record.fulfillment!==undefined){const f=record.fulfillment;if(record.entity!=='Invoice'||f?.kind!=='general-calendar-fulfillment'||f.version!==1||!/^[a-f0-9]{24}$/i.test(f.authorityId||'')||!validHash(f.authorityHash)||f.logicalKey!==record.logicalKey||f.qboId!==record.qboId||f.fingerprint!==record.fingerprint)throw problem('The distinct fulfilled-origin evidence changed.');}
     const id = canonical([record.entity, record.qboId]);
     if (logical.has(record.logicalKey) || physical.has(id)) throw problem('Record verification contains duplicate identities');
     logical.add(record.logicalKey); physical.add(id);

@@ -56,7 +56,7 @@ async function deriveBusinessPolicies(assembly, client, authorityHash, now = Dat
   }
   const policies = [];
   for (const entry of assembly.candidate.entries) {
-    if (entry.kind !== 'create') continue;
+    if (entry.kind !== 'create' && !(entry.kind==='fulfilled'&&!entry.policy)) continue;
     const step = entry.step, refs = Object.fromEntries(step.references.filter(ref => ref.entity === 'TaxCode').map(ref => [ref.key, ref.id]));
     const lifecycle = lifecyclePolicy(step);
     const policy = { ...(lifecycle ? { lifecycle } : {}), version: 1, scope: assembly.candidate.scope, status: 'approved', country: 'CA', currency: 'CAD', fromDate: assembly.candidate.fromDate, throughDate: assembly.candidate.throughDate, stepHash: hash(step), authorityHash,

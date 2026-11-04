@@ -6,8 +6,9 @@ const schema = new mongoose.Schema({
   realmId: fixed(String), environment: { ...fixed(String), enum: ['sandbox', 'production'] },
   connectionId: fixed(mongoose.Schema.Types.ObjectId),
   planId: fixed(mongoose.Schema.Types.ObjectId), planHash: fixed(String), ordinal: { ...fixed(Number), min: 0, max: 999 },
-  logicalKey: fixed(String), fingerprint: fixed(String), kind: { ...fixed(String), enum: ['create', 'existing'] },
+  logicalKey: fixed(String), fingerprint: fixed(String), kind: { ...fixed(String), enum: ['create', 'existing', 'fulfilled'] },
   step: fixed(mongoose.Schema.Types.Mixed), policy: fixed(mongoose.Schema.Types.Mixed),
+  fulfillment: { type: mongoose.Schema.Types.Mixed, immutable: true },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, planId: 1, logicalKey: 1 }, { unique: true });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, planId: 1, ordinal: 1 }, { unique: true });

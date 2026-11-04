@@ -12,15 +12,13 @@ function endpointFor(record, accountId) { date(record.TxnDate); if (!QBO_ID.test
 // QuickBooks omits the control account on some saved records; the General Ledger
 // proves it. Ledger type labels and the sign of the receivables/payables posting.
 const LEDGER = Object.freeze({ Invoice: ['Invoice', 1], Payment: ['Payment', -1], CreditMemo: ['Credit Memo', -1], BillPayment: ['Bill Payment (Cheque)', -1] });
-function accountPostingEvidence(input) {
-  const { compiled, receipt, observed, accountBinding, accountObserved, report, reportObservedAt, beforeFence, afterFence, now = Date.now() } = input;
-  // Lazy to avoid the compiler/read-back module initialization cycle.
-  const request = require('./business-readback').validateCompilation(compiled), scope = scoped(request.scope), record = observed?.record, payload = JSON.parse(request.body), payable = compiled.entity === 'BillPayment', referenceKey = payable ? 'APAccountRef' : 'ARAccountRef';
-  if (!LEDGER[compiled.entity] || !record || record[referenceKey] !== undefined || observed.entity !== compiled.entity || !sameScope(observed.scope, scope) || observed.recordHash !== hash(record) || !fresh(observed.observedAt, now) || record.CurrencyRef?.value !== 'CAD' || record.TxnDate !== payload.TxnDate || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken) || !QBO_ID.test(record.Id || '')) fail('Only an unchanged complete invoice with an omitted receivables field can use ledger evidence.');
-  if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.qboId !== record.Id || receipt.requestHash !== request.requestHash || !HASH.test(receipt.evidenceHash || '') || !HASH.test(receipt.dispatchKey || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(receipt.source)) fail('The invoice ledger evidence requires its exact saved receipt.');
+function validateExactAccountPosting({scope,entity,record,accountBinding,accountObserved,report,reportObservedAt,beforeFence,afterFence,now=Date.now()}) {
+  scope=scoped(scope);const payable=entity==='BillPayment';
+  if(!LEDGER[entity] || !record || !QBO_ID.test(record.Id || '') || record.CurrencyRef?.value!=='CAD')fail('An exact native CAD transaction identity is required.');
+  date(record.TxnDate);
   if (!beforeFence || !sameScope(beforeFence.scope, scope) || !ID.test(beforeFence.operationId || '') || !Number.isSafeInteger(beforeFence.revision) || beforeFence.revision < 0 || canonical(beforeFence) !== canonical(afterFence)) fail('Company activity changed during receivables verification.');
   require('./business-link-repair-contract').assertReadFence(beforeFence);
-  if (accountBinding?.key !== (payable ? 'accountsPayable' : 'accountsReceivable') || accountBinding.entity !== 'Account' || accountBinding.id !== payload[referenceKey]?.value) fail('The original approved receivables binding is required.');
+  if (accountBinding?.key !== (payable ? 'accountsPayable' : 'accountsReceivable') || accountBinding.entity !== 'Account' || !QBO_ID.test(accountBinding.id || '')) fail('The original approved receivables binding is required.');
   const account = verifyBusinessReference({ scope, binding: accountBinding, observed: accountObserved, now });
   if (account.AccountType !== (payable ? 'Accounts Payable' : 'Accounts Receivable') || account.AccountSubType !== (payable ? 'AccountsPayable' : 'AccountsReceivable') || account.CurrencyRef?.value !== 'CAD') fail('The approved receivables definition changed.');
   if (!fresh(reportObservedAt, now) || !report || Buffer.byteLength(canonical(report)) > 2000000 || Object.keys(report).some(key => !['Header', 'Columns', 'Rows'].includes(key))) fail('A complete fresh bounded receivables report is required.');
@@ -34,19 +32,29 @@ function accountPostingEvidence(input) {
   if (rows.length > 1000 || Object.keys(sections[0]).some(key => !['type', 'Header', 'Rows', 'Summary'].includes(key))) fail('The receivables report exceeds its record budget or has unsupported sections.');
   try { require('./book-evidence').inspectReport('GeneralLedger', report, { fromDate: record.TxnDate, throughDate: record.TxnDate }, undefined, true); }
   catch { fail('The receivables report is truncated or has incomplete detail cells.'); }
-  if (payable && (payload.PayType !== 'Check' || record.PayType !== 'Check')) fail('Only the original accounting-only cheque BillPayment is supported.');
+  if (payable && (record.PayType !== 'Check')) fail('Only the original accounting-only cheque BillPayment is supported.');
   const matches = [];
   for (const row of rows) {
     if (row.type !== 'Data' || Object.keys(row).some(key => !['ColData', 'type'].includes(key)) || !Array.isArray(row.ColData) || row.ColData.length !== columns.length) fail('The receivables report contains incomplete detail rows.');
     const cell = row.ColData[typeIndex];
     if (cell.id === record.Id) {
-      if (cell.value !== LEDGER[compiled.entity][0] || row.ColData[dateIndex].value !== record.TxnDate) fail('The ledger identity names a different transaction.');
+      if (cell.value !== LEDGER[entity][0] || row.ColData[dateIndex].value !== record.TxnDate) fail('The ledger identity names a different transaction.');
       matches.push(money(row.ColData[amountIndex].value));
     }
   }
   const total = record.TotalAmt * 100;
-  if (typeof record.TotalAmt === 'number' && Number.isSafeInteger(Math.round(total)) && total > 0 && Math.abs(total - Math.round(total)) <= 0.00001 && matches.length === 1 && matches[0] !== Math.round(total) * LEDGER[compiled.entity][1]) throw Object.assign(new Error('The exact saved transaction has a different gross ledger posting.'), { status: 409, code: 'BUSINESS_BOOK_RISK' });
-  if (typeof record.TotalAmt !== 'number' || !Number.isSafeInteger(Math.round(total)) || total <= 0 || Math.abs(total - Math.round(total)) > 0.00001 || matches.length !== 1 || matches[0] !== Math.round(total) * LEDGER[compiled.entity][1]) fail('The exact invoice gross posting is missing, duplicated or different.');
+  if (typeof record.TotalAmt === 'number' && Number.isSafeInteger(Math.round(total)) && total > 0 && Math.abs(total - Math.round(total)) <= 0.00001 && matches.length === 1 && matches[0] !== Math.round(total) * LEDGER[entity][1]) throw Object.assign(new Error('The exact saved transaction has a different gross ledger posting.'), { status: 409, code: 'BUSINESS_BOOK_RISK' });
+  if (typeof record.TotalAmt !== 'number' || !Number.isSafeInteger(Math.round(total)) || total <= 0 || Math.abs(total - Math.round(total)) > 0.00001 || matches.length !== 1 || matches[0] !== Math.round(total) * LEDGER[entity][1]) fail('The exact invoice gross posting is missing, duplicated or different.');
+  return account;
+}
+function accountPostingEvidence(input) {
+  const { compiled, receipt, observed, accountBinding, accountObserved, report, reportObservedAt, beforeFence, afterFence, now = Date.now() } = input;
+  // Lazy to avoid the compiler/read-back module initialization cycle.
+  const request = require('./business-readback').validateCompilation(compiled), scope = scoped(request.scope), record = observed?.record, payload = JSON.parse(request.body), payable = compiled.entity === 'BillPayment', referenceKey = payable ? 'APAccountRef' : 'ARAccountRef';
+  if (!LEDGER[compiled.entity] || !record || record[referenceKey] !== undefined || observed.entity !== compiled.entity || !sameScope(observed.scope, scope) || observed.recordHash !== hash(record) || !fresh(observed.observedAt, now) || record.CurrencyRef?.value !== 'CAD' || record.TxnDate !== payload.TxnDate || typeof record.SyncToken !== 'string' || !/^(0|[1-9]\d{0,63})$/.test(record.SyncToken) || !QBO_ID.test(record.Id || '')) fail('Only an unchanged complete invoice with an omitted receivables field can use ledger evidence.');
+  if (!receipt || receipt.version !== 1 || !sameScope(receipt.scope, scope) || receipt.entity !== compiled.entity || receipt.logicalKey !== compiled.logicalKey || receipt.qboId !== record.Id || receipt.requestHash !== request.requestHash || !HASH.test(receipt.evidenceHash || '') || !HASH.test(receipt.dispatchKey || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(receipt.source)) fail('The invoice ledger evidence requires its exact saved receipt.');
+  if(accountBinding?.id!==payload[referenceKey]?.value || payable && payload.PayType!=='Check')fail('The original approved control-account binding is required.');
+  const account=validateExactAccountPosting({scope,entity:compiled.entity,record,accountBinding,accountObserved,report,reportObservedAt,beforeFence,afterFence,now});
   const source = { compiled, receipt, accountBinding, accountObserved, report, reportObservedAt, beforeFence, afterFence };
   const proof = { version: 1, kind: compiled.entity.toLowerCase() + (payable ? '-payables-ledger' : '-receivables-ledger'), scope, entity: compiled.entity, logicalKey: compiled.logicalKey, fingerprint: compiled.intentHash, qboId: record.Id, syncToken: record.SyncToken, recordHash: observed.recordHash, compilationHash: compiled.compilationHash, requestHash: request.requestHash, receiptHash: receipt.evidenceHash, accountId: account.Id, accountDefinitionHash: accountBinding.definition.hash, operationId: beforeFence.operationId, writerRevision: beforeFence.revision, endpoint: endpointFor(record, account.Id), recordObservedAt: observed.observedAt, observedAt: [observed.observedAt, accountObserved.observedAt, reportObservedAt].sort()[0], source };
   return { ...proof, evidenceHash: hash(proof) };
@@ -64,4 +72,4 @@ function invoiceReceivablesEvidence(input) { if (input?.compiled?.entity !== 'In
 function verifyInvoiceReceivables(input) { if (input?.observed?.entity !== 'Invoice') fail('Invoice evidence requires an Invoice.'); return verifyAccountPosting(input); }
 function receivablesEvidence(input) { if (!['Invoice', 'Payment'].includes(input?.compiled?.entity)) fail('Receivables evidence requires an Invoice or Payment.'); return accountPostingEvidence(input); }
 function verifyReceivables(input) { if (!['Invoice', 'Payment'].includes(input?.observed?.entity)) fail('Receivables evidence requires an Invoice or Payment.'); return verifyAccountPosting(input); }
-module.exports = { accountPostingEvidence, verifyAccountPosting, receivablesEvidence, verifyReceivables, invoiceReceivablesEvidence, verifyInvoiceReceivables, endpointFor };
+module.exports = { accountPostingEvidence, verifyAccountPosting, receivablesEvidence, verifyReceivables, invoiceReceivablesEvidence, verifyInvoiceReceivables, endpointFor, validateExactAccountPosting };

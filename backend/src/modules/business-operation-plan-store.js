@@ -38,9 +38,9 @@ function validateUnsentStep(step) {
   if (details.lines.length && details.baseAmountCents != null && step.entity !== 'JournalEntry' && details.baseAmountCents !== details.lines.reduce((sum, line) => sum + line.amountCents, 0)) fail('The unsent subtotal differs from its lines');
   return { ...step, detailsHash: hash({ calendarFingerprint: step.calendarFingerprint, details }) };
 }
-function validateEntry(entry, scope, fromDate, throughDate) {
+function validateEntry(entry, scope, fromDate, throughDate, {allowUnboundFulfilled=false} = {}) {
   const step = entry?.step, policy = entry?.policy;
-  if (!['create', 'existing'].includes(entry?.kind) || !step || !validHash(step.logicalKey) || !ENTITIES.has(step.entity) || !validHash(step.calendarFingerprint) || !validHash(step.detailsHash)) fail('A saved activity needs its exact supported intent');
+  if (!['create', 'existing', 'fulfilled'].includes(entry?.kind) || !step || !validHash(step.logicalKey) || !ENTITIES.has(step.entity) || !validHash(step.calendarFingerprint) || !validHash(step.detailsHash)) fail('A saved activity needs its exact supported intent');
   date(step.txnDate);
   if (step.txnDate > throughDate || (entry.kind === 'create' && step.txnDate < fromDate) || (entry.kind === 'existing' && step.txnDate >= fromDate && !(step.txnDate === fromDate && step.entity === 'Bill' && step.details?.activityBatch?.stepKey === 'receive-bill' && policy?.lifecycle?.mode === 'purchase-order-receipt'))) fail('An activity is outside its declared new or earlier period');
   if (step.details?.version !== 1 || step.details.currency !== 'CAD' || hash({ calendarFingerprint: step.calendarFingerprint, details: step.details }) !== step.detailsHash || !Array.isArray(step.details.lines) || step.details.lines.length > 100) fail('Saved business quantities or amounts changed');
@@ -53,11 +53,12 @@ function validateEntry(entry, scope, fromDate, throughDate) {
   require('./business-dated-tax').assertDatedTaxPolicy(step, policy);
   date(policy.fromDate); date(policy.throughDate);
   if (step.txnDate < policy.fromDate || step.txnDate > policy.throughDate || policy.fromDate > policy.throughDate) fail('The business policy does not cover its activity date');
-  return { logicalKey: step.logicalKey, entity: step.entity, fingerprint: hash(step), policyHash: hash(policy), kind: entry.kind, relationships: step.dependencies.map(link => link.logicalKey).sort() };
+  if(entry.kind==='fulfilled')require('./general-calendar-fulfillment').validatePointer(entry,{allowUnbound:allowUnboundFulfilled});
+  return { logicalKey: step.logicalKey, entity: step.entity, fingerprint: hash(step), policyHash: hash(policy), kind: entry.kind, ...(entry.kind==='fulfilled'?{fulfillment:snapshot(entry.fulfillment)}:{}), relationships: step.dependencies.map(link => link.logicalKey).sort() };
 }
 // Takes server-owned prepared intent, never an arbitrary route body. Policy
 // approval and baseline/blueprint activation must be established by that loader.
-function validateOperationCandidate(candidate, scope, now = Date.now()) {
+function validateOperationCandidate(candidate, scope, now = Date.now(), {allowUnboundFulfilled=false} = {}) {
   scope = scopeOf(scope); const copy = snapshot(candidate);
   if (copy.version !== 1 || !sameScope(copy.scope, scope) || typeof copy.businessKey !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(copy.businessKey) || !ID.test(copy.blueprintId || '') || !validHash(copy.blueprintHash) || !validHash(copy.baselineHash) || !Number.isSafeInteger(copy.expectedRevision) || copy.expectedRevision < 0 || copy.expectedRevision >= Number.MAX_SAFE_INTEGER) fail('The operation needs an exact blueprint, baseline and calendar revision');
   date(copy.fromDate); date(copy.throughDate);
@@ -65,7 +66,7 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   date(copy.openingDate);
   if (copy.expectedCursor === null ? copy.fromDate !== copy.openingDate : (date(copy.expectedCursor), (copy.activityBatch ? copy.expectedCursor >= copy.fromDate : shift(copy.expectedCursor, 1) !== copy.fromDate) || copy.expectedCursor < copy.openingDate)) fail('The operation must immediately follow the verified business calendar');
   if (!Array.isArray(copy.entries) || copy.entries.length > MAX_RECORDS || copy.entries.filter(entry => entry?.kind === 'create').length > MAX_CREATES) fail('The operation exceeds its bounded record capacity');
-  const records = copy.entries.map(entry => validateEntry(entry, scope, copy.fromDate, copy.throughDate));
+  const records = copy.entries.map(entry => validateEntry(entry, scope, copy.fromDate, copy.throughDate,{allowUnboundFulfilled}));
   const byKey = new Map(copy.entries.map(entry => [entry.step.logicalKey, entry]));
   if (byKey.size !== copy.entries.length) fail('Activity identities must be unique');
   const visiting = new Set(), ordered = [], done = new Set();
@@ -89,7 +90,7 @@ function validateOperationCandidate(candidate, scope, now = Date.now()) {
   // Earlier entries must actually belong to a new activity's dependency closure.
   const needed = new Set();
   const retain = key => { if (needed.has(key)) return; needed.add(key); for (const link of byKey.get(key).step.dependencies) retain(link.logicalKey); };
-  for (const entry of copy.entries.filter(entry => entry.kind === 'create')) retain(entry.step.logicalKey);
+  for (const entry of copy.entries.filter(entry => entry.kind === 'create' || entry.kind === 'fulfilled')) retain(entry.step.logicalKey);
   if (needed.size !== byKey.size) fail('The operation contains unrelated earlier records');
   const expectedRecordSetHash = hash(records.map(({ logicalKey, entity, fingerprint, relationships }) => ({ logicalKey, entity, fingerprint, relationships })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)));
   const descriptors = new Map(records.map(row => [row.logicalKey, row]));
@@ -139,7 +140,8 @@ function runFields(manifest, planId, actorId) {
 // All adapters are explicit. checkCurrent MUST fence activation, policy approval,
 // baseline and calendar revision in this transaction, not just return a boolean.
 // This module has no default storage, route, execution or production activation.
-function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, agentLease = null, Agents }) {
+function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authorities, Audits, GeneralWriteRuns, Policies, Writers, fulfillmentModels = null, loadCandidate, checkCurrent, assertReady, authorize, transaction, writeAudit, now = () => Date.now(), readOnly = false, agentAuthority: suppliedAgentAuthority = null, agentLease = null, Agents }) {
+  const originModels=fulfillmentModels||{Authorities,Audits,GeneralWriteRuns,Runs,Plans,Intents,Steps,Policies,Writers};
   const { agentAuthority: normalizeAgentAuthority, fenceAgentAuthority } = require('./business-agent-authority');
   const agentAuthority = suppliedAgentAuthority ? normalizeAgentAuthority(suppliedAgentAuthority) : null;
   if (typeof readOnly !== 'boolean') throw new TypeError('Saved plan reader mode must be explicit');
@@ -193,13 +195,20 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const candidate = snapshot(await loadCandidate(scope, request.candidateHash, session));
       if (hash(candidate) !== request.candidateHash) fail('The server candidate changed before it could be saved');
       const prepared = validateOperationCandidate(candidate, scope, now());
+      if(Authorities&&Policies){
+        const p=await Policies.findOne({environment:scope.environment,realmId:scope.realmId}).session(session).maxTimeMS(3000).lean();
+        if(!p||!sameScope(p,scope)||p.state!=='active'||!Number.isSafeInteger(p.revision))fail('The shared company revision fence is unavailable before intent admission.');
+        const fenced=await Policies.findOneAndUpdate({_id:p._id,...scope,state:'active',revision:p.revision},{$inc:{revision:1}},{new:true,session}).lean();
+        if(!fenced)fail('Company activity changed before immutable intent admission.');
+      }else if(prepared.entries.some(entry=>entry.kind==='fulfilled'))fail('Typed fulfillment intent admission requires the shared company revision fence.');
+      for(const entry of prepared.entries)if(Authorities)await require('./general-calendar-fulfillment').assertEntry({models:originModels,scope,entry,session});
       if (agentAuthority) {
         await fenceAgentAuthority({ authority: agentAuthority, run: { ...prepared.manifest, createdBy: actorId }, scope, ownerId: agentAuthority.ownerId, actorId, Agents, session, lease: agentLease });
       }
       const auditId = await audit(scope, actorId, operationId, prepared.planHash, 'prepared', session);
       await Plans.create([{ _id: planId, contractVersion: 1, ...scope, operationId, createdBy: actorId, requestKey: request.requestKey, candidateHash: request.candidateHash, manifest: prepared.manifest, planHash: prepared.planHash, auditId, ...(agentAuthority ? { agentAuthority } : {}) }], { session });
       // Bounded immutable documents keep receipts and future verification out of the plan.
-      if (prepared.entries.length) await Intents.insertMany(prepared.entries.map((entry, ordinal) => ({ _id: hash({ planId, logicalKey: entry.step.logicalKey }).slice(0, 24), contractVersion: 1, ...scope, planId, planHash: prepared.planHash, ordinal, kind: entry.kind, step: entry.step, policy: entry.policy, fingerprint: hash(entry.step), logicalKey: entry.step.logicalKey })), { session, ordered: true });
+      if (prepared.entries.length) await Intents.insertMany(prepared.entries.map((entry, ordinal) => ({ _id: hash({ planId, logicalKey: entry.step.logicalKey }).slice(0, 24), contractVersion: 1, ...scope, planId, planHash: prepared.planHash, ordinal, kind: entry.kind, step: entry.step, policy: entry.policy, ...(entry.kind==='fulfilled'?{fulfillment:entry.fulfillment}:{}), fingerprint: hash(entry.step), logicalKey: entry.step.logicalKey })), { session, ordered: true });
       await Runs.create([{ _id: operationId, ...runFields(prepared.manifest, planId, actorId), ...(agentAuthority ? { agentAuthority } : {}), status: 'previewed', approval: null }], { session });
       return { operationId, planHash: prepared.planHash, status: 'previewed', persisted: true, reused: false };
     });
@@ -259,7 +268,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const origins = new Map((continuity?.origins || []).map(origin => [origin.logicalKey, origin]));
       for (const row of rows) {
         const origin = origins.get(row.logicalKey), segment = origin && continuity.segments.find(value => value.authorityHash === origin.authorityHash);
-        entries.push(snapshot({ kind: row.kind, step: row.step, policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, run, row, session, cache),
+        entries.push(snapshot({ kind: row.kind, step: row.step, ...(row.kind==='fulfilled'?{fulfillment:row.fulfillment}:{}), policy: await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, run, row, session, cache),
           ...(origin && segment ? { businessOrigin: { occurrence: origin.occurrence, effectiveFrom: segment.effectiveFrom } } : {}) }));
       }
       return { operationId, planHash: plan.planHash, status: run.status, recordCount: plan.manifest.recordCount, ...(continuity ? { businessTerms: continuity.segments.map(segment => ({ effectiveFrom: segment.effectiveFrom })) } : {}), offset, nextOffset: offset + rows.length < plan.manifest.recordCount ? offset + rows.length : null,
@@ -274,11 +283,13 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
       const { plan } = await read(scope, operationId, session), ordinal = plan.manifest.records.findIndex(row => row.logicalKey === logicalKey);
       if (ordinal < 0) fail('The activity is not part of this operation');
       const { run, rows } = await loadEntries(scope, operationId, ordinal, 1, session), row = rows[0];
+      if(row.kind==='fulfilled')await require('./general-calendar-fulfillment').assertEntry({models:originModels,scope,entry:row,session});
+      else if(Authorities)await require('./general-calendar-fulfillment').assertNoFulfillment({models:{Authorities},scope,logicalKey,session});
       const head = Object.hasOwn(options, 'policyHead') ? options.policyHead : run.policyAmendmentHash || null;
       if (head !== null && !validHash(head)) fail('Choose the exact retained policy head.');
       const policyRun = { ...run, policyAmendmentHash: head };
       return { version: 1, scope, operationId, planHash: plan.planHash, logicalKey, entity: row.step.entity, fingerprint: row.fingerprint,
-        dependencies: row.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })), kind: row.kind, step: snapshot(row.step), ...(head ? { policyAmendmentHash: head } : {}), policy: snapshot(await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, policyRun, row, session)) };
+        dependencies: row.step.dependencies.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint })), kind: row.kind, ...(row.kind==='fulfilled'?{fulfillment:snapshot(row.fulfillment)}:{}), step: snapshot(row.step), ...(head ? { policyAmendmentHash: head } : {}), policy: snapshot(await require('./business-policy-amendment').effectiveBusinessPolicy({ Authorities, Audits }, scope, policyRun, row, session)) };
     });
   }
   // Local saved history only. Missing entries do not establish QBO absence.
@@ -339,7 +350,12 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
           if (!groups.has(operationId)) groups.set(operationId, []);
           groups.get(operationId).push(row);
         }
-        for (const key of keys) if (!found.has(key)) missing.add(key);
+        for (const key of keys) if (!found.has(key)) {
+          const origin=Authorities&&GeneralWriteRuns?await call(()=>require('./general-calendar-fulfillment').loadOrigin({models:originModels,scope,logicalKey:key,session})):null;check();
+          if(!origin){missing.add(key);continue;}
+          const value={kind:'fulfilled',businessKey:origin.businessKey,logicalKey:key,entity:origin.entity,fingerprint:origin.fingerprint,state:'fulfilled-origin',qboId:origin.qboId,step:origin.step,policy:origin.policy,fulfillment:require('./general-calendar-fulfillment').originPointer(origin)};
+          retainSize(value);entries.set(key,value);for(const link of value.step.dependencies)if(!queued.has(link.logicalKey)){if(queued.size>=MAX_RECORDS)fail('Saved dependency history exceeds 1,000 activities');queued.add(link.logicalKey);pending.push(link.logicalKey);}
+        }
         for (const [operationId, steps] of groups) {
           const saved = plans.get(operationId), keys = steps.map(row => row.logicalKey);
           const intents = await call(() => Intents.find({ ...scope, planId: saved.plan._id, planHash: saved.plan.planHash, logicalKey: { $in: keys } }, null, { singleBatch: true, batchSize: 101 })

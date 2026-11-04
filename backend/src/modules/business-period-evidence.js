@@ -20,7 +20,7 @@ const same = (a, b) => String(a) === String(b);
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => same(a?.[key], b?.[key]));
 // Internal collector and immutable proof store. No external verification flags or
 // caller-provided report results are accepted by prepareEvidence.
-function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Evidence, Intents, Authorities, Receipts, Audits, transaction, access, assertReady, writerFence, steps, readReports, readStock, writeAudit, now = () => Date.now() }) {
+function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Evidence, Intents, Authorities, Receipts, Audits, transaction, access, assertReady, writerFence, steps, fulfillments = null, readReports, readStock, writeAudit, now = () => Date.now() }) {
   if ([Runs, Plans, Steps, Evidence].some(value => !value) || [transaction, access?.authorize, assertReady, writerFence?.graphSnapshot, writerFence?.assertSettled, steps?.verifyGraph, readReports, writeAudit, now].some(value => typeof value !== 'function')) throw new TypeError('Period evidence requires concrete stores and verification adapters');
   const movementModels = { Intents, Authorities, Receipts, Audits, Runs, Plans, Steps };
   const read = (model, filter, session) => model.findOne(filter).session(session).maxTimeMS(3000).lean();
@@ -39,13 +39,16 @@ function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Eviden
     if (!records) return { run, manifest, fence };
     const found = new Map();
     for (let offset = 0; offset < manifest.records.length; offset += 100) {
-      const keys = manifest.records.slice(offset, offset + 100).map(row => row.logicalKey);
+      const keys = manifest.records.slice(offset, offset + 100).filter(row=>row.kind!=='fulfilled').map(row => row.logicalKey);
+      if(!keys.length)continue;
       const rows = await Steps.find({ ...scope, logicalKey: { $in: keys } }, null, { singleBatch: true, batchSize: 101 }).select('operationId planHash logicalKey entity fingerprint state qboId receipt dispatch compilation verification lastAuditId revision dependencies').limit(101).session(session).maxTimeMS(3000).lean();
       if (rows.length !== keys.length) fail('Managed period records are missing or duplicated.');
       for (const row of rows) { if (found.has(row.logicalKey) || !keys.includes(row.logicalKey)) fail('Period records are duplicated or unrelated.'); found.set(row.logicalKey, row); }
     }
+    for(const expected of manifest.records.filter(row=>row.kind==='fulfilled')){const row=fulfillments?await fulfillments.state({scope,logicalKey:expected.logicalKey,session}):null;if(!row||row.state!=='verified'||row.fingerprint!==expected.fingerprint||row.origin.policyHash!==expected.policyHash||canonical(require('./general-calendar-fulfillment').originPointer(row.origin))!==canonical(expected.fulfillment)||!row.lastAuditId||!HASH.test(row.verification?.graphEvidenceHash||''))fail('A period fulfillment lacks its dedicated current persisted origin proof.');require('./general-calendar-fulfillment').validateReadback(row.verification,row.origin,now());found.set(expected.logicalKey,row);}
     const observed = manifest.records.map(expected => {
       const row = found.get(expected.logicalKey), proof = row?.verification, stamp = Date.parse(proof?.observedAt);
+      if(expected.kind==='fulfilled')return {logicalKey:row.logicalKey,entity:row.entity,fingerprint:row.fingerprint,qboId:row.qboId,state:'verified',fulfillment:require('./general-calendar-fulfillment').originPointer(row.origin),observedHash:proof.observedHash,syncToken:proof.syncToken,observedAt:proof.observedAt,auditId:row.lastAuditId,relationships:structuredClone(proof.relationships)};
       if (!row || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || row.state !== 'verified' || !row.lastAuditId || !row.qboId || row.receipt?.qboId !== row.qboId || proof?.kind !== 'business-readback' || !HASH.test(proof.graphEvidenceHash || '') || !HASH.test(proof.observedHash || '') || !HASH.test(proof.evidenceHash || '') || !HASH.test(row.dispatch?.compilationHash || '') || proof.compilationHash !== row.dispatch.compilationHash || !Number.isFinite(stamp) || stamp > now() || now() - stamp > 300000 || !Array.isArray(proof.relationships) || canonical(proof.relationships.map(link => link.logicalKey).sort()) !== canonical([...(expected.relationships || [])].sort())) fail('Every period record needs fresh exact persisted graph evidence.');
       return { logicalKey: row.logicalKey, entity: row.entity, fingerprint: row.fingerprint, qboId: row.qboId, state: 'verified', observedHash: proof.observedHash, syncToken: proof.syncToken, observedAt: proof.observedAt, auditId: row.lastAuditId, relationships: structuredClone(proof.relationships) };
     }).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));

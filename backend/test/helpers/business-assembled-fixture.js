@@ -13,7 +13,10 @@ function harness() {
   // Register these collections before composing the real runtime models.
   h.data.Authorities = [{ _id: 'authority', contractVersion: 1, ...scope, contentHash: authorityHash, payload, auditId: authorityAuditId }];
   h.data.Versions = [{ _id: payload.blueprintId, contractVersion: 2, ...scope, definition, contentHash: blueprintHash, auditId: 'draft-audit', version: 1 }];
-  const originalFind = name => ({ findOne: filter => { const query = { session() { return query; }, maxTimeMS() { return query; }, lean: async () => structuredClone(h.data[name].find(row => Object.entries(filter).every(([key, value]) => row[key] === value)) || null) }; return query; } });
+  const originalFind = name => {
+    const value=(row,key)=>key.split('.').reduce((v,k)=>v?.[k],row),matches=(row,filter)=>Object.entries(filter).every(([key,want])=>want&&typeof want==='object'&&'$in'in want?want.$in.includes(value(row,key)):value(row,key)===want);
+    return {findOne:filter=>{const q={session(){return q;},maxTimeMS(){return q;},lean:async()=>structuredClone(h.data[name].find(row=>matches(row,filter))||null)};return q;},find:filter=>{let max=Infinity,order;const q={session(){return q;},select(){return q;},sort(v){order=v;return q;},limit(v){max=v;return q;},maxTimeMS(){return q;},lean:async()=>{let rows=h.data[name].filter(row=>matches(row,filter));if(order)rows.sort((a,b)=>{for(const[k,d]of Object.entries(order)){if(value(a,k)<value(b,k))return -d;if(value(a,k)>value(b,k))return d;}return 0;});return structuredClone(rows.slice(0,max));}};return q;}};
+  };
   h.models.Authorities = originalFind('Authorities'); h.models.Versions = originalFind('Versions');
   h.data.Audits.push({ _id: authorityAuditId, userId: ownerId, realmId: scope.realmId, action: 'Business published and opening evidence accepted', outcome: 'success', afterState: { authorityHash, blueprintHash, baselineHash: payload.baselineHash, inventoryHash: payload.inventoryHash } });
 

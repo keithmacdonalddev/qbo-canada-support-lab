@@ -50,7 +50,7 @@ async function depositSet(client, paymentId, call, check, mirrored = null) {
   }
   fail('Deposit observation exceeds the supported record budget.');
 }
-function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, purchaseOrderSources = null, observations, now = () => Date.now() }) {
+function createBusinessCompilationRuntime({ scope, operationId, planHash, access, plans, steps, verification, assertReady, adoptedSources = null, purchaseOrderSources = null, loadFulfillment = null, observations, now = () => Date.now() }) {
   scope = scoped(scope);
   if (!ID.test(operationId || '') || !HASH.test(planHash || '') || [access?.authorize, access?.resolveClient, plans?.loadIntent, steps?.verifyGraph, steps?.evidence, verification?.readRecord, verification?.readFence, assertReady, now].some(value => typeof value !== 'function')) throw new TypeError('Compilation needs an exact operation and concrete observation adapters');
   const { authorize, resolveClient } = access, { loadIntent } = plans;
@@ -125,10 +125,11 @@ function createBusinessCompilationRuntime({ scope, operationId, planHash, access
         if (saved?.state !== 'verified' || saved.fresh !== true || saved.fingerprint !== dependency.fingerprint || typeof saved.qboId !== 'string' || !QBO_ID.test(saved.qboId)) fail('An originating activity lacks current persisted proof.');
         const observed = await call(() => verification.readRecord(scope, dependency.entity, saved.qboId, { signal: controller.signal, reuseGraph: true })); check();
         const proof = saved.verification;
-        if (!proof || proof.kind !== 'business-readback' || proof.observedHash !== observed.recordHash || proof.syncToken !== observed.record?.SyncToken || typeof proof.observedAt !== 'string' || !Number.isFinite(Date.parse(proof.observedAt)) || now() - Date.parse(proof.observedAt) > 300000 || Date.parse(proof.observedAt) > now()) fail('An originating record changed after graph verification.');
+        if (!proof || !['business-readback','general-calendar-readback'].includes(proof.kind) || proof.observedHash !== observed.recordHash || proof.syncToken !== observed.record?.SyncToken || typeof proof.observedAt !== 'string' || !Number.isFinite(Date.parse(proof.observedAt)) || now() - Date.parse(proof.observedAt) > 300000 || Date.parse(proof.observedAt) > now()) fail('An originating record changed after graph verification.');
         let original = {};
+        if(saved.kind==='general-calendar-fulfillment'){if(typeof loadFulfillment!=='function')fail('Typed fulfilled dependency loading is unavailable.');const origin=await call(()=>loadFulfillment({scope,logicalKey:dependency.logicalKey}));check();require('./general-calendar-fulfillment').validateReadback(proof,origin,now());original={fulfillmentOrigin:origin};}
         if (intent.step.details.datedTax !== undefined && ['Estimate', 'PurchaseOrder'].includes(dependency.entity)) { const retained = await call(() => loadIntent(scope, operationId, dependency.logicalKey)); check(); if (!retained || retained.fingerprint !== dependency.fingerprint || retained.step?.txnDate !== observed.record.TxnDate) fail('The original dated-tax conversion policy is unavailable.'); original = { originalStep: retained.step, originalPolicy: retained.policy }; }
-        parents.push({ ...observed, ...tag, ...original, ...(observed.accountRouting || (dependency.entity === 'PurchaseOrder' && observed.record.Line?.some(line => line.Received === undefined)) ? { verification: proof } : {}), logicalKey: dependency.logicalKey, entity: dependency.entity, fingerprint: dependency.fingerprint, state: 'verified', qboId: saved.qboId, syncToken: observed.record.SyncToken });
+        parents.push({ ...observed, ...tag, ...original, ...(saved.kind==='general-calendar-fulfillment' || observed.accountRouting || (dependency.entity === 'PurchaseOrder' && observed.record.Line?.some(line => line.Received === undefined)) ? { verification: proof } : {}), logicalKey: dependency.logicalKey, entity: dependency.entity, fingerprint: dependency.fingerprint, state: 'verified', qboId: saved.qboId, syncToken: observed.record.SyncToken });
       });
       // An adopted settlement reads its imported obligation fresh, inside the same
       // writer fence as every other observation.

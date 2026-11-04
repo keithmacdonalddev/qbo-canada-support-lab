@@ -24,6 +24,7 @@ const CATEGORIES = Object.freeze({
 // its catalog group when known, otherwise other) so a newly added tool is never lost.
 const INFO = Object.freeze({
   getBankingWorkspace:{category:'business-read',keywords:['banking','statements','feed','upload','reconciliation','account','month']},
+  getBankingActivity:{category:'banking',keywords:['banking','current','activity','pending','posted','instructions','settlement','account','native','lineage']},
   retryBankInstructions:{category:'banking',keywords:['banking','pending','instructions','retry','recover','delivery']},
   settleBankInstructions:{category:'banking',keywords:['banking','pending','settle','post','due','instructions']},
   getBankingPackage:{category:'business-read',keywords:['banking','csv','statement','native','operator','blocked']},

@@ -9,7 +9,7 @@ function fail(message) { throw Object.assign(new Error(message), { status: 409, 
 const same = (a, b) => String(a) === String(b);
 const revision = value => Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER;
 const exact = value => value === undefined ? { $exists: false } : value;
-function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transaction, authorize, assertReady, writeAudit, now = () => Date.now(), token = randomUUID }) {
+function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, fulfillments = null, transaction, authorize, assertReady, writeAudit, now = () => Date.now(), token = randomUUID }) {
   if ([Runs, Calendars, Writers, Plans, Steps].some(value => !value) || [transaction, authorize, assertReady, writeAudit, now, token].some(value => typeof value !== 'function')) throw new TypeError('Run state requires concrete scoped stores and authority');
   const read = (Model, filter, session) => Model.findOne(filter).session(session).maxTimeMS(3000).lean();
   async function state(scope, operationId, session) {
@@ -88,20 +88,21 @@ function createBusinessRunState({ Runs, Calendars, Writers, Plans, Steps, transa
     const plan = await read(Plans, { _id: run.planId, ...selected, operationId: run._id, planHash: run.planHash }, session);
     const expected = plan?.manifest?.records?.[ordinal];
     if (!plan || hash(plan.manifest) !== run.planHash || plan.manifest.recordCount !== run.recordCount || expected?.logicalKey !== logicalKey) fail('The ordered saved plan changed.');
-    const row = await read(Steps, { ...selected, logicalKey }, session), stamp = Date.parse(row?.verification?.observedAt);
+    const row = expected.kind==='fulfilled'?(fulfillments?await fulfillments.state({scope:selected,logicalKey,session}):null):await read(Steps, { ...selected, logicalKey }, session), stamp = Date.parse(row?.verification?.observedAt);
+    if(expected.kind==='fulfilled'){if(!row||row.kind!=='general-calendar-fulfillment'||hash(require('./general-calendar-fulfillment').originPointer(row.origin))!==hash(expected.fulfillment))fail('The exact typed fulfilled origin is unavailable.');if(row.state==='verified')require('./general-calendar-fulfillment').validateReadback(row.verification,row.origin,now());}
     let deferred = (run.deferredSteps || []).filter(item => item.logicalKey !== logicalKey);
     if (defer) {
       for (const key of expected.relationships || []) {
         if (deferred.some(item => item.logicalKey === key)) continue;
         const index = plan.manifest.records.findIndex(item => item.logicalKey === key), dependency = plan.manifest.records[index];
-        const parent = await read(Steps, { ...selected, logicalKey: key }, session);
-        if (index < ordinal && parent?.state === 'needs-check' && parent.entity === dependency.entity && parent.fingerprint === dependency.fingerprint && parent.receipt?.qboId === parent.qboId && parent.qboId && parent.lastAuditId) deferred.push({ ordinal: index, logicalKey: key, reason: 'needs-check', dependencies: [] });
+        const parent = dependency?.kind==='fulfilled'&&fulfillments?await fulfillments.state({scope:selected,logicalKey:key,session}):await read(Steps, { ...selected, logicalKey: key }, session);
+        if (index < ordinal && parent?.state === 'needs-check' && parent.entity === dependency.entity && parent.fingerprint === dependency.fingerprint && (parent.kind==='general-calendar-fulfillment'||parent.receipt?.qboId === parent.qboId) && parent.qboId && parent.lastAuditId) deferred.push({ ordinal: index, logicalKey: key, reason: 'needs-check', dependencies: [] });
       }
       const heldBy = (expected.relationships || []).filter(key => deferred.some(item => item.logicalKey === key));
-      const needsCheck = row?.state === 'needs-check' && row.entity === expected.entity && row.fingerprint === expected.fingerprint && row.receipt?.qboId === row.qboId && row.qboId && row.lastAuditId;
+      const needsCheck = row?.state === 'needs-check' && row.entity === expected.entity && row.fingerprint === expected.fingerprint && (row.kind==='general-calendar-fulfillment'||row.receipt?.qboId === row.qboId) && row.qboId && row.lastAuditId;
       if (!needsCheck && (!heldBy.length || row?.dispatch || row?.receipt || (row && row.state !== 'claimed'))) fail('Only a known saved check or its unsent dependants may be deferred.');
       deferred.push({ ordinal, logicalKey, reason: needsCheck ? 'needs-check' : 'dependency', dependencies: heldBy });
-    } else if (!row || row.state !== 'verified' || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || !row.receipt || !row.qboId || !row.lastAuditId || !HASH.test(row.verification?.graphEvidenceHash || '') || !Number.isFinite(stamp) || stamp > now() || now() - stamp > 300000) fail('The activity lacks current saved graph proof.');
+    } else if (!row || row.state !== 'verified' || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || (expected.kind!=='fulfilled'&&!row.receipt) || !row.qboId || !row.lastAuditId || !HASH.test(row.verification?.graphEvidenceHash || '') || !Number.isFinite(stamp) || stamp > now() || now() - stamp > 300000) fail('The activity lacks current saved graph proof.');
     handle(value, leaseToken);
     const nextOrdinal = Math.max(run.nextOrdinal ?? 0, ordinal + 1);
     return change(value, selected, actorId, session, defer ? 'defer' : 'advance', { nextOrdinal, deferredSteps: deferred.sort((a, b) => a.ordinal - b.ordinal), status: nextOrdinal === run.recordCount && !deferred.some(row => row.reason === 'dependency') ? 'awaiting-evidence' : 'running', leaseExpiresAt: new Date(now() + 600000) });

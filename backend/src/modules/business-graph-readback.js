@@ -10,7 +10,14 @@ function rootKeys(values) {
   if (!Array.isArray(values) || !values.length || values.length > 100 || values.some(key => typeof key !== 'string' || !HASH.test(key)) || new Set(values).size !== values.length) fail('Choose one to one hundred distinct managed activity keys.');
   return [...values].sort();
 }
+function stepRelationships(step){return step.kind==='general-calendar-fulfillment'?step.dependencies.map(link=>({...link,qboId:link.entity==='Estimate'?step.origin.native.estimateId:step.origin.native.timeId,kind:'linked'})):step.compilation.relationships;}
+function graphIdentity(step){return step.kind==='general-calendar-fulfillment'?{kind:'fulfilled',originHash:step.originHash}:{compilationHash:step.compilation.compilationHash};}
 function normalizeStep(row, scope) {
+  if(row?.kind==='general-calendar-fulfillment'){
+    require('./general-calendar-fulfillment').validateOriginEnvelope(row.origin);
+    if(!sameScope(row.scope,scope)||row.logicalKey!==row.origin.logicalKey||row.entity!=='Invoice'||row.fingerprint!==row.origin.fingerprint||row.qboId!==row.origin.qboId||row.originHash!==row.origin.originHash||!['saved','verified','needs-check'].includes(row.state)||!Number.isSafeInteger(row.revision)||row.revision<1||canonical(row.dependencies)!==canonical(row.origin.dependencies))fail('A typed fulfilled origin changed.');
+    return row;
+  }
   if (!row || !sameScope(row, scope) || row.contractVersion !== 1 || !['saved', 'verified', 'needs-check'].includes(row.state) || !Number.isSafeInteger(row.revision) || row.revision < 1 || !ID.test(String(row.operationId)) || !HASH.test(row.planHash || '') || !Array.isArray(row.dependencies) || row.dependencies.length > 20) fail('A related activity is missing or its save is unresolved.');
   const compiled = row.compilation, request = validateCompilation(compiled), receipt = row.receipt;
   if (!sameScope(request.scope, scope) || compiled.logicalKey !== row.logicalKey || compiled.entity !== row.entity || compiled.intentHash !== row.fingerprint || compiled.compilationHash !== row.dispatch?.compilationHash || compiled.evidenceHash !== row.dispatch?.evidenceHash || request.requestHash !== row.dispatch?.requestHash || !HASH.test(row.dispatch?.key || '') || !receipt || receipt.version !== 1 || receipt.dispatchKey !== row.dispatch.key || receipt.requestHash !== request.requestHash || receipt.qboId !== row.qboId) fail('A related record no longer matches its original dispatch and receipt.');
@@ -29,7 +36,7 @@ function topology(scope, roots, entries) {
     bytes += Buffer.byteLength(JSON.stringify(entry)); if (bytes > MAX_BYTES) fail('The related-record evidence exceeds its size budget.');
     nodes.set(key, { ...entry, step, parents: [], children: [], linkedChildren: [] }); physical.add(physicalKey);
   }
-  for (const node of nodes.values()) for (const link of node.step.compilation.relationships) {
+  for (const node of nodes.values()) for (const link of stepRelationships(node.step)) {
     const parent = nodes.get(link.logicalKey);
     if (!parent || parent.step.entity !== link.entity || parent.step.fingerprint !== link.fingerprint || parent.step.qboId !== link.qboId) fail('An exact originating managed activity is missing.');
     node.parents.push(link.logicalKey); parent.children.push(node.step.logicalKey);
@@ -54,18 +61,19 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
   scope = scoped(scope); roots = rootKeys(roots);
   if (!Number.isFinite(now)) fail('A valid verification clock is required.');
   const { nodes, order } = topology(scope, roots, entries), content = new Map(), completed = new Map(), failures = new Map();
-  const observation = key => { const node = nodes.get(key); return { ...node.observed, logicalKey: key, fingerprint: node.step.fingerprint, state: 'saved' }; };
+  const observation = key => { const node = nodes.get(key); return { ...node.observed, logicalKey: key, fingerprint: node.step.fingerprint, state: 'saved', ...(node.step.kind==='general-calendar-fulfillment'?{fulfillmentOrigin:node.step.origin}:{}) }; };
   const input = key => {
     const node = nodes.get(key), step = node.step;
+    if(step.kind==='general-calendar-fulfillment')return {origin:step.origin,observed:node.observed,now,parents:node.parents.map(observation),descendants:node.linkedChildren.map(childKey=>{const child=nodes.get(childKey);return {...observation(childKey),compilationHash:child.step.compilation.compilationHash,creationReceipt:{...child.step.receipt,scope,entity:child.step.entity,logicalKey:childKey},verification:content.get(childKey)};})};
     return { compiled: step.compilation, receipt: { ...step.receipt, scope, entity: step.entity, logicalKey: key }, observed: node.observed, taxPolicy: node.taxPolicy, now,
-      parents: node.parents.map(parentKey=>{const value=observation(parentKey),parent=nodes.get(parentKey);return {...value,...(step.entity==='Invoice'&&node.taxPolicy?.originalStep?.details?.datedTax&&value.entity==='Estimate'?{originalStep:parent.taxPolicy?.originalStep,originalPolicy:parent.taxPolicy?.originalPolicy,conversionStep:node.taxPolicy.originalStep,conversionPolicy:node.taxPolicy.originalPolicy}:{})};}), descendants: node.linkedChildren.map(childKey => { const child = nodes.get(childKey); return { ...observation(childKey), compilationHash: child.step.compilation.compilationHash, creationReceipt: { ...child.step.receipt, scope, entity: child.step.entity, logicalKey: childKey }, verification: content.get(childKey) }; }) };
+      parents: node.parents.map(parentKey=>{const value=observation(parentKey),parent=nodes.get(parentKey);return {...value,...(step.entity==='Invoice'&&node.taxPolicy?.originalStep?.details?.datedTax&&value.entity==='Estimate'?{originalStep:parent.taxPolicy?.originalStep,originalPolicy:parent.taxPolicy?.originalPolicy,conversionStep:node.taxPolicy.originalStep,conversionPolicy:node.taxPolicy.originalPolicy}:{})};}), descendants: node.linkedChildren.map(childKey => { const child = nodes.get(childKey); return child.step.kind==='general-calendar-fulfillment'?{...observation(childKey),fulfillmentOrigin:child.step.origin,originHash:child.step.originHash,verification:content.get(childKey)}:{ ...observation(childKey), compilationHash: child.step.compilation.compilationHash, creationReceipt: { ...child.step.receipt, scope, entity: child.step.entity, logicalKey: childKey }, verification: content.get(childKey) }; }) };
   };
   const recordFailure = (key, messages) => failures.set(key, { logicalKey: key, entity: nodes.get(key).step.entity, status: 'unverified', issues: messages, errorDetail: require('./business-error-detail').businessErrorDetail(Object.assign(new Error(messages.join(' ')), { code: 'BUSINESS_GRAPH_UNVERIFIED', businessDetail: { issues: messages } }), { logicalKey: key, entity: nodes.get(key).step.entity, recordId: nodes.get(key).step.qboId, check: { module: 'business-graph-readback', function: 'reconcileBusinessGraph', file: 'backend/src/modules/business-graph-readback.js' } }) });
   // Child content is checked first, without falsely claiming its parent closure.
   for (const key of [...order].reverse()) {
     const node = nodes.get(key);
     if (node.linkedChildren.some(child => content.get(child)?.matchesIntent !== true)) { recordFailure(key, ['A linked downstream activity is unverified.']); continue; }
-    const proof = verifyBusinessContent(input(key)); content.set(key, proof);
+    const proof = node.step.kind==='general-calendar-fulfillment'?require('./general-calendar-fulfillment').verifyContent(input(key)):verifyBusinessContent(input(key)); content.set(key, proof);
     if (!proof.matchesIntent) recordFailure(key, proof.issues);
   }
   // Now close the actual parent graph in forward order, using this same snapshot.
@@ -73,9 +81,9 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
     const node = nodes.get(key); if (content.get(key)?.matchesIntent !== true) continue;
     if (node.parents.some(parent => !completed.has(parent))) { recordFailure(key, ['An originating activity is unverified.']); continue; }
     const value = input(key); value.parents = value.parents.map(parent => ({ ...parent, state: 'verified', verification: completed.get(parent.logicalKey) }));
-    const proof = verifyBusinessReadback(value); if (proof.matchesIntent) completed.set(key, proof); else recordFailure(key, proof.issues);
+    const proof = node.step.kind==='general-calendar-fulfillment'?require('./general-calendar-fulfillment').verifyReadback(value):verifyBusinessReadback(value); if (proof.matchesIntent) completed.set(key, proof); else recordFailure(key, proof.issues);
   }
-  const records = order.map(key => ({ logicalKey: key, entity: nodes.get(key).step.entity, qboId: nodes.get(key).step.qboId, fingerprint: nodes.get(key).step.fingerprint, stepRevision: nodes.get(key).step.revision, compilationHash: nodes.get(key).step.compilation.compilationHash, proof: completed.get(key) || null }));
+  const records = order.map(key => ({ logicalKey: key, entity: nodes.get(key).step.entity, qboId: nodes.get(key).step.qboId, fingerprint: nodes.get(key).step.fingerprint, stepRevision: nodes.get(key).step.revision, ...graphIdentity(nodes.get(key).step), proof: completed.get(key) || null }));
   const complete = completed.size === nodes.size;
   return { version: 1, scope, roots, complete, recordCount: nodes.size, order, records, failures: [...failures.values()].sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)),
     observedAt: records.filter(value => value.proof).map(value => value.proof.observedAt).sort()[0] || null,
@@ -83,7 +91,7 @@ function reconcileBusinessGraph({ scope, roots, entries, now = Date.now() }) {
 }
 // This reader owns no defaults and performs no writes. Its model snapshot loads both
 // directions so omitting a known saved child cannot turn a used source into unused.
-function createBusinessGraphReaderImplementation({ Steps, transaction, assertReady, authorize, readFence, readRecord, prepareRecords = null, loadTaxPolicy, retainSources = false, now = () => Date.now() }) {
+function createBusinessGraphReaderImplementation({ Steps, transaction, assertReady, authorize, readFence, readRecord, prepareRecords = null, loadTaxPolicy, fulfillments = null, retainSources = false, now = () => Date.now() }) {
   if (!Steps || [transaction, assertReady, authorize, readFence, readRecord, loadTaxPolicy, now].some(value => typeof value !== 'function')) throw new TypeError('Graph reading needs explicit company-scoped adapters');
   function checkedFence(value, scope) {
     if (!value || !sameScope(value.scope, scope) || !Number.isSafeInteger(value.revision) || value.revision < 0 || !ID.test(value.operationId || '')) fail('The company writer has an unresolved or unavailable state.');
@@ -118,6 +126,7 @@ function createBusinessGraphReaderImplementation({ Steps, transaction, assertRea
           const query = { environment: scope.environment, realmId: scope.realmId };
           const retain = row => {
             const normalized = normalizeStep(row, scope), key = normalized.logicalKey;
+            if(found.has(key)&&canonical(found.get(key))!==canonical(normalized))fail('Managed and fulfilled ownership conflict in the same graph.');
             if (!found.has(key)) {
               bytes += Buffer.byteLength(JSON.stringify(normalized));
               if (found.size >= MAX_RECORDS || bytes > MAX_BYTES) fail('The related-record graph exceeds its supported budget.');
@@ -155,8 +164,10 @@ function createBusinessGraphReaderImplementation({ Steps, transaction, assertRea
           };
           const directKeys = new Set();
           await scan({ ...query, logicalKey: { $in: batch } }, row => { directKeys.add(row.logicalKey); retain(row); });
-          if (batch.some(key => !directKeys.has(key))) fail('A required managed activity is missing from storage.');
+          if(fulfillments)for(const key of batch.filter(key=>!directKeys.has(key))){const node=await read(()=>fulfillments.state({scope,logicalKey:key,session}));if(node){directKeys.add(key);retain(node);}}
+          if (batch.some(key => !directKeys.has(key))) fail('A required managed or typed fulfilled activity is missing from storage.');
           await scan({ ...query, 'dependencies.logicalKey': { $in: batch }, state: { $in: ['saved', 'verified', 'needs-check', 'dispatched', 'unknown'] } }, retain);
+          if(fulfillments)for(const node of await read(()=>fulfillments.related({scope,logicalKeys:batch,session})))retain(node);
           for (const key of batch) expanded.add(key);
         }
         return [...found.values()].sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
@@ -166,7 +177,7 @@ function createBusinessGraphReaderImplementation({ Steps, transaction, assertRea
         const currentActor = await read(() => authorize(scope, 'operations.read', { signal: controller.signal })); check();
         const after = checkedFence(await read(() => readFence(scope, { signal: controller.signal })), scope); check();
         if (currentActor?.actorId !== actor.actorId || canonical(fence) !== canonical(after)) fail('Company activity changed during graph preparation.');
-        const records = rows.map(step => ({ logicalKey: step.logicalKey, entity: step.entity, fingerprint: step.fingerprint, qboId: step.qboId, stepRevision: step.revision, compilationHash: step.compilation.compilationHash }));
+        const records = rows.map(step => ({ logicalKey: step.logicalKey, entity: step.entity, fingerprint: step.fingerprint, qboId: step.qboId, stepRevision: step.revision, ...graphIdentity(step) }));
         const manifest = { version: 1, scope, roots, records, writerFence: fence };
         return { ...manifest, kind: 'business-graph-preparation', recordCount: records.length, evidenceHash: hash(manifest), prepared: true };
       }
@@ -177,7 +188,7 @@ function createBusinessGraphReaderImplementation({ Steps, transaction, assertRea
           const index = next++, step = rows[index];
           try {
             check(); const observed = await read(() => readRecord(scope, step.entity, step.qboId, { signal: controller.signal, forceLive, ...(prepared ? { observed: prepared.get(step.entity + ':' + step.qboId) } : {}) })); check();
-            const taxPolicy = await read(() => loadTaxPolicy(scope, step.compilation, { signal: controller.signal })); check();
+            const taxPolicy = step.kind==='general-calendar-fulfillment'?null:await read(() => loadTaxPolicy(scope, step.compilation, { signal: controller.signal })); check();
             const entry = { step, observed, taxPolicy };
             retainedBytes += Buffer.byteLength(JSON.stringify(entry));
             if (retainedBytes > MAX_BYTES) fail('The related-record evidence exceeds its size budget.');
@@ -189,7 +200,7 @@ function createBusinessGraphReaderImplementation({ Steps, transaction, assertRea
       check(); const currentActor = await read(() => authorize(scope, 'operations.read', { signal: controller.signal })); check();
       const after = checkedFence(await read(() => readFence(scope, { signal: controller.signal })), scope); check();
       if (currentActor?.actorId !== actor.actorId || canonical(fence) !== canonical(after)) fail('Company activity changed while related records were being read.');
-      if (forceLive) for (const entry of entries) require('./business-step-store').assertLiveBookSafety(entry);
+      if (forceLive) for (const entry of entries.filter(entry=>entry.step.kind!=='general-calendar-fulfillment')) require('./business-step-store').assertLiveBookSafety(entry);
       const result = reconcileBusinessGraph({ scope, roots, entries, now: now() }); check();
       return { ...result, ...(retainSources ? { sourcesJson: JSON.stringify(entries), sourcesHash: hash(JSON.stringify(entries)) } : {}), writerFence: fence, evidenceHash: hash({ graph: result.evidenceHash, writerFence: fence }), durationMs: now() - started };
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }

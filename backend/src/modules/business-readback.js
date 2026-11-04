@@ -142,14 +142,21 @@ function verifyBusinessContent({ compiled, receipt, observed, parents = [], desc
   const childKeys = new Set(), childIds = new Set(), childLinks = [];
   let droppedChild = null;
   for (const child of descendants) {
+    if(child?.fulfillmentOrigin){
+      const F=require('./general-calendar-fulfillment'),p=child.verification;F.validateOriginEnvelope(child.fulfillmentOrigin);
+      if(!['saved','verified'].includes(child.state)||child.entity!=='Invoice'||child.logicalKey!==child.fulfillmentOrigin.logicalKey||child.fingerprint!==child.fulfillmentOrigin.fingerprint||p?.kind!=='general-calendar-content'||p.originHash!==child.fulfillmentOrigin.originHash||!p.matchesIntent)invalid('The typed fulfilled downstream origin changed.');
+      const regenerated=F.verifyContent({...p.source,origin:child.fulfillmentOrigin,now});if(canonical(regenerated)!==canonical(p))invalid('The fulfilled downstream content evidence changed.');
+      childKeys.add(child.logicalKey);verifiedObservation(child,scope,child.entity,child.fulfillmentOrigin.qboId,now,'general-calendar-content');
+    }else{
     if (!child || !HASH.test(child.logicalKey || '') || childKeys.has(child.logicalKey) || !HASH.test(child.fingerprint || '') || !['saved', 'verified'].includes(child.state) || !SUPPORTED.has(child.entity) || !child.creationReceipt || !HASH.test(child.creationReceipt.evidenceHash || '') || child.creationReceipt.qboId !== child.record?.Id) invalid('A downstream activity lacks its managed creation evidence.');
-    const physicalKey = child.entity + ':' + child.record?.Id;
-    if (childIds.has(physicalKey) || (child.entity === compiled.entity && child.record?.Id === record.Id)) invalid('A downstream saved record is duplicated.');
-    childIds.add(physicalKey);
     const childReceipt = child.creationReceipt;
     if (childReceipt.version !== 1 || !sameScope(childReceipt.scope, scope) || childReceipt.entity !== child.entity || childReceipt.logicalKey !== child.logicalKey || !HASH.test(childReceipt.requestHash || '') || !HASH.test(childReceipt.dispatchKey || '') || !['create-response', 'request-correlated-readback', 'owner-attributed-readback'].includes(childReceipt.source)) invalid('The downstream creation receipt has a different identity.');
     if (!HASH.test(child.compilationHash || '') || child.verification?.compilationHash !== child.compilationHash) invalid('The downstream proof is not bound to its dispatched compilation.');
     childKeys.add(child.logicalKey); verifiedObservation(child, scope, child.entity, childReceipt.qboId, now, 'business-content');
+    }
+    const physicalKey = child.entity + ':' + child.record?.Id;
+    if (childIds.has(physicalKey) || (child.entity === compiled.entity && child.record?.Id === record.Id)) invalid('A downstream saved record is duplicated.');
+    childIds.add(physicalKey);
     const origin = child.verification.relationships?.filter(link => link.logicalKey === compiled.logicalKey);
     if (!origin || origin.length !== 1 || origin[0].entity !== compiled.entity || origin[0].fingerprint !== compiled.intentHash || origin[0].qboId !== record.Id || origin[0].syncToken !== record.SyncToken) invalid('The downstream content proof names a different originating intent or version.');
     const linked = [...linkList(child.record.LinkedTxn), ...(child.record.Line || []).flatMap(line => linkList(line.LinkedTxn))];
@@ -318,7 +325,8 @@ function verifyBusinessReadback(input) {
   const proof = verifyBusinessContent(input), now = input.now ?? Date.now();
   for (const parent of input.parents || []) {
     if (parent.state !== 'verified') invalid('An originating activity is not freshly verified.');
-    verifiedObservation(parent, proof.scope, parent.entity, parent.record.Id, now);
+    if(parent.fulfillmentOrigin){require('./general-calendar-fulfillment').validateReadback(parent.verification,parent.fulfillmentOrigin,now);verifiedObservation(parent,proof.scope,parent.entity,parent.record.Id,now,'general-calendar-readback');}
+    else verifiedObservation(parent, proof.scope, parent.entity, parent.record.Id, now);
   }
   return { ...proof, kind: 'business-readback', observedAt: [proof.observedAt, ...(input.parents || []).map(value => value.verification.observedAt)].sort()[0], evidenceHash: hash({ content: proof.evidenceHash, parents: (input.parents || []).map(value => ({ logicalKey: value.logicalKey, evidenceHash: value.verification.evidenceHash })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) }) };
 }

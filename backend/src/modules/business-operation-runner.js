@@ -61,12 +61,15 @@ function createBusinessOperationRunner({ state, plans, steps, dispatch, periods,
           if (!page || page.operationId !== operationId || page.planHash !== planHash || page.recordCount !== current.recordCount || page.offset !== ordinal || !Array.isArray(page.entries) || !page.entries.length || page.entries.length > 50 || page.offset + page.entries.length > page.recordCount) fail('The saved plan page changed or is incomplete.');
         }
         const entry = page.entries[ordinal - page.offset], key = entry?.step?.logicalKey;
-        if (!HASH.test(key || '') || !['create', 'existing'].includes(entry.kind)) fail('The saved activity disposition is invalid.');
+        if (!HASH.test(key || '') || !['create', 'existing', 'fulfilled'].includes(entry.kind)) fail('The saved activity disposition is invalid.');
         activeKey = key; activeEntity = entry.step.entity;
         const held = (entry.step.dependencies || []).some(link => (current.deferredSteps || []).some(row => row.logicalKey === link.logicalKey));
         if (held) { current = await state.advance(scope, operationId, leaseToken, ordinal, key, { defer: true }); continue; }
         let verified;
-        if (entry.kind === 'existing') {
+        if(entry.kind==='fulfilled'){
+          // This declared origin is verification-only; dispatch is never called.
+          const proof=await steps.verifyGraph(scope,operationId,[key],{signal,forceLive:Boolean(current.deferredSteps?.some(row=>row.logicalKey===key))});verified=proof?.complete===true&&proof.persisted===true;
+        } else if (entry.kind === 'existing') {
           const proof = await steps.verifyGraph(scope, operationId, [key], { signal, forceLive: Boolean(current.deferredSteps?.some(row => row.logicalKey === key)) });
           verified = proof?.complete === true && proof.persisted === true;
         } else {

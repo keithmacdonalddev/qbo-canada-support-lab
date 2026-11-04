@@ -12,7 +12,7 @@ const clone = value => structuredClone(value);
 const at = (row, key) => key.split('.').reduce((value, part) => value?.[part], row);
 const matches = (row, filter) => row && Object.entries(filter).every(([key, value]) => value && typeof value === 'object' && !(value instanceof Date) ? ('$in' in value ? value.$in.includes(at(row, key)) : '$exists' in value ? (at(row, key) !== undefined) === value.$exists : false) : value instanceof Date ? new Date(at(row, key)).getTime() === value.getTime() : at(row, key) === value);
 function harness(business = false, options = {}) {
-  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [], Agents: [] }, sequence: 0 };
+  const h = { clock: Date.parse('2026-10-06T12:00:00.000Z'), data: { Policies: [], Writers: [], Receipts: [], Audits: [], Connections: [], Memberships: [], Runs: [], Calendars: [], Steps: [], Users: [], Agents: [], Authorities: [], Plans: [] }, sequence: 0 };
   h.data.Policies.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, state: 'active', periodControl: controls(scope, ownerId, h.clock) });
   h.data.Writers.push({ _id: 'sandbox:123', contractVersion: 1, ...scope, revision: 0, operationId: null, planHash: null, unresolved: null });
   h.data.Connections.push({ _id: scope.connectionId, realmId: scope.realmId, userId: ownerId, status: 'active' });
@@ -40,10 +40,11 @@ function harness(business = false, options = {}) {
   h.gate = { ...h.rawGate, begin: async input => h.rawGate.begin({ ...input, periodEvidence: input.periodEvidence === undefined ? await h.rawGate.preflight({ request: input.request, client: h.periodClient }) : input.periodEvidence }) };
   h.input = { request, ownerId, actorId: ownerId };
   if (business) {
-    const dispatchKey = hash('dispatch'), planHash = hash('plan'), blueprintHash = hash('blueprint'), baselineHash = hash('baseline');
+    const dispatchKey = hash('dispatch'), manifest={version:1,records:[{logicalKey,entity:'Invoice',kind:'create'}]}, planId='f'.repeat(24), planHash = hash(manifest), blueprintHash = hash('blueprint'), baselineHash = hash('baseline');
+    h.data.Plans.push({_id:planId,...scope,operationId,planHash,manifest});
     h.input.permit = { scope, operationId, logicalKey, dispatchKey, requestHash: request.requestHash, dispatchRevision: 2, stepLeaseToken: 'lease' };
     Object.assign(h.writer(), { revision: 1, operationId, planHash, unresolved: { key: dispatchKey, logicalKey, requestHash: request.requestHash, actorId: ownerId, evidenceHash: hash('observations'), compilationHash: hash('compilation'), observationWriterRevision: 0, stepRevision: 2, observedAt: new Date(h.clock).toISOString() } });
-    h.data.Runs.push({ _id: operationId, ...scope, planHash, approval: { actorId: ownerId, planHash, fenceHash: hash('approval fence'), auditId: 'approval-audit', approvedAt: new Date(h.clock).toISOString() }, blueprintHash, baselineHash, status: 'running', expectedCursor: '2026-09-30', expectedRevision: 1, writerRevision: 0, evidenceRevision: 1, verificationCandidateHash: hash('old proof') });
+    h.data.Runs.push({ _id: operationId, ...scope, planId, planHash, approval: { actorId: ownerId, planHash, fenceHash: hash('approval fence'), auditId: 'approval-audit', approvedAt: new Date(h.clock).toISOString() }, blueprintHash, baselineHash, status: 'running', expectedCursor: '2026-09-30', expectedRevision: 1, writerRevision: 0, evidenceRevision: 1, verificationCandidateHash: hash('old proof') });
     h.data.Calendars.push({ _id: 'calendar', ...scope, currentOperationId: operationId, blueprintHash, baseline: { status: 'verified', evidenceHash: baselineHash }, verifiedThrough: '2026-09-30', revision: 1, writerRevision: 0, stopRequested: false, pendingCommit: null });
     h.data.Steps.push({ _id: 'step', ...scope, operationId, logicalKey, planHash, entity: 'Invoice', state: 'dispatched', revision: 2, leaseToken: 'lease', receipt: null, dispatch: { key: dispatchKey, requestHash: request.requestHash, evidenceHash: hash('observations'), compilationHash: hash('compilation'), observationWriterRevision: 0, observedAt: new Date(h.clock).toISOString() } });
   }
@@ -279,7 +280,7 @@ test('a delayed old permission cannot consume a newly prepared marker with the s
 
 test('final Production transport gate refuses absent or mismatched explicit plan consent',async()=>{
  for(const change of [null,{confirmed:false},{environment:'sandbox'},{realmId:'999'},{connectionId:'e'.repeat(24)},{actorId:'e'.repeat(24)},{planHash:hash('other')},{}]){
-  const h=harness(true),productionScope={...scope,environment:'production'},current=h.data.Runs[0];for(const name of ['Policies','Writers','Runs','Calendars','Steps'])for(const row of h.data[name])row.environment='production';h.data.Policies[0].periodControl=controls(productionScope,ownerId,h.clock);h.input.request=freezeWriteRequest(productionScope,'POST','invoice',{TxnDate:'2026-10-06',CustomerRef:{value:'1'},Line:[]});h.input.permit.scope=productionScope;h.input.permit.requestHash=h.input.request.requestHash;h.writer().unresolved.requestHash=h.input.request.requestHash;h.data.Steps[0].dispatch.requestHash=h.input.request.requestHash;
+  const h=harness(true),productionScope={...scope,environment:'production'},current=h.data.Runs[0];for(const name of ['Policies','Writers','Runs','Calendars','Steps','Plans'])for(const row of h.data[name])row.environment='production';h.data.Policies[0].periodControl=controls(productionScope,ownerId,h.clock);h.input.request=freezeWriteRequest(productionScope,'POST','invoice',{TxnDate:'2026-10-06',CustomerRef:{value:'1'},Line:[]});h.input.permit.scope=productionScope;h.input.permit.requestHash=h.input.request.requestHash;h.writer().unresolved.requestHash=h.input.request.requestHash;h.data.Steps[0].dispatch.requestHash=h.input.request.requestHash;
   if(change!==null)current.approval.productionConsent={confirmed:true,...productionScope,actorId:ownerId,planHash:current.planHash,...change};
   if(change&&Object.keys(change).length===0){const ticket=await h.gate.begin(h.input);assert.equal(ticket.coordinated,true);assert.equal(h.data.Receipts.length,1);}else{await assert.rejects(h.gate.begin(h.input),/Production/);assert.equal(h.data.Receipts.length,0);}
  }
@@ -389,4 +390,13 @@ test('the common single-record SDK gate also refuses known unsupported Estimate 
   h.periodClient.read=async()=>({Estimate:{Id:'11217',SyncToken:'0',TxnDate:'2026-10-14'}});
   h.periodClient.query=async()=>({QueryResponse:{Preferences:[{AccountingInfoPrefs:{},SalesFormsPrefs:{AutoApplyCredit:false,UsingProgressInvoicing:true}}]}});
   await assert.rejects(h.gate.begin({...h.input,request:wanted}),error=>error.code==='BUSINESS_ESTIMATE_NATIVE_REQUIRED');assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved,null);
+});
+
+test('final business gate refuses a fulfilled descriptor or a retained origin claim before transport',async()=>{
+ for(const mode of ['fulfilled','claim','missing-authorities']){
+  const h=harness(true,mode==='missing-authorities'?{Authorities:null}:{});
+  if(mode==='fulfilled'){const plan=h.data.Plans[0];plan.manifest.records[0].kind='fulfilled';plan.planHash=hash(plan.manifest);h.data.Runs[0].planHash=plan.planHash;h.data.Runs[0].approval.planHash=plan.planHash;h.writer().planHash=plan.planHash;h.data.Steps[0].planHash=plan.planHash;}
+  if(mode==='claim')h.data.Authorities.push({_id:'9'.repeat(24),...scope,payload:{kind:'general-calendar-fulfillment-claim',type:'logicalKey',value:logicalKey}});
+  await assert.rejects(h.gate.begin(h.input),/declared create|prohibited|conflict protection/);assert.equal(h.data.Receipts.length,0);assert.equal(h.writer().unresolved.transportConsumed,undefined);
+ }
 });

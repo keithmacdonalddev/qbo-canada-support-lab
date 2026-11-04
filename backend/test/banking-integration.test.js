@@ -27,7 +27,7 @@ test('register real retained BF2 manifest through accountant tool -> BF4; close 
  const workspace=createBankingWorkspaceService({store,resolveContext:async()=>({environment:scope.environment,connection:{connected:true,realmId:scope.realmId,connectionId:scope.connectionId}}),authorize:async()=>{},getAccount:async()=>({Id:'1150040007',Name:'Savings',AccountType:'Bank',CurrencyRef:{value:'CAD'}}),readArtifact:async a=>artifacts.get(a.path)});
  const tools=createBankingAccountantTools({workspace,readArtifact:async a=>artifacts.get(a.path)}),mf=real.envelope.files.find(f=>f.kind==='manifest');
  const registered=await tools.execute(user,'prepareBankingPackage',{manifest:{path:mf.path,sha256:mf.sha256}});assert.equal(registered.id,real.packageId);
- const detail=await tools.execute(user,'getBankingPackage',{packageId:real.packageId});assert.equal(detail.package.snapshot.events[0].source.id,'591');
+ const detail=await tools.execute(user,'getBankingPackage',{packageId:real.packageId,section:'rows'});assert.equal(detail.items[0].source.id,'591');
  const close=await tools.execute(user,'getBankingCloseSupport',{period:'2026-10'});assert.equal(close.packages[0].reconciled,false);assert.equal(close.qboCalls,0);assert.match(close.limitation,/never synthesize manual/);
  t.diagnostic('Real Savings package '+real.packageId+' registered through production BF6 -> BF4; no native evidence manufactured.');
 });

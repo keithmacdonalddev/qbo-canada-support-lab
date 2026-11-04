@@ -47,9 +47,9 @@ function assertApiEstimateSupport(request, proof) {
   return { kind: 'api-estimate-conversion', preferencesHash: evidence.preferencesHash, evidenceHash: hash(evidence) };
 }
 function assertPlanSupport(plan, support) {
-  const steps = plan?.steps || plan?.records || plan?.entries?.map(entry => entry.step) || [];
+  const steps = plan?.steps || plan?.records || plan?.entries?.map(entry => ({...entry.step,kind:entry.kind})) || [];
   const byKey = new Map([...steps,...(plan?.earlierRequirements || [])].map(step => [step.logicalKey,step]));
-  const conversions = steps.filter(step => step.entity === 'Invoice' && step.kind !== 'existing' && (step.dependencies || step.relationships || []).some(link => (typeof link === 'object' ? link.entity : null) === 'Estimate' || byKey.get(typeof link === 'string' ? link : link.logicalKey)?.entity === 'Estimate'));
+  const conversions = steps.filter(step => step.entity === 'Invoice' && !['existing','fulfilled'].includes(step.kind) && (step.dependencies || step.relationships || []).some(link => (typeof link === 'object' ? link.entity : null) === 'Estimate' || byKey.get(typeof link === 'string' ? link : link.logicalKey)?.entity === 'Estimate'));
   if (conversions.length && support?.apiWritable !== true) throw refused({ logicalKeys: conversions.slice(0,20).map(step => step.logicalKey), beforeSourceWrites: true });
 }
 module.exports = { assertPlanSupport, CODE, SUPPORT, NATIVE_REASON, DOCUMENTATION, estimateIds, needsConversion, supportFor, readSyncedSupport, assertApiEstimateSupport, refused };

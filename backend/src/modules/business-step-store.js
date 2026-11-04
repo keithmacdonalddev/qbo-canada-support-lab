@@ -19,12 +19,14 @@ function validateIntent(intent, scope, operationId, logicalKey) {
   return { contractVersion: 1, ...scope, operationId, planHash: intent.planHash, logicalKey, fingerprint: intent.fingerprint, entity: intent.entity, dependencies: intent.dependencies.map(link => ({ logicalKey: link.logicalKey, fingerprint: link.fingerprint, entity: link.entity })) };
 }
 function assertIdentity(row, intent, requireOwner = true) {
+  if(row?.kind==='general-calendar-fulfillment'){if(intent.kind!=='fulfilled'||row.logicalKey!==intent.logicalKey||row.entity!==intent.entity||row.fingerprint!==intent.fingerprint||row.originHash!==intent.fulfillment?.authorityHash||canonical(row.dependencies)!==canonical(intent.dependencies))fail('The declared fulfilled origin changed.');return;}
   if (!row || row.contractVersion !== 1 || !sameScope(row, intent) || row.logicalKey !== intent.logicalKey || row.entity !== intent.entity || row.fingerprint !== intent.fingerprint || canonical(row.dependencies) !== canonical(intent.dependencies) || (requireOwner && (String(row.operationId) !== intent.operationId || row.planHash !== intent.planHash))) fail('Existing activity belongs to another operation or differs from the saved intent');
 }
 function assertHandle(row, handle, now, requireLive = false) {
+  if(row?.kind==='general-calendar-fulfillment'){if(!handle||handle.revision!==row.revision||handle.originHash!==row.originHash||handle.eventHash!==row.eventHash)fail('The fulfilled-origin verification revision changed.');return;}
   if (!handle || handle.revision !== row.revision || handle.leaseToken !== row.leaseToken || typeof handle.leaseToken !== 'string' || !handle.leaseToken || (requireLive && !(new Date(row.leaseExpiresAt).getTime() > now))) fail('This worker no longer owns the step revision');
 }
-function publicHandle(row) { return { revision: row.revision, leaseToken: row.leaseToken }; }
+function publicHandle(row) { return row.kind==='general-calendar-fulfillment'?{revision:row.revision,originHash:row.originHash,eventHash:row.eventHash}:{ revision: row.revision, leaseToken: row.leaseToken }; }
 function proofRequest(row) {
   // Lean Mongo documents still contain BSON IDs. Normalize before cloning plain evidence.
   return { ...scopeOf({ realmId: row.realmId, environment: row.environment, connectionId: String(row.connectionId) }),
@@ -38,6 +40,7 @@ function validateReceipt(value, row) {
 }
 
 function validateReadback(proof, row, clock) {
+  if(row?.kind==='general-calendar-fulfillment')return require('./general-calendar-fulfillment').validateReadback(proof,row.origin,clock);
   if (!proof || proof.kind !== 'business-readback' || proof.compilationHash !== row.dispatch?.compilationHash || !validHash(proof.compilationHash) || proof.version !== 1 || !sameScope(proof.scope, row) || proof.logicalKey !== row.logicalKey || proof.entity !== row.entity || proof.qboId !== row.qboId || proof.fingerprint !== row.fingerprint || proof.matchesIntent !== true || !validHash(proof.observedHash) || !validHash(proof.evidenceHash) || typeof proof.syncToken !== 'string' || !VERSION.test(proof.syncToken) || !Array.isArray(proof.relationships) || proof.relationships.length !== row.dependencies.length || new Set(proof.relationships.map(link => link.logicalKey)).size !== row.dependencies.length || (proof.listDefinitionHash !== undefined && !validHash(proof.listDefinitionHash))) fail('Read-back does not prove the exact saved intent and relationships');
   if (!fresh(proof.observedAt, clock)) throw Object.assign(new Error('Read-back evidence expired before it could be retained'), { status: 409, code: 'BUSINESS_READBACK_EXPIRED' });
 }
@@ -100,6 +103,7 @@ function assertLiveBookSafety({ step, observed, taxPolicy }) {
   }
 }
 function verificationData(proof) {
+  if(proof.kind==='general-calendar-readback')return structuredClone(proof);
   return { version: 1, kind: 'business-readback', compilationHash: proof.compilationHash, observedHash: proof.observedHash, evidenceHash: proof.evidenceHash, syncToken: proof.syncToken, observedAt: proof.observedAt, ...(proof.listDefinitionHash !== undefined ? { listDefinitionHash: proof.listDefinitionHash } : {}), ...(proof.accountRouting ? { accountRouting: structuredClone(proof.accountRouting) } : {}), ...(proof.estimateConversion ? { estimateConversion: structuredClone(proof.estimateConversion) } : {}), ...(proof.estimateLinkDropped ? { estimateLinkDropped: structuredClone(proof.estimateLinkDropped) } : {}), ...(proof.purchaseOrderConsumption ? { purchaseOrderConsumption: structuredClone(proof.purchaseOrderConsumption) } : {}), relationships: proof.relationships.map(link => ({ logicalKey: link.logicalKey, entity: link.entity, qboId: link.qboId, syncToken: link.syncToken })) };
 }
 
@@ -107,7 +111,7 @@ function verificationData(proof) {
 // fence MUST atomically write/fence the exact calendar/run/global-writer revision in
 // the supplied transaction. A dispatched/unknown step holds a non-expiring writer
 // barrier until its outcome is settled. A read-only preflight is NOT this contract.
-function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, transaction, fence, writeAudit, loadRecovery, loadReadback, loadGraphReadback, graphSnapshot, now = () => Date.now(), token = randomUUID }) {
+function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, transaction, fence, writeAudit, loadRecovery, loadReadback, loadGraphReadback, graphSnapshot, fulfillments = null, fenceFulfillment = null, now = () => Date.now(), token = randomUUID }) {
   for (const fn of [loadIntent, authorize, assertReady, transaction, fence, writeAudit, loadRecovery, now, token]) if (typeof fn !== 'function') throw new TypeError('Step storage requires explicit trusted adapters');
   if (typeof loadReadback !== 'function' && typeof loadGraphReadback !== 'function') throw new TypeError('Step storage requires a saved-record verification adapter');
   async function context(scope, operationId, logicalKey, action) {
@@ -119,14 +123,14 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     const savedIntent = await loadIntent(scope, operationId, logicalKey);
     const intent = validateIntent(savedIntent, scope, operationId, logicalKey);
     const kind = savedIntent.kind;
-    if (!['create', 'existing'].includes(kind)) fail('The saved activity disposition is invalid');
-    return { scope, actorId: actor.actorId, intent, kind, action, policyHash: savedIntent.policy ? hash(savedIntent.policy) : null, policyAmendmentHash: savedIntent.policyAmendmentHash || null };
+    if (!['create', 'existing', 'fulfilled'].includes(kind)) fail('The saved activity disposition is invalid');
+    return { scope, actorId: actor.actorId, intent:kind==='fulfilled'?{...intent,kind,fulfillment:savedIntent.fulfillment}:intent, rawIntent:savedIntent, kind, action, policyHash: savedIntent.policy ? hash(savedIntent.policy) : null, policyAmendmentHash: savedIntent.policyAmendmentHash || null };
   }
   const filter = ctx => ({ environment: ctx.scope.environment, realmId: ctx.scope.realmId, logicalKey: ctx.intent.logicalKey });
   async function guarded(ctx, phase, session, dispatch = null, receipt = null, step = null) {
     const actor = await authorize(ctx.scope, ctx.action);
     if (actor?.actorId !== ctx.actorId) fail('The operation actor changed', 403);
-    const result = await fence({ scope: ctx.scope, intent: ctx.intent, actorId: ctx.actorId, phase, dispatch, receipt, runLeaseToken: ctx.runLeaseToken, step: step ? { state: step.state, revision: step.revision, leaseToken: step.leaseToken } : null, session });
+    const result = ctx.kind==='fulfilled' ? await (typeof fenceFulfillment==='function'?fenceFulfillment:()=>fail('Typed fulfillment fencing is unavailable'))({scope:ctx.scope,intent:ctx.intent,actorId:ctx.actorId,phase,origin:step?.origin,session}) : await fence({ scope: ctx.scope, intent: ctx.intent, actorId: ctx.actorId, phase, dispatch, receipt, runLeaseToken: ctx.runLeaseToken, step: step ? { state: step.state, revision: step.revision, leaseToken: step.leaseToken } : null, session });
     if (!result || !sameScope(result.scope, ctx.scope) || result.operationId !== ctx.intent.operationId || result.planHash !== ctx.intent.planHash || result.phase !== phase || !validHash(result.fenceHash)) fail('The current company writer could not be fenced');
   }
   async function audit(ctx, row, phase, session) {
@@ -135,8 +139,9 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     if (!receipt || receipt.eventKey !== eventKey || typeof receipt.id !== 'string' || !receipt.id) fail('Step transition audit was not saved');
     return receipt.id;
   }
-  async function read(ctx, session) { return Steps.findOne(filter(ctx)).session(session).lean(); }
+  async function read(ctx, session) {if(ctx.kind==='fulfilled'){if(!fulfillments)fail('Typed fulfillment persistence is unavailable.');await fulfillments.assertEntry({scope:ctx.scope,entry:ctx.rawIntent,session});return fulfillments.state({scope:ctx.scope,logicalKey:ctx.intent.logicalKey,session});}return Steps.findOne(filter(ctx)).session(session).lean(); }
   async function replace(ctx, before, change, phase, session) {
+    if(ctx.kind==='fulfilled')return fulfillments.transition(ctx,before,change,phase,session);
     if (change.state === 'verified') change = { ...change, errorDetail: null, errorHistory: [], progressAt: new Date(now()) };
     else if (change.qboId && change.qboId !== before.qboId) change = { ...change, progressAt: new Date(now()) };
     const next = { ...before, ...change, revision: before.revision + 1 };
@@ -154,7 +159,9 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       if (expected.has(link.logicalKey)) { if (canonical(expected.get(link.logicalKey)) !== canonical(link)) invalid(); continue; }
       if (expected.size >= 1000) invalid();
       expected.set(link.logicalKey, link);
-      const row = await Steps.findOne({ ...ctx.scope, logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint, state: 'verified' }).session(session).lean();
+      let row = await Steps.findOne({ ...ctx.scope, logicalKey: link.logicalKey, entity: link.entity, fingerprint: link.fingerprint, state: 'verified' }).session(session).lean();
+      if(!row&&fulfillments)row=await fulfillments.state({scope:ctx.scope,logicalKey:link.logicalKey,session});
+      if(row?.kind==='general-calendar-fulfillment'){if(row.state!=='verified'||row.fingerprint!==link.fingerprint||!validHash(row.verification?.graphEvidenceHash))invalid();try{validateReadback(row.verification,row,clock);}catch{invalid();}rows.set(link.logicalKey,row);queue.push(...row.dependencies);continue;}
       if (row?.verification?.kind !== 'business-readback' || !validHash(row?.dispatch?.compilationHash) || row.verification?.compilationHash !== row.dispatch.compilationHash || !row?.qboId || row.receipt?.qboId !== row.qboId || !fresh(row.verification?.observedAt, clock) || typeof row.verification?.syncToken !== 'string' || !VERSION.test(row.verification.syncToken) || !validHash(row.verification?.observedHash) || !Array.isArray(row.dependencies) || row.dependencies.length > 20) invalid();
       rows.set(link.logicalKey, row); queue.push(...row.dependencies);
     }
@@ -313,7 +320,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       if (Buffer.byteLength(JSON.stringify(value)) > 32000000) fail('Graph proof exceeds its storage budget');
       const keys = new Set();
       for (const record of value.records) {
-        if (!record || !validHash(record.logicalKey) || keys.has(record.logicalKey) || !ENTITIES.has(record.entity) || !validHash(record.fingerprint) || typeof record.qboId !== 'string' || !/^\d{1,30}$/.test(record.qboId) || !Number.isSafeInteger(record.stepRevision) || record.stepRevision < 1 || record.stepRevision >= Number.MAX_SAFE_INTEGER || !validHash(record.compilationHash)) fail('Graph records have invalid identities');
+        if (!record || !validHash(record.logicalKey) || keys.has(record.logicalKey) || !ENTITIES.has(record.entity) || !validHash(record.fingerprint) || typeof record.qboId !== 'string' || !/^\d{1,30}$/.test(record.qboId) || !Number.isSafeInteger(record.stepRevision) || record.stepRevision < 1 || record.stepRevision >= Number.MAX_SAFE_INTEGER || !(record.kind==='fulfilled'?validHash(record.originHash):validHash(record.compilationHash))) fail('Graph records have invalid identities');
         keys.add(record.logicalKey);
       }
       if (roots.some(key => !keys.has(key))) fail('The graph omits a requested activity');
@@ -334,6 +341,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     const primary = contexts.get(roots[0]);
     for (const record of prepared.records) {
       cancelled(); if (contexts.has(record.logicalKey)) continue;
+      if(record.kind==='fulfilled'){const ctx=await context(scope,operationId,record.logicalKey,'operations.verify');if(ctx.kind!=='fulfilled')fail('A typed graph node lacks its declared fulfilled intent.');contexts.set(record.logicalKey,ctx);continue;}
       const saved = await Steps.findOne({ ...scope, logicalKey: record.logicalKey, entity: record.entity, fingerprint: record.fingerprint, qboId: record.qboId }).maxTimeMS(3000).lean();
       if (!saved || !ID.test(String(saved.operationId))) fail('The related original activity is unavailable');
       const origin = await context(scope, String(saved.operationId), record.logicalKey, 'operations.verify');
@@ -354,7 +362,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       const rows = new Map();
       for (const expected of prepared.records) {
         cancelled(); const ctx = contexts.get(expected.logicalKey), row = await read(ctx, session); assertIdentity(row, ctx.intent, false);
-        if (!['saved', 'verified', 'needs-check'].includes(row.state) || !row.receipt || row.revision !== expected.stepRevision || row.qboId !== expected.qboId || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || row.dispatch?.compilationHash !== expected.compilationHash) fail('The prepared graph changed before verification started');
+        if (!['saved', 'verified', 'needs-check'].includes(row.state) || (row.kind!=='general-calendar-fulfillment'&&!row.receipt) || row.revision !== expected.stepRevision || row.qboId !== expected.qboId || row.entity !== expected.entity || row.fingerprint !== expected.fingerprint || (row.kind==='general-calendar-fulfillment'?row.originHash!==expected.originHash:row.dispatch?.compilationHash !== expected.compilationHash)) fail('The prepared graph changed before verification started');
         await guarded(ctx, 'verification-start', session, row.dispatch, null, row);
         const saved = await replace(ctx, row, { state: 'saved', verification: null }, 'verification-start', session); rows.set(expected.logicalKey, saved);
       }
@@ -378,8 +386,8 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
           const ctx = contexts.get(key), expected = invalidated.rows.get(key), row = await read(ctx, session);
           assertIdentity(row, ctx.intent, false);
           const committedRecord = afterCommit?.records.find(record => record.logicalKey === key);
-          assertHandle(row, afterCommit ? { revision: committedRecord?.revision, leaseToken: expected.leaseToken } : publicHandle(expected), now());
-          if ((afterCommit ? row.state !== 'verified' || row.verification?.graphEvidenceHash !== afterCommit.evidenceHash : row.state !== 'saved') || !row.receipt || row.qboId !== expected.qboId || canonical(row.receipt) !== canonical(expected.receipt)) fail('The saved record changed before retaining its check');
+          assertHandle(row, afterCommit ? (row.kind==='general-calendar-fulfillment'?{revision:committedRecord?.revision,originHash:committedRecord?.originHash,eventHash:committedRecord?.eventHash}:{ revision: committedRecord?.revision, leaseToken: expected.leaseToken }) : publicHandle(expected), now());
+          if ((afterCommit ? row.state !== 'verified' || row.verification?.graphEvidenceHash !== afterCommit.evidenceHash : row.state !== 'saved') || (row.kind!=='general-calendar-fulfillment'&&!row.receipt) || row.qboId !== expected.qboId || (row.kind==='general-calendar-fulfillment'?row.originHash!==expected.originHash:canonical(row.receipt) !== canonical(expected.receipt))) fail('The saved record changed before retaining its check');
           await guarded(ctx, 'verification-start', session, row.dispatch, null, row);
           const errorDetail = businessErrorDetail(checkFailure || { code: 'BUSINESS_GRAPH_UNVERIFIED', message: 'The saved record did not pass graph verification.', businessDetail: { failures: graph?.failures || [], expectedVersion: row.receipt?.syncToken, observedVersion: graph?.records?.find(record => record.logicalKey === key)?.proof?.syncToken || null } }, { operationId, logicalKey: key, entity: row.entity, recordId: row.qboId });
           retainedError ||= errorDetail;
@@ -391,7 +399,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
     if (canonical(graph.writerFence) !== canonical(invalidated.writerFence) || graph.records.length !== invalidated.rows.size) fail('The observed graph differs from its invalidated snapshot');
     for (const record of graph.records) {
       const row = invalidated.rows.get(record.logicalKey);
-      if (!row || row.entity !== record.entity || row.fingerprint !== record.fingerprint || row.qboId !== record.qboId || row.revision !== record.stepRevision || row.dispatch.compilationHash !== record.compilationHash) fail('A graph activity changed while records were read');
+      if (!row || row.entity !== record.entity || row.fingerprint !== record.fingerprint || row.qboId !== record.qboId || row.revision !== record.stepRevision || (row.kind==='general-calendar-fulfillment'?row.originHash!==record.originHash:row.dispatch.compilationHash !== record.compilationHash)) fail('A graph activity changed while records were read');
     }
     if (!graph.complete) {
       if (retry) return verifyGraph(scope, operationId, roots, { signal, forceLive: true, retry: false });
@@ -405,7 +413,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
       for (const record of graph.records) {
         cancelled(); const ctx = contexts.get(record.logicalKey), row = invalidated.rows.get(record.logicalKey), current = await read(ctx, session);
         assertIdentity(current, ctx.intent, false); assertHandle(current, publicHandle(row), now());
-        if (current.state !== 'saved' || canonical(current.receipt) !== canonical(row.receipt) || current.qboId !== row.qboId || canonical(current.dispatch) !== canonical(row.dispatch)) fail('The saved graph changed before proof persistence');
+        if (current.state !== 'saved' || current.qboId !== row.qboId || (current.kind==='general-calendar-fulfillment'?current.originHash!==row.originHash||current.eventHash!==row.eventHash:canonical(current.receipt) !== canonical(row.receipt)||canonical(current.dispatch) !== canonical(row.dispatch))) fail('The saved graph changed before proof persistence');
         validateReadback(record.proof, current, now());
         const parents = await verifiedClosure(ctx, current.dependencies, session, now());
         for (const link of record.proof.relationships) {
@@ -414,7 +422,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
         }
         await guarded(ctx, 'verify', session, current.dispatch, null, current);
         const saved = await replace(ctx, current, { state: 'verified', verification: { ...verificationData(record.proof), graphEvidenceHash: graph.evidenceHash } }, 'verify', session);
-        savedRecords.push({ logicalKey: record.logicalKey, entity: saved.entity, qboId: saved.qboId, revision: saved.revision });
+        savedRecords.push({ logicalKey: record.logicalKey, entity: saved.entity, qboId: saved.qboId, revision: saved.revision, ...(saved.kind==='general-calendar-fulfillment'?{kind:'fulfilled',originHash:saved.originHash,eventHash:saved.eventHash}:{}) });
       }
       for (const record of graph.records) validateReadback(record.proof, invalidated.rows.get(record.logicalKey), now());
       cancelled(); return { state: 'verified', complete: true, persisted: true, recordCount: savedRecords.length, roots, records: savedRecords, evidenceHash: graph.evidenceHash };
@@ -446,11 +454,12 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
         const verified = await verifiedClosure(ctx, [{ logicalKey, entity: row.entity, fingerprint: row.fingerprint }], session, now());
         row = verified.get(logicalKey); current = true;
       } catch (error) { if (error.code !== 'BUSINESS_EVIDENCE_UNVERIFIED') throw error; }
-      return { originOperationId: String(row.operationId), originPlanHash: row.planHash, state: row.state, qboId: row.qboId || null, fingerprint: row.fingerprint, receipt: row.receipt, rejection: row.rejection || null, errorDetail: row.errorDetail || row.verification?.errorDetail || null, verification: row.verification, fresh: current, creationAuthorized: false };
+      return { ...(row.kind==='general-calendar-fulfillment'?{kind:row.kind,originHash:row.originHash,fulfillment:require('./general-calendar-fulfillment').originPointer(row.origin)}:{originOperationId: String(row.operationId), originPlanHash: row.planHash}), state: row.state, qboId: row.qboId || null, fingerprint: row.fingerprint, receipt: row.receipt, rejection: row.rejection || null, errorDetail: row.errorDetail || row.verification?.errorDetail || null, verification: row.verification, fresh: current, creationAuthorized: false };
     });
   }
   async function compilation(scope, operationId, logicalKey) {
     const ctx = await context(scope, operationId, logicalKey, 'operations.read');
+    if(ctx.kind==='fulfilled')fail('A fulfilled origin has no SDK compilation and cannot be dispatched.');
     return transaction(async session => {
       const actor = await authorize(ctx.scope, ctx.action);
       if (actor?.actorId !== ctx.actorId) fail('The operation actor changed', 403);
@@ -462,6 +471,7 @@ function createBusinessStepStore({ Steps, loadIntent, authorize, assertReady, tr
   }
   async function recordFailure(scope, operationId, logicalKey, error) {
     const ctx = await context(scope, operationId, logicalKey, 'operations.read');
+    if(ctx.kind==='fulfilled')return null;
     return transaction(async session => {
       const row = await read(ctx, session); if (!row) return null;
       assertIdentity(row, ctx.intent);

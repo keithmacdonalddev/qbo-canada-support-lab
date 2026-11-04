@@ -53,8 +53,15 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
     if (step.txnDate < base.fromDate || step.txnDate > base.throughDate || step.details?.version !== 1 || step.details.currency !== 'CAD' || !Array.isArray(step.details.lines) || step.details.lines.length > 100) fail('Prepared transaction details are missing or changed.');
     current.set(step.logicalKey, step);
   }
+  const preparedRoots=[...current.keys()];
   for (const entry of source.entries) {
     if (!entry || !HASH.test(entry.logicalKey || '') || original.has(entry.logicalKey)) fail('Original activity ownership is ambiguous.');
+    if(entry.kind==='fulfilled'){
+      if(current.has(entry.logicalKey)){const proposed=current.get(entry.logicalKey);if(proposed.kind!=='fulfilled'||proposed.calendarFingerprint!==entry.step?.calendarFingerprint||proposed.detailsHash!==entry.step?.detailsHash)fail('The current planned activity differs from its fulfilled origin.');current.delete(entry.logicalKey);}
+      validateOperationEntry({kind:'fulfilled',step:entry.step,policy:entry.policy,fulfillment:entry.fulfillment},scope,base.fromDate,base.throughDate);
+      if(entry.businessKey!==base.businessKey||entry.entity!=='Invoice'||entry.fingerprint!==hash(entry.step)||entry.state!=='fulfilled-origin')fail('The typed fulfilled history changed.');
+      const identity=entry.entity+':'+entry.qboId;if(physical.has(identity))fail('Several earlier activities claim the same QuickBooks record.');physical.add(identity);original.set(entry.logicalKey,entry);continue;
+    }
     if (current.has(entry.logicalKey)) fail('Current activity already belongs to a saved operation. Resume that operation instead.');
     if (entry.businessKey !== base.businessKey || typeof entry.operationId !== 'string' || !ID.test(entry.operationId || '') || !HASH.test(entry.planHash || '') || !['saved', 'verified'].includes(entry.state) || typeof entry.qboId !== 'string' || !QBO_ID.test(entry.qboId || '') || !Number.isSafeInteger(entry.revision) || entry.revision < 1 || entry.entity !== entry.step?.entity || entry.logicalKey !== entry.step?.logicalKey || entry.fingerprint !== hash(entry.step)) fail('The earlier activity has no exact saved business ownership.');
     const identity = entry.entity + ':' + entry.qboId;
@@ -82,23 +89,23 @@ function assembleBusinessOperation({ prepared, history, context, now = Date.now(
     let entry;
     if (previous) {
       // Preserve original canonical content, including its original policy and refs.
-      entry = { kind: 'existing', step: previous.step, policy: previous.policy };
-      origins.push({ logicalKey: key, operationId: previous.operationId, planHash: previous.planHash, fingerprint: previous.fingerprint, qboId: previous.qboId, state: previous.state, revision: previous.revision });
+      entry = previous.kind==='fulfilled'?{kind:'fulfilled',step:previous.step,policy:previous.policy,fulfillment:previous.fulfillment}:{ kind: 'existing', step: previous.step, policy: previous.policy };
+      if(previous.kind!=='fulfilled')origins.push({ logicalKey: key, operationId: previous.operationId, planHash: previous.planHash, fingerprint: previous.fingerprint, qboId: previous.qboId, state: previous.state, revision: previous.revision });
     } else {
       const references = input.references.map(ref => ({ key: ref.key, entity: ref.entity, id: ref.id, syncToken: ref.syncToken, status: ref.status, definition: ref.definition })).sort((a, b) => (a.entity + ':' + a.key).localeCompare(b.entity + ':' + b.key));
       const step = { logicalKey: input.logicalKey, entity: input.entity, txnDate: input.txnDate, calendarFingerprint: input.calendarFingerprint, detailsHash: input.detailsHash, details: input.details, references, dependencies: dependencies.sort((a, b) => a.logicalKey.localeCompare(b.logicalKey)) };
       const detailLinks = (step.details.references || []).map(link => ({ logicalKey: link.logicalKey, entity: link.entity })).sort((a, b) => a.logicalKey.localeCompare(b.logicalKey));
       if (canonical(detailLinks) !== canonical(step.dependencies.map(({ logicalKey, entity }) => ({ logicalKey, entity })))) fail('Transaction details and dependencies differ.');
-      entry = { kind: 'create', step };
+      entry = input.kind==='fulfilled'?{kind:'fulfilled',step,fulfillment:input.fulfillment}:{ kind: 'create', step };
     }
     bytes += Buffer.byteLength(canonical(entry)); if (bytes > MAX_BYTES) fail('Operation assembly exceeds its size budget.');
     visiting.delete(key); retained.set(key, entry); return entry;
   };
-  for (const key of [...current.keys()].sort()) visit(key);
+  for (const key of preparedRoots.sort()) visit(key);
   if (retained.size !== current.size + original.size) fail('History contains unrelated earlier activities.');
   const value = { version: 1, candidate: { ...base, ...(payload.receivedOrderReplacements ? { receivedOrderReplacements: payload.receivedOrderReplacements } : {}), ...(payload.activityBatch ? { activityBatch: payload.activityBatch } : {}), ...(payload.continuity ? { continuity: payload.continuity } : {}), ...(payload.inheritedFollowUps ? { inheritedFollowUps: payload.inheritedFollowUps } : {}), ...(payload.correctedFollowUps ? { correctedFollowUps: payload.correctedFollowUps } : {}), entries: [...retained.values()] }, sources: { operationHash, historyHash: sourceHash, preparedAt, historyObservedAt: source.observedAt }, origins,
     requirements: payload.remaining.map(({ key, reason }) => ({ key, reason })),
-    policyRequests: [...retained.values()].filter(entry => entry.kind === 'create').map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) })),
+    policyRequests: [...retained.values()].filter(entry => entry.kind === 'create'||entry.kind==='fulfilled'&&!entry.policy).map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) })),
     persisted: false, readyToExecute: false, requiresActivationFence: true, requiresOwnershipReview: true, requiresFreshReadback: true };
   const result = { ...value, assemblyHash: hash(value) }; snapshot(result); return result;
 }
@@ -110,7 +117,7 @@ function bindApprovedOperationPolicies(assembly, policies, now = Date.now()) {
   const assemblyHash = hash(value);
   if (value.version !== 1 || value.persisted !== false || value.readyToExecute !== false || value.requiresActivationFence !== true || value.requiresOwnershipReview !== true || value.requiresFreshReadback !== true || !HASH.test(assemblyHash || '') || !Array.isArray(value.policyRequests) || !Array.isArray(policies) || policies.length !== value.policyRequests.length) fail('The reviewed assembly or exact policy set changed.');
   fresh(value.sources.preparedAt, now); fresh(value.sources.historyObservedAt, now);
-  const expected = value.candidate.entries.filter(entry => entry.kind === 'create').map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) }));
+  const expected = value.candidate.entries.filter(entry => entry.kind === 'create'||entry.kind==='fulfilled'&&!entry.policy).map(entry => ({ logicalKey: entry.step.logicalKey, stepHash: hash(entry.step) }));
   if (value.policyRequests.length !== expected.length || new Set(value.policyRequests.map(row => row?.logicalKey)).size !== expected.length || value.policyRequests.some(row => !expected.some(entry => entry.logicalKey === row?.logicalKey))) fail('The assembly policy identities differ from its finalized activities.');
   const expectedKeys = new Set(expected.map(entry => entry.logicalKey));
   const byKey = new Map();
@@ -119,7 +126,7 @@ function bindApprovedOperationPolicies(assembly, policies, now = Date.now()) {
     byKey.set(supplied.logicalKey, supplied.policy);
   }
   const entries = value.candidate.entries.map(entry => {
-    if (entry.kind !== 'create') return entry;
+    if (entry.kind !== 'create' && !(entry.kind==='fulfilled'&&!entry.policy)) return entry;
     const policy = byKey.get(entry.step.logicalKey);
     if (!policy || !['approved', 'proposed'].includes(policy.status)) fail('The current Canadian policy is unavailable.');
     // Approval and assembly hashes describe the observation; current typed intent
@@ -144,9 +151,9 @@ function bindApprovedOperationPolicies(assembly, policies, now = Date.now()) {
     if (current.status !== policy.status || current.stepHash !== policy.stepHash) {
       delete current.evidenceHash; current.evidenceHash = hash(current);
     }
-    return { kind: 'create', step: entry.step, policy: current };
+    return { ...entry, policy: current };
   });
-  const candidate = { ...value.candidate, entries }, checked = validateOperationCandidate(candidate, candidate.scope, now);
+  const candidate = { ...value.candidate, entries }, checked = validateOperationCandidate(candidate, candidate.scope, now,{allowUnboundFulfilled:true});
   return { candidate: { ...candidate, entries: checked.entries }, candidateHash: hash({ ...candidate, entries: checked.entries }), planHash: checked.planHash,
     assemblyHash, requirements: value.requirements, persisted: false, readyToExecute: false, requiresActivationFence: true, requiresOwnershipReview: true, requiresFreshReadback: true };
 }
