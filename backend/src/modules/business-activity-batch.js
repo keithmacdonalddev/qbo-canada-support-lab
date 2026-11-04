@@ -231,12 +231,16 @@ function validateChoices(input, policy = POLICY) {
   const decisionKey = text(input.decisionKey, 8, 100), purpose = text(input.purpose, 20, 2000);
   if (!/^[a-zA-Z0-9_-]+$/.test(decisionKey) || !Array.isArray(input.activities) || input.activities.length < 1 || input.activities.length > POLICY.maxActivities) fail('Choose one to twelve concrete business activities and retain their decision identifier.');
   let cents = 0; const settled = new Set();
-  const activities = input.activities.map(row => {
+  const activities = input.activities.map((row, index) => {
     if (!policy.workflows.includes(row?.type)) fail('This activity is not part of the saved activity policy.');
     if (row?.type === 'settled-service-sale') {
       // An added item carries its retained capabilities; preparation proves them
       // against the verified role, so the sale rebuilds without any company read.
       const addedItem = v6 && ADDED.item.test(row.itemKey || '');
+      if (addedItem) {
+        const missing = ['incomeRole', 'unit'].filter(key => !Object.hasOwn(row, key));
+        if (missing.length) fail('activities[' + index + '] uses added item ' + row.itemKey + ' and requires ' + missing.join(' and ') + '. Copy incomeRole and unit from that exact item in getBusinessActivityChoices.addedItems; retain the same decisionKey and other business choices when retrying. This request prepared no operation.');
+      }
       exact(row, ['type', 'customerKey', 'itemKey', 'quantity', 'unitPriceCents', 'purpose', ...(addedItem ? ['incomeRole', 'unit'] : [])]);
       if (!(/^(field-client-0(?:0[1-9]|1[0-5])|care-client-0(?:0[1-9]|1[0-9]|2[0-5]))$/.test(row.customerKey || '') || (v6 && ADDED.customer.test(row.customerKey || ''))) || !(['field-service-hour', 'care-plan-1', 'care-plan-2', 'care-plan-3'].includes(row.itemKey) || addedItem)) fail('Choose an observed service and customer role from the published business.');
       if (addedItem && (!ADDED_INCOME.includes(row.incomeRole) || !ADDED_UNITS.includes(row.unit))) fail("An added item sale names the item's income role and unit.");

@@ -17,18 +17,21 @@ function postingContext(evidence) {
 }
 function settlementWindow(rows) { return rows.map(row => ({ ...row, record: require('./general-write-postings').accountingView(row.record) })); }
 function createGeneralCloseGate({ models = {}, copy, readValuation = null, now = () => Date.now() }) {
-  // Explicit fixture compositions must supply proof/audit stores; never query a live default from an isolated fixture.
-  const nativeStores = { Authorities: models.Authorities || (!Object.keys(models).length ? require('../models/BusinessAuthority') : null), Audits: models.Audits || (!Object.keys(models).length ? require('../models/AuditLog') : null) };
-  // Resolve the complete proof stores once, including reloads after replay capture.
-  // Production constructs this gate without injected models; saved AP-omission
-  // proofs still require their original scoped receipt, authority and run.
-  models = { ...models,
-    GeneralWriteRuns: models.GeneralWriteRuns || require('../models/GeneralWriteRun'),
-    GeneralDayCloses: models.GeneralDayCloses || require('../models/GeneralDayClose'),
-    Records: models.Records || require('../models/CompanySyncRecord'),
-    Receipts: models.Receipts || require('../models/QboWriteReceipt'),
-    Authorities: models.Authorities || require('../models/BusinessAuthority'),
+  // The production factory resolves every store needed by retained native sources.
+  // Explicit fixture compositions stay isolated and must provide their own proof stores.
+  if (!Object.keys(models).length) models = {
+    GeneralWriteRuns: require('../models/GeneralWriteRun'),
+    GeneralDayCloses: require('../models/GeneralDayClose'),
+    Records: require('../models/CompanySyncRecord'),
+    Receipts: require('../models/QboWriteReceipt'),
+    Authorities: require('../models/BusinessAuthority'),
+    Audits: require('../models/AuditLog'),
+    Steps: require('../models/OperationStep'),
+    Intents: require('../models/OperationIntent'),
+    Runs: require('../models/OperationRun'),
+    Plans: require('../models/OperationPlan'),
   };
+  const nativeStores = { Authorities: models.Authorities || null, Audits: models.Audits || null };
   const { GeneralWriteRuns: Runs, GeneralDayCloses: Closes, Records } = models;
   const company = scope => ({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId });
   async function pending(scope, { fromDate, throughDate, verifiedThrough }) {

@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-04T13:46:09.673Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T13:55:26.583Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -164,7 +164,7 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 
 | ID | Priority / status | Deliverable and direct completion proof | Dependency / next action |
 |---|---|---|---|
-| C01 | P0 — OPEN | Saved/validated/accounting-verified counts include the correct general and fixed cohorts and clearly distinguish their proof levels. | business-agent-store currently maps completed general runs to retired; cadence increments verified only for verified runs. Do not simply label every saved record verified. |
+| C01 | P0 — OPEN | Saved/validated/accounting-verified counts include the correct general and fixed cohorts and clearly distinguish their proof levels. | Completed general runs stay terminal for reservation accounting. A cheap truthful verified count needs successful close member evidence binding each original create run/ref/entity/QBOid/version or native-proof hash, plus relevant invalidation. Current GeneralDayClose stores identities and whole-snapshot hashes, not per-create version membership. Do not simply label every saved record verified. |
 | C02 | P0 — OPEN | The capability page reflects executable schemas, current switches and actual restrictions. | business-agent-catalog still says sending off/no cheques/no list tools, contradicting live dispatch and source. |
 | C03 | P1 — OPEN | The owner sees current action, unfinished work, next action, freshness and recovery truthfully; dates/counts show their meaning and as-of time. | Distinguish population records-through, verified calendar, source freshness and saved report observation dates. Do not call intentionally different measures contradictions. |
 | C04 | P1 — IMPLEMENTED / PROOF OPEN | Owner journeys cover supported accountant responsibilities, including recording, directions/overrides, banking, close, reports, errors and return paths. | Forms/navigation were inspected; end-to-end owner writes and complete parity remain unproved. Verify safely against the actual desktop journey. |
@@ -184,6 +184,10 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+2026-11-04T13:55:26.583Z — **Default native-proof stores and actionable activity diagnostics installed.** Root reproduced the completed-source failure using the actual production-default close factory, then installed its reviewed default-only10-store composition at13:50:31UTC. Managed OperationRun remains distinct from GeneralWriteRun; partial injected fixtures receive no live fallback. No proof/scope/receipt gate was relaxed.25 focused private regressions and41 installed factory/close/tool checks pass; touched syntax/diff pass. The activity correction keeps required published incomeRole/unit explicit and reports exact missing fields before any operation exists; corrected same-key shape preserves both quotes. Normal model-free ownerNov1 preparation retains one request identity; browser-command timeout left no operation at the exact computed identity, so that same-key request is now retained asynchronously and its result remainsOPEN. No request/new financial create is replayed.
+
+C01 source check confirms a cheap truthful accounting-verified count needs new per-create member/version proof in successful GeneralDayClose evidence; current records store identities but no run/ref/version memberships. Do not label all complete General runs verified or change terminal reservation semantics. C02 catalog repair is advancing independently: missing summaries currently prevent cataloguing four live banking/native tools; stale capability text also exists in the owner page. Actual saved output reached47 at13:50, full calendar stillOct31. Preserve other outstanding work and continue through the next direct close result.
 
 2026-11-04T13:46:09.670Z — **Actual output45saved; new bank instructions automatically scheduled.** Normal accountant managed General run5e28ab5c4efd34f5070e7d76 answered two batches, accepted Customers170–173 and four regional advisory SalesReceipts11577–11580, retaining original receipts and complete bankDelivery. Today37→45 saved; no filler count or sustained220/day claim. The four exact receipt-bound bank events appeared once and the model-free clock automatically froze Nov5 dates at13:42:45UTC without a manual settle call. Normal account123 HTTP200 shows7pending/0posted, original baseline65a191…b705 and balance2129225minor unchanged. Actual desktop refresh shows7pending, expected dates and last automatic check; inspected1440×1000. Direct evidence new-saves-1342.json, artifacts/bank-2.3/automatic-new-instructions.json and automatic-seven-pending-desktop.png. This proves automatic scheduling of real new instructions; actual due posting/files/endurance stayOPEN.
 
