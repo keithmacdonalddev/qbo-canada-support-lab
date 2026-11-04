@@ -7,10 +7,13 @@ async function collectionReadiness({ models, scope, calendar, day }) {
   const job = await query(models.Jobs, { _id: adoption.jobId });
   if (job?.status !== 'adopted') return null;
   const Records = models.PopulationRecords || require('../models/BusinessPopulationRecord');
-  const imported = await Records.find({ ...scope, authorityHash: job.authorityHash, entity: 'Invoice', state: 'saved', txnDate: { $lte: adoption.importedThrough }, 'financialProof.matchesFinancialIntent': true, 'relationshipCheck.outcome': { $ne: 'error' } }).select('qboId').limit(2001).maxTimeMS(3000).lean();
+  // Bound the intersection by current due/open invoices, not the entire immutable
+  // import history. Older paid invoices must not make today's readiness unknown.
+  const due = await models.Records.find({ ...scope, entity: 'Invoice', deleted: false, 'summary.balanceCents': { $gt: 0 }, 'summary.dueDate': { $lte: day } }).select('qboId summary.balanceCents').limit(2001).maxTimeMS(3000).lean();
+  if (due.length > 2000) return { unavailable: true };
+  const imported = await Records.find({ ...scope, authorityHash: job.authorityHash, entity: 'Invoice', state: 'saved', qboId: { $in: due.map(row => row.qboId) }, txnDate: { $lte: adoption.importedThrough }, 'financialProof.matchesFinancialIntent': true, 'relationshipCheck.outcome': { $ne: 'error' } }).select('qboId').limit(2001).maxTimeMS(3000).lean();
   if (imported.length > 2000) return { unavailable: true };
-  const invoices = await models.Records.find({ ...scope, entity: 'Invoice', deleted: false, qboId: { $in: imported.map(row => row.qboId) }, 'summary.balanceCents': { $gt: 0 }, 'summary.dueDate': { $lte: day } }).select('qboId summary.balanceCents').limit(2001).maxTimeMS(3000).lean();
-  if (invoices.length > 2000) return { unavailable: true };
+  const proved = new Set(imported.map(row => row.qboId)), invoices = due.filter(row => proved.has(row.qboId));
   const older = await models.Runs.find({ ...scope, 'activityBatch.day': { $lt: day }, 'activityBatch.activities.type': 'collect-adopted-invoice' }).select('_id status approval nextOrdinal executionRequest activityBatch').limit(101).maxTimeMS(3000).lean();
   const reusableDecisionKeys = [];
   if (older.length <= 100) for (const key of new Set(older.map(row => row.activityBatch.decisionKey))) {
