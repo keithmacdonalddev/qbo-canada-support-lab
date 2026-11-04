@@ -1,15 +1,41 @@
 # GPT-6.1 Terra: visual checks and live UI runs
 
-Use Terra for saved screenshots, rendered wording/layout review, and explicitly scoped live flows. It does not replace Sol code review or the deterministic test runner. The runner fixes the model to `gpt-6.1-terra`, with medium effort by default (low, medium, high and xhigh are accepted).
+Owner direction2026-11-04: use GPT-6.1 Terra subagents for all browser work, including native QuickBooks, local-app flows and rendered UI inspection. Pass `gpt-6.1-terra` with `medium` or `high` effort explicitly and verify the effective run settings. Use medium for routine bounded tasks, high for a concrete difficult or failed case. The legacy runner accepts wider flags, but current owner policy requires these two efforts. This does not replace code/security review or deterministic checks.
+
+## Required task contract
+
+The parent gives Terra a self-contained assignment, not a broad goal such as "fix banking" or "test everything". Keep one browser task to one verifiable business outcome.
+
+```text
+Outcome: one specific saved result; distinguish inspection from mutation.
+Executor: gpt-6.1-terra; effort medium or high, stated reason.
+Target: exact app URL/company/realm, account ID/name/currency, period and owned session/profile.
+Inputs: retained package/run/file IDs, exact hashes, row counts and expected opening/closing values.
+Starting state: observed last state, prerequisite proof and accepted/uncertain actions already present.
+Allowed actions: exact navigation and persistent actions; do not infer extra saves, imports or settings changes.
+Success: exact QBO/app confirmation, expected accepted row/record counts/IDs and required balances/statuses.
+Stops: identity/company/account mismatch, unexpected rows, nonzero difference, changed file, unknown prior effect.
+Time: bounded elapsed checkpoint; stop repeated unchanged attempts and return the next exact dependency.
+Proof: unobstructed screenshots with account/period, confirmation/report and retained IDs; no credentials.
+Report: attempted / accepted / unverified actions, actual counts, paths, cleanup and next safe action.
+```
+
+Split preflight, one exact upload, matching, reconciliation and accepted-action evidence recovery when their evidence or permissions differ. Upload preflight is read-only and proves full bank-rule coverage; an upload task names one file/account/period and counts only QuickBooks-confirmed accepted rows. A quiet zero-row reconciliation is never bank-feed catch-up. After a lost reply or failed command, preserve accepted/unknown actions; do not repeat Upload, Add, Match, Save or Finish. Recovery is a separate task bound to the original run.
+
+For example: target My Business/realm9130357222392856, operating-bank account123/CAD,2023-09, exact retained37-row CSV/file hash. Preflight proves the account, file and rules; upload accepts only that file and returns the native confirmation, count and screenshot. Matching is a later assignment against exact existing records. This example describes task precision, not new permission or a claim that the rows were uploaded.
+
+Before clicking, inspect the current rendered state. A missing heading from an older UI is not a readiness condition. Dismiss only an observed harmless introduction tooltip through its observed Close control. Read-only inspection predicates return structured missing/not-ready results; authentication/form guards remain unchanged. A page/command failure is not evidence that a prior financial action failed, and never permits a blind retry. Keep navigation recovery bounded and prove the next state.
+
+The parent watches safe sign-in stages and actual job state, checks the effective model/effort, then validates the saved QBO/app outcome. Browser activity, screenshots without the relevant result, tests and code changes do not count as company delivery. One shared qbo-ops lease covers the full native task; never drive it concurrently. Use the parent-side deterministic private sign-in broker, with saved-password preference, without placing actual credentials or codes in the task.
 
 ## Persistent QuickBooks work
 
-For the shared `qbo-ops` production browser, use [the common session command](../../../../docs/architecture/qbo-browser-access.md): `node scripts/banking/qbo-session.cjs run --actor claude-code --task artifacts/terra-live/tasks/<uuid>/task.txt`. Launch it through the hidden Windows route. It authenticates privately before the model runs, verifies the dedicated native identity and exact company, and holds the shared lease until the task ends. `ensure` is a sign-in check only. Raw persistent BF7 launches are refused without this coordinator. The main local coding chat may directly read/use the actual dedicated AI email/password under the [standing owner permission](../../../../AGENTS.md#dedicated-ai-quickbooks-credentials--standing-permission), without the automatic login wrapper or a new permission question. Perform that direct sign-in in the main chat while retaining the shared browser lease; keep credentials out of the bounded Terra task. The BF7 coordinator and all company-action/native stop rules below remain in force.
+For the shared `qbo-ops` production browser, use [the common session command](../../../../docs/architecture/qbo-browser-access.md): `node scripts/banking/qbo-session.cjs run --actor claude-code --task artifacts/terra-live/tasks/<uuid>/task.txt`. Launch it through the hidden Windows route. It authenticates privately before the model runs, verifies the dedicated native identity and exact company, and holds the shared lease until the task ends. `ensure` is a sign-in check only. Raw persistent BF7 launches are refused without this coordinator. The main local coding chat may directly read/use the actual dedicated AI email/password under the [standing owner permission](../../../../AGENTS.md#dedicated-ai-quickbooks-credentials--standing-permission), without the automatic login wrapper or a new permission question. Keep private credential entry in the existing parent-side deterministic sign-in broker under the shared lease; delegate browser work to Terra and keep credentials out of its task. The BF7 coordinator and all company-action/native stop rules below remain in force.
 
 ## Choose a route
 
 - **Saved screenshots:** use the read-only Codex companion with `--model gpt-6.1-terra --effort medium` and screenshot paths in the prompt. This needs no live runner or full-access session.
-- **Live:** from the canonical `C:/Projects/qbo` checkout, use Git Bash and `bash .claude/skills/qbo-team-delivery/scripts/terra-live.sh [--flow|--desktop|--chrome] <run-name> <prompt-file> [low|medium|high|xhigh]`. Paths are relative to the repo root. Start it in the background using the hidden launch route required by `AGENTS.md`; never use `exec_command` on Windows. The runner uses `codex exec -s danger-full-access` without approval prompts and disables Codex memories for this run. This is a privileged session, not a sandbox or a grant of live-write authority.
+- **Live:** from the canonical `C:/Projects/qbo` checkout, use Git Bash and `bash .claude/skills/qbo-team-delivery/scripts/terra-live.sh [--flow|--desktop|--chrome] <run-name> <prompt-file> [medium|high]`. Paths are relative to the repo root. Start it in the background using the hidden launch route required by `AGENTS.md`; never use `exec_command` on Windows. The runner uses `codex exec -s danger-full-access` without approval prompts and disables Codex memories for this run. This is a privileged session, not a sandbox or a grant of live-write authority.
 
 | Mode | Intended use | Data boundary |
 | --- | --- | --- |
