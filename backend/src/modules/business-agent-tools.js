@@ -121,7 +121,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     if(Math.max(ids.size,(Number(today?.inFlight)||0)-(reuse&&today?.open?.some(run=>run.operationId===reuse)?1:0))>=cadence.MAX_IN_FLIGHT)fail('Three operations are already prepared, queued or executing. Continue an existing operation before preparing another.');
     return today;
   }
-  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent','repairEstimateConversion','getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord','reviewCapability','recordCloseChecklistEvidence','prepareBankingPackage','retryBankInstructions','settleBankInstructions'].includes(tool.name))].map(tool=>({...tool,input_schema:{...tool.input_schema}}));
+  const definitions=[...accountantReadDefinitions(native),...EXTRA_TOOLS.filter(tool=>role==='accountant'||!['publishCurrentBankFeed','publishCumulativeBankFeed','configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent','repairEstimateConversion','getBusinessActivityChoices','prepareBusinessActivity','prepareBusinessPeriod','executeBusinessPeriod','resumeBusinessOperation','recordDailyPlan','requestCapability','manageQboRecord','reviewCapability','recordCloseChecklistEvidence','prepareBankingPackage','retryBankInstructions','settleBankInstructions'].includes(tool.name))].map(tool=>({...tool,input_schema:{...tool.input_schema}}));
   for(const tool of definitions)if(require('./business-agent-accountability').WRITE_TOOLS.has(tool.name)){tool.description+=' Include decision.goal and decision.planItem to connect this write to your business objective and exact daily-plan change; use an explicit independent-work item when unplanned.';tool.input_schema={...tool.input_schema,properties:{...tool.input_schema.properties,decision:schema({goal:text,planItem:text},['goal','planItem'])}};}
   const byName=new Map(definitions.map(tool=>[tool.name,tool]));const clients=new Map();let calls=0,readAttempts=0,local=null;
   const localReads=()=>local||(local=require('./business-local-reads').createLocalReads({Records:store.models.Records,scope,freshness:()=>require('./business-agent-service').publicSync(row,now())}));
@@ -148,9 +148,10 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       const type=input.type||input.entityType;if(type&&!SPECIALIST_TYPES[role].includes(type))fail('This record type belongs to another specialist responsibility.',403);
       if(name==='getObligations'&&input.area!==role)fail('This obligations queue belongs to another responsibility.',403);
     }
+    const bankOnlyPublish=['publishCurrentBankFeed','publishCumulativeBankFeed'].includes(name);
     let result,writeDecision=null;
     if(require('./business-agent-accountability').WRITE_TOOLS.has(name)){
-      await guard(true);
+      await guard(bankOnlyPublish?'authority':true);
       const plan=typeof store.latestDailyPlan==='function'?await store.latestDailyPlan(row):null;
       const operation=input.operationId&&typeof store.run==='function'?await store.run(scope,input.operationId):null;
       const data=require('./business-agent-accountability').decisionData({name,input,plan,operation,day:cadence.localParts(now()).date,passId});
@@ -168,9 +169,9 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
       result=value?{success:true,data:{...value,rows:value.rows.slice(offset,offset+limit),total:value.rows.length,nextOffset:offset+limit<value.rows.length?offset+limit:null}}:{success:false,error:'Current measured coverage is unavailable; do not claim missing or covered situations.'};
     }
     else if(require('./banking-accountant-tools').DEFINITIONS.some(t=>t.name===name)){
-      if(['configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent','prepareBankingPackage','retryBankInstructions','settleBankInstructions'].includes(name))await guard(true);
+      if(['publishCurrentBankFeed','publishCumulativeBankFeed','configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent','prepareBankingPackage','retryBankInstructions','settleBankInstructions'].includes(name))await guard(bankOnlyPublish?'authority':true);
       const runtime=require('./banking-accountant-tools').createBankingRuntime();
-      let context={};if(['configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent'].includes(name)){if(role!=='accountant'||!row.grant)fail('Only the authorized head accountant may change bank-origin policy or bookkeeping.');const business=await store.business(scope);context={agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)}};}result={success:true,data:await runtime.tools.execute(user,name,input,context)};
+      let context={};if(['publishCurrentBankFeed','publishCumulativeBankFeed','configureBankOriginPolicy','processBankOriginDue','addBankOriginAdvice','bookBankOriginEvent'].includes(name)){if(role!=='accountant'||!row.grant)fail('Only the authorized head accountant may change bank records or publish current files.');const business=await store.business(scope);context={agentAuthority:{version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)}};}result={success:true,data:await runtime.tools.execute(user,name,input,context)};
     }
     else if(name==='getCloseChecklist')result={success:true,data:await governanceFor(null).getCloseChecklist(user,input)};
     else if(name==='recordCloseChecklistEvidence')result={success:true,data:await governanceFor(null).recordCloseChecklistEvidence(user,{...input,attestation:null})};

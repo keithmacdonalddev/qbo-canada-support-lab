@@ -1039,6 +1039,55 @@ function exactBankLeg(entity, record, event, mapping, context, local, {
   need(Number.isSafeInteger(gross) && -gross === expected && (!saved || C.minor(record.TotalAmt) === gross), 'Purchase gross including tax differs from bank advice.');
   return -gross;
 }
+// Ownership indexes share kind:reservation with BF4 creator reservations.
+// Exclude an index only after authenticating its retained original lineage.
+async function creatorReservations({rows,scope,accounts,models,session}) {
+  need(Array.isArray(rows)&&rows.length<=100000,'Complete bank reservation history unavailable.');
+  const result=[],seen=new Set(),rowIds=new Set(),checkedAccounts=new Set(),runs=new Map();
+  const accountById=new Map(accounts.map(a=>[a.Id,a]));
+  const one=(list,message)=>{need(list.length===1,message);return list[0];};
+  for(const row of rows.filter(r=>r.kind==='reservation')) {
+    const p=row.payload,account=accountById.get(row.accountId);
+    validateRows([row],scope,row.accountId);
+    need(row.revision===0&&typeof row.eventId==='string'&&p&&same(p.scope,scope)&&p.accountId===row.accountId&&account&&row.accountCurrency===(account.CurrencyRef?.value||'CAD')&&!rowIds.has(row._id),'Bank creator reservation identity changed or is already claimed.');
+    rowIds.add(row._id);
+    if(row.eventId===p.eventId) {
+      need(/^bse1_[a-f0-9]{40}$/.test(p.eventId)&&['api-accountant','native-add','none'].includes(p.creator),'Unknown bank creator reservation.');
+      need(!seen.has(p.eventId),'Duplicate bank creator reservation.');seen.add(p.eventId);result.push(row);continue;
+    }
+    const general=row.eventId==='@origin-general:'+p.runId+':'+p.ref,
+      counterpart=row.eventId==='@origin-counterpart:'+p.entity+':'+p.qboId;
+    need(general||counterpart,'Unknown bank ownership reservation.');
+    if(!checkedAccounts.has(row.accountId)) {
+      validateOriginLifecycle(rows.filter(r=>r.accountId===row.accountId&&r.kind==='revision'&&r.eventId.startsWith('@origin')),scope,row.accountId);
+      checkedAccounts.add(row.accountId);
+    }
+    const chain=rows.filter(r=>r.eventId==='@origin:'+p.eventId).sort((a,b)=>a.revision-b.revision),
+      posted=one(chain.filter(r=>r.revision===2),'Original posted ownership source unavailable.'),last=chain.at(-1),
+      claim=one(rows.filter(r=>r.eventId==='@origin-booking:'+p.eventId&&r.revision===1),'Original ownership booking claim unavailable.'),c=claim.payload,
+      preparedRows=rows.filter(r=>r.eventId===claim.eventId&&r.revision===2);
+    need(chain.every(r=>r.kind==='revision')&&claim.kind==='revision'&&preparedRows.every(r=>r.kind==='revision'),'Bank ownership revision identity changed.');
+    validateRows([...chain,claim,...preparedRows],scope,row.accountId);
+    need(preparedRows.length<=1&&posted.accountId===row.accountId&&posted.accountCurrency===row.accountCurrency&&posted.contentHash===p.originHash&&claim.accountId===row.accountId&&claim.accountCurrency===row.accountCurrency&&c.kind==='bank-origin-booking-claim'&&same(c.scope,scope)&&c.accountId===row.accountId&&c.eventId===p.eventId&&c.originHash===posted.contentHash&&c.adviceHash===posted.payload.adviceHash&&c.policyHash===posted.payload.policyHash&&c.mappingHash===C.hash(posted.payload.mapping)&&c.creator==='api-accountant'&&c.decisionKey===require('./bank-origin-resolution').keyFor(posted.payload.event)&&c.ref==='bank-origin'&&c.draftHash===C.hash(c.draft)&&c.contentHash===C.hash({purpose:c.draft.purpose.trim(),operations:c.draft.operations})&&c.runId===C.hash({scope,ownerId:c.ownerId,kind:'general-write',decisionKey:c.decisionKey}).slice(0,24),'Bank ownership booking lineage changed.');
+    if(general)need(same(p,{scope,runId:c.runId,ref:c.ref,eventId:c.eventId,accountId:row.accountId,originHash:posted.contentHash}),'General bank ownership identity changed.');
+    else need(same(p,{scope,entity:p.entity,qboId:p.qboId,eventId:c.eventId,accountId:row.accountId,originHash:posted.contentHash}),'Counterpart bank ownership identity changed.');
+    if(!runs.has(c.runId)) {
+      need(models.GeneralWriteRuns&&typeof models.GeneralWriteRuns.findOne==='function','Retained General ownership store unavailable.');
+      let q=models.GeneralWriteRuns.findOne({_id:c.runId,...scope}).maxTimeMS(3000);if(session)q=q.session(session);runs.set(c.runId,await q.lean());
+    }
+    const run=runs.get(c.runId),prepared=preparedRows[0];
+    if(run)need(same(persistedScopeOf(run),scope)&&String(run._id)===c.runId&&String(run.ownerId)===c.ownerId&&String(run.actorId)===c.originalActorId&&run.decisionKey===c.decisionKey&&run.contentHash===c.contentHash&&run.plan?.operations?.length===1&&run.plan.operations[0].ref===c.ref&&C.hash(run.plan.operations)===c.operationHash,'Retained General ownership request changed.');
+    if(prepared) {
+      const b=prepared.payload;
+      need(run&&prepared.accountId===row.accountId&&prepared.accountCurrency===row.accountCurrency&&b.kind==='bank-origin-prepared-run'&&same(b.scope,scope)&&b.accountId===row.accountId&&b.eventId===p.eventId&&b.runId===c.runId&&b.claimHash===claim.contentHash&&b.previousHash===claim.contentHash&&b.contentHash===c.contentHash&&b.operationHash===c.operationHash,'Prepared General ownership binding changed.');
+    }
+    if(counterpart) {
+      const item=run?.items?.[c.ref],booked=last?.payload?.bookkeeping,first=last?.payload?.firstSource;
+      need(run&&prepared&&typeof p.entity==='string'&&typeof p.qboId==='string'&&booked?.status==='booked'&&booked.runId===c.runId&&booked.qboEntity===p.entity&&booked.qboId===p.qboId&&first?.entity===p.entity&&first.id===p.qboId&&typeof first.signature==='string'&&first.signature.length>0&&item?.outcome==='saved'&&item.complete===true&&item.entity===p.entity&&item.qboId===p.qboId&&item.record?.Id===p.qboId,'Booked bank counterpart ownership changed.');
+    }
+  }
+  return result;
+}
 function createBankBookkeepingAdapter({
   models,
   store,
@@ -1085,8 +1134,7 @@ function createBankBookkeepingAdapter({
       accounts = current.records.filter(r => r.entity === 'Account' && !r.deleted).map(r => r.record),
       reservations = await store.listBankOriginContext(bound.scope, session);
     need(reservations.length <= 100000, 'Complete bank reservation history unavailable.');
-    const claimRows = reservations.filter(r => r.kind === 'reservation');
-    for (const r of claimRows) need(r.contentHash === C.hash(r.payload), 'Bank creator reservation changed.');
+    const claimRows = await creatorReservations({rows:reservations,scope:bound.scope,accounts,models,session});
     const decisionQuery = models.GeneralWriteRuns.find({
       ...bound.scope,
       decisionKey: require('./bank-origin-resolution').keyFor(event)
@@ -1499,6 +1547,7 @@ function createDefaultBankOriginService(options = {}) {
   return api;
 }
 module.exports = {
+  creatorReservations,
   assertBankOriginAdmission,
   assertOriginFinancialSnapshot,
   exactBankLeg,

@@ -1,5 +1,6 @@
 'use strict';
 const express = require('express');
+const {respondQboError}=require('../modules/qbo-error');
 const { authenticate } = require('../middleware/auth');
 // Mount beneath the existing company scope middleware; deliberately not mounted here.
 // GET /, /packages/:id, /packages/:id/files/:fileId; POST /packages,
@@ -17,9 +18,10 @@ function createBankingWorkspaceRouter(dependencies = {}) {
       const data = await work(req, res);
       if (!res.headersSent) res.json({ data });
     } catch (error) {
-      const known = /^(BANKING_|BUSINESS_ACCESS_)/.test(error.code || '');
-      const status = known && [400,401,403,404,409].includes(error.status) ? error.status : 500;
-      res.status(status).json({ error: status === 500 ? 'Banking evidence could not be confirmed. Retain the exact request and retry.' : error.message, code: status === 500 ? 'BANKING_FAILED' : error.code });
+      if(error.qboStage==='api'&&respondQboError(res,error))return;
+      const domain=/^GENERAL_WRITE_[A-Z0-9_]{1,80}$/.test(error.code||'')||error.code==='QBO_WRITE_ADMISSION_DENIED',known=domain||/^(BANKING_|BUSINESS_ACCESS_)/.test(error.code||''),allowed=domain?[400,403,404,409]:[400,401,403,404,409],status=known&&allowed.includes(error.status)?error.status:500;
+      const message=status===500?'Banking evidence could not be confirmed. Retain the exact request and retry.':String(error.message||'The original banking action is held.').replace(/[\u0000-\u001F\u007F]/g,' ').slice(0,1000);
+      res.status(status).json({error:message,code:status===500?'BANKING_FAILED':String(error.code).slice(0,120)});
     }
   };
   const operator = () => dependencies.operator || require('../modules/banking-accountant-tools').createBankingRuntime({workspace:service()}).operator;
@@ -30,6 +32,10 @@ function createBankingWorkspaceRouter(dependencies = {}) {
     if(operatorLoop.resumeAvailable && operatorLoop.packageId){try{canResume=await operator().canResume(req.user,operatorLoop.packageId);}catch(error){if(!['BANKING_RESUME_FORBIDDEN','BUSINESS_ACCESS_DENIED'].includes(error.code))throw error;}}
     return {...list,operatorLoop:{...operatorLoop,canResume}};
   }, ['accountId','period']));
+  router.get('/accounts/:accountId/feeds',action(req=>service().currentFeeds(req.user,req.params.accountId,{...(req.query.mode!==undefined?{mode:req.query.mode}:{}),...(req.query.offset!==undefined?{offset:/^\d+$/.test(req.query.offset)?Number(req.query.offset):NaN}:{}),...(req.query.limit!==undefined?{limit:/^\d+$/.test(req.query.limit)?Number(req.query.limit):NaN}:{}),...(req.query.expectedHash!==undefined?{expectedHash:req.query.expectedHash}:{})}),['mode','offset','limit','expectedHash']));
+  router.post('/feeds/publish',action(req=>service().publishCurrentFeed(req.user,req.body)));
+  router.post('/feeds/cumulative',action(req=>service().publishCumulativeFeed(req.user,req.body)));
+  router.get('/accounts/:accountId/feeds/:publicationId/files/:fileId',action(async(req,res)=>{const file=await service().downloadCurrentFeed(req.user,req.params.accountId,req.params.publicationId,req.params.fileId);res.set('Content-Type',file.kind==='csv'?'text/csv; charset=utf-8':'application/json');res.set('X-Content-Type-Options','nosniff');res.set('Content-Disposition','attachment; filename="current-bank-feed-'+req.params.accountId+'-'+file.fileId.slice(0,16)+(file.kind==='csv'?'.csv':'.json')+'"');res.set('ETag','"'+file.sha256+'"');res.send(file.bytes);}));
   router.get('/accounts/:accountId/origin-policy', action(req => service().originPolicy(req.user,req.params.accountId,{...(req.query.offset!==undefined?{offset:/^\d+$/.test(req.query.offset)?Number(req.query.offset):NaN}:{}),...(req.query.limit!==undefined?{limit:/^\d+$/.test(req.query.limit)?Number(req.query.limit):NaN}:{}),...(req.query.expectedHash!==undefined?{expectedHash:req.query.expectedHash}:{})}),['offset','limit','expectedHash']));
   router.post('/origins/policy', action(req => service().configureOriginPolicy(req.user,req.body)));
   router.post('/origins/process', action(req => service().processOriginDue(req.user,req.body)));

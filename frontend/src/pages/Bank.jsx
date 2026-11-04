@@ -79,6 +79,40 @@ function originMinor(text) {
   const negative = text.startsWith('-'), [whole, fraction = ''] = text.replace('-', '').split('.')
   return (negative ? -1 : 1) * (Number(whole) * 100 + Number(fraction.padEnd(2, '0')))
 }
+
+function CurrentBankFeeds({ account, stale, refresh, refreshKey }) {
+  const [load, setLoad] = useState({loading:true,data:null,error:''}), [page, setPage] = useState({offset:0,expectedHash:undefined}), [revision, setRevision] = useState(0)
+  const [mode, setMode] = useState(''), [fromDate, setFromDate] = useState(''), [throughDate, setThroughDate] = useState(''), [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [error, setError] = useState('')
+  const alive = useRef(true)
+  useEffect(() => { alive.current=true; return () => {alive.current=false} }, [])
+  useEffect(() => {
+    if (!account.independentLedger) return
+    const controller=new AbortController()
+    Promise.resolve().then(() => {if(!controller.signal.aborted)setLoad(old=>({...old,loading:true,error:''}))})
+    bankingApi.currentFeeds(account.accountId,{signal:controller.signal,...page,...(mode?{mode}:{})}).then(data=>{if(!controller.signal.aborted)setLoad({loading:false,data,error:''})}).catch(failure=>{if(!controller.signal.aborted)setLoad(old=>({...old,loading:false,error:bankingError(failure)}))})
+    return () => controller.abort()
+  }, [account.accountId, account.independentLedger, page, mode, revision, refreshKey])
+  if (!account.independentLedger) return null
+  const disabled=stale||load.loading||Boolean(busy), data=load.data
+  async function publish(input,publicationId) {
+    setBusy('publish');setError('');setMessage('')
+    try {const value=publicationId?await bankingApi.publishCurrentFeed(account.accountId,publicationId):input?await bankingApi.publishCumulativeFeed({accountId:account.accountId,...input}):await bankingApi.publishCurrentFeed(account.accountId);if(alive.current){setMessage(value.status==='no-posted-activity'?'No new independently posted activity is available.':value.reused?'Original publication retained. Its files and event assignments are unchanged.':'Current posted activity retained in a new bank CSV publication.');setPage({offset:0,expectedHash:undefined});setRevision(v=>v+1);refresh()}}
+    catch(failure){if(alive.current)setError(bankingError(failure))}finally{if(alive.current)setBusy('')}
+  }
+  async function download(publication,file) {
+    setBusy(file.fileId);setError('')
+    try {const blob=await bankingApi.currentFeedFile(account.accountId,publication.publicationId,file);if(!alive.current)return;const url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download='maple-harbour-current-'+account.accountId+'-'+publication.mode+'-'+publication.publicationId.slice(0,12)+'-'+file.fileId.slice(0,10)+(file.kind==='csv'?'.csv':'.json');document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+    catch(failure){if(alive.current)setError(bankingError(failure))}finally{if(alive.current)setBusy('')}
+  }
+  return <section className="bank-history" aria-label="Current bank CSV downloads"><div className="bank-section-heading"><h2>Current transaction CSVs</h2><Button variant="outline" disabled={disabled} onClick={()=>publish()}>{busy==='publish'?'Preparing…':'Generate new CSV'}</Button></div><div className="bank-history-note"><p>Incremental files contain each newly posted movement once. Downloading a file does not import, match or reconcile it in QuickBooks.</p>{data&&<p>{data.postedCount} post-adoption movements · {data.unpublishedPostedCount} awaiting a published incremental file · {data.fileHeldPostedCount || 0} published movements need file verification · current-feed epoch {data.epoch}. {data.coverage}</p>}</div>
+    {load.loading&&<p role="status" className="bank-history-note">Reading retained current feeds…</p>}{load.error&&<p role="alert" className="bank-caution">{load.error} <button type="button" onClick={()=>{setPage({offset:0,expectedHash:undefined});setRevision(v=>v+1)}}>Read latest files</button></p>}
+    {data&&<><label className="bank-period-label">Feed view<select value={mode} onChange={e=>{setMode(e.target.value);setPage({offset:0,expectedHash:undefined})}}><option value="">All current files</option><option value="incremental">Incremental · next import files</option><option value="cumulative">Cumulative · reference only</option></select></label>{!data.items.length?<div className="bank-empty"><strong>No current CSV publication yet</strong><p>Only independently posted activity after adoption is eligible. Pending activity and historical statement files remain separate.</p></div>:<div className="bank-history-scroll"><table><thead><tr><th scope="col">Publication window</th><th scope="col">Rows & native movement</th><th scope="col">Files & next action</th></tr></thead><tbody>{data.items.map(publication=><tr key={publication.publicationId}><td><strong>{publication.mode==='incremental'?'Incremental':'Cumulative reference'} · revision {publication.revision}</strong><p>{publication.window.fromDate}–{publication.window.throughDate}</p><p>{publication.warning}</p>{publication.mode==='cumulative'&&<p>Overlap when issued: {publication.overlapAsOfPublication.count} row(s). Current overlap: {publication.currentOverlap.count} row(s), checked {new Date(publication.currentOverlap.asOf).toLocaleString('en-CA')}.</p>}</td><td>{publication.rowCount} row(s)<p>{bankMoney(publication.nativeMovementMinor,account.accountCurrency)}</p></td><td>{publication.status==='published'&&publication.fileHealth?.status==='verified'?publication.files.map(file=><Button key={file.fileId} variant="outline" disabled={disabled} onClick={()=>download(publication,file)}><Download size={14} aria-hidden="true"/>{busy===file.fileId?'Checking…':file.kind==='csv'?'Download CSV':'Row identities'}</Button>):<><p>{publication.status==='published'?'Registry publication retained; file verification needs attention.':'Original publication is not complete.'} Its event assignments and original bytes are retained.</p><Button variant="outline" disabled={disabled} onClick={()=>publish(null,publication.publicationId)}>Verify original publication</Button></>}{publication.lastError&&<details><summary>Current file health issue</summary><p>{publication.lastError}. Existing files are preserved; inspect the original publication before retrying.</p></details>}</td></tr>)}</tbody></table></div>}
+      <div className="bank-pagination"><span>{data.page.total} retained publication(s)</span><Button variant="outline" disabled={disabled||page.offset===0} onClick={()=>setPage({offset:Math.max(0,page.offset-10),expectedHash:data.registryHash})}>Newer</Button><Button variant="outline" disabled={disabled||data.page.nextOffset===null} onClick={()=>setPage({offset:data.page.nextOffset,expectedHash:data.registryHash})}>Older</Button></div>
+      <details className="bank-basis"><summary>Download an overlapping reference window</summary><p>A cumulative reference file can include movements already present in incremental files. It is not the next incremental import file. Earlier files stay unchanged.</p><form className="flex items-end gap-4 py-4" onSubmit={e=>{e.preventDefault();publish({fromDate,throughDate})}}><label>From banking date<input className="block border rounded p-2" required type="date" min={data.epoch} value={fromDate} onChange={e=>setFromDate(e.target.value)}/></label><label>Through banking date<input className="block border rounded p-2" required type="date" min={fromDate||data.epoch} value={throughDate} onChange={e=>setThroughDate(e.target.value)}/></label><Button type="submit" variant="outline" disabled={disabled}>Generate reference CSV</Button></form></details>
+    </>}{error&&<p role="alert" className="bank-caution">{error}</p>}{message&&<p role="status" className="bank-history-note">{message}</p>}
+  </section>
+}
+
 function BankOrigins({ account, stale, refresh, refreshKey }) {
   const [load, setLoad] = useState({ loading: true, data: null, error: '' }), [revision, setRevision] = useState(0)
   const [fee, setFee] = useState(''), [enabled, setEnabled] = useState(false), [counterpart, setCounterpart] = useState(''), [tax, setTax] = useState('out-of-scope'), [taxCode, setTaxCode] = useState(''), [net, setNet] = useState('')
@@ -185,6 +219,7 @@ function AccountDetail({ id, period, scope, refresh, retry, navigate }) {
     <div className="bank-account-balance"><div><span>{balanceLabel(account)}</span><strong>{bankMoney(account.balanceMinor, account.accountCurrency)}</strong><p>As of {account.balanceAsOf || 'date unavailable'} · retained statement</p></div><div><span>Opening</span><strong>{bankMoney(account.openingMinor, account.accountCurrency)}</strong></div><div><span>Posted transactions</span><strong>{account.postedCount}</strong><p>{account.pendingActivity?.availability === 'instruction-only' ? account.pendingActivity.count + ' pending instructions' : 'Pending activity: not independently observed'}</p></div></div>
     <IndependentLedger account={account} />
     <BankClockStatus status={account.instructionProcessing} />
+    <CurrentBankFeeds account={account} stale={load.loading || Boolean(load.error)} refresh={retry} refreshKey={refresh} />
     <InstructionDelivery delivery={account.instructionDelivery} stale={load.loading || Boolean(load.error)} refresh={retry} />
     <PendingActivity account={account} stale={load.loading || Boolean(load.error)} refresh={retry} />
     <NewBankActivity account={account} />

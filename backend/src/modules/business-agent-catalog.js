@@ -10,6 +10,9 @@ const GROUPS = Object.freeze([
   { key: 'notes', label: 'Notes and handoffs' },
 ]);
 const TOOLS = Object.freeze({
+  getCurrentBankFeeds:{group:'business-read',summary:'Reads current retained bank CSVs, disjoint incremental assignments and clearly overlapping cumulative reference windows.'},
+  publishCurrentBankFeed:{group:'notes',summary:'Retains the next current incremental bank CSV or verifies an exact retained publication; no QuickBooks call or bank balance change.'},
+  publishCumulativeBankFeed:{group:'notes',summary:'Retains an explicitly overlapping reference CSV window; not the next incremental import file.'},
   getBankOriginPolicy: {group:'business-read',summary:'Reads explicit bank fee policy and current counterpart choices; no policy is enabled by default.'},
   configureBankOriginPolicy: {group:'notes',summary:'Records an explicit future bank fee policy under current authority; no QuickBooks write.'},
   processBankOriginDue: {group:'notes',summary:'Posts only due configured bank-origin events once, with a visible bookkeeping obligation; no QuickBooks call.'},

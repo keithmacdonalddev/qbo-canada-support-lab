@@ -23,7 +23,7 @@ function description(event) {
   const label = event.description || labels[event.source?.entity] || event.kind || 'Bank movement';
   return String(label).normalize('NFKD').replace(/[^A-Za-z -]/g,' ').replace(/\s+/g,' ').trim().slice(0,100) || 'Bank movement';
 }
-function generateBankFeedCsv(events, options) {
+function renderFeedRows(events, options, validate) {
   const {scope,accountId,accountCurrency} = options;
   C.validateScope(scope);
   if (!accountId || !/^[A-Z]{3}$/.test(accountCurrency || '')) throw new TypeError('CSV account and currency are required.');
@@ -31,8 +31,7 @@ function generateBankFeedCsv(events, options) {
   if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > CSV_PROFILE.maxRows || !Number.isInteger(maxBytes) || maxBytes < 100 || maxBytes > CSV_PROFILE.maxBytes) throw new TypeError('CSV limits must stay within the Canadian profile.');
   const seen = new Set();
   const sorted = [...events].map(event => {
-    C.validateEvent(event); C.assertScope(event.scope,scope);
-    if (event.accountId !== accountId || event.accountCurrency !== accountCurrency || event.status !== 'resolved' || event.supersededBy || event.resolution.action === 'Exclude' || seen.has(event.eventId)) throw new TypeError('CSV requires unique current resolved events in one account/currency.');
+    validate(event,scope,accountId,accountCurrency,seen);
     seen.add(event.eventId); eventDate(event); return event;
   }).sort((a,b) => eventDate(a).localeCompare(eventDate(b)) || a.eventId.localeCompare(b.eventId));
   const files = [], header = 'Date,Description,Amount\r\n';
@@ -49,9 +48,18 @@ function generateBankFeedCsv(events, options) {
     if (Buffer.byteLength(header) + length > maxBytes) throw new TypeError('One CSV row exceeds the byte limit.');
     if (rows.length >= maxRows || size + length > maxBytes) flush();
     lines.push(line); size += length;
-    rows.push({eventId:event.eventId,eventRevision:event.revision,rowNumber:rows.length+1,date,description:desc,amountMinor:event.amountMinor});
+    rows.push({eventId:event.eventId,eventRevision:event.eventRevision??event.revision,rowNumber:rows.length+1,date,description:desc,amountMinor:event.amountMinor});
   }
   flush();
   return {profile:{...CSV_PROFILE,maxRows,maxBytes},files};
 }
-module.exports = { CSV_PROFILE, formatMoney, formatDate, eventDate, description, sha256, generateBankFeedCsv };
+
+function generateBankFeedCsv(events,options){return renderFeedRows(events,options,(event,scope,accountId,currency,seen)=>{
+ C.validateEvent(event);C.assertScope(event.scope,scope);if(event.accountId!==accountId||event.accountCurrency!==currency||event.status!=='resolved'||event.supersededBy||event.resolution.action==='Exclude'||seen.has(event.eventId))throw new TypeError('CSV requires unique current resolved events in one account/currency.');
+});}
+// Durable bank-posted rows are a distinct contract. Investigation status does not
+// erase a real bank movement or pretend to resolve its QuickBooks counterpart.
+function generatePostedBankFeedCsv(rows,options){return renderFeedRows(rows,options,(event,scope,accountId,currency,seen)=>{
+ C.assertScope(event.scope,scope);if(event.kind!=='bank-posted-feed-row'||event.state!=='posted'||event.accountId!==accountId||event.accountCurrency!==currency||!/^bse1_[a-f0-9]{40}$/.test(event.eventId)||!Number.isSafeInteger(event.eventRevision)||event.eventRevision<1||!Number.isSafeInteger(event.amountMinor)||event.amountMinor===0||!/^[a-f0-9]{64}$/.test(event.financialHash)||seen.has(event.eventId))throw new TypeError('CSV requires exact unique retained posted bank rows.');
+});}
+module.exports = { CSV_PROFILE, formatMoney, formatDate, eventDate, description, sha256, generateBankFeedCsv, generatePostedBankFeedCsv };

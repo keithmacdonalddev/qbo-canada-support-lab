@@ -42,6 +42,20 @@ function createArtifactReader(directory = path.resolve(__dirname, '../../../arti
     return bytes;
   };
 }
+async function completeOriginContext(Events,scope,session){
+ const rows=[];let after=null;
+ for(;;){
+  let q=Events.find({...scope,...(after===null?{}:{_id:{$gt:after}})},null,{singleBatch:true,batchSize:501,collation:{locale:'simple'}}).sort({_id:1}).limit(500).maxTimeMS(10000);
+  if(session)q=q.session(session);
+  const page=await q.lean();
+  check(Array.isArray(page)&&page.length<=500,'Complete banking event enumeration unavailable.',409);
+  if(!page.length)return rows;
+  for(const row of page){
+   check(typeof row?._id==='string'&&row._id.length>0&&(after===null||Buffer.compare(Buffer.from(row._id),Buffer.from(after))>0)&&sameScope(row,scope)&&rows.length<100000,'Complete banking event enumeration unavailable.',409);
+   after=row._id;rows.push(row);
+  }
+ }
+}
 function createMongoBankingStore({ Events, Packages, connection }) {
   const query = (Model, filter, session) => { let q = Model.findOne(filter).maxTimeMS(3000); if (session) q = q.session(session); return q.lean(); };
   return {
@@ -58,7 +72,9 @@ function createMongoBankingStore({ Events, Packages, connection }) {
     async transaction(work) { const session = await connection.startSession(); try { let result; await session.withTransaction(async () => { result = await work(session); }); return result; } finally { await session.endSession(); } },
     getLedger: (scope, accountId, session) => query(Events, { ...scope, kind: 'ledger-account', eventId: '@ledger:' + accountId, revision: 0 }, session),
     async findOriginByDecision(scope,decisionKey,session) {let q=Events.find({...scope,kind:'revision',eventId:{$regex:'^@origin:'},'payload.bookkeeping.decisionKey':decisionKey}).sort({revision:1}).limit(10001).maxTimeMS(5000);if(session)q=q.session(session);const rows=await q.lean();check(rows.length<=10000,'Complete origin decision history unavailable.',409);return rows;},
-    async listBankOriginContext(scope,session) {let q=Events.find({...scope}).limit(100001).maxTimeMS(10000);if(session)q=q.session(session);const rows=await q.lean();check(rows.length<=100000,'Complete banking event enumeration unavailable.',409);return rows;},
+    listBankOriginContext: (scope,session) => completeOriginContext(Events,scope,session),
+    async loadFeedPeers(scope,eventIds,session){const names=eventIds.map(id=>'@instruction:'+id);let a=Events.find({...scope,kind:'instruction',eventId:{$in:names},revision:0}).limit(10001).maxTimeMS(5000),b=Events.find({...scope,kind:'revision',eventId:{$in:names}}).limit(20001).maxTimeMS(5000);if(session){a=a.session(session);b=b.session(session);}return{rows:await a.lean(),revisions:await b.lean()};},
+    async listFeedRows(scope,accountId,session){let query=Events.find({...scope,accountId,kind:'revision',eventId:{$regex:'^@feed(?:-|:)'}}).sort({eventId:1,revision:1}).limit(50001).maxTimeMS(5000);if(session)query=query.session(session);return query.lean();},
     async listOriginRows(scope,accountId,session) { let q=Events.find({...scope,accountId,kind:'revision',eventId:{$regex:'^@origin(?:-|:)'}}).sort({eventId:1,revision:1}).limit(10001).maxTimeMS(5000);if(session)q=q.session(session);return q.lean(); },
     getCanonicalOriginConflict: (scope,eventId,session) => query(Events,{...scope,eventId,kind:'revision'},session),
     getReservation: (scope,eventId,session) => query(Events,{...scope,kind:'reservation',eventId,revision:0},session),
@@ -82,11 +98,11 @@ function createMongoBankingStore({ Events, Packages, connection }) {
         {$sort:{'payload.receivedAt':1,_id:1}},{$limit:100},{$project:{lifecycle:0}}
       ]).option({maxTimeMS:5000});if(session)q=q.session(session);return q;
     },
-    async listInstructionActivity(scope,accountId) {
+    async listInstructionActivity(scope,accountId,session) {
       const filter={...scope,kind:'instruction',accountId,revision:0};
-      const rows=await Events.find(filter).sort({_id:1}).limit(10001).maxTimeMS(5000).lean();
+      let rowQuery=Events.find(filter).sort({_id:1}).limit(10001).maxTimeMS(5000);if(session)rowQuery=rowQuery.session(session);const rows=await rowQuery.lean();
       check(rows.length<=10000,'Independent bank activity exceeds the complete projection limit; a full current balance is unavailable.',409,'BANKING_ACTIVITY_INCOMPLETE');
-      const revisions=await Events.find({...scope,kind:'revision',accountId,eventId:{$regex:'^@instruction:'}}).sort({eventId:1,revision:1}).limit(20001).maxTimeMS(5000).lean();
+      let revisionQuery=Events.find({...scope,kind:'revision',accountId,eventId:{$regex:'^@instruction:'}}).sort({eventId:1,revision:1}).limit(20001).maxTimeMS(5000);if(session)revisionQuery=revisionQuery.session(session);const revisions=await revisionQuery.lean();
       check(revisions.length<=20000,'Independent settlement history exceeds the complete projection limit; a full current balance is unavailable.',409,'BANKING_ACTIVITY_INCOMPLETE');
       return {rows,revisions};
     },
@@ -115,6 +131,58 @@ function createMongoBankingStore({ Events, Packages, connection }) {
  * Inject store/resolveContext/authorize/getAccount/findSyncedRecord/readArtifact/now
  * for fully offline replay. No QBO client or service startup is used here.
  */
+
+async function loadBankFeedActivity({
+  store,
+  bound,
+  accountId,
+  session
+}) {
+  const scope = scoped(bound.scope),
+    row = await store.getLedger(scope, accountId, session);
+  check(row && sameScope(row, scope) && row.accountId === accountId, 'Adopted current-feed ledger unavailable.', 409, 'BANKING_FEED_UNAVAILABLE');
+  const ledger = require('./independent-bank-ledger').verifyLedger(clone(row.payload));
+  check(sameScope(ledger.scope, scope) && ledger.contentHash === row.contentHash && ledger.account.accountId === accountId, 'Current-feed baseline identity changed.', 409, 'BANKING_FEED_INVALID');
+  check(store.listInstructionActivity && store.listOriginRows, 'Complete current-feed source stores are required.', 409, 'BANKING_FEED_UNAVAILABLE');
+  const source = await store.listInstructionActivity(scope, accountId, session),
+    businessActivity = require('./bank-instruction-settlement').projectInstructionActivity({
+      scope,
+      ledger,
+      instructions: source.rows,
+      revisions: source.revisions
+    }),
+    origins = await store.listOriginRows(scope, accountId, session),
+    activity = require('./bank-origin-service').projectOriginActivity({
+      scope,
+      ledger,
+      rows: origins,
+      businessActivity
+    });
+  const paired = activity.events.filter(e => e.state === 'posted' && e.pairedEventId),
+    pairedProofs = {};
+  if (paired.length) {
+    check(store.loadFeedPeers, 'Complete paired feed source unavailable.', 409, 'BANKING_FEED_INCOMPLETE');
+    const peer = await store.loadFeedPeers(scope, [...new Set(paired.map(e => e.pairedEventId))], session);
+    check(peer.rows.length <= 10000 && peer.revisions.length <= 20000, 'Paired feed history exceeds its complete bound.', 409, 'BANKING_FEED_INCOMPLETE');
+    const verifier = require('./bank-instruction-settlement');
+    for (const event of paired) {
+      const rows = peer.rows.filter(r => r.payload?.eventId === event.pairedEventId);
+      check(rows.length === 1, 'Paired bank instruction is missing.', 409, 'BANKING_FEED_PAIR_HELD');
+      const p = verifier.validateInstruction(rows[0], scope),
+        latest = verifier.validateRevisions(rows[0], peer.revisions.filter(r => r.eventId === rows[0].eventId), scope);
+      check(latest?.payload.state === 'posted' && p.accountId !== accountId && p.accountCurrency === event.accountCurrency && p.pairedEventId === event.eventId && p.settlementGroupId && p.settlementGroupId === event.settlementGroupId && p.amountMinor === -event.amountMinor && p.source.runId === event.source.runId && p.source.ref === event.source.ref, 'Reciprocal same-currency posted pair is unproved.', 409, 'BANKING_FEED_PAIR_HELD');
+      pairedProofs[event.eventId] = hash({
+        instruction: rows[0].contentHash,
+        posted: latest.contentHash
+      });
+    }
+  }
+  return {
+    ledger,
+    activity,
+    pairedProofs
+  };
+}
 function createBankingWorkspaceService(dependencies = {}) {
   let defaultStore;
   const store = () => dependencies.store || (defaultStore ||= createMongoBankingStore({ Events: require('../models/BankingEvent'), Packages: require('../models/BankingPackage'), connection: require('mongoose').connection }));
@@ -457,6 +525,12 @@ function createBankingWorkspaceService(dependencies = {}) {
   function publicInstructionSource(source) {
     return Object.fromEntries(['entity','id','runId','ref','batchIndex','requestId','bId','requestHash','itemRequestHash','responseHash','recordHash','receiptId','originalActorId','signature','adviceReference','sourceHash'].filter(key=>source?.[key]!==undefined && ['string','number'].includes(typeof source[key])).map(key=>[key,source[key]]));
   }
+  let feedRuntime;
+  const feeds=()=>dependencies.feedService||(feedRuntime||=require('./bank-feed-service').createDefaultBankFeedService({store:store(),directory:dependencies.feedDirectory,now:()=>Number(new Date(now())),authorize:(bound,session,action)=>authorizeBound(bound,action,session)}));
+  async function currentFeeds(user,accountId,input={}){return feeds().list(await bind(user),accountId,input);}
+  async function publishCurrentFeed(user,input,context={}){const bound=await bind(user,true);if(context.agentAuthority)bound.agentAuthority=context.agentAuthority;return Object.hasOwn(input||{},'publicationId')?feeds().recoverPublication(bound,input):feeds().publishDue(bound,input);}
+  async function publishCumulativeFeed(user,input,context={}){const bound=await bind(user,true);if(context.agentAuthority)bound.agentAuthority=context.agentAuthority;return feeds().publishCumulative(bound,input);}
+  async function downloadCurrentFeed(user,accountId,publicationId,fileId){return feeds().download(await bind(user),accountId,publicationId,fileId);}
   let originRuntime;
   const origins=()=>dependencies.originService||(originRuntime||=require('./bank-origin-service').createDefaultBankOriginService({store:store(),now:()=>Number(new Date(now())),authorize:(bound,session,action)=>authorizeBound(bound,action,session)}));
   function publicOriginPolicy(state){const p=state.policy;return{revision:state.policyRevision,policy:p?{accountId:p.accountId,currency:p.currency,epoch:p.epoch,effectiveFrom:p.effectiveFrom,enabled:p.enabled,feeMinor:p.feeMinor,seriesId:p.seriesId,mapping:{counterpartAccountId:p.mapping.counterpartAccountId,taxTreatment:p.mapping.taxTreatment,...(p.mapping.taxCodeId?{taxCodeId:p.mapping.taxCodeId,netAmountMinor:p.mapping.netAmountMinor}:{})}}:null};}
@@ -622,6 +696,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { originPolicy, configureOriginPolicy, processOriginDue, addOriginAdvice, bookOriginEvent, list, detail, accounts, accountDetail, activity, recoverInstructions, settleInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
+  return { currentFeeds,publishCurrentFeed,publishCumulativeFeed,downloadCurrentFeed,originPolicy, configureOriginPolicy, processOriginDue, addOriginAdvice, bookOriginEvent, list, detail, accounts, accountDetail, activity, recoverInstructions, settleInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
 }
-module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };
+module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, loadBankFeedActivity, hash, STRENGTHS };

@@ -6,6 +6,10 @@ const {TXNS}=require('./banking-operator-guards');
 const object=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
 const digest={type:'string',pattern:'^[a-f0-9]{64}$'};
 const DEFINITIONS=[
+ {name:'getCurrentBankFeeds',description:'Read retained current posted-bank CSV publications for an adopted account. Incremental assignments are disjoint; cumulative reference files overlap. Current overlap is computed separately from immutable publication-time overlap. Follow registryHash/nextOffset for later pages. Downloads do not prove QBO import or reconciliation. No QBO calls.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},mode:{type:'string',enum:['incremental','cumulative']},offset:{type:'integer',minimum:0,maximum:1000000},limit:{type:'integer',minimum:1,maximum:3},expectedHash:digest},['accountId'])},
+ {name:'publishCurrentBankFeed',description:'Retain the next incremental CSV, or verify/recover an exact publicationId without allocating new events, from completely validated independently posted bank activity. Reuses any original incomplete publication and never assigns the same economic event twice. No QBO calls, imports, fees or balance changes; current authority and Pause apply.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},publicationId:digest},['accountId'])},
+ {name:'publishCumulativeBankFeed',description:'Retain a cumulative reference CSV for an explicit post-adoption date window ending no later than the real Halifax banking date. It overlaps prior exports and is not the next incremental import file. Same financial set retains original bytes; changed set appends a revision. No QBO call or native import.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},fromDate:{type:'string',pattern:'^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'},throughDate:{type:'string',pattern:'^20[0-9]{2}-[0-9]{2}-[0-9]{2}$'}},['accountId','fromDate','throughDate'])},
+
  {name:'getBankOriginPolicy',description:'Read the explicitly configured bank-origin policy for one adopted account and current eligible counterpart/tax choices. No QBO calls; no policy is enabled by default.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},offset:{type:'integer',minimum:0,maximum:1000000},limit:{type:'integer',minimum:1,maximum:50},expectedHash:digest},['accountId'])},
  {name:'configureBankOriginPolicy',description:'Explicitly configure or disable one adopted CAD account monthly service fee. Current observed expense counterpart and explicit tax treatment are required. Starts on real Halifax activation date; changes apply to future due cycles, disabled cycles are skipped, existing origins and baselines are unchanged. No QBO call. Reuse decisionKey on retry.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'},expectedRevision:{type:'integer',minimum:0},enabled:{type:'boolean'},feeMinor:{type:'integer',minimum:1,maximum:100000},decisionKey:{type:'string',pattern:'^[A-Za-z0-9_-]{8,100}$'},mapping:object({counterpartAccountId:{type:'string',pattern:'^[0-9]{1,30}$'},taxTreatment:{type:'string',enum:['out-of-scope','taxable']},taxCodeId:{type:'string',pattern:'^[0-9]{1,30}$'},netAmountMinor:{type:'integer',minimum:1,maximum:100000}},['counterpartAccountId','taxTreatment'])},['accountId','expectedRevision','enabled','feeMinor','decisionKey','mapping'])},
  {name:'processBankOriginDue',description:'Process only due explicitly configured bank-origin fees/advice through the real Halifax cutoff. Posts each economic event once and shows its needed/held/booked bookkeeping obligation. No QBO calls and no historical reconstruction.',input_schema:object({accountId:{type:'string',pattern:'^[0-9]{1,30}$'}},['accountId'])},
@@ -46,6 +50,9 @@ function sectionItems(pkg,section,operator,rowId=null){const s=pkg.snapshot,e=pk
 
 function createBankingAccountantTools({workspace=createBankingWorkspaceService(),operator=null,readArtifact=createArtifactReader(),readLoopStatus=require('./banking-operator-loop').readBankingLoopStatus}={}) {
  async function execute(user,name,input,context={}){
+  if(name==='getCurrentBankFeeds'){argsFor(input,['accountId','mode','offset','limit','expectedHash']);const query=pageArgs(input,{defaultLimit:1,maxLimit:3});const value=await workspace.currentFeeds(user,input.accountId,{...pick(input,['mode','expectedHash']),...query});return{...value,items:value.items.map(item=>({...item,files:item.files.map(({path,...file})=>file)}))};}
+  if(name==='publishCurrentBankFeed')return workspace.publishCurrentFeed(user,input,context);
+  if(name==='publishCumulativeBankFeed')return workspace.publishCumulativeFeed(user,input,context);
   if(name==='getBankOriginPolicy')return workspace.originPolicy(user,input.accountId,pick(input,['offset','limit','expectedHash']));
   if(name==='configureBankOriginPolicy')return workspace.configureOriginPolicy(user,input,context);
   if(name==='processBankOriginDue')return workspace.processOriginDue(user,input,context);
@@ -82,6 +89,20 @@ function createBankingAccountantTools({workspace=createBankingWorkspaceService()
 }
 // Strict read-only sync adapter. It waits for the existing synchronizer; it never
 // refreshes QBO itself and never claims a wall-clock read proves sync completeness.
+// Each find closes its cursor. The admission transaction's CSOT deadline still
+// bounds the whole scan; an empty page alone proves enumeration finished.
+async function completeMirrorRows(Records,scope){
+ const rows=[];let after=null;
+ for(;;){
+  const page=await Records.find({...scope,...(after===null?{}:{_id:{$gt:after}})},null,{singleBatch:true,batchSize:501,collation:{locale:'simple'}}).sort({_id:1}).limit(500).maxTimeMS(10000).lean();
+  if(!Array.isArray(page)||page.length>500)throw Object.assign(new Error('Complete scoped mirror enumeration unavailable'),{code:'BANKING_OPERATOR_BLOCKED',status:409});
+  if(!page.length)return rows;
+  for(const row of page){
+   if(typeof row?._id!=='string'||!row._id||after!==null&&Buffer.compare(Buffer.from(row._id),Buffer.from(after))<=0||['environment','realmId','connectionId'].some(k=>String(row[k])!==String(scope[k]))||rows.length>=100000)throw Object.assign(new Error('Complete scoped mirror enumeration unavailable'),{code:'BANKING_OPERATOR_BLOCKED',status:409});
+   after=row._id;rows.push(row);
+  }
+ }
+}
 function createBankingMirrorReader({Records,Agents,now=()=>Date.now(),wait=ms=>new Promise(r=>setTimeout(r,ms)),timeoutMs=420000}={}){
  return async function readVerification({scope,phase,startedAt}){
   const deadline=now()+timeoutMs;
@@ -91,7 +112,7 @@ function createBankingMirrorReader({Records,Agents,now=()=>Date.now(),wait=ms=>n
    const stamps=[...TXNS].map(entity=>sources[entity]);
    const ready=stamps.every(s=>s?.status==='current' && s.phase==='incremental' && Date.parse(s.lastSuccessAt)>=floor && Date.parse(s.lastSuccessAt)<=now() && Date.parse(s.since)>=floor && Date.parse(s.since)<=Date.parse(s.lastSuccessAt));
    if(ready){
-    const records=await Records.find(scope).limit(100001).maxTimeMS(10000).lean();
+    const records=await completeMirrorRows(Records,scope);
     const current=await Agents.findOne(scope).maxTimeMS(5000).lean();
     if(records.length<=100000 && hash(current?.sync?.sources)===hash(sources))return {scope,complete:true,observedAt:new Date(now()).toISOString(),syncedThrough:new Date(Math.min(...stamps.map(s=>Date.parse(s.since)))).toISOString(),records:records.map(r=>({...r,scope,connectionId:String(r.connectionId)})),settlementEvents:[]};
    }

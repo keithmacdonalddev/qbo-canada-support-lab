@@ -4,6 +4,11 @@ import client from './client'
 const base = '/company/banking-workspace'
 const segment = value => encodeURIComponent(String(value))
 export const bankingApi = {
+  async currentFeeds(accountId,{signal,...params}={}) {return (await client.get(base+'/accounts/'+segment(accountId)+'/feeds',{signal,params})).data?.data},
+  async publishCurrentFeed(accountId,publicationId) {return (await client.post(base+'/feeds/publish',{accountId,...(publicationId?{publicationId}:{})})).data?.data},
+  async publishCumulativeFeed(input) {return (await client.post(base+'/feeds/cumulative',input)).data?.data},
+  async currentFeedFile(accountId,publicationId,file,{signal}={}) {const response=await client.get(base+'/accounts/'+segment(accountId)+'/feeds/'+segment(publicationId)+'/files/'+segment(file.fileId),{signal,responseType:'blob'}),blob=response.data,digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()),actual=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');if(actual!==file.sha256)throw new Error('Current bank feed hash changed. Inspect the original publication before retrying.');return blob},
+
   async originPolicy(accountId,{signal,offset,limit,expectedHash}={}) {return (await client.get(base+'/accounts/'+segment(accountId)+'/origin-policy',{signal,params:{offset,limit,expectedHash}})).data?.data},
   async configureOriginPolicy(input) {return (await client.post(base+'/origins/policy',input)).data?.data},
   async processOriginDue(accountId) {return (await client.post(base+'/origins/process',{accountId})).data?.data},
