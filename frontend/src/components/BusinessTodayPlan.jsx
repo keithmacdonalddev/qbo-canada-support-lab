@@ -31,10 +31,10 @@ export default function BusinessTodayPlan({ management }) {
       <small>Calendar verified through {scorecard.closes?.verifiedThrough || 'no verified close'}. Reconciliation and filing require their own evidence.</small>
     </div>}
     {plan ? <>
-      <p className="bpl-note">{plan.note}</p>
+      <p className="bpl-note"><strong>Assessment when the plan was set{plan.at ? ' at ' + timeOfDay(plan.at) : ''}.</strong> {plan.note}<small> These findings are retained from that review; current progress is shown above.</small></p>
       <div className="bpl-grid">
         <div>
-          <h3>What it found</h3>
+          <h3>What it found at that review</h3>
           <ul className="bpl-findings">{plan.findings.map((row, index) => <li key={index} className={'bpl-finding bpl-finding--' + row.status}>
             <span className="bpl-req">{REQUIREMENTS[row.requirement] || row.requirement}<em>{STATUS[row.status] || row.status}</em></span>
             <span>{row.finding}</span>
