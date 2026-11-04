@@ -165,3 +165,5 @@ test('incomplete diagnostic stores cannot close historical build requests',async
  const store={models:{Runs:query([]),Steps:query([]),GeneralWriteRuns:query([])},capabilityRequests:async()=>[{kind:'capability-request',key:'business-blocker-'+fingerprint(d),status:'open',errorDetail:d}],event:async()=>{changes++;}};
  await escalateBusinessBlockers({store,row:{_id:'agent'},scope,now});assert.equal(changes,0);
 });
+
+test('known retained native-origin failures preserve static reasons with exact-code matching and existing bounds',()=>{for(const code of ['GENERAL_CALENDAR_FULFILLMENT_UNVERIFIED','GENERAL_TIME_ESTIMATE_HELD']){const message='The exact retained origin proof is unavailable. '+ 'x'.repeat(800);const d=businessErrorDetail(Object.assign(new Error(message),{code}));assert.equal(d.message,message.slice(0,600));assert.ok(Buffer.byteLength(JSON.stringify(d))<=MAX_BYTES);const unknown=businessErrorDetail(Object.assign(new Error('untrusted near-prefix detail'),{code:code+'_OTHER'}));assert.equal(unknown.message,'Business work could not finish. Saved progress is retained.');}});

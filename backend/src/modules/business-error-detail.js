@@ -25,7 +25,7 @@ function businessErrorDetail(error, context = {}) {
   const existing = error?.errorDetail?.version === 1 ? error.errorDetail : error?.version === 1 && error.check ? error : null;
   const source = existing || error;
   const code = /^[A-Z][A-Z0-9_]{2,99}$/.test(source?.code || '') ? source.code : 'BUSINESS_OPERATION_FAILED';
-  const known = /^(BUSINESS_|GENERAL_(?:WRITE_|DAY_CLOSE_)|QBO_|AI_|CODEX_)/.test(source?.code || '');
+  const known = ['GENERAL_CALENDAR_FULFILLMENT_UNVERIFIED','GENERAL_TIME_ESTIMATE_HELD'].includes(source?.code) || /^(BUSINESS_|GENERAL_(?:WRITE_|DAY_CLOSE_)|QBO_|AI_|CODEX_)/.test(source?.code || '');
   let detail = bounded(redact(existing?.detail || { ...(context.detail || {}), ...(error?.businessDetail || {}), ...((error?.referenceDiagnostic || error?.diagnostic?.reference) ? { reference: error.referenceDiagnostic || error.diagnostic.reference } : {}) }));
   if (Buffer.byteLength(JSON.stringify(detail)) > 3500) detail = { truncated: true, note: 'Diagnostic detail exceeded its retained budget.' };
   const check = { ...checkFrom(error), ...(existing?.check || context.check || error?.businessCheck || {}) };
