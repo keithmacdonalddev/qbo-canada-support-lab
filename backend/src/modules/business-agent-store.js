@@ -111,9 +111,10 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
     const mirrored=await models.Records.find({...scope,entity:{$in:['Invoice','Bill']},deleted:false,'summary.balanceCents':{$gt:0},...(dueBy?{'summary.dueDate':{$lte:dueBy}}:{})}).select('entity qboId summary.balanceCents').limit(2000).maxTimeMS(3000).lean();
     if(mirrored.length>=2000)return null;
     const imported=mirrored.length?await Records.find({...scope,authorityHash:job.authorityHash,state:'saved',entity:{$in:['Invoice','Bill']},qboId:{$in:mirrored.map(row=>row.qboId)},...(adoption.importedThrough?{txnDate:{$lte:adoption.importedThrough}}:{}),'financialProof.matchesFinancialIntent':true,'relationshipCheck.outcome':{$ne:'error'}}).select('entity qboId').limit(2000).maxTimeMS(3000).lean():[];
-    const owned=new Set(imported.map(row=>row.entity+':'+row.qboId)),total={invoices:{count:0,cents:0},bills:{count:0,cents:0}};
-    for(const row of mirrored)if(owned.has(row.entity+':'+row.qboId)){const bucket=row.entity==='Invoice'?total.invoices:total.bills;bucket.count+=1;bucket.cents+=Number(row.summary?.balanceCents)||0;}
-    return total;
+    const owned=new Set(imported.map(row=>row.entity+':'+row.qboId)),eligible=[],total={invoices:{count:0,cents:0},bills:{count:0,cents:0}};
+    for(const row of mirrored)if(owned.has(row.entity+':'+row.qboId)){const bucket=row.entity==='Invoice'?total.invoices:total.bills;bucket.count+=1;bucket.cents+=Number(row.summary?.balanceCents)||0;eligible.push([row.entity,String(row.qboId),row.summary?.balanceCents]);}
+    const complete=eligible.every(([,id,balance])=>/^\d{1,30}$/.test(id)&&Number.isSafeInteger(balance)&&balance>0)&&new Set(eligible.map(row=>row[0]+':'+row[1])).size===eligible.length&&imported.length<2000;
+    return {...total,budgetIdentityHash:complete?hash({scope,adoption:{jobId:String(adoption.jobId),authorityHash:job.authorityHash,importedThrough:adoption.importedThrough||null},dueBy,eligible:eligible.sort((a,b)=>(a[0]+':'+a[1]).localeCompare(b[0]+':'+b[1]))}):null};
   }
   // Today's accountant-owned same-day batches and their saved native create receipts
   // (saved records only, no QuickBooks calls). Counted by business-agent-cadence.summarizeToday.
@@ -203,7 +204,7 @@ function createBusinessAgentStore({models=loadModels(),connection=require('mongo
   async function dueObligations(scope,day){
     const key=hash({scope,day,kind:'due'}),cached=factCache.get(key);
     if(cached&&now()-cached.at<FACT_TTL_MS)return cached.value;
-    let value=null;try{const open=await openAdopted(scope,day);value=open?{invoices:open.invoices.count,bills:open.bills.count,count:open.invoices.count+open.bills.count}:null;}catch{value=null;}
+    let value=null;try{const open=await openAdopted(scope,day);value=open?{invoices:open.invoices.count,bills:open.bills.count,count:open.invoices.count+open.bills.count,budgetIdentityHash:open.budgetIdentityHash}:null;}catch{value=null;}
     if(factCache.size>=50)factCache.clear();
     factCache.set(key,{at:now(),value});
     return value;

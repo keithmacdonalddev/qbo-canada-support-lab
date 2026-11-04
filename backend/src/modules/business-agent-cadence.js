@@ -4,7 +4,7 @@ const { ownsAgentWork } = require('./business-agent-authority');
 // business day should carry. Pure: every answer comes from saved state passed in,
 // so a restart resumes the same slot, backoff and review ceiling.
 // Plan: docs/plans/continuous-business-activity-2026-10-30.md (v2) §3a, §3c, §3e.
-const { shift } = require('./business-calendar');
+const { shift, hash, canonical } = require('./business-calendar');
 
 const ZONE = 'America/Halifax';
 // Rhythm v3 (owner direction 2026-10-31: the business runs 24/7, 365 days a year): 220 records every
@@ -53,7 +53,8 @@ const MIDNIGHT_CLOSE_MINUTES = 5;
 // Scheme (sync tuning, 2026-10-31):
 // - Activity budget: 10,000 metered NON-sync attempts (read + query + report) per UTC day. At it, no
 //   new discretionary slice is scheduled or admitted; recovery, obligations, calendar closes and
-//   continuation proceed. Background sync is excluded, so it can never starve the business.
+//   continuation proceed. At a spent budget, unchanged close/duty reviews recheck
+//   local work until a relevant change or fresh budget. Background sync is excluded.
 // - Sync is expected at about 300 a day (an adaptive combined change read, one before writes, snapshot
 //   re-reads and a nightly count sweep; business-agent-sync.js), shown separately but not limited here.
 // - Monthly guard: 450,000 metered attempts (sync included) month to date also stops new slices,
@@ -288,12 +289,38 @@ function nextClose(business, todayDay) {
 // requests: requestBudget(...) for today; when reached, no new discretionary slice is scheduled.
 // management: see managementDue; after recovery and catch-up, before slices and even while work is held.
 const hasUnsentRemainder=(business,agent)=>!business?.diagnosticsUnavailable&&(business?.errorBlockers||[]).some(blocker=>blocker.recovery?.state==='replan-remaining'&&blocker.recovery.agentId===agent?.id&&String(blocker.recovery.ownerId)===String(agent?.ownerId));
+// Budget-only work identity. Source watermarks and display timestamps cannot
+// manufacture new work; incomplete local eligibility stays unknown.
+function budgetWorkIdentity(business, today, owned, obligations){
+  if(business?.diagnosticsUnavailable||!Number.isSafeInteger(obligations?.count)||obligations.count<0||!/^[a-f0-9]{64}$/.test(obligations?.budgetIdentityHash||''))return null;
+  const ready=business.collectionReadiness;let collections=null;
+  if(ready!==null){
+    if(!ready||ready.unavailable||!Number.isSafeInteger(ready.eligibleInvoiceCount)||ready.eligibleInvoiceCount<0||!Array.isArray(ready.eligibleInvoices)||ready.eligibleInvoices.length!==ready.eligibleInvoiceCount||ready.eligibleInvoices.length>2000||!Array.isArray(ready.reusableDecisionKeys)||typeof ready.readyForNewBatch!=='boolean')return null;
+    const invoices=ready.eligibleInvoices.map(row=>[row?.invoiceId,row?.balanceCents]);
+    if(!Number.isSafeInteger(ready.eligibleBalanceCents)||invoices.reduce((n,row)=>n+(Number.isSafeInteger(row[1])?row[1]:0),0)!==ready.eligibleBalanceCents||invoices.some(([id,balance])=>typeof id!=='string'||!/^\d{1,30}$/.test(id)||!Number.isSafeInteger(balance)||balance<=0)||new Set(invoices.map(row=>row[0])).size!==invoices.length||ready.reusableDecisionKeys.some(key=>typeof key!=='string'||key.length>100)||new Set(ready.reusableDecisionKeys).size!==ready.reusableDecisionKeys.length)return null;
+    collections={eligible:invoices.sort((a,b)=>a[0].localeCompare(b[0])),keys:[...ready.reusableDecisionKeys].sort(),ready:ready.readyForNewBatch};
+  }
+  if(!Array.isArray(owned)||owned.length>1000||business.blockers!==undefined&&!Array.isArray(business.blockers)||business.errorBlockers!==undefined&&!Array.isArray(business.errorBlockers))return null;
+  const operation=op=>op?{id:op.operationId||null,status:op.status||null,planHash:op.planHash||null,completed:op.completedRecords||0,pending:op.executionPending===true,disposition:op.disposition||null}:null;
+  const blocker=row=>({code:row?.code||null,operationId:row?.operationId||row?.errorDetail?.operationId||null,errorCode:row?.errorDetail?.code||null,check:row?.errorDetail?.check||null,recovery:row?.recovery?Object.fromEntries(['state','operationId','agentId','ownerId','planHash','evidenceHash'].map(key=>[key,row.recovery[key]??null])):null});
+  const blockers=[...(business.blockers||[]),...(business.errorBlockers||[])].map(blocker).sort((a,b)=>canonical(a).localeCompare(canonical(b)));
+  const value={version:1,close:{authorityHash:business.authorityHash||null,openingDate:business.openingDate||null,verifiedThrough:business.verifiedThrough||null,recordsThrough:business.recordsThrough||null,lastActivityOperationId:business.lastActivityOperationId||null},current:operation(business.currentOperation),owned:owned.map(operation).sort((a,b)=>canonical(a).localeCompare(canonical(b))),blockers,adopted:{count:obligations.count,identity:obligations.budgetIdentityHash},collections,saved:today&&!today.unavailable?today.saved:null};
+  return Buffer.byteLength(canonical(value))<=64000?hash(value):null;
+}
+function budgetResetAt(now,requests){
+  if(requests?.unavailable||!['day','month'].includes(requests?.scope))return null;
+  const date=new Date(now);return requests.scope==='month'?Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1):Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate()+1);
+}
+
 function decide({ now, settings = {}, business = {}, agent = {}, today = null, owned = [], obligations = null, requests = null, state = {}, ownerRequested = false, ceiling = REVIEW_CEILING, management = null }) {
   const local = localParts(now), day = local.date, interval = Math.max(5, Number(settings.decisionIntervalMinutes) || 60) * MINUTE, recheck = Math.min(interval, PAUSE_RECHECK_MINUTES * MINUTE);
   let s = { ...(state || {}) };
   if (s.day !== day) s = { ...s, day, reviews: 0 };
   const rhythm = frozenRhythm(s, day);s.rhythm = rhythm;
   const signature = progressSignature(business, today, owned, obligations);
+  const budgetSpent=Boolean(requests?.reached),budgetIdentity=budgetSpent&&!requests.unavailable?budgetWorkIdentity(business,today,owned,obligations):null;
+  if(budgetSpent)s.budgetCandidateIdentity=budgetIdentity;else delete s.budgetCandidateIdentity;
+  const budgetReviewHeld=budgetSpent&&(!budgetIdentity||s.budgetReviewedIdentity===budgetIdentity);
   // A review is judged against its own starting point; between reviews, any change (for example
   // queued execution finishing) is progress and clears the backoff.
   if (typeof s.reviewSignature === 'string') {
@@ -319,7 +346,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // calendar completion and coordination still hold the whole company. The tools prove resource independence.
   const operationHold = (!op || ownRetained(op, agent)) && blockers.every(item => item.code === 'current-operation' || item.code === 'uncertain-write') && (op || (owned || []).some(run => ownRetained(run, agent)));
   const newActivity = (!op || ownRetained(op, agent)) && capacity && today && !today.unavailable && today.dueSlot && !requests?.reached && (!blockers.length || operationHold);
-  const independentDuties = (!op || ownRetained(op, agent)) && capacity && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
+  const independentDuties = !budgetReviewHeld && (!op || ownRetained(op, agent)) && capacity && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
   const independentKind = newActivity ? 'slice' : independentDuties ? 'obligations' : null;
   const independentReason = () => newActivity ? sliceReason() : 'settling currently eligible invoices and bills while other operations continue or recover';
   const sliceReason = () => 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule' + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
@@ -358,8 +385,8 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // the retired operation, and must not disappear between activity slots.
   if (!kind && !held && !requests?.reached && hasUnsentRemainder(business,agent)) { kind='recovery'; reason='replanning unsent work while keeping its already saved records'; }
   if (!kind && !held && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
-  const budgetSpent = Boolean(requests?.reached), budgetReason = requestBudgetReason(requests, '');
-  if (!kind && !budgetSpent && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
+  const budgetReason = requestBudgetReason(requests, '');
+  if (!kind && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
   // Alternate recovery reviews with new activity; a failed/held recovery cannot consume the
   // next slice's delay. Automatic recovery also runs between model reviews in the worker.
   if (independentKind && (!kind && held || ['recovery', 'catch-up'].includes(kind) && (['recovery', 'catch-up'].includes(s.lastKind) || misses > 0))) { kind = independentKind; reason = independentReason(); held = null; }
@@ -370,6 +397,10 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // so an obligation that cannot be settled never loops.
   if (!kind && open && obligations && obligations.count > 0) { kind = 'obligations'; reason = 'settling ' + obligations.count + ' due ' + (obligations.count === 1 ? 'invoice or bill' : 'invoices and bills'); }
 
+  if(!capped&&budgetReviewHeld&&['catch-up','obligations'].includes(kind)){
+    if(managementDue(management,s,day,now)){kind='management';reason=management.lastPlanDay?'the daily management review':'the first management review';}
+    else{const reset=budgetResetAt(now,requests);return result('idle',false,Math.min(now+recheck,reset??Infinity),budgetReason+'; '+(!budgetIdentity?'work eligibility is unknown; checking saved state locally':'unchanged close and obligations wait for changed work or a fresh request budget'));}
+  }
   if (kind) {
     const sameKind = !s.lastKind || s.lastKind === kind;
     const failures = sameKind ? misses : 0;
@@ -395,7 +426,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
     // An all-day rhythm (v3) runs to the close just after midnight. Paused: nothing is due, so saved state is
     // re-checked at the next share, the hourly window or within 15 minutes.
     const close = rhythm.close >= 24 * 60 ? midnight : zonedTime(day, rhythm.close), check = now + recheck;
-    return result('idle', false, Math.min(check, nextSlot, close, hourReset), why || (today && !today.unavailable && rhythm.target && nextSlot <= check ? 'on schedule; more work is due at ' + localTime(nextSlot) : 'nothing is due right now'));
+    return result('idle', false, Math.min(check, nextSlot, close, hourReset, budgetSpent?budgetResetAt(now,requests)??Infinity:Infinity), why || (today && !today.unavailable && rhythm.target && nextSlot <= check ? 'on schedule; more work is due at ' + localTime(nextSlot) : 'nothing is due right now'));
   }
   // Only an earlier (v2) day has hours without activity.
   return result('quiet', false, Math.min(now + interval, nextOpen(), midnight, nextSlot), why || (rhythm.open === null ? 'no activity was planned that day' : 'outside that day’s activity hours'));
@@ -409,7 +440,7 @@ function countReview(state, now) {
 // A main review also fixes the progress baseline that the next decision compares against.
 // A management review plans rather than writes, so it never counts as a review without progress.
 function beginReview(state, { now, signature, kind }) {
-  const next = { ...countReview(state, now), ...(state?.lastKind && state.lastKind !== kind ? { misses: 0, missKind: null } : {}), reviewFailureKind: null, reviewSignature: kind === 'management' ? null : signature, reviewPending: true, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
+  const next = { ...countReview(state, now), ...(typeof state?.budgetCandidateIdentity==='string'?{budgetReviewedIdentity:state.budgetCandidateIdentity}:{}), ...(state?.lastKind && state.lastKind !== kind ? { misses: 0, missKind: null } : {}), reviewFailureKind: null, reviewSignature: kind === 'management' ? null : signature, reviewPending: true, lastReviewAt: new Date(now).toISOString(), lastKind: kind };
   if (kind === 'management') { const day = localParts(now).date, prior = next.management?.day === day ? Number(next.management.attempts) || 0 : 0; next.management = { day, attempts: prior + 1 }; }
   return next;
 }
@@ -429,4 +460,4 @@ function specialistAllowed({ now, state = {}, ceiling = REVIEW_CEILING }) {
 }
 
 module.exports = { MAX_IN_FLIGHT, MIN_DUE, HOURLY_CAP, PAUSE_RECHECK_MINUTES, V3_FROM, HOURLY_WEIGHTS, MANAGEMENT_MINUTES, MANAGEMENT_ATTEMPTS, managementMinutes, managementAt, managementDue, DAILY_REQUEST_BUDGET, MONTHLY_METERED_BUDGET, FREE_MONTHLY_ALLOWANCE, EXPECTED_DAILY_SYNC, METERED_CATEGORIES, requestBudget, requestBudgetReason, ZONE, RHYTHM_VERSION, SCHEDULES, SPACING_MINUTES, BACKOFF_MINUTES, REVIEW_CEILING, PREVIEW_HOLD_MS, STALLED_POLL_MS, SLICE_TYPES,
-  hasUnsentRemainder, localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };
+  budgetWorkIdentity, budgetResetAt, hasUnsentRemainder, localParts, zonedTime, dayRhythm, frozenRhythm, slotKey, slotOf, isSlice, summarizeToday, progressSignature, nextClose, decide, countReview, beginReview, finishReview, specialistAllowed, shortDate, dayLabel, monthEnd, localTime };

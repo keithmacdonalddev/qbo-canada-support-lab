@@ -109,3 +109,14 @@ test('watchdog compare-and-swap cannot evict a renewed lease or owner revision',
  const store=createBusinessAgentStore({models:{Agents:{find:()=>chain([row]),findOneAndUpdate:filter=>{assert.equal(filter.leaseExpiresAt,row.leaseExpiresAt);assert.equal(filter.leaseToken,'old');assert.equal(filter.revision,2);fenced=true;return chain(null);}},Events:{create:()=>{throw Error('must not record recovery');}}},connection:{},transaction:async f=>f({}),now:()=>180000});
  await store.recoverReviews();assert.equal(fenced,true);
 });
+
+test('due budget identity covers complete eligible IDs balances and adoption without extra reads',async()=>{
+ let clock=0,copyReads=0,proofReads=0;const chain=rows=>({select(){return this;},maxTimeMS(){return this;},limit(){return this;},lean:async()=>structuredClone(rows)});
+ const scope={environment:'sandbox',realmId:'123',connectionId:'a'.repeat(24)},adoption={kind:'adopted-history',jobId:'job',importedThrough:'2026-10-31'},mirrored=[{entity:'Invoice',qboId:'10',summary:{balanceCents:100}},{entity:'Bill',qboId:'20',summary:{balanceCents:200}}];
+ const models={Agents:{},Events:{},Calendars:{findOne:()=>chain({adoption})},Jobs:{findOne:()=>chain({status:'adopted',authorityHash:'f'.repeat(64)})},Records:{find(){copyReads++;return chain(mirrored);}},PopulationRecords:{find(){proofReads++;return chain(mirrored.map(row=>({entity:row.entity,qboId:row.qboId})));}}};
+ const store=createBusinessAgentStore({models,connection:{},transaction:async work=>work({}),now:()=>clock}),first=await store.dueObligations(scope,'2026-11-04');assert.equal(first.count,2);assert.match(first.budgetIdentityHash,/^[a-f0-9]{64}$/);await store.dueObligations(scope,'2026-11-04');assert.equal(copyReads,1);assert.equal(proofReads,1);
+ clock+=31000;mirrored.reverse();const reordered=await store.dueObligations(scope,'2026-11-04');assert.equal(reordered.budgetIdentityHash,first.budgetIdentityHash);
+ clock+=31000;mirrored[0].qboId='21';const replaced=await store.dueObligations(scope,'2026-11-04');assert.equal(replaced.count,first.count);assert.notEqual(replaced.budgetIdentityHash,first.budgetIdentityHash);
+ clock+=31000;mirrored[0].summary.balanceCents++;const balanced=await store.dueObligations(scope,'2026-11-04');assert.notEqual(balanced.budgetIdentityHash,replaced.budgetIdentityHash);
+ clock+=31000;adoption.jobId='new-job';assert.notEqual((await store.dueObligations(scope,'2026-11-04')).budgetIdentityHash,balanced.budgetIdentityHash);assert.equal(copyReads,5);assert.equal(proofReads,5,'same two existing local reads per refresh');
+});

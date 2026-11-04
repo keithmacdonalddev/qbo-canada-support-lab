@@ -303,9 +303,9 @@ test('the daily QuickBooks request budget stops discretionary slices only, with 
   const slice = c.decide({ now, settings, agent, business: current(day), today: todayAt(now), requests: spent, state: {} });
   assert.deepEqual([slice.kind, slice.callModel], ['idle', false]);
   assert.match(slice.reason, /QuickBooks request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\); new sales and expenses resume after midnight UTC$/);
-  assert.equal(c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-27' }), today: todayAt(now), requests: spent, state: {} }).kind, 'catch-up', 'calendar closes continue');
+  assert.equal(c.decide({ now, settings, agent, business: current(day, { verifiedThrough: '2026-10-27' }), today: todayAt(now), requests: spent, state: {} }).kind, 'idle', 'unknown local work identity rechecks without another model');
   assert.equal(c.decide({ now, settings, agent, business: current(day, { currentOperation: { operationId: 'o', status: 'blocked', agentAuthority: own }, blockers: [{ code: 'current-operation' }] }), today: todayAt(now), requests: spent, state: {} }).kind, 'recovery', 'recovery continues');
-  assert.equal(c.decide({ now, settings, agent, business: current(day), today: todayAt(now), obligations: { count: 2 }, requests: spent, state: {} }).kind, 'obligations', 'obligations continue');
+  assert.equal(c.decide({ now, settings, agent, business: current(day), today: todayAt(now), obligations: { count: 2 }, requests: spent, state: {} }).kind, 'idle', 'unknown duty identity rechecks locally');
 });
 
 function completedReview(state, options) { return c.finishReview(c.beginReview(state, options)); }
@@ -404,4 +404,45 @@ test('progress and a due obligation bypass a failed-close backoff',()=>{
  assert.deepEqual([duty.kind,duty.callModel],['obligations',true]);
  const advanced=c.decide({now,settings,agent,business:{...business,verifiedThrough:'2026-11-01'},today,state});
  assert.equal(advanced.state.misses,0);assert.deepEqual([advanced.kind,advanced.callModel],['catch-up',true]);
+});
+
+function budgetFixture(extra={}){const day='2026-11-04',now=Date.parse('2026-11-04T20:30:00Z');return{now,settings,agent,business:current(day,{verifiedThrough:'2026-11-02',collectionReadiness:{eligibleInvoices:[],eligibleInvoiceCount:0,eligibleBalanceCents:0,reusableDecisionKeys:[],readyForNewBatch:true}}),today:todayAt(now),obligations:{count:0,budgetIdentityHash:'1'.repeat(64)},requests:{reached:true,scope:'day',used:10057,limit:10000},state:{},...extra};}
+test('budget hold consumes changed-work identity only when the main review actually starts',()=>{
+ const input=budgetFixture(),first=c.decide(input);assert.equal(first.kind,'catch-up');assert.equal(first.callModel,true);assert.equal(first.state.budgetReviewedIdentity,undefined);
+ const persisted=c.decide({...input,state:first.state});assert.equal(persisted.callModel,true,'decide persistence does not consume allowance');
+ const begun=c.beginReview(first.state,{now:input.now,signature:c.progressSignature(input.business,input.today,[],input.obligations),kind:first.kind}),next=c.decide({...input,now:input.now+31*MIN,state:c.finishReview(begun)});
+ assert.equal(next.callModel,false);assert.equal(next.kind,'idle');assert.match(next.reason,/unchanged|changed work/);assert.ok(begun.budgetReviewedIdentity);
+});
+test('budget candidate survives backoff, review ceiling and simulated usage hold before actual due wake',()=>{
+ const input=budgetFixture(),state={day:'2026-11-04',lastKind:'catch-up',lastReviewAt:new Date(input.now).toISOString(),misses:2,missKind:'catch-up:no-progress'},waiting=c.decide({...input,state});assert.equal(waiting.callModel,false);assert.equal(waiting.state.budgetReviewedIdentity,undefined);
+ const capped=c.decide({...input,state:{...waiting.state,reviews:400}});assert.equal(capped.callModel,false);assert.equal(capped.state.budgetReviewedIdentity,undefined);
+ const due=c.decide({...input,now:input.now+31*MIN,state:waiting.state});assert.equal(due.callModel,true);const usageHeld=c.decide({...input,now:input.now+32*MIN,state:due.state});assert.equal(usageHeld.callModel,true,'usage hold never calls beginReview');assert.equal(usageHeld.state.budgetReviewedIdentity,undefined);
+});
+
+function budgetReviewed(input){const d=c.decide(input);return c.finishReview(c.beginReview(d.state,{now:input.now,signature:c.progressSignature(input.business,input.today,input.owned||[],input.obligations),kind:d.kind}));}
+test('budget-only identity includes complete duty targets and sorted collection readiness without sync timestamps',()=>{
+ const input=budgetFixture(),ready={eligibleInvoices:[{invoiceId:'17',balanceCents:100},{invoiceId:'18',balanceCents:200}],eligibleInvoiceCount:2,eligibleBalanceCents:300,reusableDecisionKeys:['key-b','key-a'],readyForNewBatch:true};input.business.collectionReadiness=ready;
+ const original=c.budgetWorkIdentity(input.business,input.today,[],input.obligations),reordered=structuredClone(input.business);reordered.collectionReadiness.eligibleInvoices.reverse();reordered.collectionReadiness.reusableDecisionKeys.reverse();reordered.sync={lastSuccessAt:'2026-11-04T23:00:00Z'};reordered.bookChecks={observedAt:'2026-11-04T23:00:00Z'};assert.equal(c.budgetWorkIdentity(reordered,input.today,[],input.obligations),original);
+ const state=budgetReviewed(input);for(const mutate of [i=>i.obligations.budgetIdentityHash='2'.repeat(64),i=>i.business.collectionReadiness.eligibleInvoices[0].invoiceId='19',i=>{i.business.collectionReadiness.eligibleInvoices[0].balanceCents++;i.business.collectionReadiness.eligibleBalanceCents++;},i=>i.business.collectionReadiness.reusableDecisionKeys.push('key-c'),i=>i.business.collectionReadiness.readyForNewBatch=false,i=>i.business.errorBlockers=[{code:'proof',operationId:'op',recovery:{state:'ready',evidenceHash:'new-proof'}}]]){const changed=structuredClone(input);changed.now+=31*MIN;changed.state=state;mutate(changed);const d=c.decide(changed);assert.equal(d.callModel,true);assert.equal(d.state.budgetReviewedIdentity,state.budgetReviewedIdentity,'changed candidate is not consumed by decision');}
+});
+test('unknown or truncated budget work is an explicit local recheck, never unchanged proof',()=>{
+ for(const change of [i=>delete i.obligations.budgetIdentityHash,i=>i.obligations=null,i=>i.requests.unavailable=true,i=>i.business.collectionReadiness={unavailable:true},i=>i.business.collectionReadiness.eligibleInvoiceCount=61,i=>i.business.collectionReadiness.eligibleBalanceCents=999]){const input=budgetFixture();change(input);const d=c.decide(input);assert.equal(d.callModel,false);assert.equal(d.kind,'idle');assert.match(d.reason,/unknown/);assert.equal(d.state.budgetCandidateIdentity,null);assert.ok(Date.parse(d.nextReviewAt)<=input.now+15*MIN);}
+});
+test('budget hold preserves owner instructions, bounded management, active polls and accepted recovery',()=>{
+ const input=budgetFixture(),state=budgetReviewed(input),later={...input,now:input.now+2*MIN,state};assert.equal(c.decide({...later,ownerRequested:true}).kind,'owner');assert.equal(c.decide({...later,ownerRequested:true}).callModel,true);
+ const managed=c.decide({...later,management:{lastPlanDay:'2026-11-03'}});assert.equal(managed.kind,'management');assert.equal(managed.callModel,true);
+ const active=budgetFixture();active.business.currentOperation={operationId:'active',status:'running',agentAuthority:own};active.obligations.count=1;const activeState=budgetReviewed(active),poll=c.decide({...active,now:active.now+MIN,state:activeState});assert.equal(poll.kind,'poll');assert.equal(poll.callModel,false);assert.equal(Date.parse(poll.nextReviewAt),active.now+3*MIN);
+ const recovering=c.decide({...later,business:{...input.business,currentOperation:{operationId:'retained',status:'blocked',agentAuthority:own},blockers:[{code:'current-operation'}]}});assert.equal(recovering.kind,'recovery');assert.equal(recovering.callModel,true);
+});
+test('UTC reset is a scheduled wake, never permission while the meter remains reached',()=>{
+ const input=budgetFixture(),state=budgetReviewed(input),near={...input,now:Date.parse('2026-11-04T23:59:50Z'),state};const held=c.decide(near);assert.equal(held.nextReviewAt,'2026-11-05T00:00:00.000Z');
+ const reset=c.decide({...near,now:Date.parse('2026-11-05T00:00:01Z'),state:held.state});assert.equal(reset.callModel,false);const reopened=c.decide({...near,now:Date.parse('2026-11-05T00:00:01Z'),requests:{reached:false},state:held.state});assert.equal(reopened.kind,'slice','normal under-budget cadence resumes the genuinely due independent activity');assert.equal(reopened.callModel,true);
+ const monthly=c.decide({...near,now:Date.parse('2026-11-30T23:59:50Z'),requests:{...input.requests,scope:'month',monthlyLimit:450000,meteredMonth:450000},state});assert.equal(monthly.nextReviewAt,'2026-12-01T00:00:00.000Z');assert.equal(monthly.callModel,false);
+});
+
+test('under-budget progress identity and record accounting source are unchanged',()=>{
+ const fs=require('node:fs'),path=require('node:path'),original=fs.readFileSync(path.join(process.cwd(),'backend/src/modules/business-agent-cadence.js'),'utf8'),candidate=fs.readFileSync(path.join(__dirname,'../src/modules/business-agent-cadence.js'),'utf8');
+ const progress=source=>source.slice(source.indexOf('function progressSignature('),source.indexOf('// A run’s disposition')<0?source.indexOf('// A run\'s disposition'):source.indexOf('// A run’s disposition'));assert.equal(progress(candidate),progress(original));
+ const summary=source=>source.slice(source.indexOf('function summarizeToday('),source.indexOf('// Progress means'));assert.equal(summary(candidate),summary(original));
+ const sourceStore=fs.readFileSync(path.join(process.cwd(),'backend/src/modules/business-agent-store.js'),'utf8'),candidateStore=fs.readFileSync(path.join(__dirname,'../src/modules/business-agent-store.js'),'utf8'),today=source=>source.slice(source.indexOf('  async function todayActivity('),source.indexOf('  // Display/review evidence only;'));assert.equal(today(candidateStore),today(sourceStore));
 });
