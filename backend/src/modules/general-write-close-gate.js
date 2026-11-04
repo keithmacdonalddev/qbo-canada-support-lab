@@ -17,6 +17,8 @@ function postingContext(evidence) {
 }
 function settlementWindow(rows) { return rows.map(row => ({ ...row, record: require('./general-write-postings').accountingView(row.record) })); }
 function createGeneralCloseGate({ models = {}, copy, readValuation = null, now = () => Date.now() }) {
+  // Explicit fixture compositions must supply proof/audit stores; never query a live default from an isolated fixture.
+  const nativeStores = { Authorities: models.Authorities || (!Object.keys(models).length ? require('../models/BusinessAuthority') : null), Audits: models.Audits || (!Object.keys(models).length ? require('../models/AuditLog') : null) };
   // Resolve the complete proof stores once, including reloads after replay capture.
   // Production constructs this gate without injected models; saved AP-omission
   // proofs still require their original scoped receipt, authority and run.
@@ -43,6 +45,11 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
     const accounts = await Records.find({ ...company(scope), entity: 'Account', deleted: false }).select('qboId record').limit(501).maxTimeMS(3000).lean();
     if (accounts.length > 500) fail('Posting-account enumeration exceeds its proof budget; close is incomplete.');
     const tax = accounts.filter(row => TAX_SUBTYPES.includes(row.record?.AccountSubType) && (row.record.AccountSubType !== 'OtherCurrentLiabilities' || /\b(GST|HST|PST|QST|tax)\b/i.test(row.record?.Name || ''))).map(row => String(row.qboId));
+    const taxLines = records.flatMap(row => [row.current,row.before].flatMap(record => require('./general-write-postings').taxLinesForPosting(row.entity,record)));
+    const taxRateIds = new Set(taxLines.map(line => line.rateId).filter(id => id != null));
+    const nativeTax = require('./native-tax-account-proof');
+    const proof = taxLines.length ? await nativeTax.loadProof({ ...nativeStores, scope, now:now() }) : null;
+    const nativeContext = proof ? await nativeTax.contextFor({ proof, scope, rateIds:[...taxRateIds].sort(), copy }) : null;
     const sources = new Map();
     for (const row of records) for (const record of [row.current, row.before]) for (const line of record?.Line || []) for (const link of line.LinkedTxn || []) {
       if (!record?.CurrencyRef?.value || record.CurrencyRef.value === 'CAD' || !['Invoice', 'Bill', 'CreditMemo', 'VendorCredit', 'Payment', 'SalesReceipt'].includes(link.TxnType)) continue;
@@ -62,12 +69,12 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
       if (days.length !== 1) fail('Inventory close needs one complete open-day replay.');
       stock = await require('./business-stock-general').readGeneralStockContext({ models: stockModels, scope, active, day: days[0], readValuation, verifyValuation:true, observations: require('./business-observation-store').createBusinessObservationStore({ ...stockModels, now }) });
     }
-    const evidence = { ...(stock ? { stockBasisHash: stock.basisHash, valuationChecks:stock.valuationChecks } : {}), mappings, sources: [...sources], items: [...items], taxAccountIds: [...tax].sort(), taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
+    const evidence = { ...(nativeContext ? {nativeTaxProof:nativeContext.evidence} : {}), ...(stock ? { stockBasisHash: stock.basisHash, valuationChecks:stock.valuationChecks } : {}), mappings, sources: [...sources], items: [...items], taxAccountIds: [...tax].sort(), taxAccounts: accounts.map(row => ({ qboId: row.qboId, record: row.record })) };
     return { evidence, inventory, ...(stock ? { stockEvidence:{returns:stock.returnEvidence,checks:stock.valuationChecks,reportJson:require('./report-json').canonicalReport(stock.valuationReport)} } : {}), ...(stock ? { stockCost: (entity, record, lineIndex) => require('./business-stock-general').stockPostingCost(stock, entity, record, lineIndex) } : {}), homeCurrency: 'CAD', currencyAccount, exchangeGainLoss: gains.length === 1 ? String(gains[0].qboId) : null, get: (entity, id) => entity === 'Item' ? items.get(String(id)) || null : sources.get(entity + ':' + id) || null,
       receivables: mappings.accountsReceivable ? String(mappings.accountsReceivable) : null, payables: mappings.accountsPayable ? String(mappings.accountsPayable) : null, undepositedFunds: mappings.undepositedFunds ? String(mappings.undepositedFunds) : null,
       // Retain real account identities. Multiple agency accounts require an explicit
       // rate-to-account proof; guessing or collapsing them could hide a substitution.
-      taxAccount: () => { if (tax.length !== 1) fail('The tax posting account cannot be attributed uniquely; retain a rate-to-account proof before close.'); return tax[0]; }, accountKey: id => String(id) };
+      taxAccount: rateId => { if (nativeContext) return nativeContext.taxAccount(rateId); if (tax.length !== 1) fail('The tax posting account cannot be attributed uniquely; retain a rate-to-account proof before close.'); return tax[0]; }, accountKey: id => String(id) };
   }
   async function retainStockReturns(scope,{day,mappings}) {
     const runs=await require('./general-write-day-close').readGeneralRuns(Runs,scope,{day});

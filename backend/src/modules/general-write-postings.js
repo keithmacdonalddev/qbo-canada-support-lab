@@ -24,6 +24,11 @@ const SALES = { Invoice: -1, SalesReceipt: -1, CreditMemo: 1, RefundReceipt: 1 }
 function fail(message) { throw Object.assign(new Error(message), { code: 'GENERAL_POSTING_UNSUPPORTED' }); }
 function cents(value) { const n = Math.round(Number(value) * 100); if (typeof value !== 'number' || !Number.isSafeInteger(n) || Math.abs(value * 100 - n) > 0.00001) fail('A posting amount is not an exact cent value.'); return n; }
 const id = ref => ref?.value == null ? null : String(ref.value);
+// The close requests native tax configuration only for lines these posting rules consume.
+function taxLinesForPosting(entity, record) {
+  if (!record || NON_POSTING.has(entity) || SALES[entity] === undefined && PURCHASES[entity] === undefined || record.status === 'Voided' || record.PrivateNote?.startsWith?.('Voided')) return [];
+  return (record.TxnTaxDetail?.TaxLine || []).map(tax => ({ amount:cents(tax.Amount), rateId:id(tax.TaxLineDetail?.TaxRateRef) })).filter(tax => tax.amount !== 0);
+}
 // ctx: { get(entity, id) (the local copy), receivables, payables, undepositedFunds: account
 // ids used when QuickBooks omits the control account, taxAccount(rateId, direction) }.
 function nativePostingsOf(entity, record, ctx) {
@@ -68,9 +73,8 @@ function nativePostingsOf(entity, record, ctx) {
       else fail(entity + ' line type ' + type + ' has no posting rule.');
       const amount = cents(line.Amount); gross += amount; add(account, lineSign * amount);
     }
-    for (const tax of record.TxnTaxDetail?.TaxLine || []) {
-      const amount = cents(tax.Amount); if (!amount) continue;
-      gross += amount; add(ctx.taxAccount(id(tax.TaxLineDetail?.TaxRateRef), direction), lineSign * amount);
+    for (const {amount,rateId} of taxLinesForPosting(entity,record)) {
+      gross += amount; add(ctx.taxAccount(rateId, direction), lineSign * amount);
     }
     const control = entity === 'Invoice' || entity === 'CreditMemo' ? id(record.ARAccountRef) || ctx.receivables
       : entity === 'Bill' || entity === 'VendorCredit' ? id(record.APAccountRef) || ctx.payables
@@ -154,4 +158,4 @@ function movementsOf(entity, before, after, ctx) {
   return [...rows].filter(([, amount]) => amount).map(([key, amount]) => { const [date, accountId] = key.split('|'); return { date, accountId, cents: amount }; }).sort((a, b) => (a.date + a.accountId).localeCompare(b.date + b.accountId));
 }
 const isPosting = entity => !NON_POSTING.has(entity);
-module.exports = { accountingView, settlementConsistent, postingsOf, compareLedger, movementsOf, isPosting, NON_POSTING };
+module.exports = { taxLinesForPosting, accountingView, settlementConsistent, postingsOf, compareLedger, movementsOf, isPosting, NON_POSTING };
