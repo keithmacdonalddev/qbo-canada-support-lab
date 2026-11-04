@@ -24,3 +24,17 @@ test('generic private subprocess still requires close after valid JSON and exit 
 test('native transport alone opts into terminal-JSON parent completion',async()=>{let seen;const browser=T.createBrowserTransport({run:async(_file,_args,options)=>{seen=options;return '{"success":true,"data":{"result":true}}';},delay:async()=>{}});await browser.enterPassword('fixture-secret');assert.equal(seen.nativeCliCompletion,process.platform==='win32');});
 
 test('native terminal JSON remains bounded in bytes before parent completion',async()=>{const child=inheritedPipeChild(),running=nativePipeRun(child);child.stdout.write(JSON.stringify({success:true,data:'é'.repeat(40000)}));child.emit('exit',0);await assert.rejects(running.promise,e=>e.code==='QBO_SESSION_UNCERTAIN');assert.equal(running.kills(),1);});
+
+test('every native command retains the exact normalized persistent profile and private credential input',async()=>{
+ const calls=[],company={realmId:'9130357222392856',name:'My Business'};
+ const browser=T.createBrowserTransport({delay:async()=>{},run:async(file,args,options)=>{
+  calls.push({file,args,input:options.input});let result;
+  if(args.includes('eval')){const prefix='('+T.pageAction.toString()+')(';assert.ok(options.input.startsWith(prefix));const [action]=JSON.parse('['+options.input.slice(prefix.length,-1)+']');result=action==='inspect'?{url:'https://accounts.intuit.com/app/sign-in'}:action==='company'?company:action==='identity'?{loaded:true,matches:true}:action==='identity-open'||action==='identity-close'?{loaded:true}:true;}
+  return JSON.stringify({success:true,data:result===undefined?{}:{result}});
+ }});
+ await browser.open();await browser.inspect();await browser.enterUsername('fixture@example.invalid');await browser.enterPassword('fixture-profile-secret');assert.equal(await browser.verifyIdentity('fixture@example.invalid'),true);assert.deepEqual(await browser.verifyCompany(),company);
+ const expectedProfile=path.posix.join(os.homedir().split(String.fromCharCode(92)).join('/'),'.qbo-automation-profile');
+ assert.ok(calls.some(c=>c.args.includes('open')));assert.ok(calls.some(c=>c.args.includes('press')));assert.ok(calls.some(c=>c.args.includes('eval')));
+ for(const call of calls){assert.equal(call.file,calls[0].file);assert.equal(call.args.filter(x=>x==='--session').length,1);assert.equal(call.args[call.args.indexOf('--session')+1],'qbo-ops');assert.equal(call.args.filter(x=>x==='--profile').length,1);assert.equal(call.args[call.args.indexOf('--profile')+1],expectedProfile);assert.ok(!call.args.some(x=>x.includes('fixture-profile-secret')||x.includes('fixture@example.invalid')));}
+ assert.ok(calls.some(c=>c.input?.includes('fixture-profile-secret')));
+});

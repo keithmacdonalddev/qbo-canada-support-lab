@@ -96,10 +96,10 @@ async function pageAction(action,value=''){
 }
 function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=ms=>new Promise(r=>setTimeout(r,ms))}={}){
  const bin=path.join(process.env.APPDATA||path.join(os.homedir(),'AppData/Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
- const profile=path.join(os.homedir(),'.qbo-automation-profile');
+ const profile=path.join(os.homedir(),'.qbo-automation-profile').split(path.sep).join('/');
  const native=process.platform==='win32',executable=native?path.join(path.dirname(bin),'agent-browser-win32-'+process.arch+'.exe'):process.execPath,prefix=native?[]:[bin];
  const command=async(args,options={})=>{
-  let raw;try{raw=await run(executable,[...prefix,'--session','qbo-ops',...args,'--json'],{onChild,nativeCliCompletion:native,...options});const result=JSON.parse(raw);if(result.success!==true)throw failure('QBO_BROWSER_UNAVAILABLE');return result.data;}finally{raw='';}
+  let raw;try{raw=await run(executable,[...prefix,'--session','qbo-ops','--profile',profile,...args,'--json'],{onChild,nativeCliCompletion:native,...options});const result=JSON.parse(raw);if(result.success!==true)throw failure('QBO_BROWSER_UNAVAILABLE');return result.data;}finally{raw='';}
  };
  const evaluate=async(action,value)=>{
   let input='('+pageAction.toString()+')('+JSON.stringify(action)+','+JSON.stringify(value||'')+')';
@@ -108,7 +108,7 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
  return {
   open:async()=>{
    // Launch the persistent profile without waiting for an authentication redirect's load event.
-   await command(['--profile',profile,'open'],{timeoutMs:120000});
+   await command(['open'],{timeoutMs:120000});
    let state=await evaluate('inspect');if(loginOrigin(state?.url)||qboOrigin(state?.url))return;
    await evaluate('navigate-home');
    for(let n=0;n<20;n++){state=await evaluate('inspect');if(loginOrigin(state?.url)||qboOrigin(state?.url))return;await delay(500);}

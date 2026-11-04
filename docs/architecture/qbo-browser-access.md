@@ -27,6 +27,8 @@ Use the actual values through the authorized browser's data-entry API or private
 
 **Nov4 password-only recovery:** a fresh direct sign-in offered the password form after entering the dedicated email. The saved password succeeded without a code. The live dedicated identity and exact Production My Business company ID were verified under the shared lease; the original historical banking job then resumed through its existing recovery checks and started its upload. The earlier SMS challenge describes that earlier page, not a permanent requirement. Try the observed password form first; never change authentication controls or assume sign-in proves a banking action complete. Sanitized proof: `artifacts/native-access-20261104/password-only-ready.json`.
 
+**Profile argument consistency:** the common transport normalizes its existing persistent profile to forward slashes and supplies that exact fixed profile on every command, matching the Terra runner. This prevents different entry points from requesting different launch configurations. The Nov4 fix passed29 focused tests and a fresh default coordinator reused the verified session without password/code; complete native task handoff is proved separately.
+
 ## Shared browser and company scope
 
 The target is Production **My Business**, company ID ending **2856**, using the owner's dedicated AI Intuit account. Verify the signed-in identity and exact company before company-scoped work. The API OAuth connection is independent. Standing login permission does not authorize new bookkeeping, account administration, OAuth reconnects or service changes.
