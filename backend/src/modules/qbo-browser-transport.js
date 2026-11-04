@@ -1,21 +1,33 @@
 'use strict';
 const path=require('node:path'),os=require('node:os'),fs=require('node:fs/promises');
 const {spawn,execFile}=require('node:child_process');
-const {failure,LOGIN,QBO,normalizeUser}=require('./qbo-browser-login');
+const {failure,LOGIN,QBO,normalizeUser,loginOrigin,qboOrigin}=require('./qbo-browser-login');
 const ROOT=path.resolve(__dirname,'../../..');
-function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=execFile,onChild=()=>{}}={}){
+function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=execFile,onChild=()=>{},nativeCliCompletion=false}={}){
  return new Promise((resolve,reject)=>{
-  let child,output='',closed=false,failed=false,timer,grace;
+  let child,output='',outputBytes=0,closed=false,failed=false,timer,grace,parentExited=false,parentExitCode=null,completionQueued=false;
+  const terminalJson=()=>{try{const value=JSON.parse(output);return value!==null&&!Array.isArray(value)&&typeof value==='object'&&typeof value.success==='boolean';}catch{return false;}};
   const done=(error)=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(grace);if(error)reject(error);else resolve(output);output='';};
-  try{child=spawnProcess(file,args,{cwd:ROOT,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});onChild(child.pid);}catch{if(child?.pid){if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');}done(failure(child?.pid?'QBO_SESSION_UNCERTAIN':'QBO_BROWSER_UNAVAILABLE'));return;}
-  const stop=()=>{if(failed||closed)return;failed=true;grace=setTimeout(()=>done(failure('QBO_SESSION_UNCERTAIN')),3000);if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');};
+  const closeOwnedPipes=()=>{for(const stream of [child.stdin,child.stdout,child.stderr])try{stream.destroy?.();}catch{}};
+  // The native CLI may leave its persistent browser daemon holding inherited
+  // pipes. Only its successful parent exit plus a complete JSON protocol reply
+  // can release our pipe handles; generic subprocesses still require close.
+  const completeNative=()=>{if(!nativeCliCompletion||closed||failed||!parentExited||parentExitCode!==0||!terminalJson()||completionQueued)return;completionQueued=true;setImmediate(()=>{completionQueued=false;if(closed||failed||!parentExited||parentExitCode!==0||!terminalJson())return;done(null);closeOwnedPipes();});};
+  try{child=spawnProcess(file,args,{cwd:ROOT,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});onChild(child.pid,path.basename(file));}catch{if(child?.pid){if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');}done(failure(child?.pid?'QBO_SESSION_UNCERTAIN':'QBO_BROWSER_UNAVAILABLE'));return;}
+  const stop=()=>{if(failed||closed)return;failed=true;if(nativeCliCompletion&&parentExited){done(failure('QBO_SESSION_UNCERTAIN'));closeOwnedPipes();return;}grace=setTimeout(()=>done(failure('QBO_SESSION_UNCERTAIN')),3000);if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');};
   timer=setTimeout(stop,timeoutMs);
   child.once('error',()=>done(failure('QBO_BROWSER_UNAVAILABLE')));
-  child.stdout.on('data',b=>{if(output.length+b.length>65536)stop();else output+=b.toString();});
+  child.stdout.on('data',b=>{if(closed)return;if((nativeCliCompletion?outputBytes:output.length)+b.length>65536)stop();else{outputBytes+=b.length;output+=b.toString();completeNative();}});
   child.stderr.on('data',()=>{}); // Never expose provider/credential/browser diagnostics.
-  child.once('close',code=>done(failed?failure('QBO_SESSION_UNCERTAIN'):code===0?null:failure('QBO_BROWSER_UNAVAILABLE')));
+  child.once('exit',code=>{parentExited=true;parentExitCode=code;completeNative();});
+  child.once('close',code=>done(failed?failure('QBO_SESSION_UNCERTAIN'):nativeCliCompletion?parentExited&&parentExitCode===0&&code===0&&terminalJson()?null:failure('QBO_SESSION_UNCERTAIN'):code===0?null:failure('QBO_BROWSER_UNAVAILABLE')));
   child.stdin.on('error',()=>{});child.stdin.end(input);
  });
+}
+async function readDedicatedCredential({presence=false,file=path.join(process.env.LOCALAPPDATA||path.join(os.homedir(),'AppData/Local'),'TestDataLab/qbo-ai-login.json'),readFile=fs.readFile,lstat=fs.lstat}={}){
+ let raw='',value;
+ try{const info=await lstat(file);if(!info.isFile()||info.isSymbolicLink()||info.size<2||info.size>16384)throw failure('QBO_CREDENTIAL_MISSING');raw=await readFile(file,'utf8');value=JSON.parse(raw.replace(/^\uFEFF/,''));const username=normalizeUser(value?.email);if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)||typeof value.password!=='string'||!value.password||value.password.length>4096)throw failure('QBO_CREDENTIAL_MISSING');return presence?{configured:true}:{username,password:value.password};}
+ catch{if(presence)return{configured:false};throw failure('QBO_CREDENTIAL_MISSING');}finally{raw='';if(value&&typeof value==='object'){value.password='';value.email='';}}
 }
 async function readWindowsCredential({root=ROOT,presence=false,run=privateRun,onChild}={}){
  if(process.platform!=='win32')throw failure('QBO_CREDENTIAL_MISSING');
@@ -28,6 +40,11 @@ async function readWindowsCredential({root=ROOT,presence=false,run=privateRun,on
 async function pageAction(action,value=''){
  const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};
  const main=window===window.top,origin=location.origin,url=origin+location.pathname;
+ if(action==='navigate-home'||action==='navigate-billing'){
+  if(!main||!(location.href==='about:blank'||origin==='https://accounts.intuit.com'||origin==='https://qbo.intuit.com'))throw new Error('QBO_SIGNIN_REQUIRED');
+  const target=action==='navigate-home'?'https://qbo.intuit.com/app/homepage':'https://qbo.intuit.com/app/billing';
+  setTimeout(()=>location.assign(target),0);return true;
+ }
  const text=String(document.body?.innerText||'');
  const inputs=[...document.querySelectorAll('input')].filter(visible),buttons=[...document.querySelectorAll('button')].filter(visible);
  const password=inputs.filter(e=>e.type==='password'),username=inputs.filter(e=>e.id==='iux-identifier-first-international-email-user-id-input'||['email','username'].includes(e.autocomplete)||e.type==='email');
@@ -80,15 +97,23 @@ async function pageAction(action,value=''){
 function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=ms=>new Promise(r=>setTimeout(r,ms))}={}){
  const bin=path.join(process.env.APPDATA||path.join(os.homedir(),'AppData/Roaming'),'npm/node_modules/agent-browser/bin/agent-browser.js');
  const profile=path.join(os.homedir(),'.qbo-automation-profile');
+ const native=process.platform==='win32',executable=native?path.join(path.dirname(bin),'agent-browser-win32-'+process.arch+'.exe'):process.execPath,prefix=native?[]:[bin];
  const command=async(args,options={})=>{
-  let raw;try{raw=await run(process.execPath,[bin,'--session','qbo-ops',...args,'--json'],{onChild,...options});const result=JSON.parse(raw);if(result.success!==true)throw failure('QBO_BROWSER_UNAVAILABLE');return result.data;}finally{raw='';}
+  let raw;try{raw=await run(executable,[...prefix,'--session','qbo-ops',...args,'--json'],{onChild,nativeCliCompletion:native,...options});const result=JSON.parse(raw);if(result.success!==true)throw failure('QBO_BROWSER_UNAVAILABLE');return result.data;}finally{raw='';}
  };
  const evaluate=async(action,value)=>{
   let input='('+pageAction.toString()+')('+JSON.stringify(action)+','+JSON.stringify(value||'')+')';
   try{return (await command(['eval','--stdin'],{input})).result;}finally{input='';}
  };
  return {
-  open:async()=>{await command(['--profile',profile,'open',QBO+'/app/homepage'],{timeoutMs:120000});},
+  open:async()=>{
+   // Launch the persistent profile without waiting for an authentication redirect's load event.
+   await command(['--profile',profile,'open'],{timeoutMs:120000});
+   let state=await evaluate('inspect');if(loginOrigin(state?.url)||qboOrigin(state?.url))return;
+   await evaluate('navigate-home');
+   for(let n=0;n<20;n++){state=await evaluate('inspect');if(loginOrigin(state?.url)||qboOrigin(state?.url))return;await delay(500);}
+   throw failure('QBO_SIGNIN_REQUIRED');
+  },
   inspect:()=>evaluate('inspect'),
   differentAccount:async()=>{await evaluate('different');await delay(350);},
   enterUsername:async value=>{await evaluate('username',value);await delay(500);},
@@ -97,15 +122,15 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
   settle:()=>delay(500),
   verifyIdentity:async username=>{for(let n=0;n<20;n++){await evaluate('identity-open');const identity=await evaluate('identity',username);if(identity.loaded){await evaluate('identity-close');return identity.matches;}await delay(500);}return false;},
   verifyCompany:async()=>{
-   await command(['open',QBO+'/app/homepage']);
+   await evaluate('navigate-home');
    let proof=null;
    for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
    if(proof?.name!=='My Business')return proof;
    await command(['press','Control+Alt+Shift+/']);
    for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}
-   if(!proof?.realmId){await command(['press','Escape']);await command(['open',QBO+'/app/billing']);for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}}
-   await command(['press','Escape']);await command(['open',QBO+'/app/homepage']);return proof;
+   if(!proof?.realmId){await command(['press','Escape']);await evaluate('navigate-billing');for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}}
+   await command(['press','Escape']);await evaluate('navigate-home');return proof;
   }
  };
 }
-module.exports={privateRun,readWindowsCredential,pageAction,createBrowserTransport};
+module.exports={privateRun,readDedicatedCredential,readWindowsCredential,pageAction,createBrowserTransport};

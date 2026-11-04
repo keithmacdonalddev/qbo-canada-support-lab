@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-04T16:02:04.243Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T16:10:59.778Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -14,7 +14,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
 
-**Current priority: keep useful current-day output moving and finish overdue Nov2/Nov3 closes after actual Nov1 verification.** Nov4 owner direction continues the full goal across milestones. Latest observed current-day count87/220; Nov1 closed14:15 with5new scheduled records and existing native Invoice11240 preserved. Nov2 actual General ledger39records passes with no failures; its full calendar now waits on the next exact native estimate-conversion chain. BANK-2.1/2.2 bounded live slices and2.3 automatic new-instruction scheduling are verified; actual due postingNov5 remains open. Next primary feature is BANK-2.5 explicit bank-origin fee/advice policy and once-only bookkeeping linkage;2.4 and2.6–2.10 keep their dependencies and proof open. C02 current catalog/desktop slice is verified; C01 per-create accounting member proof remains open. Continue the complete index below.
+**Current priority: keep useful current-day output moving and finish overdue Nov2/Nov3 closes after actual Nov1 verification.** Nov4 owner direction continues the full goal across milestones. Latest observed current-day count95/220; Nov1 closed14:15 with5new scheduled records and existing native Invoice11240 preserved. Nov2 actual General ledger39records passes with no failures; its full calendar now waits on the next exact native estimate-conversion chain. BANK-2.1/2.2 bounded live slices and2.3 automatic new-instruction scheduling are verified; actual due postingNov5 remains open. Next primary feature is BANK-2.5 explicit bank-origin fee/advice policy and once-only bookkeeping linkage;2.4 and2.6–2.10 keep their dependencies and proof open. C02 current catalog/desktop slice is verified; C01 per-create accounting member proof remains open. Continue the complete index below.
 
 | Outstanding workstream | Task IDs / location | Remaining owner outcome |
 |---|---|---|
@@ -34,6 +34,8 @@ The status/detail rows below remain authoritative; this index is navigation, not
 Latest checkpoint 2026-11-04T15:39:30.229Z: Nov2 original11239 is an earlier-issued exact-work case; authenticated retained seven-report/GL proof and private v2 candidate pass offline, final native/live close proof remainsOPEN. BANK-2.5 private feature174checks passes; final review corrections underway before activation. S02 permanent direct credential/native launch candidate52checks passes; reviews/live proof remainOPEN. Last measured9387metered calls; avoid repeated unchanged live diagnosis.
 
 2026-11-04T16:02:04.243Z — **Reviewed earlier-issued Invoice recognition installed; live native/close proof stillOPEN.** Exact6source bundle e52dccd5…6ebb applied in observed idle15:59:46; both independent reviewsclear after descendantPayment CADrate absent/1 and revisedpublication Baselinesdefault/pass-through corrections. Actual retained11239/time113 earlierNov1/DueDec1 source authenticates complete prior sevenreport/financial/stock/targetGL proof offline, preserving scheduledNov2/DueDec2 identity and original financialdates; no replacementincome dispatch. Installed21functional tests pass. Revisedpublication composition was moved unchanged into a separate test process to avoid a cached captured mock from prior harnesses; its standalone1test passes. No companywrites/newclose in this milestone.
+
+2026-11-04T16:10:59.778Z — **Native launcher completion defect fixed; genuine Intuit SMS challenge remains.** Both reviews clear final2fe9f315…058f and prior credential/navigation deltas. Exact reviewed isolated default process returned QBO_VERIFICATION_REQUIRED in10.217s at16:08:18.895, replacing120s false process-cleanup uncertainty. Live observed exactIntuit /app/sign-in headingCheck your text messages, Verificationcode field/Continue, invisiblecaptchaiframes. No principal/companyproof or financialsave claimed. Optional previouswrappers are not required; actual savedJSON/private stdin/fixedidentity+realm checks retained. Finaltransport/test applied idle16:09:12;11affectedinstalled tests pass, broader68private pass. Parentexit0+boundedterminalJSON required; exited uncertainPID is neverkilled, onlyownpipesclose; genericprivateprocess semanticsunchanged. Both failedowned sessionsclosedanddoubleprocessrecoveryclear. SMS requested asynchronously once; continueindependentwork whilepending.
 
 ## Execution order and delivery rules
 

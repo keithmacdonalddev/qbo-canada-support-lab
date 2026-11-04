@@ -23,6 +23,8 @@ Use the actual values through the authorized browser's data-entry API or private
 
 **Access verified, not sign-in verified:** on Nov3 the file was populated and a fresh hidden Node process confirmed both fields are readable/nonempty. No native QBO sign-in was performed in that check. If Intuit presents additional verification, report that exact page requirement; do not misclassify readable credentials as missing permission.
 
+**Nov4 protocol evidence:** the reviewed default path completed browser startup and reached Intuit’s “Check your text messages” screen in about10seconds. An SMS verification code is required; dedicated identity/company readiness remainsOPEN until it is completed and checked. No company writes occurred in that check. This supersedes the former120second launcher timeout, not the account’s verification requirement.
+
 ## Shared browser and company scope
 
 The target is Production **My Business**, company ID ending **2856**, using the owner's dedicated AI Intuit account. Verify the signed-in identity and exact company before company-scoped work. The API OAuth connection is independent. Standing login permission does not authorize new bookkeeping, account administration, OAuth reconnects or service changes.
@@ -31,7 +33,7 @@ Use the shared `qbo-ops` browser/profile for coordinated native work. Direct sig
 
 ## Optional existing coordinated sign-in runner
 
-The older deterministic runner reads Windows Generic Credential `TestDataLab/QBO/production/2856`. It remains available for existing governed banking execution. Windows Credential Manager and this runner are optional for the main chat's direct credential sign-in; do not send the owner back through them when the direct file exists. The BF7 accounting runner's existing lease/token/recovery checks remain unchanged. Perform direct credential sign-in in the main coding chat when needed; do not embed the email/password in a Terra task.
+The default coordinated runner now reads the authorized per-user `TestDataLab/qbo-ai-login.json` directly and launches the installed native Windows browser CLI. The legacy Windows Generic Credential reader remains available only to explicit internal callers; it is not a sign-in prerequisite. Direct main-chat sign-in remains available under the same shared lease. Native CLI completion requires actual parent exit plus its bounded terminal JSON, since the persistent browser daemon may retain inherited pipes. The BF7 accounting runner's existing lease/token/recovery checks remain unchanged. Perform direct credential sign-in in the main coding chat when needed; do not embed the email/password in a Terra task.
 
 From the repository root, use the installed Node executable with these arguments (coding agents must launch it using the hidden Windows process route required by AGENTS.md):
 

@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs/promises'),syncFs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {REALM,COMPANY,MESSAGES,failure,scopeOk,validActor,ensureLogin}=require('./qbo-browser-login');
-const {readWindowsCredential,createBrowserTransport}=require('./qbo-browser-transport');
+const {readDedicatedCredential,createBrowserTransport}=require('./qbo-browser-transport');
 const ROOT=path.resolve(__dirname,'../../..'),LOCK=path.join(os.tmpdir(),'qbo-terra-live.lock');
 async function acquireSessionLease({root=ROOT,directory=LOCK}={}){
  try{await fs.mkdir(directory);}catch{throw failure('QBO_SESSION_BUSY');}
@@ -12,7 +12,7 @@ async function acquireSessionLease({root=ROOT,directory=LOCK}={}){
  catch{retain=true;throw failure('QBO_SESSION_UNCERTAIN');}
  return {
   environment:{TDL_QBO_SESSION_OWNER:marker},
-  trackChild:pid=>{if(Number.isInteger(pid)&&pid>0)syncFs.appendFileSync(path.join(output,'pids.txt'),pid+' node.exe\n');},
+  trackChild:(pid,executable='node.exe')=>{const name=/^[a-zA-Z0-9_.-]+\.exe$/.test(executable)?executable:'node.exe';if(Number.isInteger(pid)&&pid>0)syncFs.appendFileSync(path.join(output,'pids.txt'),pid+' '+name+'\n');},
   retain:()=>{retain=true;},
   release:async()=>{if(retain)return false;const owner=await fs.readFile(path.join(directory,'owner.txt'),'utf8');if(owner!==marker+'\n')throw failure('QBO_SESSION_UNCERTAIN');await fs.unlink(path.join(directory,'owner.txt'));await fs.rmdir(directory);return true;},
  };
@@ -24,7 +24,7 @@ function createSessionStore(root=ROOT){
   write:async value=>{await fs.mkdir(base,{recursive:true});const tmp=file+'.'+crypto.randomUUID()+'.tmp';try{await fs.writeFile(tmp,JSON.stringify(value,null,2),{flag:'wx'});await fs.rename(tmp,file);await fs.appendFile(path.join(base,'qbo-session-audit.jsonl'),JSON.stringify(value)+'\n');}finally{await fs.unlink(tmp).catch(e=>{if(e.code!=='ENOENT')throw e;});}},
  };
 }
-function createSessionCoordinator({root=ROOT,acquire=()=>acquireSessionLease({root}),store=createSessionStore(root),readCredential=options=>readWindowsCredential({root,...options}),browserFactory=options=>createBrowserTransport({root,...options}),now=()=>new Date().toISOString()}={}){
+function createSessionCoordinator({root=ROOT,acquire=()=>acquireSessionLease({root}),store=createSessionStore(root),readCredential=options=>readDedicatedCredential(options),browserFactory=options=>createBrowserTransport({root,...options}),now=()=>new Date().toISOString()}={}){
  async function withSession({actor,scope={realmId:REALM,environment:'production'}},work=async()=>null){
   validActor(actor);if(!scopeOk(scope))throw failure('QBO_COMPANY_MISMATCH');
   const attemptId=crypto.randomUUID(),lease=await acquire();
