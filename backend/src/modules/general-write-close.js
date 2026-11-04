@@ -84,9 +84,16 @@ function explainedByOwnSettlements(proven, current, ownSettlements, entity) {
     const old = cents(proven[field]), next = cents(current[field]);
     if (old === null || next === null || next < 0 || (completeGraph ? cents(current.TotalAmt) : old) - applied !== next) return false;
   }
-  // Foreign home allocations require their original conversion proof, never a
-  // guessed proportional exchange rate from today's remaining balance.
-  if (proven.HomeBalance !== current.HomeBalance) return false;
+  // An explicit CAD Invoice has equal native/home cents. Its complete owned
+  // CAD Payment graph above must explain both; foreign allocations stay held.
+  if (proven.HomeBalance !== current.HomeBalance) {
+    const oldHome=cents(proven.HomeBalance),nextHome=cents(current.HomeBalance);
+    const cadInvoice=completeGraph && entity==='Invoice' && proven.CurrencyRef?.value==='CAD' && current.CurrencyRef?.value==='CAD'
+      && oldHome!==null && nextHome!==null && oldHome===cents(proven.Balance) && nextHome===cents(current.Balance)
+      && [proven.ExchangeRate,current.ExchangeRate].every(rate=>rate===undefined||rate===1)
+      && applications.every(key=>{const record=ownSettlements.get(key)?.record;return key.startsWith('Payment:') && record?.CurrencyRef?.value==='CAD' && (record.ExchangeRate===undefined||record.ExchangeRate===1);});
+    if(!cadInvoice)return false;
+  }
   if (!added.some(key => key.startsWith('Deposit:')) && !sameQboValue(proven.DepositToAccountRef || null, current.DepositToAccountRef || null)) return false;
   return true;
 }
