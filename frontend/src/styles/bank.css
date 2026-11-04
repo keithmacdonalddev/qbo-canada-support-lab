@@ -80,3 +80,14 @@
 .bank-caution { font-size: 12px; color: var(--attention) !important; margin-top: 12px !important; }
 @media (max-width: 1150px) { .bank-account-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bank-app { padding: 22px; } }
 @media (prefers-reduced-motion: reduce) { .bank-account-card { transition: none; } }
+
+.bank-pending { margin: 0 0 22px; }
+.bank-pending .bank-history-scroll { max-height: 330px; }
+.bank-pending details { margin-top: 6px; font-size: 11px; }
+.bank-pending summary { color: var(--link); cursor: pointer; }
+.bank-pending details p { margin-top: 5px; overflow-wrap: anywhere; }
+.bank-pending-status { color: var(--attention); background: var(--sunken); padding: 3px 6px; border-radius: 4px; font-size: 10px; }
+.bank-delivery { margin-bottom: 20px; }
+.bank-delivery h2 { font-size: 16px; }
+.bank-delivery-row { display: flex; gap: 20px; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); padding: 12px 0; margin-top: 10px; }
+.bank-delivery-row strong { font-size: 12px; }

@@ -57,6 +57,13 @@ function createMongoBankingStore({ Events, Packages, connection }) {
     },
     async transaction(work) { const session = await connection.startSession(); try { let result; await session.withTransaction(async () => { result = await work(session); }); return result; } finally { await session.endSession(); } },
     getLedger: (scope, accountId, session) => query(Events, { ...scope, kind: 'ledger-account', eventId: '@ledger:' + accountId, revision: 0 }, session),
+    getReservation: (scope,eventId,session) => query(Events,{...scope,kind:'reservation',eventId,revision:0},session),
+    getInstruction: (scope,eventId,session) => query(Events,{...scope,kind:'instruction',eventId:'@instruction:'+eventId,revision:0},session),
+    getInstructionByLogical: (scope,accountId,logicalKey,session) => query(Events,{...scope,kind:'instruction',accountId,'payload.logicalKey':logicalKey,revision:0},session),
+    async listInstructions(scope,accountId) {
+      const filter={...scope,kind:'instruction',accountId,'payload.state':'pending',revision:0};
+      const [rows,count]=await Promise.all([Events.find(filter).sort({'payload.receivedAt':-1,_id:1}).limit(200).maxTimeMS(5000).lean(),Events.countDocuments(filter).maxTimeMS(5000)]);return {rows,count};
+    },
     get: (scope, packageId, session) => query(Packages, { ...scope, _id: packageId }, session),
     getPackages: (scope, packageIds) => Packages.find({ ...scope, _id: { $in: packageIds } }).maxTimeMS(5000).lean(),
     ledgerAccountIds: scope => Events.distinct('accountId', { ...scope, kind: 'ledger-account', revision: 0 }).maxTimeMS(5000),
@@ -264,7 +271,9 @@ function createBankingWorkspaceService(dependencies = {}) {
       const generatedAt = stamp();
       for (const event of snapshot.events) {
         const reservation = { scope: bound.scope, eventId: event.eventId, accountId: event.accountId, period: snapshot.period, creator: event.creator };
-        await store().putEvent({ ...bound.scope, _id: hash({ scope: bound.scope, eventId: event.eventId, revision: 0 }), kind: 'reservation', eventId: event.eventId, revision: 0, accountId: event.accountId, accountCurrency: event.accountCurrency, sourceHash: hash(reservation), contentHash: hash(reservation), payload: reservation }, session);
+        const existing = await store().getReservation?.(bound.scope,event.eventId,session);
+        if (existing) check(sameScope(existing,bound.scope) && existing.contentHash === hash(existing.payload) && existing.accountId === event.accountId && existing.accountCurrency === event.accountCurrency && existing.payload.creator === event.creator && (existing.payload.period === undefined || existing.payload.period === snapshot.period), 'Event creator/account reservation conflicts with this package.',409);
+        else await store().putEvent({ ...bound.scope, _id: hash({ scope: bound.scope, eventId: event.eventId, revision: 0 }), kind: 'reservation', eventId: event.eventId, revision: 0, accountId: event.accountId, accountCurrency: event.accountCurrency, sourceHash: hash(reservation), contentHash: hash(reservation), payload: reservation }, session);
         await store().putEvent({ ...bound.scope, _id: hash({ scope: bound.scope, eventId: event.eventId, revision: event.revision }), eventId: event.eventId, revision: event.revision, accountId: event.accountId, accountCurrency: event.accountCurrency, sourceHash: event.sourceHash, contentHash: hash(event), payload: event }, session);
       }
       const row = { ...bound.scope, _id: packageId, accountId: snapshot.accountId, accountCurrency: snapshot.accountCurrency, period: snapshot.period, revision: snapshot.revision, previousPackageId: snapshot.previousPackageId || null, contentHash, snapshot,
@@ -418,7 +427,24 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   const bankName = 'Maple Harbour Bank';
   const evidenceLabel = 'Historical reconstruction baseline — not independent bank confirmation.';
-  const pendingActivity = () => ({ availability: 'not-observed', count: null, note: 'Independent pending bank activity is not observed. Retained statement timing items are shown separately.' });
+  async function pendingActivity(bound,accountId,ledger) {
+    if(!ledger || !store().listInstructions)return {availability:'not-observed',count:null,items:[],note:'Independent pending bank activity is not observed. Retained statement timing items are shown separately.'};
+    const {rows,count}=await store().listInstructions(bound.scope,accountId);
+    check(Number.isSafeInteger(count) && count>=rows.length,'Pending bank instruction count is unavailable.',409);
+    const items=rows.map(row=>{
+      const p=row.payload;
+      check(sameScope(row,bound.scope) && sameScope(p.scope,bound.scope) && row.kind==='instruction' && row.accountId===accountId && row.contentHash===hash(p) && p.accountId===accountId && p.accountCurrency===ledger.account.accountCurrency && Number.isSafeInteger(p.amountMinor) && p.state==='pending','Pending instruction evidence changed.',409);
+      return {eventId:p.eventId,status:p.state,amountMinor:p.amountMinor,currency:p.accountCurrency,bookDate:p.bookDate,receivedAt:p.receivedAt,description:p.description,source:Object.fromEntries(['entity','id','runId','ref','batchIndex','requestId','bId','requestHash','itemRequestHash','responseHash','recordHash','receiptId','originalActorId','signature'].filter(key=>p.source?.[key]!==undefined).map(key=>[key,p.source[key]])),deliveryActorId:p.deliveryActorId};
+    });
+    return {availability:'instruction-only',count,shownCount:items.length,truncated:count>items.length,items,note:'Accepted business instructions received by the independent bank. Pending events do not change the posted balance. Other pending bank activity is not established.'};
+  }
+  let defaultInstructions;
+  const instructions=()=>dependencies.instructions || (defaultInstructions ||= require('./bank-instruction-service').createBankInstructionService({store:store()}));
+  async function instructionDelivery(bound) { return dependencies.store && !dependencies.instructions ? {count:0,runs:[],truncated:false,qboCalls:0} : instructions().status(bound); }
+  async function recoverInstructions(user,command={}) {
+    check(exact(command,['runId']) && (!command.runId || /^[a-f0-9]{24}$/.test(command.runId)),'Retry accepts only an optional exact original run ID.');
+    const bound=await bind(user,true);return instructions().recover(bound,command);
+  }
   function periodEnd(period) { const date = new Date(period + '-01T00:00:00Z'); date.setUTCMonth(date.getUTCMonth() + 1); date.setUTCDate(0); return date.toISOString().slice(0, 10); }
   async function retainedManifest(bound, row) {
     const file = row.snapshot.files.find(f => f.kind === 'manifest');
@@ -472,7 +498,7 @@ function createBankingWorkspaceService(dependencies = {}) {
       period: selected.period, packageId: selected._id, revision: selected.revision, openingMinor: selected.snapshot.openingMinor,
       postedCount: selected.snapshot.events.filter(e => e.expectedResolution !== 'exclude').length,
       availablePeriods: rows.map(row => ({ period: row.period, packageId: row._id, revision: row.revision })),
-      openingEvidence, pendingActivity: pendingActivity(), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
+      openingEvidence, pendingActivity: await pendingActivity(bound,selected.accountId,ledger), unavailableEvidence, selectedPeriodAdopted: Boolean(ledger?.packages.some(ref=>ref.id === selected._id)), independentLedger: ledger };
   }
   async function accounts(user) {
     const bound = await bind(user), rows = await store().list(bound.scope);
@@ -486,7 +512,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     }
     const summaries = [];
     for (const [accountId,family] of groups) { const ledger = await readLedger(bound,accountId); const periods = await ledgerPeriods(bound,ledger,family); if (periods.length) summaries.push(await accountSummary(bound, periods)); }
-    return { bankName, evidenceLabel, accounts: summaries, truncated: rows.length === 2000, qboCalls: 0 };
+    return { bankName, evidenceLabel, accounts: summaries, instructionDelivery:await instructionDelivery(bound), truncated: rows.length === 2000, qboCalls: 0 };
   }
   async function accountDetail(user, accountId, filters = {}) {
     check(id(accountId) && exact(filters, ['period']) && (!filters.period || /^\d{4}-(0[1-9]|1[0-2])$/.test(filters.period)), 'Exact account and optional statement month required.');
@@ -511,7 +537,7 @@ function createBankingWorkspaceService(dependencies = {}) {
     });
     check(balance === snapshot.closingMinor, 'Retained transaction movements do not equal the statement closing balance.', 409, 'BANKING_EVIDENCE_UNAVAILABLE');
     const retained = view(row);
-    return { bankName, evidenceLabel, ...summary, transactions, outstandingItems: clone(snapshot.outstandingItems),
+    return { bankName, evidenceLabel, ...summary, instructionDelivery:await instructionDelivery(bound), transactions, outstandingItems: clone(snapshot.outstandingItems),
       package: { id: retained.id, contentHash: retained.contentHash, stateVersion: retained.stateVersion, summary: retained.summary, files: clone(snapshot.files), blockers: clone(snapshot.blockers) }, qboCalls: 0 };
   }
   async function list(user, filters = {}) {
@@ -522,6 +548,6 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function detail(user, packageId) { return view(await load(await bind(user), packageId)); }
   async function download(user, packageId, fileId) { const row = await load(await bind(user), packageId), file = row.snapshot.files.find(f => f.fileId === fileId); check(file, 'Package file not found.', 404); return { fileId: file.fileId, kind: file.kind, sha256: file.sha256, bytes: await artifact({ path: file.path, sha256: file.sha256 }, { ...await bind(user), accountId: row.accountId }) }; }
-  return { list, detail, accounts, accountDetail, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
+  return { list, detail, accounts, accountDetail, recoverInstructions, ledgerBaseline, adoptLedger, register, recordImport, recordRow, recordReconciliation, download };
 }
 module.exports = { createBankingWorkspaceService, createMongoBankingStore, createArtifactReader, hash, STRENGTHS };

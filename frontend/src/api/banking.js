@@ -14,6 +14,11 @@ export const bankingApi = {
     if (data?.accountId !== accountId || !Array.isArray(data?.transactions) || !data.package?.id) throw new Error('The server did not return this retained bank account. Refresh and select it again.')
     return data
   },
+  async retryInstructions(runId) {
+    const data = (await client.post(base + '/instructions/retry', runId ? { runId } : {})).data?.data
+    if (!Array.isArray(data?.results) || data.qboCalls !== 0) throw new Error('Bank-only recovery was not confirmed. Refresh before retrying.')
+    return data
+  },
   async resume(packageId, resolution) {
     const data = (await client.post(base + '/operator/resume', { packageId, resolution })).data?.data
     if (data?.resolved !== true || data.packageId !== packageId) throw new Error('The server did not confirm this banking resolution. Refresh and inspect the current pause before retrying.')

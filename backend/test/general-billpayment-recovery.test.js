@@ -34,6 +34,8 @@ function fixture() {
 test('two saved payments are verified from one exact ledger report without changing receipts or issuing payments',async()=>{
   const h=fixture(),originalBatches=clone(h.run.batches),originalReceipt=clone(h.receipt),originalRequests=h.payments.map(p=>clone(p.payload));
   const result=await h.execute();assert.equal(result.status,'complete');assert.deepEqual(h.counts(),{reads:4,reports:1,sends:0});
+  assert.equal(h.run.bankDelivery.status,'pending','saved-mismatch acceptance durably queues bank-only delivery');
+  assert.equal(h.run.bankDelivery.sourceHash,require('../src/modules/bank-instruction-service').acceptedSourceHash(h.run.items));
   assert.deepEqual(h.run.batches,originalBatches);assert.deepEqual(h.receipt,originalReceipt);assert.deepEqual(h.payments.map(p=>p.payload),originalRequests);
   assert.equal(h.authorities.length,1);assert.equal(h.audits.length,1);
   for(const p of h.payments){const item=h.run.items[p.ref];assert.equal(item.outcome,'saved');assert.equal(item.record.APAccountRef,undefined);assert.equal(item.originalSavedRecord.APAccountRef,undefined);assert.equal(item.request.APAccountRef.value,'59');assert.equal(item.qboId,p.record.Id);}

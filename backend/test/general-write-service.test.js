@@ -340,3 +340,13 @@ test('three persistent saved-PO mismatches cannot starve an unanswered unknown b
  await recheckGeneralWrites({scope,models:{Agents:{findOne:()=>query(agent)},GeneralWriteRuns:{find:filter=>query(filter.status==='needs-correction'?held:[unknown])}},now:()=>Date.now(),service:{execute:async(b,id)=>{selected.push(id);return {status:id==='unknown'?'complete':'needs-correction'};}}});
  assert.equal(selected[0],'unknown');assert.ok(selected.includes('unknown'));assert.deepEqual(limits,[3,2]);
 });
+
+test('accepted save durably queues bank delivery; delivery revision reload and completed recovery never resend QuickBooks',async()=>{
+  const h=company(),Runs=fakeRuns();let deliveries=0;
+  const api=createGeneralWriteService({models:{GeneralWriteRuns:Runs,Steps:{findOne:()=>({select(){return this;},maxTimeMS(){return this;},lean:async()=>null})}},copy:h.copy,transport:h.transport,dispatchEnabled:()=>true,contextFor:async()=>({day:DAY,verifiedThrough:'2026-12-01',protectedThrough:'2026-10-31',taxCodes:{sales:['7'],purchases:['7']},taxPercent:{7:15}}),bankInstructions:{deliver:async(_bound,id)=>{
+    const run=Runs.rows.get(id);deliveries++;assert.equal(run.items.inv1.outcome,'saved');assert.equal(run.bankDelivery.status,'pending');assert.equal(run.bankDelivery.sourceHash,require('../src/modules/bank-instruction-service').acceptedSourceHash(run.items));
+    run.bankDelivery.status='complete';run.revision++;
+  }}});
+  const prepared=await api.prepare(bound,input('bank-delivery-regression-01',[invoiceOp]));assert.equal((await api.execute(bound,prepared.runId)).status,'complete');assert.equal(deliveries,1);assert.equal(h.sent.length,1);
+  Runs.rows.get(prepared.runId).bankDelivery.status='pending';const resumed=await api.execute(bound,prepared.runId);assert.equal(resumed.status,'complete');assert.equal(deliveries,2);assert.equal(h.sent.length,1,'completed receipt-only bank recovery sends nothing to QuickBooks');
+});

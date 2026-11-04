@@ -13,6 +13,7 @@ const CORE = Object.freeze(['getBusinessState', 'getBusinessWork', 'queryCompany
 const CATEGORIES = Object.freeze({
   'quickbooks-read': 'Live QuickBooks reads: records, links and reports',
   'business-read': 'The app’s own business state, work, obligations, saved plans and the local company copy',
+  banking: 'Independent simulated bank activity and delivery recovery; no QuickBooks resend',
   'quickbooks-write': 'Prepares, approves, resumes or saves accounting work in QuickBooks',
   notes: 'Decisions, plans, handoffs, build requests and case links',
   skills: 'Procedures and reference knowledge loaded on demand',
@@ -23,6 +24,7 @@ const CATEGORIES = Object.freeze({
 // its catalog group when known, otherwise other) so a newly added tool is never lost.
 const INFO = Object.freeze({
   getBankingWorkspace:{category:'business-read',keywords:['banking','statements','feed','upload','reconciliation','account','month']},
+  retryBankInstructions:{category:'banking',keywords:['banking','pending','instructions','retry','recover','delivery']},
   getBankingPackage:{category:'business-read',keywords:['banking','csv','statement','native','operator','blocked']},
   getBankingCloseSupport:{category:'business-read',keywords:['banking','close','reconciliation','evidence']},
   prepareBankingPackage:{category:'quickbooks-write',keywords:['banking','prepare','package','manifest','register']},

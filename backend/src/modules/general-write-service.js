@@ -87,7 +87,7 @@ function preflightRecordsFor({ scope, run, batch, periodProof, preflightReads, n
   }
   return records;
 }
-function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, recoveryCopy = copy, recoveryLedger = null, recoveryReadsFor = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
+function createGeneralWriteServiceImplementation({ models, copy, contextFor, transport = null, retain = null, markDirty = null, transaction = null, authorizeRecovery = null, recoveryCopy = copy, recoveryLedger = null, recoveryReadsFor = null, bankInstructions = null, caseWrites = false, dispatchEnabled = () => require('../config').features?.generalWriteDispatch === true, now = () => Date.now() }) {
   const Runs = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
   const unsent = require('./general-write-unsent').createGeneralUnsentRetirement({ models, Runs, now });
   const recoveryHelper = require('./general-estimate-recovery'), recoveryFence = recoveryHelper.createRecoveryFence({ models, transaction, authorize: authorizeRecovery, now });
@@ -144,11 +144,20 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
   }
   function summary(plan) { return { operations: plan.operations.length, batches: plan.layers.length, reverifyDates: plan.reverifyDates, externalEdits: plan.externalEdits, exposureCents: plan.exposureCents }; }
   async function save(run, changes, session) {
+    if (changes.items) {
+      const sourceHash = require('./bank-instruction-service').acceptedSourceHash(changes.items);
+      if (sourceHash !== require('./bank-instruction-service').acceptedSourceHash(run.items)) changes = { ...changes, bankDelivery: { version: 1, status: 'pending', sourceHash, queuedAt: new Date(now()).toISOString(), attempts: 0, results: [] } };
+    }
     if (changes.lastError) changes = { ...changes, ...failureFields(run, Object.assign(new Error(changes.lastError), { code: 'GENERAL_WRITE_REFUSED', businessDetail: { status: changes.status, problems: changes.problems || [], items: Object.entries(changes.items || {}).filter(([,item]) => !['saved','deleted'].includes(item.outcome)).map(([ref,item]) => ({ ref, entity: item.entity, outcome: item.outcome, fault: item.fault, next: item.next })) } }), { operationId: String(run._id) }, now()) };
     if (changes.status === 'complete' || changes.items && canonical(changes.items) !== canonical(run.items)) changes = { ...changes, progressAt: new Date(now()), ...(changes.status === 'complete' ? { errorDetail: null, errorHistory: [] } : {}) };
     const saved = await Runs.findOneAndUpdate({ _id: run._id, revision: run.revision }, { $set: changes, $inc: { revision: 1 } }, { new: true, session }).lean();
     if (!saved) fail('This write changed concurrently; read it again.');
     return saved;
+  }
+  async function deliverAccepted(run, bound) {
+    if (!bankInstructions || !['pending','failed'].includes(run.bankDelivery?.status)) return run;
+    try { await bankInstructions.deliver(bound, String(run._id), { inline: true }); } catch { /* Durable pending marker survives bank-only failure. */ }
+    return await Runs.findOne({ _id: run._id, ...scopeOf(run) }).lean() || run;
   }
   async function refreshSettlement(run, batch) {
     const fresh = await Runs.findOne({ _id: run._id, ...scopeOf(run) }).lean();
@@ -224,13 +233,13 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     if (!run || String(run.connectionId) !== scope.connectionId) fail('This general write is unavailable.', 404);
     if (canonical(run.caseAuthority || null) !== canonical(bound.caseAuthority || null) || run.caseAuthority && !caseWrites) fail('This write belongs to a different case authority.');
     run = await unsent.retire(scope, run);
-    if (['complete', 'expired-unsent'].includes(run.status) || run.retirement?.retainedSavedEffects) return report(run);
+    if (['complete', 'expired-unsent'].includes(run.status) || run.retirement?.retainedSavedEffects) return report(await deliverAccepted(run, bound));
     // A saved mismatch is a read-only recovery pass, even while API dispatch is
     // disabled. It must never fall through into another batch after reconciliation.
-    if (run.status === 'needs-correction') return report(await recheckSavedMismatch(run, scope, bound));
+    if (run.status === 'needs-correction') return report(await deliverAccepted(await recheckSavedMismatch(run, scope, bound), bound));
     if (!dispatchEnabled() || !transport) { if (run.status !== 'held') run = await save(run, { status: 'held', lastError: 'Dispatch of general writes is not enabled on this server yet; the plan is saved and nothing was sent.' }); return report(run); }
     run = await recheckSavedMismatch(run, scope, bound);
-    if (run.status === 'complete') return report(run);
+    if (run.status === 'complete') return report(await deliverAccepted(run, bound));
     if (run.status === 'needs-correction' || Object.values(run.items).some(item => ['mismatch', 'unknown'].includes(item.outcome))) return report(run);
     for (let guardRounds = 0; guardRounds < 40; guardRounds++) {
       const saved = Object.fromEntries(Object.entries(run.items).filter(([, item]) => item.outcome === 'saved').map(([ref, item]) => [ref, item.qboId]));
@@ -239,7 +248,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
       let batch = run.batches.find(row => row.state !== 'answered');
       if (!batch) {
         const remaining = run.plan.operations.filter(op => !done.has(op.ref));
-        if (!remaining.length) { run = await save(run, { status: 'complete', lastError: null, errorDetail: null, errorHistory: [] }); return report(run); }
+        if (!remaining.length) { run = await save(run, { status: 'complete', lastError: null, errorDetail: null, errorHistory: [] }); return report(await deliverAccepted(run, bound)); }
         const operations = remaining.map(op => ({ ref: op.ref, op: op.op, entity: op.entity, ...(op.id ? { id: op.id } : {}), payload: resolve(op.payload, saved), ...(op.reason ? { reason: op.reason } : {}) }));
         // Earlier saved records count for references; their ids are now real ids.
         const extras = Object.values(run.items).filter(item => item.outcome === 'saved' && item.record).map(item => ({ entity: item.entity, record: item.record }));
@@ -340,14 +349,15 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
       const open = Object.values(items).filter(item => !['saved', 'deleted'].includes(item.outcome));
       const status = open.some(item => item.outcome === 'unknown') ? 'unknown' : open.length ? 'needs-correction' : 'sending';
       run = await save(run, { batches: run.batches.map(row => row.index === batch.index ? { ...row, waiting: null, state: 'answered', answeredAt: new Date(now()).toISOString() } : row), items, owned, status, lastError: open.length ? open.map(item => item.entity + ' (' + item.outcome + ')' + (item.fault ? ': ' + item.fault.map(row => row.code + ' ' + row.message).join('; ') : '')).join(' | ') : null });
-      if(status==='needs-correction'&&Object.values(run.items).some(i=>i.entity==='BillPayment'&&i.outcome==='mismatch'))return report(await recheckSavedMismatch(run,scope,bound));
+      run = await deliverAccepted(run, bound);
+      if(status==='needs-correction'&&Object.values(run.items).some(i=>i.entity==='BillPayment'&&i.outcome==='mismatch'))return report(await deliverAccepted(await recheckSavedMismatch(run,scope,bound), bound));
       if (status !== 'sending') return report(run);
       if (run.batches.length >= MAX_ATTEMPTS * Math.max(1, run.plan.layers.length)) fail('This general write used its attempt budget.');
     }
     return report(run);
   }
   function report(run, problems = null) {
-    return { runId: run._id, status: run.status, ...(run.status === 'expired-unsent' || run.retirement?.retainedSavedEffects ? { next: { action: run.retirement?.retainedSavedEffects ? 'replan-remaining' : 'replan', day: run.retirement.currentDay, reason: run.retirement.reason || 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
+    return { runId: run._id, status: run.status, ...(run.bankDelivery ? { bankDelivery: { status: run.bankDelivery.status, results: run.bankDelivery.results || [], note: 'Accepted QuickBooks effects are retained. Bank delivery is separate and never resends QuickBooks records.' } } : {}), ...(run.status === 'expired-unsent' || run.retirement?.retainedSavedEffects ? { next: { action: run.retirement?.retainedSavedEffects ? 'replan-remaining' : 'replan', day: run.retirement.currentDay, reason: run.retirement.reason || 'Nothing was sent. Prepare the still-needed work for the current business day with a new decisionKey.' } } : {}), items: Object.fromEntries(Object.entries(run.items).map(([ref, item]) => [ref, { outcome: item.outcome, entity: item.entity, ...(item.qboId ? { qboId: item.qboId } : {}), ...(item.fault ? { fault: item.fault } : {}), ...(item.next ? { next: item.next } : {}), ...(item.errorDetail ? { errorDetail: item.errorDetail } : {}) }])), ...(run.errorDetail ? { errorDetail: run.errorDetail } : {}), batches: run.batches.length, ...(run.lastError ? { message: run.lastError } : {}), ...(problems ? { problems } : {}) };
   }
   // Called again INSIDE gate admission for every unsent/resumed saved batch.
   async function guardBatch({ scope, run, batch, session, periodProof, preflightReads }) {
@@ -404,7 +414,7 @@ function createGeneralWriteServiceImplementation({ models, copy, contextFor, tra
     const scope=scopeOf(bound.scope);if(typeof authorizeRecovery!=='function')fail('Read-only saved recovery authority is unavailable');await authorizeRecovery(scope,bound);
     const run=await Runs.findOne({_id:runId,...scope}).maxTimeMS(3000).lean();
     if(!run||String(run.ownerId)!==String(bound.ownerId)||String(run.actorId)!==String(bound.actorId)||run.caseAuthority||bound.caseAuthority)fail('The original owner-scoped saved write is unavailable');
-    return report(run.status==='needs-correction'?await recheckSavedMismatch(run,scope,bound):run);
+    return report(await deliverAccepted(run.status==='needs-correction'?await recheckSavedMismatch(run,scope,bound):run,bound));
   }
   return { prepare, execute,reconcileSaved, guardBatch, dispatchEnabled: () => Boolean(dispatchEnabled() && transport) };
 }
@@ -521,7 +531,7 @@ function createDefaultGeneralWrite({ now = () => Date.now(), access = null, case
   const readValuation = require('./business-stock-valuation').createValuationReader({access,now});
   const warmCurrency = async (scope, batch, run) => { if(require('../config').features?.generalWriteInventory===true) await api.guardBatch({scope,run,batch}); for (const item of batch.items) { const r = { ...item.before, ...item.payload }; if (r.CurrencyRef?.value && r.CurrencyRef.value !== 'CAD' && r.TxnDate && (item.op === 'create' || item.payload.ExchangeRate !== undefined || item.payload.TxnDate !== undefined)) await readRate(scope, r.CurrencyRef.value, r.TxnDate); } };
   const transport = enabled ? (caseTransport || (access ? require('./general-write-transport').createGeneralLiveTransport({ access, models, admissionGuard: input => api.guardBatch(input), warmCurrency, now }) : null)) : null;
-  api = createGeneralWriteService({ models, copy, recoveryReadsFor:(scope,maxAttempts)=>require('./general-billpayment-recovery').createBoundedReader({access,scope,maxAttempts}),recoveryCopy: { ...copy, read: async (scope,entity,id) => recoveryHints?.get(entity+':'+id) || copy.read(scope,entity,id) }, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
+  api = createGeneralWriteService({ models, copy, bankInstructions: require('./bank-instruction-service').createBankInstructionService({models,now}), recoveryReadsFor:(scope,maxAttempts)=>require('./general-billpayment-recovery').createBoundedReader({access,scope,maxAttempts}),recoveryCopy: { ...copy, read: async (scope,entity,id) => recoveryHints?.get(entity+':'+id) || copy.read(scope,entity,id) }, transaction: require('./business-transaction').createBusinessTransaction(require('mongoose').connection), authorizeRecovery: async (scope,bound,session) => { if(!access) fail('Recovery read authority is unavailable.'); const actor=await access.authorize(scope,session?'operations.verify':'operations.read',{session}); if(String(actor.ownerId)!==String(bound.ownerId)||String(actor.actorId)!==String(bound.actorId)) fail('Recovery owner or selected company changed.'); }, contextFor: createGeneralWriteContext({ models, now, readRate, readValuation }), transport, caseWrites: Boolean(caseTransport), retain: (scope, entity, record, observedAt) => observations.retain(scope, entity, record, observedAt), now });
   return api;
 }
 module.exports = { createGeneralWriteService, createGeneralWriteContext, createDefaultGeneralWrite, loadCopy, resolve, matchesRequest, preflightRecordsFor };

@@ -7,7 +7,7 @@ const schema = new mongoose.Schema({
   realmId: { type: String, required: true, immutable: true },
   connectionId: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true },
   eventId: { type: String, required: true, immutable: true },
-  kind: { type: String, enum: ['revision', 'reservation', 'account-fence', 'ledger-account'], default: 'revision', required: true, immutable: true },
+  kind: { type: String, enum: ['revision', 'reservation', 'account-fence', 'ledger-account', 'instruction'], default: 'revision', required: true, immutable: true },
   revision: { type: Number, required: true, immutable: true, min: 0, validate: { validator(value) { return Number.isSafeInteger(value) && (this.kind !== 'revision' ? value === 0 : value > 0); }, message: 'Only identity reservations use revision zero' } },
   fenceVersion: { type: Number, min: 0 },
   accountId: { type: String, required: true, immutable: true },

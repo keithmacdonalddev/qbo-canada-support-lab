@@ -30,6 +30,8 @@ const schema = new mongoose.Schema({
   errorDetail: { type: mongoose.Schema.Types.Mixed, default: null },
   errorHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
   retirement: { type: mongoose.Schema.Types.Mixed, default: null },
+  // Separate durable bank projection; accepted QBO effects never depend on delivery.
+  bankDelivery: { type: mongoose.Schema.Types.Mixed, default: null },
   progressAt: Date,
 }, { timestamps: true, autoCreate: false, autoIndex: false, minimize: false });
 schema.index({ environment: 1, realmId: 1, connectionId: 1, decisionKey: 1 }, { unique: true });

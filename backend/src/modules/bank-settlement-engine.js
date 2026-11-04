@@ -1,5 +1,6 @@
 'use strict';
 const C = require('./bank-settlement-contract');
+const financial = require('./bank-settlement-financial');
 const TYPE_MAP = {
   'Journal Entry':'JournalEntry', 'Sales Tax Payment':'TaxPayment',
   'Sales Tax Adjustment':'TaxAdjustment', 'Expense':'Purchase',
@@ -83,10 +84,7 @@ function buildSettlementEvents(input) {
     candidates.set(id,{ item, account:a, amount, kind, why, lineIds });
   }
   function nativeAmount(item, accountId, amount, sign = 1) {
-    const a = accountMap.get(accountId);
-    const currency = item.record.CurrencyRef?.value;
-    if (!a?.currency || (currency !== a.currency && !(item.entity === 'TaxPayment' && !currency && a.currency === input.homeCurrency))) return null;
-    try { return C.integer(C.minor(amount) * sign); } catch { return null; }
+    return financial.nativeAmount(item.record, accountMap.get(accountId)?.currency, amount, sign, {entity:item.entity,homeCurrency:input.homeCurrency});
   }
   // Deposit links take precedence over receipt account references, including
   // references QBO rewrites to the bank after the receipt was deposited.
@@ -137,28 +135,10 @@ function buildSettlementEvents(input) {
         else nonSettlements.push({ entity,id:item.qboId,code:'zero-receipt' });
         continue;
       }
-      add(item,accountId,nativeAmount(item,accountId,r.TotalAmt),'direct-receipt');
-    } else if (['Deposit','Invoice','RefundReceipt'].includes(entity)) {
-      if (entity === 'Invoice' && (r.Deposit === undefined || r.Deposit === 0)) continue;
-      const accountId = ref(r.DepositToAccountRef);
-      add(item,accountId,nativeAmount(item,accountId,entity === 'Invoice' ? r.Deposit : r.TotalAmt,entity === 'RefundReceipt' ? -1 : 1),
-        entity === 'Deposit' ? 'deposit' : entity === 'Invoice' ? 'invoice-deposit' : 'refund');
-    } else if (entity === 'Purchase') {
-      const accountId = ref(r.AccountRef);
-      add(item,accountId,nativeAmount(item,accountId,r.TotalAmt,r.Credit === true ? 1 : -1),r.Credit === true ? 'card-credit' : 'purchase');
-    } else if (entity === 'BillPayment') {
-      const accountId = ref(r.CheckPayment?.BankAccountRef) || ref(r.CreditCardPayment?.CCAccountRef);
-      add(item,accountId,nativeAmount(item,accountId,r.TotalAmt,-1),'bill-payment');
-    } else if (['Transfer','CreditCardPayment'].includes(entity)) {
-      const from = ref(entity === 'Transfer' ? r.FromAccountRef : r.BankAccountRef);
-      const to = ref(entity === 'Transfer' ? r.ToAccountRef : r.CreditCardAccountRef);
-      add(item,from,nativeAmount(item,from,r.Amount,-1),'transfer-out');
-      add(item,to,nativeAmount(item,to,r.Amount,1),'transfer-in');
-    } else if (entity === 'TaxPayment') {
-      const accountId = ref(r.PaymentAccountRef);
-      // TaxPayment.PaymentAmount is signed: retained refund 460 is -775.50.
-      // Negate it once; Refund corroborates intent but must not reverse it again.
-      add(item,accountId,nativeAmount(item,accountId,r.PaymentAmount,-1),'tax-payment');
+      const leg = financial.settlementLegs(entity,r)[0];
+      add(item,leg.accountId,nativeAmount(item,leg.accountId,leg.amount,leg.sign),leg.kind);
+    } else if (['Deposit','Invoice','RefundReceipt','Purchase','BillPayment','Transfer','CreditCardPayment','TaxPayment'].includes(entity)) {
+      for (const leg of financial.settlementLegs(entity,r)) add(item,leg.accountId,nativeAmount(item,leg.accountId,leg.amount,leg.sign),leg.kind);
     } else if (entity === 'JournalEntry') {
       const grouped = new Map();
       for (const line of r.Line || []) {

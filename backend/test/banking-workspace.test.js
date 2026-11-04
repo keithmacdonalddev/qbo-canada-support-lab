@@ -721,3 +721,21 @@ test('stale previews and transaction-time event changes cannot bypass manifest c
   await assert.rejects(a.h.service.adoptLedger(user,'60',{throughPeriod:'2026-10',baselineHash:prepared.contentHash,packageIds:[a.row.id]}),{code:'BANKING_CONFLICT'});
   assert.equal([...a.h.events.values()].filter(e=>e.kind==='ledger-account').length,0);
 });
+
+test('independent pending instructions reopen separately from frozen balance and expose only safe lineage fields',async()=>{
+ const h=fixture(),pkg=await h.service.register(user,h.input());
+ const ledger={scope,ledgerId:'fixture-ledger',account:{accountId:'60',accountCurrency:'CAD',accountType:'Bank',accountName:'Fictional Bank',balanceConvention:'bank-balance'},openingMinor:5000,openingPeriod:'2026-10',throughPeriod:'2026-10',events:[],packages:[{id:pkg.id,contentHash:pkg.contentHash,period:pkg.period,revision:pkg.revision}]};ledger.balance=require('../src/modules/independent-bank-ledger').balances(ledger);ledger.contentHash=hash(ledger);
+ h.events.set('ledger',{...scope,kind:'ledger-account',accountId:'60',contentHash:ledger.contentHash,payload:clone(ledger)});
+ const payload={scope,eventId:'pending-event',state:'pending',accountId:'60',accountCurrency:'CAD',amountMinor:1234,bookDate:'2026-11-01',receivedAt:now,description:'Payment #123',source:{entity:'Payment',id:'123',runId:'a'.repeat(24),originalActorId:user.actorId,record:{PrivateNote:'must remain private'},request:{secret:'private'}},deliveryActorId:user.id};
+ const instruction={...scope,kind:'instruction',accountId:'60',contentHash:hash(payload),payload};h.store.listInstructions=async()=>({rows:[clone(instruction)],count:1});
+ const detail=await h.service.accountDetail(user,'60');assert.equal(detail.pendingActivity.count,1);assert.equal(detail.pendingActivity.availability,'instruction-only');assert.equal(detail.pendingActivity.items[0].amountMinor,1234);assert.equal(detail.balanceMinor,5000);assert.deepEqual(detail.independentLedger,ledger);assert.equal(detail.pendingActivity.items[0].source.record,undefined);assert.equal(detail.pendingActivity.items[0].source.request,undefined);assert.equal(detail.pendingActivity.items[0].source.originalActorId,user.actorId);
+ instruction.payload.amountMinor++;await assert.rejects(h.service.accountDetail(user,'60'),/evidence changed/);
+});
+test('periodless pending creator reservation survives later posting month and blocks native Add, while dated history stays exact',async()=>{
+ for(const nativeAdd of [false,true]) {
+  const h=fixture(),input=h.input({period:'2026-11',events:[{eventId:'reserved-pending',revision:1,accountId:'60',accountCurrency:'CAD',sourceHash:hash('pending-source'),amountMinor:5000,actualPostingDate:'2026-11-20',expectedResolution:nativeAdd?'add':'match',creator:nativeAdd?'native-add':'api-accountant',source:{entity:'Payment',id:'123'}}],rows:[{rowId:'row-1',eventId:'reserved-pending',eventRevision:1,fileId:'feed-1',rowNumber:1}]}),reservation={scope,eventId:'reserved-pending',accountId:'60',creator:'api-accountant'},key=hash({scope,eventId:reservation.eventId,revision:0}),row={...scope,_id:key,kind:'reservation',eventId:reservation.eventId,revision:0,accountId:'60',accountCurrency:'CAD',contentHash:hash(reservation),sourceHash:hash(reservation),payload:reservation};h.events.set(key,clone(row));h.store.getReservation=async(_s,id)=>clone([...h.events.values()].find(e=>e.kind==='reservation'&&e.eventId===id)||null);
+  if(nativeAdd)await assert.rejects(h.service.register(user,input),/reservation/);else await h.service.register(user,input);
+  assert.deepEqual(h.events.get(key),row,'first periodless creator reservation is retained verbatim');
+ }
+ const h=fixture(),input=h.input(),reservation={scope,eventId:input.events[0].eventId,accountId:'60',creator:'api-accountant',period:'2026-09'},row={...scope,kind:'reservation',accountId:'60',accountCurrency:'CAD',contentHash:hash(reservation),payload:reservation};h.store.getReservation=async()=>row;await assert.rejects(h.service.register(user,input),/reservation/);
+});
