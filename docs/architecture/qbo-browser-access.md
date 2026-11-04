@@ -25,6 +25,8 @@ Use the actual values through the authorized browser's data-entry API or private
 
 **Nov4 protocol evidence:** the reviewed default path completed browser startup and reached Intuit’s “Check your text messages” screen in about10seconds. An SMS verification code is required; dedicated identity/company readiness remainsOPEN until it is completed and checked. No company writes occurred in that check. This supersedes the former120second launcher timeout, not the account’s verification requirement.
 
+**Nov4 password-only recovery:** a fresh direct sign-in offered the password form after entering the dedicated email. The saved password succeeded without a code. The live dedicated identity and exact Production My Business company ID were verified under the shared lease; the original historical banking job then resumed through its existing recovery checks and started its upload. The earlier SMS challenge describes that earlier page, not a permanent requirement. Try the observed password form first; never change authentication controls or assume sign-in proves a banking action complete. Sanitized proof: `artifacts/native-access-20261104/password-only-ready.json`.
+
 ## Shared browser and company scope
 
 The target is Production **My Business**, company ID ending **2856**, using the owner's dedicated AI Intuit account. Verify the signed-in identity and exact company before company-scoped work. The API OAuth connection is independent. Standing login permission does not authorize new bookkeeping, account administration, OAuth reconnects or service changes.
