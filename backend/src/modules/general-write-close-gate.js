@@ -30,6 +30,11 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
     Intents: require('../models/OperationIntent'),
     Runs: require('../models/OperationRun'),
     Plans: require('../models/OperationPlan'),
+    Evidence: require('../models/OperationEvidence'),
+    Calendars: require('../models/BusinessCalendar'),
+    Versions: require('../models/BlueprintVersion'),
+    Connections: require('../models/Connection'),
+    Baselines: require('../models/BusinessBaseline'),
   };
   const nativeStores = { Authorities: models.Authorities || null, Audits: models.Audits || null };
   const { GeneralWriteRuns: Runs, GeneralDayCloses: Closes, Records } = models;

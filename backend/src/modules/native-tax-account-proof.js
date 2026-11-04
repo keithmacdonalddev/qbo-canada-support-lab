@@ -64,9 +64,10 @@ async function one(Model, filter, session=null) {
   need(Model?.findOne, 'Native tax proof storage or linked admission audit is unavailable.');
   let q=Model.findOne(filter); if(session)q=q.session(session); return q.maxTimeMS(3000).lean();
 }
-async function loadProof({Authorities,Audits,scope,now=Date.now(),session=null}) {
+async function loadProof({Authorities,Audits,scope,now=Date.now(),session=null,authorityId=null}) {
   if(!Authorities)return null;
-  let q=Authorities.findOne({...scope,'payload.kind':KIND}).sort({createdAt:-1,_id:-1});if(session)q=q.session(session);
+  need(authorityId===null||ID.test(authorityId),'Exact historical native authority identity is invalid.');
+  let q=Authorities.findOne({...scope,'payload.kind':KIND,...(authorityId?{_id:authorityId}:{})});if(!authorityId)q=q.sort({createdAt:-1,_id:-1});if(session)q=q.session(session);
   const row=await q.maxTimeMS(3000).lean();if(!row)return null;
   const p=row.payload;
   need(row.contractVersion === 1 && sameScope(row,scope) && sameScope(p?.scope,scope) && p.kind === KIND && p.version === 1 && p.revoked !== true && row.contentHash === hash(p), 'Latest retained native tax proof changed or has the wrong scope.');

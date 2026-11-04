@@ -17,7 +17,7 @@ async function assertBusinessWriterIntegration() { const state = businessWriterI
 
 // Internal transactional adapter. The step/period stores own permission and audit.
 // Production default is CLOSED until the shared QBO transport participates.
-function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, Authorities, Audits, Receipts, GeneralWriteRuns, Plans, Intents, Records, assertIntegration = assertBusinessWriterIntegration, now = () => Date.now() }) {
+function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, Authorities, Audits, Receipts, GeneralWriteRuns, Plans, Intents, Records, GeneralDayCloses, Evidence, Versions, Connections, Baselines, assertIntegration = assertBusinessWriterIntegration, now = () => Date.now() }) {
   if (!Runs || !Calendars || !Writers || !Steps || typeof assertIntegration !== 'function') throw new TypeError('Company writer needs explicit stores and integration readiness');
   async function ready(scope, session, phase) {
     scopeFilter(scope);
@@ -106,7 +106,7 @@ function createBusinessWriterFence({ Runs, Calendars, Writers, Steps, Authoritie
   async function fenceFulfillment({scope,intent,actorId,phase,origin,session}) {
     if(intent?.kind!=='fulfilled'||!validHash(intent.logicalKey)||!validHash(intent.fingerprint)||!['verification-start','verify'].includes(phase)||!origin||origin.kind!=='general-calendar-fulfillment'||origin.logicalKey!==intent.logicalKey||origin.fingerprint!==intent.fingerprint)fail('An exact read-only fulfilled intent is required.');
     const state=await snapshot(intent,scope,session,false,phase);owner(state);
-    const admitted=await require('./general-calendar-fulfillment').loadOrigin({models:{Authorities,Audits,Receipts,GeneralWriteRuns,Steps,Runs,Plans,Intents,Records,Writers},scope:scopeFilter(scope),logicalKey:intent.logicalKey,session});if(!admitted||admitted.originHash!==origin.originHash||admitted.fingerprint!==intent.fingerprint)fail('The admitted fulfilled origin changed before graph fencing.');
+    const admitted=await require('./general-calendar-fulfillment').loadOrigin({models:{Authorities,Audits,Receipts,GeneralWriteRuns,Steps,Runs,Plans,Intents,Records,Writers,GeneralDayCloses,Evidence,Versions,Connections,Calendars,Baselines},scope:scopeFilter(scope),logicalKey:intent.logicalKey,session});if(!admitted||admitted.originHash!==origin.originHash||admitted.fingerprint!==intent.fingerprint)fail('The admitted fulfilled origin changed before graph fencing.');
     if(!['reserved','running','blocked','stopped','awaiting-evidence'].includes(state.run.status)||state.writer.unresolved!==null)fail('Fulfillment verification requires a settled company writer.');
     const revisions=await touch(state,scope,session,{},true);
     return {scope:scopeFilter(scope),operationId:intent.operationId,planHash:intent.planHash,phase,fenceHash:hash({...revisions,originHash:origin.originHash,logicalKey:intent.logicalKey,phase})};
