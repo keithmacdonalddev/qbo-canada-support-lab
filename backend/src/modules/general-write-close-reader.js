@@ -10,9 +10,8 @@ function createGeneralCloseReader({ scope, access, client, signal = new AbortCon
   const check = value => { signal.throwIfAborted(); if (canonical(scoped(value)) !== canonical(scope)) fail('The close reader cannot change its company scope.'); };
   const identity = (entity, id) => { if (!/^[A-Z][A-Za-z0-9]{0,49}$/.test(entity || '') || !/^\d{1,30}$/.test(id || '')) fail('Close reads require exact saved record identities.'); };
   const grouped = createBusinessTransactionBatchReader({ access, now });
-  // Exact GET preserves inactive master coverage. Active-filter equivalence for
-  // grouped Customer/Vendor/Item queries is not established for this close.
-  const batchable = entity => grouped.supports(entity) && !['Customer', 'Vendor', 'Item'].includes(entity);
+  // Supported lists use the shared reader's explicit active+inactive predicate.
+  const batchable = entity => grouped.supports(entity);
   async function read(value, entity, id) {
     check(value); identity(entity, id);
     const actor = await access.authorize(scope, 'operations.read', { signal }); check(value);
@@ -39,7 +38,7 @@ function createGeneralCloseReader({ scope, access, client, signal = new AbortCon
       result.set(key, observed.record);
     }
     if (observations.size !== supported.length) fail('Grouped close observations contain unexpected identities.');
-    // Other types and masters retain their original exact GET. An incomplete query is
+    // Unsupported types retain their original exact GET. An incomplete query is
     // never retried as a singleton or substituted with retained/create data.
     for (const row of identities.filter(row => !batchable(row.entity))) {
       const record = await read(value, row.entity, row.qboId);

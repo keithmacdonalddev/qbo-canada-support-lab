@@ -4,6 +4,7 @@ const { hash, canonical } = require('./business-calendar');
 const { createBusinessTransactionReader } = require('./business-reference');
 const TRANSACTIONS = new Set(['Estimate','TimeActivity','Invoice','Payment','Deposit','PurchaseOrder','Bill','SalesReceipt','BillPayment','CreditMemo','Purchase','VendorCredit','RefundReceipt','Transfer','JournalEntry','Customer','Vendor','Item']);
 const { runWithCaller } = require('./qbo-request-meter');
+const ACTIVE_LISTS = new Set(['Customer','Vendor','Item']);
 const QID = /^\d{1,30}$/, VERSION = /^(0|[1-9]\d{0,63})$/;
 function fail(message) { throw Object.assign(new Error(message), { status: 409, code: 'BUSINESS_VERIFICATION_UNAVAILABLE' }); }
 // Batch exact IDs in one full SELECT per type (up to 50). These are current
@@ -70,7 +71,7 @@ function createBusinessTransactionBatchReader({ access, observations, now = () =
               if (!(client instanceof QBOClient) || client.apiCall !== QBOClient.prototype.apiCall || client.query !== QBOClient.prototype.query || client.apiBase !== base || client.realmId !== scope.realmId || String(client.connection?._id) !== scope.connectionId || String(client.connection?.realmId) !== scope.realmId || client.connection?.status !== 'active' || !/^[a-f0-9]{24}$/.test(actor?.ownerId || '') || !actor?.actorId || String(client.connection?.userId) !== actor.ownerId) fail('The batch reader changed company or owner.');
             };
             const authorize = async () => { check(); guard(); const current = await access.authorize(scope, 'operations.read', { signal: controller.signal }); check(); guard(); if (current?.actorId !== actor.actorId || current?.ownerId !== actor.ownerId) fail('The batch reader changed authority.'); };
-            const ids = rows.map(row => row.qboId).sort(), query = 'SELECT * FROM ' + entity + ' WHERE Id IN (' + ids.map(id => "'" + id + "'").join(',') + ') MAXRESULTS 50';
+            const ids = rows.map(row => row.qboId).sort(), query = 'SELECT * FROM ' + entity + ' WHERE Id IN (' + ids.map(id => "'" + id + "'").join(',') + ')' + (ACTIVE_LISTS.has(entity) ? ' AND Active IN (true,false)' : '') + ' MAXRESULTS 50';
             await authorize();
             const body = await runWithCaller('business-transaction', () => client.query(query, { signal: controller.signal, beforeAttempt: authorize, onFailure: error => { failure ||= error; controller.abort(); } }));
             await authorize();

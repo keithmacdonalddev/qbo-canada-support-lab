@@ -49,7 +49,12 @@ function createGeneralCloseGate({ models = {}, copy, readValuation = null, now =
   async function contextFor(scope, mappings, records) {
     const items = new Map(), wanted = new Set();
     for (const row of records) for (const record of [row.current, row.before]) for (const line of record?.Line || []) { const id = line?.[line?.DetailType]?.ItemRef?.value; if (id != null) wanted.add(String(id)); }
-    for (const id of wanted) { const record = await copy.read(scope, 'Item', id); if (record) items.set(id, record); }
+    if(wanted.size && typeof copy.readMany==='function'){
+      const ids=[...wanted],observed=await copy.readMany(scope,ids.map(qboId=>({entity:'Item',qboId})));
+      if(!(observed instanceof Map)||observed.size!==ids.length||ids.some(id=>!observed.has('Item:'+id)||observed.get('Item:'+id)?.Id!==id))fail('Posting item observations omitted or changed an exact saved identity.');
+      // Provider order is immaterial: retain the original wanted-ID evidence order.
+      for(const id of ids)items.set(id,observed.get('Item:'+id));
+    }else for (const id of wanted) { const record = await copy.read(scope, 'Item', id); if (record) items.set(id, record); }
     const accounts = await Records.find({ ...company(scope), entity: 'Account', deleted: false }).select('qboId record').limit(501).maxTimeMS(3000).lean();
     if (accounts.length > 500) fail('Posting-account enumeration exceeds its proof budget; close is incomplete.');
     const tax = accounts.filter(row => TAX_SUBTYPES.includes(row.record?.AccountSubType) && (row.record.AccountSubType !== 'OtherCurrentLiabilities' || /\b(GST|HST|PST|QST|tax)\b/i.test(row.record?.Name || ''))).map(row => String(row.qboId));

@@ -89,3 +89,22 @@ test('inactive and externally changed masters retain exact GET coverage without 
  f.native.get('Customer:801').Active=true;
  const second=await f.copy.readMany(scope,refs);assert.equal(second.get('Customer:801').Active,true,'a later window observes external master changes');assert.equal(first.get('Customer:801').Active,false,'earlier window remains original');assert.equal(f.h.calls.length,6);
 });
+
+test('retained master cohort uses three inactive-inclusive exact queries instead of thirty GETs per fresh window',async()=>{
+ const f=fixture(0),refs=[];for(const [entity,count,start]of [['Customer',25,800],['Vendor',3,900],['Item',2,950]])for(let i=0;i<count;i++){const id=String(start+i);f.native.set(entity+':'+id,record(id,{Active:i%2===0,Name:'Fictional master'}));refs.push({entity,qboId:id});}
+ const first=await f.copy.readMany(scope,refs);assert.equal(first.size,30);assert.equal(f.h.calls.length,3);for(const call of f.h.calls)assert.match(new URL(call.url).searchParams.get('query'),/AND Active IN \(true,false\)/);
+ f.native.get('Customer:800').Active=false;const second=await f.copy.readMany(scope,refs);assert.equal(f.h.calls.length,6);assert.equal(first.get('Customer:800').Active,true);assert.equal(second.get('Customer:800').Active,false);assert.ok([...second.values()].some(row=>row.Active===false));
+});
+
+test('inactive master groups retain singleton economy and every strict query failure without GET fallback',async()=>{
+ const many=fixture(0),refs=Array.from({length:51},(_,i)=>({entity:'Customer',qboId:String(i+800)}));for(const ref of refs)many.native.set('Customer:'+ref.qboId,record(ref.qboId,{Active:false}));assert.equal((await many.copy.readMany(scope,refs)).size,51);assert.equal(many.h.calls.length,2);assert.match(new URL(many.h.calls[0].url).searchParams.get('query'),/Active IN \(true,false\)/);assert.equal(new URL(many.h.calls[1].url).searchParams.has('query'),false,'last singleton retains exact GET');
+ for(const entity of ['Customer','Vendor','Item'])for(const mode of ['missing','duplicate','wrong-id','sparse','version','truncated','fault','error']){
+  const f=fixture(0),rows=[record('800',{Active:false}),record('801',{Active:true})];if(mode==='missing')rows.pop();if(mode==='duplicate')rows[1]=rows[0];if(mode==='wrong-id')rows[1].Id='999';if(mode==='sparse')rows[0].sparse=true;if(mode==='version')rows[0].SyncToken='invalid';
+  f.h.response=async()=>{if(mode==='error')throw Error('Fixture list transport error');return mode==='fault'?{Fault:{Error:[{code:'500',Message:'Fixture list query fault'}]}}:{QueryResponse:{[entity]:rows,startPosition:1,maxResults:mode==='truncated'?1:rows.length}};};
+  await assert.rejects(f.copy.readMany(scope,[{entity,qboId:'800'},{entity,qboId:'801'}]),/omitted|truncated|partial|unrelated|Fixture list transport/);assert.equal(f.h.calls.length,1,entity+':'+mode+' cannot retry as GET');
+ }
+});
+test('list query cancellation preserves the existing prepare abort boundary',async()=>{
+ const f=fixture(0),controller=new AbortController();for(const id of ['800','801'])f.native.set('Customer:'+id,record(id,{Active:false}));const reader=createGeneralCloseReader({scope,access:f.h.access,client:f.h.client,signal:controller.signal,now:()=>f.h.now}),original=f.h.response;f.h.response=async options=>{controller.abort();return original(options);};
+ await assert.rejects(reader.readMany(scope,[{entity:'Customer',qboId:'800'},{entity:'Customer',qboId:'801'}]));assert.equal(f.h.calls.length,1);await assert.rejects(reader.readMany(scope,[{entity:'Customer',qboId:'800'}]));assert.equal(f.h.calls.length,1);
+});

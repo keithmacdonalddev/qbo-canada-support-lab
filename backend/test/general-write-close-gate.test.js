@@ -19,7 +19,7 @@ function setup({ run, copyRecord, taxAccounts = null, itemRecord = null }) {
   const row = (date, debit, credit) => ({ type: 'Data', ColData: [{ value: date }, { value: 'Invoice', id: '700' }, {}, {}, {}, {}, { value: debit }, { value: credit }] });
   const section = (account, rows) => ({ type: 'Section', Header: { ColData: [{ value: 'A', id: account }] }, Rows: { Row: rows } });
   const readLedger = async (from, through) => { reads.push(from + '..' + through); const date = copyRecord.TxnDate; return { Header: { ReportName: 'GeneralLedger', ReportBasis: 'Accrual', StartPeriod: from, EndPeriod: through }, Columns: { Column: columns }, Rows: { Row: date >= from && date <= through ? [section('120', [row(date, (copyRecord.Line[0].Amount * 1.15).toFixed(2), '')]), section('400', [row(date, '', copyRecord.Line[0].Amount.toFixed(2))]), section('210', [row(date, '', (copyRecord.Line[0].Amount * 0.15).toFixed(2))])] : [] } }; };
-  return { gate: createGeneralCloseGate({ models, copy, now: () => Date.parse('2026-12-03T12:00:00Z') }), closes, reads, readLedger };
+  return { copy, gate: createGeneralCloseGate({ models, copy, now: () => Date.parse('2026-12-03T12:00:00Z') }), closes, reads, readLedger };
 }
 const mappings = { accountsReceivable: '120', accountsPayable: '200', undepositedFunds: '125' };
 
@@ -119,4 +119,20 @@ test('more than one hundred unrelated daily decisions do not block native stock-
  const dayRuns=Array.from({length:220},(_,i)=>({...run,_id:String(i).padStart(24,'0')}));
  const gate=createGeneralCloseGate({models:{GeneralWriteRuns:{find:()=>chain(dayRuns)},GeneralDayCloses:{},Records:{}},copy:{read:async()=>{throw Error('No item read expected')}}});
  assert.deepEqual(await gate.retainStockReturns(scope,{day:'2026-12-02',mappings}),{required:false});
+});
+
+async function contextBatchFixture({bad=null,reverse=false,legacy=false}={}){
+ const saved=invoice(100,'2026-12-02');saved.Line[0].SalesItemLineDetail.ItemRef.value='42';saved.Line.push({...structuredClone(saved.Line[0]),Amount:0,SalesItemLineDetail:{...structuredClone(saved.Line[0].SalesItemLineDetail),ItemRef:{value:'40'},UnitPrice:0}});
+ const run={_id:'ordered-context',dirty:[],plan:{operations:[{ref:'inv',op:'create',entity:'Invoice'}]},items:{inv:{outcome:'saved',op:'create',entity:'Invoice',qboId:'700',record:saved}}},h=setup({run,copyRecord:saved});let contexts=0,fallbacks=0;
+ h.copy.read=async(_scope,entity,id)=>{fallbacks++;if(legacy)return entity==='Item'?{Id:id,SyncToken:'0',Type:'Service',IncomeAccountRef:{value:'400'}}:structuredClone(saved);throw Error('Context GET fallback is forbidden');};
+ h.copy.readMany=async(_scope,refs)=>{assert.deepEqual(_scope,scope);if(refs[0]?.entity==='Invoice')return new Map([['Invoice:700',structuredClone(saved)]]);contexts++;assert.deepEqual(refs.map(r=>r.qboId),['42','40']);const entries=refs.map(r=>['Item:'+r.qboId,{Id:r.qboId,SyncToken:'0',Type:'Service',IncomeAccountRef:{value:'400'}}]);
+  if(bad==='error')throw Error('Fixture context read failed');if(bad==='non-map')return{};if(bad==='missing')entries.pop();if(bad==='extra')entries.push(['Item:99',{Id:'99'}]);if(bad==='wrong-id')entries[0][1].Id='99';if(bad==='wrong-key')entries[0][0]='Item:99';if((contexts%2===0)!==reverse)entries.reverse();return new Map(entries);};
+ if(legacy)delete h.copy.readMany;
+ await h.gate.assertPeriodReady(scope,{fromDate:'2026-12-02',throughDate:'2026-12-02',verifiedThrough:'2026-12-01',mappings,readLedger:h.readLedger});return{...h,contexts,fallbacks};
+}
+test('separate context Item batches preserve wanted insertion order across shuffled provider windows',async()=>{
+ const first=await contextBatchFixture(),second=await contextBatchFixture({reverse:true}),baseline=await contextBatchFixture({legacy:true});assert.equal(first.contexts,2);assert.equal(first.fallbacks,0);assert.equal(first.closes[0].ok,true);assert.equal(first.closes[0].snapshotHash,second.closes[0].snapshotHash,'provider order cannot change posting evidence');assert.equal(first.closes[0].snapshotHash,baseline.closes[0].snapshotHash,'full equivalent query bodies preserve original exact-GET financial snapshot');
+});
+test('context Item batch maps reject missing extra wrong identity and non-Map without GET fallback',async()=>{
+ for(const bad of ['non-map','missing','extra','wrong-id','wrong-key','error'])await assert.rejects(contextBatchFixture({bad}),/omitted|changed|exact|Fixture context read failed/);
 });
