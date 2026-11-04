@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-04T18:08:25.890Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T18:13:12.043Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -14,7 +14,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
 
-**Current priority: sustain useful current-day trading, finish overdue Nov2/Nov3 closes when Intuit verification is available, and continue ready banking work.** Latest actual count116/220; Nov1 closed and Nov2 General39-record ledger verified. The same fee run is now booked as live QBO JournalEntry11650 with one independent CAD5 bank movement. Automatic current CSV/download/repeat/cumulative-overlap bounded proofs are verified; later-posted incremental, month-end, all-account and native reconciliation remain open. Four of12 accounts now have bounded adopted histories; the original two held card legs are delivered pending with zero QBO calls. Next immediate implementation is the reviewed negative-only F01 stock-date preflight, followed by the next ready full-backlog banking/coverage outcome.
+**Current priority: sustain useful current-day trading, finish overdue Nov2/Nov3 closes when Intuit verification is available, and continue ready banking work.** Latest actual count116/220; Nov1 closed and Nov2 General39-record ledger verified. The same fee run is now booked as live QBO JournalEntry11650 with one independent CAD5 bank movement. Automatic current CSV/download/repeat/cumulative-overlap bounded proofs are verified; later-posted incremental, month-end, all-account and native reconciliation remain open. Four of12 accounts now have bounded adopted histories; the original two held card legs are delivered pending with zero QBO calls. The reviewed negative-only F01 stock-date preflight is installed with10focused checks; observe actual call savings and continue ready full-backlog banking/coverage work.
 
 | Outstanding workstream | Task IDs / location | Remaining owner outcome |
 |---|---|---|
@@ -40,6 +40,9 @@ Latest checkpoint 2026-11-04T15:39:30.229Z: Nov2 original11239 is an earlier-iss
 2026-11-04T16:47:38.728Z — **BANK2.5 bounded actual fee VERIFIED; QBO counterpart PROOF OPEN and retained.** Normalowner origin-policyGET200 after reviewedpersistedBSON/action-map fix8fb6f94c…6c77;66currentcounterpartaccounts/31taxchoices. Explicitowneraccount123 CAD500minor monthlyservicefee policyrevision1/epoch/effectiveNov4 configured via normalAPI200, counterpartAccount19Bankcharges/out-of-scope simulatedadvice. No card policy enabled. Existingmodel-freeclock16:15:36.650 automaticallypostedexactlyone bse1_deab12d5d6dfa84c11419dcb4a95210c2a2f726d (-500); baseline65a19176…b705/2129225minor unchanged, activity0→-500, boundedsubtotal2129225→2128725,25pendingunchanged. Direct private actual-configured-and-clock-projection.json; actualowner1440x1000 policy/fee/neededbook actionrender inspected, nooverflow. This is bounded independentbankoutput, notfullcurrentbalance/nativecatch-up.
 
 2026-11-04T18:08:25.890Z — **Fee booked, current CSV delivered, and two blocked card legs recovered.** The same original fee run b9831827404d3a4398e42d1b completed through the normal owner API at17:38:29.562 (HTTP200, booked), creating JournalEntry11650. A fresh QBO GET confirms Nov4/CAD, debit Bank charges19=500minor and credit Bank123=500minor. The simulated bank still has exactly one origin/posted movement of-500, zero bookkeeping needed, unchanged baseline65a19176…b705/2129225minor and bounded subtotal2128725. No second movement or replacement run.
+
+2026-11-04T18:13:12.043Z — F01 negative-only stock-date preflight installed18:12:13.909 in observed idle window. Exact reviewed manifest dfb55f48…5668 matched both source bases and candidate hashes; 10 installed focused regressions, two source syntax checks and diff check pass (both final independent reviews already clear;39 distinct candidate checks). Known Nov1-to-Nov4 stock-gap fixture now returns the unchanged409 BUSINESS_STOCK_COST_UNVERIFIED before any SDK read/source refresh/new operation. Positive preparations retain all normal freshness/financial/stock checks; saved exact retry identities and original records remain unchanged. Actual future accountant-path call reduction remains observation-open; no stock date/carry bypass or live financial request was used for testing. Current company123/220 saved at18:11; calendar stillNov1. Bank CSV/fee/card milestone committed and pushed bca4e91 main/origin/main. Value checkpoint: tangible bank file/card delivery achieved; essential call-waste repair now installed, continue remaining-account coverage and paired settlement lifecycle rather than broaden unchanged tests.
+
 
 ## Execution order and delivery rules
 

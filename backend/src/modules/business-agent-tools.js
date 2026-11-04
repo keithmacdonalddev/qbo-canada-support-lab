@@ -151,7 +151,7 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
     const bankOnlyPublish=['publishCurrentBankFeed','publishCumulativeBankFeed'].includes(name);
     let result,writeDecision=null;
     if(require('./business-agent-accountability').WRITE_TOOLS.has(name)){
-      await guard(bankOnlyPublish?'authority':true);
+      await guard(bankOnlyPublish||name==='prepareBusinessActivity'?'authority':true);
       const plan=typeof store.latestDailyPlan==='function'?await store.latestDailyPlan(row):null;
       const operation=input.operationId&&typeof store.run==='function'?await store.run(scope,input.operationId):null;
       const data=require('./business-agent-accountability').decisionData({name,input,plan,operation,day:cadence.localParts(now()).date,passId});
@@ -272,8 +272,10 @@ function createBusinessAgentTools({row,role='accountant',passId,attemptId=null,s
         }
       }
       if(writeDecision&&writeDecision.decisionKey!==input.decisionKey){await event(row,'accountant-write-key','Effective governed decision identity',writeDecision.reason,{decisionId:writeDecision.id,decisionKey:input.decisionKey},null,hash({decisionId:writeDecision.id,decisionKey:input.decisionKey}),role);writeDecision={...writeDecision,decisionKey:input.decisionKey};}
-      await guard(true);const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)};
-      try{result={success:true,data:await governed(origin).prepareActivityBatch(user,input,{signal})};}finally{forgetToday();}
+      const origin={version:1,agentId:String(row._id),grantId:row.grant.id,authorityHash:business.authorityHash,ownerId:String(row.ownerId)},governor=governed(origin);
+      if(typeof governor.preflightActivityBatch==='function')await governor.preflightActivityBatch(user,input,{signal});
+      await guard(true);
+      try{result={success:true,data:await governor.prepareActivityBatch(user,input,{signal})};}finally{forgetToday();}
     }else if(name==='prepareBusinessPeriod'){
       const business=await store.business(scope);if(business.blockers.length)fail(business.blockers[0].detail);
       await requireNoUnfinished();

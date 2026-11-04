@@ -441,10 +441,27 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (!estimateConversion.apiWritable) own.ownOpenEstimates = own.ownOpenEstimates.map(estimate => ({ ...estimate, eligible: false, reason: estimateConversion.reason }));
     return { scope, day, estimateConversion, ...(client.source ? { source: client.source } : {}), policy: policy.POLICY, customers, services, vendors, ...added, correctableRecords, ...own, ownSettlementLimitation: ownUnavailable || 'invoice-on-terms and bill-on-terms leave a record open until its due date (' + policy.TERMS_DAYS.join(', ') + ' days). ownOpenInvoices and ownOpenBills list your own open terms records from earlier days with their open balance; collect-own-invoice and pay-own-bill settle one in full or in part (up to its open balance). order-stock raises a purchase order for one to five workshop stock items (vendorKey, lines of itemKey, quantity up to 500 and unitPriceCents before tax); from tomorrow it appears in receivablePurchaseOrders. send-estimate quotes field-service hours to a field customer; ownOpenEstimates lists your own open sent estimates from earlier days, and convert-own-estimate turns one into today’s time entry and an invoice on terms at the quoted hours and price. Imported records use collect-adopted-invoice and pay-adopted-bill; scheduled monthly records are settled by their own schedule.', correctionLimitation: correctionUnavailable || 'Corrections reverse your own verified records from earlier days, dated today: a wholly unpaid service invoice gets a full credit applied to it, a fully collected service sale gets a refund from the operating bank, a wholly unpaid operating bill gets a full supplier credit applied to it, and a journal entry gets its exact reverse. The original tax rate is repeated. Paid bills, partly paid records, records with credits, stock, imported records, corrections of corrections and voids are unavailable. Each record can be corrected once.', receivablePurchaseOrders, receivingLimitation: 'Only wholly unreceived open purchase orders are available, in full at their original cost. Partially received orders are unavailable.', ...adopted, ...transfers, journalRoles: policy.JOURNAL_ROLES, choicesAvailable: !client.source || client.source.unavailable.length === 0, ready: Boolean(active.calendar.verifiedThrough && active.calendar.verifiedThrough < day) && !active.calendar.currentOperationId && !active.calendar.stopRequested, limitation: 'Today’s additional activity needs an established history cursor and an idle calendar writer. Earlier days close separately; use independent general writes while a close holds the calendar. Preparation creates no QuickBooks records; review and approve the exact saved plan before running it.' };
   }
+  // A negative-only local check: successful callers still take every normal
+  // source, financial and stock guard in prepare. Exact retries stay on their
+  // original saved-plan path before any current-calendar rejection.
+  async function activityStockPreflight(bound, requestKey) {
+    const {scope,actorId,ownerId}=bound,operationId=hash({scope,actorId,requestKey}).slice(0,24);
+    if(await read(models.Runs,{_id:operationId,...scope}))return;
+    const active=await assertPublishedBusiness({...models,scope,requireScheduleAcceptance:true,verifyBaseline:true}),current=await coordination(bound);
+    if(active.value.ownerId!==ownerId)fail('The accepted business belongs to another owner.',403);
+    if(current.policy.state!=='active'||active.calendar.currentOperationId!==null)fail('Enable write coordination and finish the current operation first.');
+    const through=active.calendar.verifiedThrough,day=businessDate(new Date(now()));
+    if(active.value.stockRoot&&through!==null&&day>shift(through,1))throw Object.assign(new Error('Stock-cost periods must be contiguous and stay within one calendar month.'),{status:409,code:'BUSINESS_STOCK_COST_UNVERIFIED'});
+  }
+  async function preflightActivityBatch(user,input) {
+    const choices=require('./business-activity-batch').validateChoices(input),bound=await bind(user,'operations.preview',true);
+    await activityStockPreflight(bound,await activityRequestKey(bound,choices.decisionKey));
+  }
   async function prepareActivityBatch(user, input, { signal } = {}) {
     let choices = require('./business-activity-batch').validateChoices(input);
     const bound = await bind(user, 'operations.preview', true);
     const requestKey = await activityRequestKey(bound, choices.decisionKey);
+    await activityStockPreflight(bound,requestKey);
     const derived = require('./business-activity-batch').OWN_SOURCED;
     if (choices.activities.some(row => row.type === 'correct-own-record' || derived[row.type])) choices = await correctionChoices(bound, requestKey, choices, signal);
     return prepare(user, { requestKey, throughDate: businessDate(new Date(now())) }, { signal, batchChoices: choices });
@@ -538,6 +555,6 @@ function createBusinessGovernanceService(dependencies = {}) {
   const recovery = createBusinessOperationRecovery({ models, transaction, now, bind, fence, agentAuthority: dependencies.agentAuthority, Agents: dependencies.Agents });
   const unknownRecovery = createBusinessUnknownRecovery({ models, connection, transaction, now, bind, fence });
   const closeChecklist = require('./business-close-checklist').createBusinessCloseChecklist({ models, connection, transaction, now, bind, fence, CloseEvidence: dependencies.CloseEvidence, Events: dependencies.CloseEvents, assertStorageReady: dependencies.assertCloseStorageReady });
-  return { ...closeChecklist, ...unknownRecovery, ...recovery, reviewHistoryAdoption: historyAdoption.review, adoptHistory: historyAdoption.adopt, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, activityOptions, prepareActivityBatch, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
+  return { ...closeChecklist, ...unknownRecovery, ...recovery, reviewHistoryAdoption: historyAdoption.review, adoptHistory: historyAdoption.adopt, reviewContinuity: continuity.review, applyContinuity: continuity.apply, withdrawContinuity: continuity.withdraw, status, reviewPublication, publish, prepare, activityOptions, preflightActivityBatch, prepareActivityBatch, approve, reviewOperation, reviewRetirement: retirement.review, retire: retirement.retire, reviewTaxChange: taxReview.review, approveTaxChange: taxReview.approve };
 }
 module.exports = { createBusinessGovernanceService, reportHash };
