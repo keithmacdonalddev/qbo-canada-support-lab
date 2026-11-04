@@ -159,4 +159,132 @@ function generateBankStatementPackages(dataset, options={}) {
       blockedPeriods:packages.filter(p=>!p.manifest.readyForNativeWork).length,quietPeriods:packages.filter(p=>!p.envelope.rows.length).length,
       csvFiles:packages.reduce((n,p)=>n+p.envelope.files.filter(f=>f.kind==='csv').length,0),nativeStateVerified:false}};
 }
-module.exports={generateBankStatementPackages,months,endOfMonth};
+function generateIndependentBankStatementPackage(p) {
+  if (p?.kind !== 'independent-monthly-statement-plan' || p.rendererVersion !== 2 || !/^[a-f0-9]{64}$/.test(p.statementId || '')) throw new TypeError('Frozen independent monthly plan required.');
+  const scope = C.validateScope(p.scope),
+    period = month(p.period),
+    card = p.balanceConvention === 'card-amount-owed';
+  if (!['bank-balance', 'card-amount-owed'].includes(p.balanceConvention) || !Array.isArray(p.rows) || p.rows.length > 10000 || !/^[A-Z]{3}$/.test(p.currency)) throw new TypeError('Native monthly statement identity required.');
+  let balance = C.integer(p.openingMinor);
+  const ids = new Set();
+  const rows = p.rows.map(r => {
+    C.assertScope(r.scope, scope);
+    if (ids.has(r.eventId) || r.accountId !== p.accountId || r.accountCurrency !== p.currency || r.postingDate.slice(0, 7) !== period || !Number.isSafeInteger(r.amountMinor) || !/^[a-f0-9]{64}$/.test(r.financialHash || '')) throw new TypeError('Monthly row changed its bound identity.');
+    const financial = Object.fromEntries(['scope', 'eventId', 'eventRevision', 'accountId', 'accountCurrency', 'amountMinor', 'postingDate', 'postingProofHash', 'pairProofHash'].filter(k => r[k] !== undefined).map(k => [k, r[k]]));
+    if (C.hash(financial) !== r.financialHash || r.amountMinor === 0) throw new TypeError('Frozen monthly row money hash changed.');
+    C.date(r.postingDate);
+    ids.add(r.eventId);
+    balance = C.sum([balance, card ? -r.amountMinor : r.amountMinor]);
+    return {
+      eventId: r.eventId,
+      date: r.postingDate,
+      description: r.description,
+      sourceEntity: r.source.entity,
+      sourceId: r.source.id,
+      amountMinor: r.amountMinor,
+      balanceMinor: balance
+    };
+  });
+  if (C.hash(p.rows.map(r => ({
+    id: r.eventId,
+    hash: r.financialHash
+  }))) !== p.financialHash || !Array.isArray(p.pending) || p.pending.length > 10000 || p.pending.some(x => x.expectedPostingDate <= endOfMonth(period) || ids.has(x.eventId))) throw new TypeError('Frozen monthly membership or pending schedule changed.');
+  if (balance !== p.closingMinor) throw new TypeError('Monthly closing does not equal exact movements.');
+  const model = {
+    kind: 'independent-monthly-statement-model',
+    rendererVersion: 2,
+    label: 'Maple Harbour Bank - simulated monthly statement',
+    scope,
+    accountId: p.accountId,
+    accountName: p.accountName,
+    currency: p.currency,
+    accountCurrency: p.currency,
+    period,
+    balanceConvention: p.balanceConvention,
+    openingMinor: p.openingMinor,
+    closingMinor: balance,
+    positiveMinor: C.sum(rows.filter(r => r.amountMinor > 0).map(r => r.amountMinor)),
+    negativeMinor: C.sum(rows.filter(r => r.amountMinor < 0).map(r => -r.amountMinor)),
+    rows,
+    blockers: [],
+    openingBasis: p.openingBasis,
+    outstandingItems: p.pending,
+    dueDate: null,
+    evidenceLabel: 'Independent simulated bank activity; historical opening evidence remains identified.',
+    nativeStatus: 'Publishing does not prove QuickBooks import, matching or reconciliation.'
+  };
+  const pdf = require('./bank-statement-pdf').generateIndependentBankStatementPdf(model),
+    directory = C.hash(scope) + '/' + p.accountId + '/monthly-statements/' + p.statementId,
+    artifacts = [],
+    add = (kind, name, bytes, rowCount) => {
+      const file = {
+        fileId: C.hash({
+          statementId: p.statementId,
+          kind,
+          name
+        }),
+        kind,
+        path: directory + '/' + name,
+        sha256: sha256(bytes),
+        byteCount: bytes.length,
+        rowCount
+      };
+      artifacts.push({
+        ...file,
+        bytes
+      });
+      return file;
+    };
+  if (p.rows.length) {
+    const csv = require('./bank-feed-csv').generatePostedBankFeedCsv(p.rows, {
+      scope,
+      accountId: p.accountId,
+      accountCurrency: p.currency
+    });
+    for (const part of csv.files) add('csv', part.fileName, part.bytes, part.rowCount);
+  }
+  add('statement', 'statement.pdf', pdf.bytes, rows.length);
+  const manifest = {
+    version: 1,
+    kind: 'independent-monthly-bank-statement',
+    statementId: p.statementId,
+    scope,
+    ownerId: p.ownerId,
+    originalActorId: p.originalActorId,
+    accountId: p.accountId,
+    accountCurrency: p.currency,
+    period,
+    revision: 1,
+    rendererVersion: 2,
+    openingMinor: p.openingMinor,
+    closingMinor: p.closingMinor,
+    openingBasis: p.openingBasis,
+    predecessor: p.predecessor,
+    coverageHash: p.coverageHash,
+    baselineHash: p.baselineHash,
+    financialHash: p.financialHash,
+    rows: p.rows,
+    pending: p.pending,
+    overlap: p.overlap,
+    referenceOnly: true,
+    warning: 'Full-month reference CSV may overlap incremental imports. Do not import it as the next incremental file.',
+    nativeStateVerified: false,
+    files: artifacts.map(({
+      bytes,
+      ...f
+    }) => f),
+    statementTotals: {
+      openingMinor: p.openingMinor,
+      closingMinor: p.closingMinor,
+      rowCount: rows.length,
+      pageCount: pdf.pageCount
+    }
+  };
+  add('manifest', 'manifest.json', Buffer.from(C.canonical(manifest) + '\n'), rows.length);
+  return {
+    artifacts,
+    model,
+    manifest
+  };
+}
+module.exports={generateBankStatementPackages,generateIndependentBankStatementPackage,months,endOfMonth};

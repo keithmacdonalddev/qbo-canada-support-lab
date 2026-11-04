@@ -10,6 +10,8 @@ const GROUPS = Object.freeze([
   { key: 'notes', label: 'Notes and handoffs' },
 ]);
 const TOOLS = Object.freeze({
+  getBankMonthlyStatements:{group:'business-read',summary:'Reads monthly bank statements and exact coverage/opening holds; files do not prove QuickBooks reconciliation.'},
+  issueDueBankStatements:{group:'notes',summary:'Retains an eligible completed bank month or recovers its exact statement files under accountant authority; no QuickBooks calls, changed balances or automatic revisions.'},
   getCurrentBankFeeds:{group:'business-read',summary:'Reads current retained bank CSVs, disjoint incremental assignments and clearly overlapping cumulative reference windows.'},
   publishCurrentBankFeed:{group:'notes',summary:'Retains the next current incremental bank CSV or verifies an exact retained publication; no QuickBooks call or bank balance change.'},
   publishCumulativeBankFeed:{group:'notes',summary:'Retains an explicitly overlapping reference CSV window; not the next incremental import file.'},

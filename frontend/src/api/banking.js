@@ -4,6 +4,10 @@ import client from './client'
 const base = '/company/banking-workspace'
 const segment = value => encodeURIComponent(String(value))
 export const bankingApi = {
+  async monthlyStatements(accountId,{signal,...params}={}) {return (await client.get(base+'/accounts/'+segment(accountId)+'/statements',{signal,params})).data?.data},
+  async issueMonthlyStatements(accountId,statementId) {return (await client.post(base+'/statements/issue',{accountId,...(statementId?{statementId}:{})})).data?.data},
+  async monthlyStatementFile(accountId,statementId,file,{signal}={}) {const response=await client.get(base+'/accounts/'+segment(accountId)+'/statements/'+segment(statementId)+'/files/'+segment(file.fileId),{signal,responseType:'blob'}),blob=response.data,digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()),actual=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');if(actual!==file.sha256)throw new Error('Retained monthly statement hash changed. Inspect its original publication.');return blob},
+
   async currentFeeds(accountId,{signal,...params}={}) {return (await client.get(base+'/accounts/'+segment(accountId)+'/feeds',{signal,params})).data?.data},
   async publishCurrentFeed(accountId,publicationId) {return (await client.post(base+'/feeds/publish',{accountId,...(publicationId?{publicationId}:{})})).data?.data},
   async publishCumulativeFeed(input) {return (await client.post(base+'/feeds/cumulative',input)).data?.data},

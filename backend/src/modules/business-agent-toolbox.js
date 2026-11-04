@@ -23,6 +23,8 @@ const CATEGORIES = Object.freeze({
 // Search metadata for the known tools. A tool missing here still registers (category from
 // its catalog group when known, otherwise other) so a newly added tool is never lost.
 const INFO = Object.freeze({
+  getBankMonthlyStatements:{category:'banking',keywords:['bank','monthly','statement','pdf','quiet','carry','opening','coverage','download']},
+  issueDueBankStatements:{category:'banking',keywords:['bank','monthly','statement','pdf','issue','due','quiet','carry','recover']},
   getBankingWorkspace:{category:'business-read',keywords:['banking','statements','feed','upload','reconciliation','account','month']},
   getBankingActivity:{category:'banking',keywords:['banking','current','activity','pending','posted','instructions','settlement','account','native','lineage']},
   retryBankInstructions:{category:'banking',keywords:['banking','pending','instructions','retry','recover','delivery']},
