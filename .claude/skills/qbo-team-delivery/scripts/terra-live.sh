@@ -39,7 +39,9 @@ codex_bin=$(command -v codex.cmd || ls "${APPDATA:-}/npm/codex.cmd" 2>/dev/null 
 # A fresh folder per run, so old screenshots never pass as new evidence.
 ab_js=$(node -p "require('node:path').join(process.env.APPDATA || require('node:path').join(require('node:os').homedir(), 'AppData', 'Roaming'), 'npm', 'node_modules', 'agent-browser', 'bin', 'agent-browser.js')") || exit 2
 ab_js=$(cygpath -m "$ab_js" 2>/dev/null || echo "$ab_js")
-[ -f "$ab_js" ] || { echo "Installed agent-browser executable is unavailable" >&2; exit 2; }
+ab_native=$(node -p "require('node:path').join(require('node:path').dirname(process.argv[1]), 'agent-browser-win32-' + process.arch + '.exe')" "$ab_js") || exit 2
+ab_native=$(cygpath -m "$ab_native" 2>/dev/null || echo "$ab_native")
+[ -f "$ab_native" ] || { echo "Installed native agent-browser executable is unavailable" >&2; exit 2; }
 out="artifacts/terra-live/$run_name-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$out"
 
 # Each run passes a unique marker (an unused config key) so this run's processes
@@ -138,12 +140,12 @@ fi
 
 # The repository's AGENTS.md bans exec_command on Windows (it flashes focus-stealing
 # windows) and asks for hidden child processes from the node_repl tool. Give Terra
-# that exact route, with a timeout long enough for the first Chrome start.
+# the existing hidden native route and bounded protocol completion.
 ab_route() {
   local ab_profile_args=""
   [ "$banking_persistent" -eq 1 ] && ab_profile_args="'--profile', 'C:/Users/NewAdmin/.qbo-automation-profile',"
   cat <<ROUTE
-- Run agent-browser the way the repository's AGENTS.md "Windows background commands" section requires: from the node_repl js tool, call node:child_process execFile('node', ['$ab_js', '--session', '$session', $ab_profile_args ...args], { windowsHide: true, timeout: 120000 }), and give that js tool call timeout_ms: 150000 (the first open starts Chrome and takes over 30 seconds; a shorter tool timeout resets the kernel). Do not use exec_command. After each open or navigation run the args wait --load networkidle.
+- Run agent-browser through the repository's existing hidden native transport from the general node_repl js tool. Initialize: var {createRequire}=await import('node:module'); var {privateRun}=createRequire('C:/Projects/qbo/package.json')('./backend/src/modules/qbo-browser-transport'); var ab=async(...args)=>{var j=JSON.parse(await privateRun('$ab_native', ['--session', '$session', $ab_profile_args ...args, '--json'], {nativeCliCompletion:true, timeoutMs:45000})); if(!j.success)throw new Error('Browser command failed'); nodeRepl.write(j.data);}; Then await ab(...args). Give each js call timeout_ms:60000. This existing transport uses windowsHide:true, shell:false, private stdin and actual native parent-exit plus terminal JSON completion. Do not invoke the agent-browser.js Node shim: it launches its child with windowsHide:false and can retain pipes. Do not use exec_command, write_stdin, shell wrappers or the CUA REPL for commands. After navigation, inspect current state or use a bounded DOM readiness wait; do not wait indefinitely for networkidle on the background-active QBO app. Keep the exact assigned session/profile, lease, scope, stop list and action authorization unchanged.
 ROUTE
 }
 never_list() {
