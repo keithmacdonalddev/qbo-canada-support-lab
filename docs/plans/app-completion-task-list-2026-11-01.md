@@ -1,6 +1,6 @@
 # App completion task list
 
-Updated: 2026-11-04T09:48:36.452Z. Maintained by the active implementation session at each verified milestone.
+Updated: 2026-11-04T10:05:09.899Z. Maintained by the active implementation session at each verified milestone.
 
 ## Authority and use
 
@@ -184,6 +184,8 @@ These ten OPEN steps split the existing BANK-2 milestone into bounded assignment
 | G02 | P2 — CONDITIONAL | Deployment/endurance environment if needed for the owner's always-running workflow. | Deployment guide was not server-validated. Do not start services, deploy or change accounts merely to satisfy documentation. |
 
 ## Progress log
+
+- 2026-11-04T10:05:09.899Z — **A03/F01 progress: actual close crash cleared, fresh-window batching installed.** Nov1 actual preparation09:53UTC now fails only on exact tax-account attribution,118general records; no TypeError and no calendar advance. Reused exact native50-ID reader without cross-window reuse; original51GET fixture now2requests/window (query+singletonGET), before/after changes and all financial barriers preserved. InactiveCustomer/Vendor/Item remainGET.37initial focused checks/349syntax plus7finalbatch cases,adapter syntax/diff and distinct final implementation/safety reviews pass. Actual Production2856 five-record/two-window query proof gives stable exact11559–11563 IDs in1.542s,0writes; native retry count/full close performance and3calls/record endurance remainunverified. A05 latest21/220; continue exact tax proof and independent ready full-backlog work.
 
 - 2026-11-04T09:48:36.452Z — **A05 actual output16→21; collection readiness known0.** Normal accountant governed run39800889d8f57058ce19d010 saved SalesReceipts11559–11561 and Estimates11562–11563 in one answered batch/single send; original receipts retained. Authenticated app shows21/220, calendarOct31; fresh original close attempt in-flight. Due-first collection proof removes2,063-history/2,000-cap false unavailability without weakening eligibility;55duecurrent invoices have0proven imported intersection.37focused checks,syntax,diff and distinct implementation/safety review pass. Five new saves are bounded delivery; sustained220/day/overdue closes remainOPEN.
 

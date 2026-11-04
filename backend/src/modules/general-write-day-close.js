@@ -111,13 +111,22 @@ async function generalRecordsFor({ Runs, scope, day, through = day, copy, models
       else previous.dates = dates;
     }
   }
+  // Every retained identity is observed, including older records moved into this
+  // period. Each invocation gets a fresh map; the after-ledger gather never
+  // reuses the before-ledger observations. Explicit deletes remain tombstones.
+  const identities = [];
+  for (const { item, before, id, request } of candidates.values()) {
+    if (item.outcome === 'saved' && !preservesBillableState(before, item.record, item.entity)) fail('General write ' + item.entity + ' ' + id + ' changed native billable expense history; recover its original evidence before close.');
+    if (item.outcome === 'saved' && !require('./general-write-currency').preservesCurrency(before, item.record, request, item.entity)) fail('General foreign write ' + item.entity + ' ' + id + ' lost its currency basis.');
+    if (item.outcome !== 'deleted') identities.push({ entity: item.entity, qboId: String(id) });
+  }
+  const grouped = typeof copy.readMany === 'function' ? await copy.readMany(scope, identities) : null;
+  if (typeof copy.readMany === 'function' && (!(grouped instanceof Map) || grouped.size !== identities.length || identities.some(row => !grouped.has(row.entity + ':' + row.qboId) || grouped.get(row.entity + ':' + row.qboId)?.Id !== row.qboId))) fail('Grouped close reads omitted or changed an exact saved identity.');
   const records = [], settlementVersions = [];
   for (const { run,ref,item, op, before, id, dates, request } of candidates.values()) {
     // An exact successful delete is its tombstone; do not turn its expected
     // not-found GET into a close failure. Remaining GL rows still fail proof.
-    if (item.outcome === 'saved' && !preservesBillableState(before, item.record, item.entity)) fail('General write ' + item.entity + ' ' + id + ' changed native billable expense history; recover its original evidence before close.');
-    if (item.outcome === 'saved' && !require('./general-write-currency').preservesCurrency(before, item.record, request, item.entity)) fail('General foreign write ' + item.entity + ' ' + id + ' lost its currency basis.');
-    const current = item.outcome === 'deleted' ? null : await copy.read(scope, item.entity, id);
+    const current = item.outcome === 'deleted' ? null : grouped ? grouped.get(item.entity + ':' + id) : await copy.read(scope, item.entity, id);
     if (SETTLEMENT_ENTITIES.has(item.entity)) settlementVersions.push({ key: item.entity + ':' + id, targets: [...new Set(settlementLinks(item.record))].sort(), record: item.record || null, current, outcome: item.outcome, op: item.op });
     if (![...dates, current?.TxnDate].some(inside)) continue;
     let apOmission=null;if(item.entity==='BillPayment'&&item.reconciliation?.kind===require('./general-billpayment-recovery').KIND){const receipt=await models.Receipts.findOne({_id:item.reconciliation.receiptId,...scope}).maxTimeMS(3000).lean();apOmission=await require('./general-billpayment-recovery').loadProof({models,scope,run,ref,receipt,current});if(!apOmission)fail('Saved bill-payment account proof is unavailable or changed');}

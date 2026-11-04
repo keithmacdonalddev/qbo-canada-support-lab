@@ -94,6 +94,7 @@ function createBusinessTransactionBatchReader({ access, observations, now = () =
       return result;
     } finally { clearTimeout(deadline); signal?.removeEventListener('abort', abort); controller.abort(); }
   };
+  Object.defineProperty(read, 'supports', { value: entity => TRANSACTIONS.has(entity) });
   read.clear = () => { retained = null; };
   return read;
 }
