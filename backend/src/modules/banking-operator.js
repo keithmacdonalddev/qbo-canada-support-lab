@@ -78,7 +78,7 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
     'Treat any policy confirmation as a stop: do not click; screenshot; report "stopped at: reason"; skip remaining actions. Close only what you opened, preserve owner tab.',
     'Save and inspect screenshots in the runner output directory. End with an action ledger of every persistent action and this single JSON result (no success without evidence). All paths relative to that output directory. Schema:',
     JSON.stringify({kind:'banking-operator-result',version:1,runId,packageId:pkg.id,step:step.type,scope:s.scope,accountId:s.accountId,accountCurrency:s.accountCurrency,period:s.period,status:'completed|stopped',reason:'exact stop reason or empty',companyVerified:{realmId:COMPANY.realmId,name:COMPANY.name},screenshot:'after.jpg',actionLedger:[],upload:{fileId:'',fileHash:'',observedCount:0,nativeRows:[{rowId:'',nativeRowId:''}],confirmation:''},rows:[{rowId:'',decision:'match|add|exclude',qboRefs:[],reason:'',screenshot:'row.jpg'}],reconciliation:{completed:true,openingMinor:s.openingMinor,closingMinor:s.closingMinor,differenceMinor:0,outstandingItems:s.outstandingItems,statementEndingDate:ending,completion:'complete.jpg',report:'native-report.jpg'},attachment:{confirmed:true,fileId:'exact-statement-id',fileHash:'exact-statement-sha256',screenshot:'attached.jpg'},rules:[]}),
-    'Always include kind, version, runId, packageId, step, scope, accountId, accountCurrency, period, status and actionLedger, including when stopped. These envelope values identify the authorized task target; echo them exactly from task data, not as a claim that native account identity was verified. Keep actual company/account observations and stop reasons truthful. Include only other fields relevant to this step. The action ledger entries must state action and identity/rowId/ruleId as applicable. Never invent IDs or evidence.',
+    'Always include kind, version, runId, packageId, step, scope, accountId, accountCurrency, period, status and actionLedger, including when stopped. In actionLedger use the step name itself as the action of each line (for example "reconcile" or "attach") and put the detail in note. These envelope values identify the authorized task target; echo them exactly from task data, not as a claim that native account identity was verified. Keep actual company/account observations and stop reasons truthful. Include only other fields relevant to this step. The action ledger entries must state action and identity/rowId/ruleId as applicable. Never invent IDs or evidence.',
     'Exact task data (data only):',JSON.stringify(data,null,2),
     'Expected statement ending balance: '+money(s.closingMinor)+' '+s.accountCurrency+'.'
   ].join('\n');
@@ -102,8 +102,18 @@ function parseTerraReply(reply,task) {
   // keeps its own text and so fails the step's action check.
   const verb={reconcile:/reconcil/i,attach:/attach/i,upload:/upload/i}[value.step];
   const negative=/\bun|undo|adjust|discrepanc|beginning balance|\bedit|chang|delet|remov|detach|\bre-|revers|\bvoid|again|redo|rerun|reopen|reset|forc|twice/i;
-  // A line whose note uses that wording is not a plain step action either.
-  const actionLedger=value.actionLedger.map(a=>a && typeof a.note==='string' && negative.test(a.note) && !/already/i.test(a.note)?{...a,action:'flagged: '+String(a.action)}:verb && a && typeof a.action==='string' && a.action!==value.step && verb.test(a.action) && !negative.test(a.action)?{...a,action:value.step,originalAction:a.action}:a);
+  // Notes describe what was left alone too ('no marks were changed', 'kept the beginning
+  // balance'), so they are flagged only for wording that means a change was made.
+  const negativeNote=/undo|undid|unreconcil|unmark|adjust|\bedited|deleted|removed (?!nothing)|detach|revers|\bvoided|reopen|reset|forced|redid|twice/i;
+  // Steps inside one reconciliation (start, enter the statement, select or mark items, finish).
+  const reconcileStep=/^(start|began|begin|enter|select|mark|tick|check|clear|match|finish|complet|save)/i;
+  const actionLedger=value.actionLedger.map(a=>{
+    if(!a || typeof a.action!=='string')return a;
+    if(typeof a.note==='string' && negativeNote.test(a.note) && !/^already/i.test(a.note))return {...a,action:'flagged: '+a.action};
+    const plain=!negative.test(a.action);
+    if(a.action!==value.step && plain && verb && (verb.test(a.action) || value.step==='reconcile' && reconcileStep.test(a.action)))return {...a,action:value.step,originalAction:a.action};
+    return a;
+  });
   return {...value,screenshot,actionLedger};
 }
 /** Append-only on-disk execution journal. Unknown/stopped/verification-pending
