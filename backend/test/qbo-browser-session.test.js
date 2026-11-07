@@ -175,3 +175,10 @@ test('a native browser command that fails returns its own error reply instead of
  await assert.rejects(T.privateRun('agent-browser.exe',['eval'],{nativeCliCompletion:true,timeoutMs:300,spawnProcess:fake(1,''),exec:(_f,_a,_o,cb)=>cb(null)}),e=>e.code==='QBO_SESSION_UNCERTAIN');
  await assert.rejects(T.privateRun('agent-browser.exe',['open'],{nativeCliCompletion:true,timeoutMs:300,spawnProcess:fake(1,JSON.stringify({success:false,error:'Read timed out waiting for daemon'})),exec:(_f,_a,_o,cb)=>cb(null)}),e=>e.code==='QBO_SESSION_UNCERTAIN');
 });
+test('a large native reply such as a QuickBooks page snapshot completes normally',async()=>{
+ const {EventEmitter}=require('node:events'),{PassThrough}=require('node:stream');
+ const big=JSON.stringify({success:true,data:{snapshot:'x'.repeat(300000)}});
+ const spawnProcess=()=>{const child=new EventEmitter();child.pid=32126;child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();setTimeout(()=>{for(let i=0;i<big.length;i+=60000)child.stdout.emit('data',Buffer.from(big.slice(i,i+60000)));child.emit('exit',0);},5);return child;};
+ const raw=await T.privateRun('agent-browser.exe',['snapshot'],{nativeCliCompletion:true,timeoutMs:2000,spawnProcess,exec:(_f,_a,_o,cb)=>cb(null)});
+ assert.equal(JSON.parse(raw).data.snapshot.length,300000);
+});

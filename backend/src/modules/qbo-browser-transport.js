@@ -23,7 +23,9 @@ function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=
   const stop=()=>{if(failed||closed)return;failed=true;if(nativeCliCompletion&&parentExited){done(failure('QBO_SESSION_UNCERTAIN'));closeOwnedPipes();return;}grace=setTimeout(()=>done(failure('QBO_SESSION_UNCERTAIN')),3000);if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');};
   timer=setTimeout(stop,timeoutMs);
   child.once('error',()=>done(failure('QBO_BROWSER_UNAVAILABLE')));
-  child.stdout.on('data',b=>{if(closed)return;if((nativeCliCompletion?outputBytes:output.length)+b.length>65536)stop();else{outputBytes+=b.length;output+=b.toString();completeNative();}});
+  // A QuickBooks page snapshot is ~200 KB; a small cap stopped good commands and
+  // falsely held the shared browser lock as 'cleanup unverified'.
+  child.stdout.on('data',b=>{if(closed)return;if((nativeCliCompletion?outputBytes:output.length)+b.length>(nativeCliCompletion?8388608:65536))stop();else{outputBytes+=b.length;output+=b.toString();completeNative();}});
   child.stderr.on('data',()=>{}); // Never expose provider/credential/browser diagnostics.
   child.once('exit',code=>{parentExited=true;parentExitCode=code;completeNative();});
   child.once('close',code=>done(failed?failure('QBO_SESSION_UNCERTAIN'):nativeCliCompletion?parentExited&&terminalJson()&&pageAnswered()?null:failure('QBO_SESSION_UNCERTAIN'):code===0?null:failure('QBO_BROWSER_UNAVAILABLE')));
