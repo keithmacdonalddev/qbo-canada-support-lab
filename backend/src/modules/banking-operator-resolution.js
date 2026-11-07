@@ -6,6 +6,8 @@ const settled=entry=>['completed','recovered-read-only','resolved-stop'].include
 const stepKey=entry=>hash({packageId:entry.packageId,step:entry.step});
 const check=(ok,message)=>{if(!ok)throw Object.assign(new Error(message),{code:'BANKING_RESUME_BLOCKED',status:409});};
 function noNativeEffect(entry,result){
+  // A verify-only reconcile (every line says it was already completed) changed nothing.
+  if(entry.step?.type==='reconcile' && result?.status==='completed' && Array.isArray(result.actionLedger) && result.actionLedger.length>0 && result.actionLedger.every(a=>a?.action==='reconcile' && /^already\b/i.test(String(a.note||'')))) return true;
   // Preflight is read-only. A reconcile or attach that stopped with an empty action
   // ledger and no reported reconciliation/attachment did nothing that a retry could
   // repeat (an unfinished QuickBooks reconciliation is only a draft). Upload, rules and

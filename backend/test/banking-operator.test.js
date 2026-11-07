@@ -398,3 +398,9 @@ test('Terra replies naming the action in words and putting screenshots under the
  for(const words of ['Unreconciled two prior items','Added reconciliation adjustment','Undo reconciliation for May','Edited beginning balance on reconcile screen']){
   const bad=parseTerraReply(reply.replace('Entered the statement and finished the reconciliation',words),{data});assert.notEqual(bad.actionLedger[0].action,'reconcile',words);}
 });
+test('a verify-only reconcile that only re-read QuickBooks counts as no native effect',async()=>{
+ const R=require(path.join(modules,'banking-operator-resolution'));const entry={step:{type:'reconcile'}};
+ assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'already completed'}]}),true);
+ assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'finished'}]}),false);
+ assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'already completed'},{action:'reconcile'}]}),false);
+});
