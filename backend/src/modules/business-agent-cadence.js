@@ -340,6 +340,9 @@ function budgetResetAt(now,requests){
 function decide({ now, settings = {}, business = {}, agent = {}, today = null, owned = [], obligations = null, requests = null, state = {}, ownerRequested = false, ceiling = REVIEW_CEILING, management = null }) {
   const local = localParts(now), day = local.date, interval = Math.max(5, Number(settings.decisionIntervalMinutes) || 60) * MINUTE, recheck = Math.min(interval, PAUSE_RECHECK_MINUTES * MINUTE);
   let s = { ...(state || {}) };
+  // A review cut off by a restart or cancellation (never finished, or finished as cancelled) did no work:
+  // it does not start the spacing clock for the next one.
+  const cutOff = s.reviewPending === true && now - (Date.parse(s.lastReviewAt || '') || now) > 3 * MINUTE || s.lastOutcome === 'cancelled';
   if (s.day !== day) s = { ...s, day, reviews: 0 };
   const rhythm = frozenRhythm(s, day);s.rhythm = rhythm;
   const signature = progressSignature(business, today, owned, obligations);
@@ -359,7 +362,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   }
   else if (typeof s.lastSignature === 'string' && s.lastSignature !== signature) s.misses = 0;
   s.lastSignature = signature;
-  const misses = Number(s.misses) || 0, last = Date.parse(s.lastReviewAt || '') || 0;
+  const misses = Number(s.misses) || 0, last = cutOff ? 0 : Date.parse(s.lastReviewAt || '') || 0;
   const midnight = zonedTime(nextDay(day), MIDNIGHT_CLOSE_MINUTES), tomorrow = zonedTime(nextDay(day), 0);
   const nextOpen = () => { for (let offset = 0; offset < 8; offset++) { const value = shift(day, offset), r = offset ? dayRhythm(value) : rhythm; if (r.open === null) continue; const at = zonedTime(value, offset ? Math.max(r.open, MIDNIGHT_CLOSE_MINUTES) : r.open); if (at > now) return at; } return now + interval; };
   const result = (kind, callModel, at, reason) => ({ kind, callModel, nextReviewAt: new Date(Math.max(now + (callModel ? 0 : 1000), at)).toISOString(), reason, state: s });
@@ -473,7 +476,7 @@ function beginReview(state, { now, signature, kind }) {
 }
 // Only a recorded terminal outcome makes a review eligible for no-progress backoff.
 // A crash leaves the baseline pending; it still consumes its daily review allowance.
-function finishReview(state, { failureKind = 'no-progress' } = {}) { return { ...(state || {}), reviewPending: false, reviewFailureKind: failureKind }; }
+function finishReview(state, { failureKind = 'no-progress', outcome = null } = {}) { return { ...(state || {}), reviewPending: false, reviewFailureKind: failureKind, lastOutcome: outcome }; }
 const timeFormat = new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, hour: 'numeric', minute: '2-digit', hour12: true });
 // "2:15 PM" in Halifax time, for text the accountant and the work list read.
 const localTime = value => { const ms = typeof value === 'number' ? value : Date.parse(value || ''); return Number.isFinite(ms) ? timeFormat.format(new Date(ms)).replace(/\s*a\.m\./i, ' AM').replace(/\s*p\.m\./i, ' PM') : null; };

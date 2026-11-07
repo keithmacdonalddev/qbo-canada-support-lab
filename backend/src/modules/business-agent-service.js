@@ -365,7 +365,7 @@ function createBusinessAgentService(options={}) {
       try{transcript?.add('outcome',{status:final,...(error?{data:{errorDetail:businessErrorDetail(error)}}:{}),text:event?[event.title,event.detail].filter(Boolean).join(' · '):''});}catch{/* transcript is best-effort */}
       if(usageRecord){try{await usage.save(usageRecord,{outcome:final,finishedAt:new Date(now()),resetAt:error?.quota?.resetAt||null});}catch{/* The engine already saved token totals. */}}
       if(pass?.role==='accountant'&&terminalRecorded){
-        try{row=await store.update(row,token,{cadence:cadence.finishReview(row.cadence,{failureKind:final==='failed'?(error?.code||'failed'):'no-progress'})});}catch{/* Lost leases retain the pending baseline; never invent a completed review. */}
+        try{row=await store.update(row,token,{cadence:cadence.finishReview(row.cadence,{failureKind:final==='failed'?(error?.code||'failed'):'no-progress',outcome:final})});}catch{/* Lost leases retain the pending baseline; never invent a completed review. */}
       }
       if(pass){try{row=await store.update(row,token,{activePass:null});}catch{/* A newer lease owns review state. */}}
       if(apply){try{await apply(final);}catch{/* Owner changes and expired leases win; no second terminal outcome is recorded. */}}
