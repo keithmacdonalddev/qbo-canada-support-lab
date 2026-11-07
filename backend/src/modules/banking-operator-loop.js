@@ -13,8 +13,9 @@ function nextStep(pkg,status){
   const runs=status.steps || [];
   // A month whose own CSV was already imported still has its rows reviewed first.
   if(pkg.evidence.imports.some(i=>i.status==='uploaded')){const row=pkg.snapshot.rows.find(r=>!['matched','added','excluded'].some(k=>pkg.evidence.rows[r.rowId]?.[k]));if(row)return {type:'review',rowId:row.rowId};}
-  if(!runs.some(r=>r.step.type==='reconcile' && r.status==='completed'))return {type:'reconcile'};
-  return {type:'attach'};
+  // The reconcile step records the reconciliation; attaching the statement PDF in QuickBooks
+  // is optional and not scheduled (the browser's upload policy can refuse it).
+  return {type:'reconcile'};
 }
 // One month worth working per account: the month after the latest one already
 // reconciled in the app; for an account with none, its latest statement (its

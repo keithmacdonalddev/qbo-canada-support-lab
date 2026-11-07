@@ -162,6 +162,14 @@ function createBankingOperator(deps) {
       check(!journal.some(j=>!resolution.settled(j)), 'Account has a stopped, uncertain or unverified earlier step');
       check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)), 'Unfinished native import requires observed recovery');
       const previous=journal.filter(j=>j.packageId===pkg.id && j.status==='completed').sort((a,b)=>Date.parse(a.finishedAt)-Date.parse(b.finishedAt));
+      // A reconcile completed by an earlier version that recorded only at attach time:
+      // record it now from that run's retained report and completion screens; no browser.
+      const done=previous.findLast(j=>j.step.type==='reconcile' && j.report && j.completion && j.result?.reconciliation);
+      if(step.type==='reconcile' && done && !pkg.summary.reconciled){
+        const r=done.result.reconciliation,cmd={requestId:done.runId+'-reconciled-'+pkg.stateVersion,expectedVersion:pkg.stateVersion,action:'reconciled'};
+        const recorded=await deps.workspace.recordReconciliation(user,pkg.id,{...cmd,accountId:s.accountId,accountCurrency:s.accountCurrency,period:s.period,openingMinor:r.openingMinor,closingMinor:r.closingMinor,differenceMinor:r.differenceMinor,outstandingItems:r.outstandingItems,report:done.report,completion:done.completion,evidence:done.screen});
+        return {runId:done.runId,package:recorded,verification:done.verification,evidence:done,recordedFrom:done.runId};
+      }
       const preflight=previous.findLast(j=>j.step.type==='preflight');
       if(step.type==='upload') check(preflight && Date.parse(now())-Date.parse(preflight.rulesInspection?.observedAt)<=300000, 'Fresh successful preflight required before upload');
       const reconciled=previous.findLast(j=>j.step.type==='reconcile');
@@ -260,6 +268,7 @@ function createBankingOperator(deps) {
         // outstanding list; those come from the earlier run that completed it.
         const r=existing && result.reconciliation ? {differenceMinor:existing.differenceMinor,outstandingItems:existing.outstandingItems,...result.reconciliation} : result.reconciliation; if(existing && r)result.reconciliation=r; check(r?.completed===true && r.statementEndingDate===task.data.statementEndingDate && (existing ? r.openingMinor===existing.openingMinor && r.statementEndingDate===existing.statementEndingDate && result.actionLedger.every(a=>/already/i.test(a.note||a.originalAction||'')) : r.openingMinor===s.openingMinor || firstReconciliation && Number.isSafeInteger(r.openingMinor)) && r.closingMinor===s.closingMinor && r.differenceMinor===0 && same(r.outstandingItems,s.outstandingItems) && result.actionLedger.some(a=>a.action==='reconcile'), 'Exact zero-difference reconciliation evidence missing');
         entry.completion=await screen(r.completion); entry.report=await screen(r.report,'Completed native reconciliation report','native report retained');
+        current=await deps.workspace.recordReconciliation(user,pkg.id,command(current,'reconciled',{accountId:s.accountId,accountCurrency:s.accountCurrency,period:s.period,openingMinor:r.openingMinor,closingMinor:r.closingMinor,differenceMinor:r.differenceMinor,outstandingItems:r.outstandingItems,report:entry.report,completion:entry.completion,evidence:entry.screen}));
       }
       if(step.type==='attach') {
         const statement=s.files.find(f=>f.kind==='statement');

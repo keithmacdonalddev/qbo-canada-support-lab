@@ -58,7 +58,8 @@ async function harness(input=real) {
 test('real stored Payment26 package replays through BF2 -> BF4 -> BF7 production execute with fake Terra',async t=>{
   const h=await harness();const e=h.source.envelope.events.find(e=>e.source.entity==='Payment' && e.source.id==='26');assert.equal(e.amountMinor,342349);assert.equal(real.envelope.period,'2023-08');
   await h.upload();h.withMarks=true;let reviewed;for(let i=0;i<12;i++)reviewed=await h.exec('review');assert.equal(reviewed.package.summary.matched,12);assert.equal(reviewed.verification.status,'observed');
-  await h.exec('reconcile');assert.equal(h.pkg.summary.reconciled,false);const done=await h.exec('attach');assert.equal(done.package.summary.reconciled,true);assert.equal(done.verification.status,'Terra-reported only');assert.equal(h.calls,17);assert.ok(h.journals.every(j=>j.status==='completed'));assert.equal(h.leaseHeld,false);
+  // The reconcile step records the reconciliation; attaching the PDF is optional.
+  const done=await h.exec('reconcile');assert.equal(done.package.summary.reconciled,true);assert.equal(done.verification.status,'Terra-reported only');assert.equal(h.calls,16);assert.ok(h.journals.every(j=>j.status==='completed'));assert.equal(h.leaseHeld,false);
   t.diagnostic('Real package '+real.packageId+' account 60 / 2023-08: 12 rows, Payment26 CAD3423.49; all native outcomes FAKE, no QBO/DB calls.');
 });
 test('task scopes CSV only, Company ID, persistent operator browser and deliberate rule Auto-post',async()=>{
@@ -150,8 +151,8 @@ test('rules retain exact desired settings and mismatched Auto-post/category cann
  const spec={action:'create',name:'BF7 fake rule',accountId:'60',period:real.envelope.period,autoPost:false,conditions:[{field:'description',operator:'equals',value:'Exact fake fee'}],categoryId:'19',taxTreatment:'out-of-scope'};
  for(const wrong of [false,true]){const h=await harness();await h.upload();h.mutateReply=(v,task)=>{if(wrong && task.data.step.type==='rules')v.rules[0].categoryId='wrong';};if(wrong)await assert.rejects(h.exec('rules',{rules:[spec]}),/Exact rule/);else assert.equal((await h.exec('rules',{rules:[spec]})).evidence.result.rules[0].autoPost,false);}
 });
-test('wrong statement PDF hash cannot complete reconciliation evidence',async()=>{
- const h=await harness();await h.upload();for(let i=0;i<12;i++)await h.exec('review');await h.exec('reconcile');h.mutateReply=v=>v.attachment.fileHash='f'.repeat(64);await assert.rejects(h.exec('attach'),/Exact statement attachment/);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.reconciled,false);
+test('a reconciliation is recorded without the optional PDF attachment, and nothing runs after it is recorded',async()=>{
+ const h=await harness();await h.upload();for(let i=0;i<12;i++)await h.exec('review');await h.exec('reconcile');const view=await h.workspace.detail(user,h.pkg.id);assert.equal(view.summary.reconciled,true);assert.equal(view.evidence.reconciled.statementAttachment,null);const calls=h.calls;await assert.rejects(h.exec('attach'),/already reconciled/);assert.equal(h.calls,calls);
 });
 test('flagged command audit cannot advance a native outcome',async()=>{
  const h=await harness(),run=h.runner.run;h.runner.run=async args=>({...await run(args),commandAudit:{shell:1,flagged:1}});await assert.rejects(h.exec('preflight'),/Terra process/);assert.equal(h.journals.at(-1).status,'blocked');
@@ -403,4 +404,14 @@ test('a verify-only reconcile that only re-read QuickBooks counts as no native e
  assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'already completed'}]}),true);
  assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'finished'}]}),false);
  assert.equal(R.noNativeEffect(entry,{status:'completed',actionLedger:[{action:'reconcile',note:'already completed'},{action:'reconcile'}]}),false);
+});
+test('a reconcile completed by the earlier attach-time version is recorded from its journal without Terra, once',async()=>{
+ const h=await harness();await h.upload();for(let i=0;i<12;i++)await h.exec('review');
+ // Simulate the earlier version: the reconcile run completed but the package was not recorded.
+ const record=h.workspace.recordReconciliation;h.workspace.recordReconciliation=async()=>{throw Object.assign(new Error('old version records at attach'),{skipped:true});};
+ await assert.rejects(h.exec('reconcile'));h.workspace.recordReconciliation=record;
+ const last=h.journals.at(-1);last.status='completed';
+ const calls=h.calls;const done=await h.exec('reconcile');
+ assert.equal(done.package.summary.reconciled,true);assert.equal(done.recordedFrom,last.runId);assert.equal(h.calls,calls);
+ await assert.rejects(h.exec('reconcile'),/already reconciled/);assert.equal(h.calls,calls);
 });

@@ -470,10 +470,13 @@ function createBankingWorkspaceService(dependencies = {}) {
       check((!imported || Object.values(row.state.rows).every(r => r.matched || r.added || r.excluded)) && row.state.imports.every(r => !['started','interrupted'].includes(r.status)), 'Resolve every imported row and uncertain import before reconciliation.', 409);
       check((c.openingMinor === row.snapshot.openingMinor || firstReconciliation && Number.isSafeInteger(c.openingMinor)) && c.closingMinor === row.snapshot.closingMinor && c.differenceMinor === 0 && canonical(c.outstandingItems) === canonical(row.snapshot.outstandingItems), 'Native completion needs exact statement balances, zero difference and retained outstanding items.');
       check(c.accountId === row.accountId && c.accountCurrency === row.accountCurrency && c.period === row.period, 'Native reconciliation account/currency/period changed.', 403);
-      const report = await evidence(c.report, bound), completion = await evidence(c.completion, bound), attachment = await evidence(c.statementAttachment, bound);
-      check(report.strength === 'native report retained' && completion.strength === 'screen observed' && attachment.strength === 'screen observed', 'Retain the completed native report, zero-difference completion screen and statement-attachment screen.');
-      check(new Set([report.artifact.sha256, completion.artifact.sha256, attachment.artifact.sha256]).size === 3 && !row.snapshot.files.some(f => f.sha256 === report.artifact.sha256), 'Native report and completion evidence must be distinct from the simulated statement and each other.');
-      nativeSuccess(completion); nativeSuccess(attachment); nativeSuccess(ev); row.state.reconciled = { report, completion, statementAttachment: attachment, openingMinor: c.openingMinor, closingMinor: c.closingMinor, differenceMinor: 0, outstandingItems: clone(c.outstandingItems), evidence: ev };
+      // Attaching the statement PDF in QuickBooks is optional: the browser's file-upload
+      // policy can refuse it, and the reconciliation itself is complete without it.
+      const report = await evidence(c.report, bound), completion = await evidence(c.completion, bound), attachment = c.statementAttachment ? await evidence(c.statementAttachment, bound) : null;
+      check(report.strength === 'native report retained' && completion.strength === 'screen observed' && (!attachment || attachment.strength === 'screen observed'), 'Retain the completed native report and zero-difference completion screen.');
+      const shots = [report.artifact.sha256, completion.artifact.sha256, ...(attachment ? [attachment.artifact.sha256] : [])];
+      check(new Set(shots).size === shots.length && !row.snapshot.files.some(f => f.sha256 === report.artifact.sha256), 'Native report and completion evidence must be distinct from the simulated statement and each other.');
+      nativeSuccess(completion); if (attachment) nativeSuccess(attachment); nativeSuccess(ev); row.state.reconciled = { report, completion, statementAttachment: attachment, openingMinor: c.openingMinor, closingMinor: c.closingMinor, differenceMinor: 0, outstandingItems: clone(c.outstandingItems), evidence: ev };
     });
   }
   // Read-only bank-style projection of immutable retained statement packages.
