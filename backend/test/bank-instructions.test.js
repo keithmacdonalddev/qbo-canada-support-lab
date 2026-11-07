@@ -142,3 +142,12 @@ test('native spaced Other Current Asset Undeposited Funds receipts are excluded 
   const result=await h.service.deliver(bound,run._id);assert.equal(result.status,'complete');assert.equal(result.results[0].status,'excluded');assert.match(result.results[0].reason,/Observed Undeposited Funds/);assert.equal(h.instructions().length,0);
  }
 });
+test('physical cash needs no bank delivery: a bank-to-petty-cash transfer keeps only its bank leg, a cash purchase is excluded',async()=>{
+  const h=fixture();h.accounts.set('120',{Id:'120',Name:'Cash on hand',AccountType:'Bank',AccountSubType:'CashOnHand',CurrencyRef:{value:'CAD'}});
+  const {run}=h.createRun([{ref:'transfer',entity:'Transfer',payload:{TxnDate:'2026-11-05',CurrencyRef:{value:'CAD'},Amount:200,FromAccountRef:{value:'50'},ToAccountRef:{value:'120'}}},{ref:'cash',entity:'Purchase',payload:{TxnDate:'2026-11-05',CurrencyRef:{value:'CAD'},AccountRef:{value:'120'},PaymentType:'Cash',TotalAmt:27.93}}]);
+  const result=await h.service.deliver(bound,run._id);
+  assert.equal(result.status,'complete');
+  const [only]=h.instructions();assert.equal(h.instructions().length,1);
+  assert.equal(only.accountId,'50');assert.equal(only.payload.amountMinor,-20000);assert.equal(only.payload.pairedEventId,null);assert.equal(only.payload.settlementGroupId,null);assert.equal(only.payload.cashCounterpartAccountId,'120');
+  assert.ok(!h.ledgers.has('120'));
+});

@@ -766,7 +766,7 @@ function createDefaultBankMonthlyStatementService(options = {}) {
           ref: p.source.ref,
           session
         }),
-        legs = financial.settlementLegs(p.source.entity, original.record),
+        legs = financial.bankLegs(financial.settlementLegs(p.source.entity, original.record), p.cashCounterpartAccountId, p.accountId) || [],
         leg = legs.find(x => x.accountId === p.accountId);
       need(original.source.signature === p.source.signature && original.record.Id === p.source.id && original.record.TxnDate === p.bookDate && p.logicalKey === C.hash({
         scope: b.scope,

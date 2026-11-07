@@ -19,4 +19,11 @@ function settlementLegs(entity, r) {
   if (entity === 'TaxPayment') return [leg(ref(r.PaymentAccountRef),r.PaymentAmount,-1,'tax-payment')];
   return [];
 }
-module.exports = { nativeAmount, settlementLegs };
+// Legs that move money at a bank. A transfer to or from physical cash keeps only
+// its bank leg; the instruction names the cash account it skipped.
+function bankLegs(legs, cashCounterpartAccountId, accountId) {
+  if (!cashCounterpartAccountId) return legs;
+  if (cashCounterpartAccountId === accountId || !legs.some(l => l.accountId === cashCounterpartAccountId)) return null;
+  return legs.filter(l => l.accountId !== cashCounterpartAccountId);
+}
+module.exports = { nativeAmount, settlementLegs, bankLegs };

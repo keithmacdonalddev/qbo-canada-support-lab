@@ -6,6 +6,7 @@ const { buildGeneralBatch, itemRequest } = require('./general-write-transport');
 const { matchesRequest } = require('./general-write-recovery');
 const crypto = require('node:crypto');
 const KEYS = ['environment','realmId','connectionId'];
+const isPhysicalCash = a => Boolean(a) && (a.AccountType || a.type) === 'Bank' && ['CashOnHand','Cash on hand'].includes(a.AccountSubType || a.subtype);
 const SUPPORTED = new Set(['Payment','SalesReceipt','Deposit','Invoice','RefundReceipt','Purchase','BillPayment','Transfer','CreditCardPayment','TaxPayment']);
 const clone = value => JSON.parse(JSON.stringify(value));
 const same = (a,b) => C.canonical(a) === C.canonical(b);
@@ -95,13 +96,19 @@ function createBankInstructionService(options={}) {
           const source=await proveSource({models:models(),scope:bound.scope,run,ref,session}),r=source.record;
           C.date(r.TxnDate);
           if(['Payment','SalesReceipt'].includes(item.entity) && [...(r.LinkedTxn || []),...(r.Line || []).flatMap(l=>l.LinkedTxn || [])].some(l=>l.TxnType==='Deposit')) {results.push({ref,status:'excluded',reason:'Receipt is contained in a deposit; only that deposit enters bank activity.'});continue;}
-          const legs=settlementLegs(item.entity,r);
+          let legs=settlementLegs(item.entity,r);
           if(!legs.length)continue;
-          const accounts=[];
+          let accounts=[];
           // Mongo transactions require sequential operations on their shared session.
           for(const leg of legs)accounts.push(leg.accountId?await getAccount(bound.scope,leg.accountId,session):null);
           if(['Payment','SalesReceipt'].includes(item.entity) && accounts[0] && String(accounts[0].Id || accounts[0].id)===legs[0].accountId && /^[A-Z]{3}$/.test(accounts[0].CurrencyRef?.value || accounts[0].currency || '') && (accounts[0].CurrencyRef?.value || accounts[0].currency)===r.CurrencyRef?.value && ['Other Current Asset','OtherCurrentAsset'].includes(accounts[0].AccountType || accounts[0].type) && (accounts[0].AccountSubType || accounts[0].subtype)==='UndepositedFunds') {results.push({ref,status:'excluded',reason:'Observed Undeposited Funds receipt creates no bank activity.'});continue;}
           if(accounts.some(a=>!a)) {results.push({ref,accountIds:legs.map(l=>l.accountId).filter(Boolean),status:'held',reason:'Bank account evidence is unavailable. Wait for account sync, then retry bank delivery; no instruction was discarded.'});continue;}
+          // Physical cash has no bank statement: a cash leg needs no bank delivery,
+          // and a transfer between cash and a bank account is one bank movement.
+          const cash=accounts.map(isPhysicalCash);
+          if(cash.every(Boolean)) {results.push({ref,accountIds:legs.map(l=>l.accountId),status:'excluded',reason:'Physical cash has no bank activity.'});continue;}
+          let cashCounterpartAccountId=null;
+          if(cash.some(Boolean)) {cashCounterpartAccountId=legs[cash.indexOf(true)].accountId;legs=legs.filter((l,i)=>!cash[i]);accounts=accounts.filter((a,i)=>!cash[i]);}
           let reason=null;
           if(legs.length===2 && (legs[0].accountId===legs[1].accountId || accounts.some(a=>!a)))reason='Both distinct transfer accounts must be available; neither leg was created.';
           const eligible=[];
@@ -140,7 +147,7 @@ function createBankInstructionService(options={}) {
               const payload={scope:bound.scope,eventId,accountId:leg.accountId,creator:'api-accountant'};
               await store().putEvent({...bound.scope,_id:C.hash({scope:bound.scope,eventId,revision:0}),kind:'reservation',eventId,revision:0,accountId:leg.accountId,accountCurrency:currency,sourceHash:C.hash(payload),contentHash:C.hash(payload),payload},session);
             }
-            const payload={version:1,kind:'governed-bank-instruction',scope:bound.scope,eventId,logicalKey,state:'pending',accountId:leg.accountId,accountCurrency:currency,accountType:type,amountMinor,bookDate:r.TxnDate,description:item.entity+' #'+r.Id,creator:'api-accountant',expectedResolution:'match',settlementGroupId:pair,pairedEventId:pair?eligible.find(e=>e.eventId!==eventId).eventId:null,source:source.source,receivedAt:stamp(),deliveryActorId:String(bound.actorId)};
+            const payload={version:1,kind:'governed-bank-instruction',scope:bound.scope,eventId,logicalKey,state:'pending',accountId:leg.accountId,accountCurrency:currency,accountType:type,amountMinor,bookDate:r.TxnDate,description:item.entity+' #'+r.Id,creator:'api-accountant',expectedResolution:'match',settlementGroupId:pair,pairedEventId:pair?eligible.find(e=>e.eventId!==eventId).eventId:null,...(cashCounterpartAccountId?{cashCounterpartAccountId}:{}),source:source.source,receivedAt:stamp(),deliveryActorId:String(bound.actorId)};
             await store().putEvent({...bound.scope,_id:C.hash({scope:bound.scope,kind:'instruction',eventId:envelopeId}),kind:'instruction',eventId:envelopeId,revision:0,accountId:leg.accountId,accountCurrency:currency,sourceHash:source.source.signature,contentHash:C.hash(payload),payload},session);
             results.push({ref,accountId:leg.accountId,eventId,status:'pending',reused:false});
           }
