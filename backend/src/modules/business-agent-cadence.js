@@ -38,7 +38,7 @@ const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 5, 'catch-up': 60, ma
 const PAUSE_RECHECK_MINUTES = 15;
 // Same-day slices may add at most this many new records in any rolling hour, on top of the daily ceiling,
 // so a business that fell behind catches up steadily instead of in one burst.
-const HOURLY_CAP = 300;
+const HOURLY_CAP = 1000;
 // Under the all-day rhythm a review starts once at least this many records are due (or the rest of the day's
 // target, if fewer remain), so the accountant keeps pace through the hour instead of waiting for a slot.
 const MIN_DUE = 5;
@@ -75,17 +75,24 @@ const FREE_MONTHLY_ALLOWANCE = 500000;
 const EXPECTED_DAILY_SYNC = 300;
 // summary: the meter summary ({ today: { attempts }, month: { attempts } }) or null when it could not be
 // read. Any unreadable or malformed count is treated as reached (fail closed).
-function requestBudget(summary, { limit = DAILY_REQUEST_BUDGET, monthlyLimit = MONTHLY_METERED_BUDGET } = {}) {
+function requestBudget(summary, { limit = null, monthlyLimit = MONTHLY_METERED_BUDGET } = {}) {
   const counts = attempts => {
     if (!attempts || typeof attempts !== 'object') return null;
     const values = METERED_CATEGORIES.map(key => Number(attempts[key]));
     return values.every(value => Number.isFinite(value) && value >= 0) ? Object.fromEntries(METERED_CATEGORIES.map((key, i) => [key, values[i]])) : null;
   };
   const day = counts(summary?.today?.attempts), month = counts(summary?.month?.attempts);
-  const base = { limit, monthlyLimit, allowance: FREE_MONTHLY_ALLOWANCE, expectedDailySync: EXPECTED_DAILY_SYNC };
+  const base = { limit: limit ?? DAILY_REQUEST_BUDGET, monthlyLimit, allowance: FREE_MONTHLY_ALLOWANCE, expectedDailySync: EXPECTED_DAILY_SYNC };
   if (!summary || summary.unavailable || !day || !month) return { ...base, used: null, sync: null, meteredToday: null, meteredMonth: null, reached: true, unavailable: true, scope: null };
   const sum = (row, keys) => keys.reduce((total, key) => total + row[key], 0);
   const used = sum(day, ACTIVITY_CATEGORIES), meteredToday = sum(day, METERED_CATEGORIES), meteredMonth = sum(month, METERED_CATEGORIES);
+  // Owner direction 2026-11-07: no self-imposed daily cap. Today's share is what remains of Intuit's monthly
+  // metered allowance (under the guard), spread over the days left in the UTC month, less the sync reserve.
+  if (limit === null) {
+    const dayText = typeof summary.day === 'string' && /^d{4}-d{2}-d{2}$/.test(summary.day) ? summary.day : new Date().toISOString().slice(0, 10);
+    const [y, m, d] = dayText.split('-').map(Number), left = new Date(Date.UTC(y, m, 0)).getUTCDate() - d + 1;
+    base.limit = limit = Math.max(0, Math.floor((monthlyLimit - (meteredMonth - meteredToday)) / Math.max(1, left)) - EXPECTED_DAILY_SYNC);
+  }
   const monthly = meteredMonth >= monthlyLimit, daily = used >= limit;
   return { ...base, used, sync: day.sync, meteredToday, meteredMonth, reached: daily || monthly, unavailable: false, scope: monthly ? 'month' : daily ? 'day' : null };
 }
@@ -162,8 +169,9 @@ function monthEnd(day) { const [y, m] = day.split('-').map(Number); return new D
 function dayRhythm(day, level = 1) {
   const scale = [0.5, 1, 2].includes(level) ? level : 1;
   if (day >= V4_FROM) {
-    const target = roundHalfUp(Math.floor(DAILY_REQUEST_BUDGET / 3 * 0.9) * scale);
-    return { version: 4, day, level: scale, target, ceiling: roundHalfUp(target * 1.1), open: 0, close: 24 * 60, slots: SCHEDULES.everyDay.slots.map((minute, index) => ({ n: index + 1, minute, weight: 1 })) };
+    // Capacity, not a goal: what Intuit's monthly metered allowance (less a sync reserve) supports at ~3 calls per record.
+    const target = roundHalfUp(Math.floor((MONTHLY_METERED_BUDGET / 30 - EXPECTED_DAILY_SYNC) / 3) * scale);
+    return { version: 4, day, level: scale, target, ceiling: target, open: 0, close: 24 * 60, slots: SCHEDULES.everyDay.slots.map((minute, index) => ({ n: index + 1, minute, weight: 1 })) };
   }
   if (day >= V3_FROM) {
     const every = SCHEDULES.everyDay, target = roundHalfUp(every.target * scale);
@@ -248,7 +256,10 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   // five-record batching threshold to conserve model reviews. Reservations count
   // too, so a prepared first batch is never duplicated.
   const minimum = hourly && used > 0 ? MIN_DUE : 1;
-  const behind = Math.max(0, expectedNow - used), enough = Math.max(1, Math.min(minimum, rhythm.target - used));
+  // v4: no pace. Work is due whenever the budget-backed capacity and the hourly rate cap have room; the
+  // accountant decides how much of it to use.
+  const roomy = rhythm.version >= 4;
+  const behind = roomy ? Math.max(0, Math.min(hourLeft, rhythm.ceiling - used)) : Math.max(0, expectedNow - used), enough = roomy ? 1 : Math.max(1, Math.min(minimum, rhythm.target - used));
   // Work is due whenever today is behind its expected count, batch after batch, within the daily ceiling and the
   // rolling hourly cap; a v2 shortfall is never replayed after that day's hours.
   const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0 && inFlight < MAX_IN_FLIGHT
@@ -363,7 +374,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const independentDuties = !budgetReviewHeld && (!op || ownRetained(op, agent)) && capacity && (!blockers.length || operationHold) && rhythm.open !== null && local.minutes >= rhythm.open && local.minutes < rhythm.close && (obligations?.count > 0 || business.collectionReadiness?.eligibleInvoiceCount > 0 && business.collectionReadiness?.reusableDecisionKeys?.length > 0);
   const independentKind = newActivity ? 'slice' : independentDuties ? 'obligations' : null;
   const independentReason = () => newActivity ? sliceReason() : 'settling currently eligible invoices and bills while other operations continue or recover';
-  const sliceReason = () => 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule' + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
+  const sliceReason = () => (today.rhythmVersion >= 4 ? 'business activity is open: room for up to ' + today.dueSlot.records + ' new records this hour within the request budget; choose what the business needs' : 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule') + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
   const ownRuns = (Array.isArray(owned) ? owned : []).filter(run => ownRetained(run, agent) && run.operationId !== op?.operationId && dispositionOf(run) !== 'unsent');
 
   if (ownerRequested) return capped ? result('ceiling', false, tomorrow, 'you asked for a review, but ' + limit) : result('owner', true, now, 'you asked for a review');
