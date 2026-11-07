@@ -166,7 +166,8 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
   settle:()=>delay(500),
   verifyIdentity:async username=>{for(let n=0;n<20;n++){await evaluate('identity-open');const identity=await evaluate('identity',username);if(identity.loaded){await evaluate('identity-close');return identity.matches;}await delay(500);}return false;},
   verifyCompany:async()=>{
-   await evaluate('navigate-home');
+   // Let the navigation actually start, so the name is read from the new page.
+   await evaluate('navigate-home');await delay(3000);
    let proof=null;
    // A freshly opened browser can take well over ten seconds to render the homepage.
    for(let n=0;n<60;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
@@ -174,7 +175,7 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
    // The shortcut is ignored until the freshly loaded homepage registers it,
    // so press it again (bounded) rather than falling back immediately.
    for(let press=0;press<4 && !proof?.realmId;press++){
-    await command(['press','Control+Alt+Shift+/']);
+    await delay(1500);await command(['press','Control+Alt+Shift+/']);
     for(let n=0;n<10;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}
     if(!proof?.realmId){await command(['press','Escape']);await delay(1500);}
    }

@@ -2,6 +2,9 @@
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const os=require('node:os');
+// Codes that may involve re-entering the password or a person's verification keep the
+// slow, capped retry (repeated password attempts could lock the Intuit account).
+const NEEDS_PERSON=new Set(['QBO_VERIFICATION_REQUIRED','QBO_CREDENTIAL_MISSING','QBO_IDENTITY_UNVERIFIED','QBO_SIGNIN_REQUIRED']);
 function currentPackages(rows){const map=new Map();for(const p of rows){const key=p.accountId+':'+p.period;if(!map.has(key)||p.revision>map.get(key).revision)map.set(key,p);}return [...map.values()].sort((a,b)=>a.period.localeCompare(b.period)||a.accountId.localeCompare(b.accountId,undefined,{numeric:true}));}
 // A monthly statement is reconciled, then attached. Its lines reach QuickBooks
 // through the daily current-feed uploads, so the month's CSV is not uploaded
@@ -70,7 +73,7 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
       if(signInRetry){
         let fresh=null;try{fresh=await readSignInStatus();}catch{/* Only a fresh success may reset retry history. */}
         if(fresh?.status==='ready' && fresh.identityVerified===true && fresh.companyVerified===true && Date.parse(fresh.at)>Date.parse(signInRetry.failedAt))signInRetry=null;
-        else if(signInRetry.attempts>=3 || Date.parse(now())<Date.parse(signInRetry.nextRetryAt))return last={status:'blocked',requiresSignIn:true,reason:signInRetry.reason,code:signInRetry.code,signInRetry};
+        else if(signInRetry.attempts>=3 && NEEDS_PERSON.has(signInRetry.code) || Date.parse(now())<Date.parse(signInRetry.nextRetryAt))return last={status:'blocked',requiresSignIn:true,reason:signInRetry.reason,code:signInRetry.code,signInRetry};
       }
       let selected=null;
       for(const user of await listUsers()){
@@ -100,7 +103,9 @@ function createBankingOperatorLoop({workspace,operator,listUsers,enabled=()=>fal
         if(error.code==='QBO_SESSION_BUSY')return publish({status:'waiting',reason:'Another operator owns the automation browser'});
         const attempts=Math.min(3,(signInRetry?.attempts || 0)+1);
         const code=Object.hasOwn(require('./qbo-browser-login').MESSAGES,error.code)?error.code:'QBO_SIGNIN_REQUIRED';
-        signInRetry={attempts,failedAt:now(),nextRetryAt:new Date(Date.parse(now())+15*60000).toISOString(),code,reason:require('./qbo-browser-login').MESSAGES[code]};
+        // A person must act on a verification challenge or missing login: 15 minutes, three tries.
+        // Anything else (a slow page, a flaky check, a busy browser) retries every two minutes.
+        signInRetry={attempts,failedAt:now(),nextRetryAt:new Date(Date.parse(now())+(NEEDS_PERSON.has(code)?15:2)*60000).toISOString(),code,reason:require('./qbo-browser-login').MESSAGES[code]};
         return publish({status:'blocked',requiresSignIn:true,reason:signInRetry.reason,code,signInRetry});
       }
       const value={reason:error.message,packageId:error.packageId || null,accountId:error.accountId || null,at:now()};let saved=value;try{await pauseStore.write(value);localPauses.delete(value.accountId);}catch(persistenceError){saved={...value,persistenceError:'Durable banking pause could not be saved; no further native work on this account in this process'};localPauses.set(value.accountId,saved);}last={status:'blocked',...saved};heartbeat.lastOutcome=last;try{await stateStore?.write({...heartbeat,...last,signInRetry});}catch{}return last;}).finally(()=>{pending=null;});

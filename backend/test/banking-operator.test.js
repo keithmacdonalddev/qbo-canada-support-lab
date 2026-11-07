@@ -367,3 +367,10 @@ test('a reconcile that stopped before any action retries automatically; one that
  assert.equal(R.noNativeEffect(base,{...result,actionLedger:[{action:'reconcile'}]}),false);
  assert.equal(R.noNativeEffect({...base,step:{type:'upload'}},{...result,step:'upload'}),false);
 });
+test('a flaky company check on a signed-in browser retries every two minutes without a cap',async()=>{
+ const h=await harness(),L=require(path.join(modules,'banking-operator-loop'));let pause=null,state=null,signins=0;
+ h.runner.withSession=async()=>{signins++;throw Object.assign(Error('company'),{code:'QBO_COMPANY_MISMATCH',qboSignInBeforeAdmission:true});};
+ const deps={workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=v},stateStore:{read:async()=>state,write:async v=>state=clone(v)},readSignInStatus:async()=>null,now:h.now};
+ const loop=L.createBankingOperatorLoop(deps);for(let i=0;i<5;i++){await loop.tick();h.advance(3*60000);}
+ assert.equal(signins,5);assert.equal(pause,null);assert.equal(state.signInRetry.code,'QBO_COMPANY_MISMATCH');
+});
