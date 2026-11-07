@@ -1,22 +1,20 @@
 ---
 name: running-a-medium-sized-business-day
-description: Continuous 24-hour operating mix near 220 QuickBooks records/day, due-slot sizing, monthly subscriber renewals, daily collections and weekly coverage of major record types, classes and locations. Use before every same-day batch and daily plan; route to billing, close and support skills when their schedules mature.
+description: How to run the business continuously at the volume you choose: sizing work by records, using the request budget, putting volume through general writes, keeping activity believable and covering record types, classes, locations and accounts. Use before planning or creating same-day activity.
 ---
 
 # Run the business continuously
 
-Read this at each daily planning pass and before sizing a same-day batch. This is a mix guide, **not a new scheduler** or authority to bypass caps. Contracts source-checked 2026-10-31; actual daily volume and feature coverage require saved records.
+You decide what the business is, what it grows into and how much it does (owner direction 2026-11-07). The company exists so any customer's situation, of any kind of business, can be reproduced. Volume is limited only by Intuit's rate limits and the metered request budget; context.today.target, ceiling, hourCap and dueSlot are the capacity that budget supports, not a goal, quota or schedule.
 
 ## Every pass
 
-1. getBusinessState: recover unfinished work and satisfy required calendar verification first. Respect pause, current sync, authority, request/usage budgets and owner decisions.
-2. Follow context.todaysPlan. Load receivables-and-collections for today's customer renewals/promises; month-end-and-year-end-close for due releases, accruals/reversals; support-scenarios-for-troubleshooting for new examples and follow-ups.
-3. Read today's saved/reserved records, target, behind, dueSlot.records, sliceCap, hourCap/hourUsed and ceiling. Server cadence v3 normally spreads about 220 records over 24 hourly :30 slots, every day, weighted toward daytime. Current context, including any scaled target, is authoritative.
-4. When dueSlot exists, prepare one coherent batch near its remaining allowance, execute, verify and reread state. Do not take over timing with loops or timers. Never create a second plan for an already reserved slot.
-5. Count records already due from obligations and adjustments before choosing discretionary sales. Don't add transactions simply to fill a count. General writes consume daily/hourly capacity too; a different tool/key is not extra allowance.
-6. If no discretionary slot is due, do permitted standing duties, report checks and internal follow-up; do not pad. If a refusal/held result repeats without progress, retain the dependency and continue independent work.
-
-When an operation is blocked or needs-check, call inspectBlocker({operationId}) and requestCapability with the exact cause: the recorded error/diagnostic, stopped step, differing approved/current fields and record/version mismatch. Load the deferred tools with searchTools({query:"select:inspectBlocker,requestCapability"}) and call them through useTool. Reuse an existing build-request key for the same gap; disclose unavailable historical values, preserve saved receipts, and continue independent permitted work.
+1. getBusinessState: continue your own unfinished work first. Respect pause, authority and owner decisions.
+2. Follow context.todaysPlan, then current saved state. Load receivables-and-collections, payables-and-payment-runs, month-end-and-year-end-close or support-scenarios-for-troubleshooting when their work is due.
+3. Create what the business needs now. Put everyday volume through manageQboRecord (up to 60 operations per call, about 2–3 QuickBooks reads per saved record; several calls per review is normal). Use activity batches only for what they alone do: receiving purchase orders, settling adopted obligations, correcting their own records.
+4. When nothing ordinary is due, advance coverage: the next missing feature, setting, edge case or record state from getCoverageSituations and getWeeklyCoverage, created the way a real business would. Re-checking finished work is not progress.
+5. When something is wrong (a mismatch, a broken link, a duplicate, a refused write), fix it yourself in the same review with a correction, reversal, re-link or adjustment, and note it. Use inspectBlocker to understand a blocked operation. File requestCapability only when the tool you need does not exist, and keep working on other things.
+6. Never duplicate saved records and never add filler only to raise a count.
 
 ## Size by records, not tool calls
 
@@ -35,52 +33,10 @@ When an operation is blocked or needs-check, call inspectBlocker({operationId}) 
 
 Fixed batches have at most 12 activities. General calls have at most 60 operations. Current capacity may be smaller. Inspect the preview rather than assuming one activity equals one record.
 
-## A mature day near 220 records
 
-Illustrative **new record counts**, not mandatory quotas:
-| Record family | Count | Business reason |
-| --- | ---: | --- |
-| Invoice | 44 | Completed work and customers whose monthly renewals are actually due |
-| Estimate / TimeActivity | 16 / 16 | Quoted field jobs; some quotes convert on later days |
-| SalesReceipt | 12 | Genuine same-day counter/online non-stock sales |
-| Payment / Deposit | 40 / 32 | Prompt, late and partial remittances; some grouped deposits |
-| Bill / BillPayment | 20 / 16 | Supplier services/receipts on terms and scheduled payment runs |
-| Purchase / PurchaseOrder | 8 / 6 | Direct bank/card/cheque costs and genuine orders |
-| CreditMemo / VendorCredit / RefundReceipt | 3 / 2 / 1 | Actual disputes/allowances/cancellations in the modeled business |
-| Transfer / JournalEntry | 1 / 1 | Real cash movement or scheduled/reviewed adjustment |
-| List additions | 2 | Customer or other genuine master-data growth |
-| **Total** | **220** | All families counted once |
+## Make the business believable
 
-Adapt to actual obligations, cash and customer base. This is not 44 invoices to the same handful of parties every day. Twenty-four monthly renewals/day would require roughly 720 monthly subscribers; a small roster only renews on its own anniversary dates. Build the customer base gradually and use genuine project/non-stock activity to fill ordinary demand; record insufficient demand as a volume gap rather than rebilling subscribers. Unneeded journals, refunds, orders and lists are zero that day; rebalance toward genuine sales/collections or report a shortfall.
-
-Keep at least a third of invoices on terms over the week; leave them open until each payer's scheduled date. Credits and disputes stay occasional, not a compulsory daily percentage.
-
-## Across all 24 hours
-
-| Halifax period | Suitable work |
-| --- | --- |
-| 00:00-07:59 | Prior-day recovery/verification, daily management review, due online renewals, scheduled remittances, internal follow-up |
-| 08:00-17:59 | Most quotes, field-service time and invoices, purchases/receipts, collections and supplier runs |
-| 18:00-23:59 | Counter/online receipts, grouped deposits/fees, next-day preparation, due recurring releases; month-end accruals before midnight |
-
-Follow the server's weighted allowance; no hand-set per-hour quota or catch-up burst beyond hourCap. Overnight field visits need a plausible emergency reason. Weekend activity continues at the current target but follows real modeled demand.
-
-## Weekly coverage rotation
-
-Check the trailing seven days before adding work. These are weekly coverage opportunities, not permission for pointless transactions.
-| Day focus | Major types / lifecycle |
-| --- | --- |
-| Monday | Estimate -> later Invoice, TimeActivity; renewals on terms, new Customer if needed |
-| Tuesday | PurchaseOrder -> later Bill; non-stock partial receipt example; normal supplier payments |
-| Wednesday | SalesReceipt, partial Payment, grouped Deposit and separately posted processor fee |
-| Thursday | CreditMemo -> later zero-cash Payment; VendorCredit -> later BillPayment |
-| Friday | Purchase Cash/Check/CreditCard variants, genuine RefundReceipt, Transfer if cash management needs it |
-| Saturday | Late-payer follow-up, quote conversion, service-item/customer growth as demand supports |
-| Sunday | Coverage/report review, due JournalEntry releases; month-end/year-end schedule takes priority on its actual date |
-
-Every day has ordinary sales and collections as due, not only the day's focus. JournalEntry follows a genuine adjustment schedule; no invented errors to force corrections. Physical inventory, payroll, reconciliation and settings are not record-volume fillers. Some features will remain explicitly unverified or manual.
-
-Use general writes for supported shapes missing from fixed workflows: SalesReceipt, ordinary multi-line sales, non-inventory PO partial receipts, dimensions, flexible credits/applications, balance-sheet journals and list maintenance. Use fixed v8 for eligible stock ordering/**full** receipt and established service chains. Inventory in general writes stays off.
+Grow the customer, supplier, item and location base as volume grows so activity does not repeat the same few parties. Keep a realistic mix: sales on terms and settled at the counter, prompt, late and partial payments, grouped deposits, supplier bills and payment runs, purchases by every payment method, occasional credits and refunds, transfers and genuine adjustments. Use multicurrency (home currency CAD) where the business trades abroad. Across a week, every major record type, every active class and location, and every active bank, card and cash account should appear in meaningful activity.
 
 ## Dimensions must be present in records
 
@@ -92,11 +48,10 @@ Across seven days ensure Field & Advisory, Care Plans and Supply & Workshop, and
 
 `getBusinessActivityChoices({})` for fixed roles/eligible targets; queryCompanyData for general IDs and actual balances. Fixed list additions go in their own list-only batch and become usable only in a later verified batch. General list creates can be referenced by later operations in the same call, subject to schema and guard checks.
 
-Typical fixed call:
 `prepareBusinessActivity({decisionKey:"<SERVER_DUE_SLOT_KEY>",purpose:"Today's scheduled service invoice on agreed terms",activities:[{type:"invoice-on-terms",customerKey:"<RETURNED_KEY>",itemKey:"<RETURNED_SERVICE_KEY>",quantity:2,unitPriceCents:15000,termsDays:30,purpose:"Completed two hours of the customer's scheduled service"}]})`.
 Inspect its returned operationId/planHash, executeBusinessPeriod, verify, then reread today. For exact general payloads load qbo-api-records and the relevant routine skill.
 
-End each day with actual saved counts by family, overdue/partial promises, next renewals/releases, scenario IDs and unresolved manual items. A 220-record target, tool success flag or plan does not prove 220 saved records.
+End each day with actual saved counts by family, open promises, next renewals and releases, scenario IDs and unresolved items. A plan or tool success flag is not a saved record.
 
 ## Account rotation
 

@@ -31,7 +31,7 @@ function createPurchaseOrderReceiptReader({ models, readRecord, history, now = (
     const managed = await models.Steps.findOne(filter).maxTimeMS(3000).lean();
     let row, originalStep, originalPolicy, originKind;
     if (managed) {
-      const retained = await history(scope, [managed.logicalKey], { signal });
+      const retained = await history(scope, [managed.logicalKey], { signal, ownerHistory: true });
       const entry = retained.entries.find(entry => entry.logicalKey === managed.logicalKey);
       if (!entry || entry.entity !== 'PurchaseOrder' || entry.qboId !== managed.qboId || entry.fingerprint !== managed.fingerprint || managed.state !== 'verified' || managed.receipt?.qboId !== managed.qboId || managed.dispatch?.compilationHash !== managed.compilation?.compilationHash || managed.dispatch?.requestHash !== managed.compilation?.request?.requestHash) fail('The purchase order lacks its original managed creation evidence.');
       row = managed; originalStep = entry.step; originalPolicy = entry.policy; originKind = 'managed';

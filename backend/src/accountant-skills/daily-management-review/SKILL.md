@@ -40,7 +40,7 @@ When an operation is blocked or needs-check, call inspectBlocker({operationId}) 
 7. List additions planned for today may run now in their own batch (add-customer, add-supplier, add-item only).
 
 ## Good versus weak findings
-- Good: "R02 attention: 131 of 220 records yesterday; 14 active customers took 70% of sales; add 4 customers today."
+- Good: "R02 attention: 14 active customers took 70% of yesterday’s sales; add customers and suppliers as volume grows."
 - Weak: "Volume is fine." (no number, no action)
 
 ## Do not
