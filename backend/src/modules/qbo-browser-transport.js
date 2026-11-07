@@ -86,7 +86,10 @@ async function pageAction(action,value=''){
   if(!main||origin!=='https://qbo.intuit.com'||!location.pathname.startsWith('/app/'))return null;
   const rawId=/Company\s*ID(?:\s+is)?\s*[:#]?\s*([0-9][0-9 \u00a0]{8,30}[0-9])/i.exec(text)?.[1];
   const id=rawId?.replace(/\D/g,'');
-  return {realmId:id||null,name:text.includes('My Business')?'My Business':null};
+  // QuickBooks also states the open company in its own page bootstrap ("realmInfo"),
+  // which needs no keyboard focus. Exactly one distinct value is required.
+  let fromPage=null;try{const ids=[...new Set([...document.documentElement.outerHTML.matchAll(/"realmInfo":\{"realmId":"([0-9]{6,30})"/g)].map(m=>m[1]))];if(ids.length===1)fromPage=ids[0];}catch{}
+  return {realmId:id||fromPage||null,source:id?'dialog':fromPage?'page':null,name:text.includes('My Business')?'My Business':null};
  }
  // Both routes share the existing atomic form guard, but only the live picker
  // closure can authorize the account-manager password form.
@@ -172,6 +175,9 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
    // A freshly opened browser can take well over ten seconds to render the homepage.
    for(let n=0;n<60;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
    if(proof?.name!=='My Business')return proof;
+   // The page's own company record proves the ID without the focus-dependent shortcut.
+   for(let n=0;n<10 && !proof?.realmId;n++){await delay(500);proof=await evaluate('company');}
+   if(proof?.realmId && proof.name==='My Business'){await evaluate('navigate-home');return proof;}
    // The shortcut is ignored until the freshly loaded homepage registers it,
    // so press it again (bounded) rather than falling back immediately.
    for(let press=0;press<4 && !proof?.realmId;press++){
@@ -179,7 +185,10 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
     for(let n=0;n<10;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}
     if(!proof?.realmId){await command(['press','Escape']);await delay(1500);}
    }
-   if(!proof?.realmId){await command(['press','Escape']);await evaluate('navigate-billing');for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}}
+   if(!proof?.realmId){
+    // Local diagnostic: what the page looked like when the ID never appeared (no page text kept).
+    try{const tabs=await command(['tab','list']);const state=await command(['eval','--stdin'],{input:"(()=>({path:location.pathname,ready:document.readyState,focus:document.hasFocus(),dialogs:document.querySelectorAll('[role=dialog]').length,frames:document.querySelectorAll('iframe').length,active:document.activeElement&&document.activeElement.tagName}))()"});await command(['screenshot',path.join(ROOT,'artifacts/banking/company-check-miss.png')]);require('node:fs').appendFileSync(path.join(ROOT,'artifacts/banking/browser-uncertain.jsonl'),JSON.stringify({at:new Date().toISOString(),command:'company-check-miss',tabs:(tabs?.tabs||[]).length,state:state?.result})+'\n');}catch{}
+    await command(['press','Escape']);await evaluate('navigate-billing');for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}}
    await command(['press','Escape']);await evaluate('navigate-home');return proof;
   }
  };
