@@ -14,7 +14,7 @@ Statuses: **OPEN** = not delivered; **IN PROGRESS** = active work; **IMPLEMENTED
 
 Owner direction, 2026-11-03: any new project chat asked "what is next?", "what is outstanding?" or to continue must use this file as the shared backlog, together with the latest handoff. Do not rely on a closed chat or narrow the answer to banking. OPEN, IN PROGRESS and IMPLEMENTED / PROOF OPEN rows all retain unfinished work; CONDITIONAL rows retain their stated conditions. Recheck current evidence before reporting old observations as current.
 
-**Current priority: sustain useful trading, retain the prepared Nov3 close for the actual UTC API-budget reset, complete the shared password route/watch and advance independent historical banking plus automatic statements.** Current saved count151/220, full books closed throughNov2. All12bounded bank baselines, actualCAD5fee/counterpart/currentCSV and paired pendingTransfer11660 are retained. Historical uploads/reconciliations, missing carries, foreign settlement and full currentness remain OPEN. F01 request reduction andF02 unchanged-review hold are installed; observe real ordinary-close savings and sustained output.
+**Current priority (2026-11-07): monthly close replaces the daily verified close (October closed 2026-11-07; daily books check runs and never blocks). Keep activity flowing at the volume the accountant chooses within Intuit’s real read budget, cut metered calls per saved record toward 3, and see [docs/plans/accountant-unblock-2026-11-07.md](accountant-unblock-2026-11-07.md) for the remaining unblock items.** Earlier status text below that refers to daily closes or verifiedThrough is historical.
 
 | Outstanding workstream | Task IDs / location | Remaining owner outcome |
 |---|---|---|
