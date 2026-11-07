@@ -159,3 +159,10 @@ test('overview continuation is exact one-shot and never bypasses challenge rejec
  let phase='overview';const wrong=loginHarness({inspect:async()=>({url:phase==='overview'?L.LOGIN+'/app/account-manager/overview':L.QBO+'/app/homepage'}),navigateHome:async()=>phase='qbo',verifyIdentity:async()=>false});await assert.rejects(wrong.run(),e=>e.code==='QBO_IDENTITY_UNVERIFIED');
  const uncertain=loginHarness({inspect:async()=>({url:L.LOGIN+'/app/account-manager/overview'}),navigateHome:async()=>{throw L.failure('QBO_SESSION_UNCERTAIN');}});await assert.rejects(uncertain.run(),e=>e.code==='QBO_SESSION_UNCERTAIN');assert.equal(uncertain.credential.password,'');
 });
+test('after the password, an intermediate redirect page is waited through, never typed into',async()=>{
+ let index=0;const states=[{url:L.LOGIN+'/app/sign-in',phase:'password'},{url:'https://accounts-tax.intuit.com/redirect',phase:'transition'},{url:L.QBO+'/app/homepage'}];
+ const h=loginHarness({inspect:async()=>states[Math.min(index++,states.length-1)]});const r=await h.run();
+ assert.equal(r.status,'ready');assert.deepEqual(h.calls,['open','password','settle']);
+ index=0;const before=[{url:'https://accounts-tax.intuit.com/redirect',phase:'transition'}];
+ const early=loginHarness({inspect:async()=>before[0]});await assert.rejects(early.run(),e=>e.code==='QBO_SIGNIN_REQUIRED');assert.deepEqual(early.calls,['open']);
+});

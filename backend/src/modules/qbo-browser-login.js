@@ -31,7 +31,9 @@ async function ensureLogin({browser,readCredential,maxSteps=12,onStage=async()=>
     if(proof?.realmId!==REALM||proof?.name!==COMPANY)throw failure('QBO_COMPANY_MISMATCH');
     return {status:'ready',companyVerified:true,identityVerified:true,realmId:REALM,environment:'production',authenticated:passwordSent};
    }
-   if(!loginOrigin(state.url))throw failure('QBO_SIGNIN_REQUIRED');
+   // After the password is accepted Intuit can redirect through other pages on the
+   // way to QuickBooks. Wait (bounded by maxSteps); nothing is entered off the login origin.
+   if(!loginOrigin(state.url)){if(passwordSent){await stage('waiting-for-sign-in');await browser.settle();continue;}throw failure('QBO_SIGNIN_REQUIRED');}
    if(new URL(state.url).pathname==='/app/account-manager/overview'&&!homeRequested){
     homeRequested=true;await stage('opening-company');await browser.navigateHome();continue;
    }
