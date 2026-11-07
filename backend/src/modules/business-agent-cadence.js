@@ -26,7 +26,10 @@ const SCHEDULES = Object.freeze({
 // Continuous operation (owner direction 2026-10-31): while work is due the accountant runs back to back,
 // one minute after the previous review. It pauses only when nothing is due or a hard limit is reached.
 // Minimum minutes between model reviews of each kind while it keeps making progress.
-const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 1, 'catch-up': 1, management: 1, slice: 1, obligations: 1 });
+// Owner direction 2026-11-06: review only when something is due, at most about hourly. Every model review
+// (any kind) starts the spacing clock, so slices, obligations and the coverage heartbeat share one hourly rhythm;
+// recovery of the accountant's own interrupted work and the owner's requests stay prompt.
+const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 5, 'catch-up': 60, management: 1, slice: 50, obligations: 60, coverage: 60 });
 // With nothing due, saved state is re-checked at least this often (the owner's interval can only shorten it).
 const PAUSE_RECHECK_MINUTES = 15;
 // Same-day slices may add at most this many new records in any rolling hour, on top of the daily ceiling,
@@ -43,9 +46,9 @@ const MANAGEMENT_MINUTES = Object.freeze({ everyDay: 10 });
 const MANAGEMENT_ATTEMPTS = 2;
 // Consecutive model reviews that fail or make no progress wait 5, 15, then 30 minutes. Waiting on QuickBooks is
 // polled without a model, and a review that saved or queued records resets the count.
-const BACKOFF_MINUTES = Object.freeze([5, 15, 30]);
+const BACKOFF_MINUTES = Object.freeze([15, 30, 60]);
 // Hard ceiling on model reviews per Halifax day across every role and outcome, sized for back-to-back reviews.
-const REVIEW_CEILING = 400;
+const REVIEW_CEILING = 60;
 const MIDNIGHT_CLOSE_MINUTES = 5;
 // QuickBooks request budget (Phase 0 meter: transport attempts by UTC day, unsaved counts included).
 // Intuit's Builder tier allows 500,000 metered ("CorePlus") calls a month: reads, queries and reports.
@@ -269,7 +272,10 @@ function ownRetained(operation, agent) {
   return ownsAgentWork(origin,agent);
 }
 // The next uninterrupted period to close: never across a month-end, at most 31 days, through yesterday.
-function nextClose(business, todayDay) {
+// Retired 2026-11-06 (monthly close): the daily books check moves the open day forward without a model
+// review, so there is never a daily close to catch up. Kept for callers and display; always null.
+function nextClose() { return null; }
+function legacyNextClose(business, todayDay) {
   const from = business?.verifiedThrough ? shift(business.verifiedThrough, 1) : business?.openingDate || null, yesterday = shift(todayDay, -1);
   if (!from || from > yesterday) return null;
   const through = [yesterday, monthEnd(from), shift(from, 30)].sort()[0];
@@ -351,7 +357,6 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   const independentReason = () => newActivity ? sliceReason() : 'settling currently eligible invoices and bills while other operations continue or recover';
   const sliceReason = () => 'today is ' + (Number.isSafeInteger(today.behind) ? today.behind : today.dueSlot.records) + ' records behind schedule' + (op || flight.size ? '; prepare independent work while existing operations continue or recover' : '');
   const ownRuns = (Array.isArray(owned) ? owned : []).filter(run => ownRetained(run, agent) && run.operationId !== op?.operationId && dispositionOf(run) !== 'unsent');
-  const behind = nextClose(business, day);
 
   if (ownerRequested) return capped ? result('ceiling', false, tomorrow, 'you asked for a review, but ' + limit) : result('owner', true, now, 'you asked for a review');
   let kind = null, reason = '';
@@ -384,7 +389,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // definitely-unsent Deposit. That remainder needs a model replan, not replay of
   // the retired operation, and must not disappear between activity slots.
   if (!kind && !held && !requests?.reached && hasUnsentRemainder(business,agent)) { kind='recovery'; reason='replanning unsent work while keeping its already saved records'; }
-  if (!kind && !held && behind) { kind = 'catch-up'; reason = 'closing ' + shortDate(behind.fromDate) + (behind.throughDate !== behind.fromDate ? '–' + shortDate(behind.throughDate) : ''); }
+  // No catch-up reviews: the daily books check moves the open day forward without the model (monthly close, 2026-11-06).
   const budgetReason = requestBudgetReason(requests, '');
   if (!kind && managementDue(management, s, day, now)) { kind = 'management'; reason = management.lastPlanDay ? 'the daily management review' : 'the first management review'; }
   // Alternate recovery reviews with new activity; a failed/held recovery cannot consume the
@@ -397,6 +402,10 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
   // so an obligation that cannot be settled never loops.
   if (!kind && open && obligations && obligations.count > 0) { kind = 'obligations'; reason = 'settling ' + obligations.count + ' due ' + (obligations.count === 1 ? 'invoice or bill' : 'invoices and bills'); }
 
+  // Nothing else due: a slow heartbeat review advances QuickBooks coverage (owner direction 2026-11-07).
+  // It creates the next missing feature, setting, edge case or record state; it never re-checks finished work.
+  if (!kind && open && !requests?.reached && (!blockers.length || operationHold)) { kind = 'coverage'; reason = 'nothing is due; advancing QuickBooks coverage with the next missing situation'; }
+
   if(!capped&&budgetReviewHeld&&['catch-up','obligations'].includes(kind)){
     if(managementDue(management,s,day,now)){kind='management';reason=management.lastPlanDay?'the daily management review':'the first management review';}
     else{const reset=budgetResetAt(now,requests);return result('idle',false,Math.min(now+recheck,reset??Infinity),budgetReason+'; '+(!budgetIdentity?'work eligibility is unknown; checking saved state locally':'unchanged close and obligations wait for changed work or a fresh request budget'));}
@@ -406,8 +415,7 @@ function decide({ now, settings = {}, business = {}, agent = {}, today = null, o
     const failures = sameKind ? misses : 0;
     // Slow repeated close/recovery failures down even while today is short. Due
     // independent activity is selected above and keeps its own shorter retry.
-    const behindTarget = ['slice', 'obligations'].includes(kind) && today && !today.unavailable && today.saved < today.target;
-    const wait = failures > 0 ? Math.min(behindTarget ? 5 : Infinity, Math.max(SPACING_MINUTES[kind], BACKOFF_MINUTES[Math.min(failures, BACKOFF_MINUTES.length) - 1])) : SPACING_MINUTES[kind];
+    const wait = Math.max(SPACING_MINUTES[kind] ?? 60, failures > 0 ? BACKOFF_MINUTES[Math.min(failures, BACKOFF_MINUTES.length) - 1] : 0);
     if (failures > 0) reason += ' · no progress on the last ' + (misses === 1 ? 'review' : misses + ' reviews') + ', waiting ' + wait + ' min';
     if (capped) return result('ceiling', false, tomorrow, limit);
     const earliest = last ? last + wait * MINUTE : now;

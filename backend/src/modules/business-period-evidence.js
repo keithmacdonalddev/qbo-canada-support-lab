@@ -17,6 +17,15 @@ function assertEvidenceCapacity(row, retained = false) {
   if (bytes > 15000000) fail('Retained period evidence exceeds its BSON storage budget.');
 }
 const same = (a, b) => String(a) === String(b);
+// Activity batches prepared without report or stock expectations need only their saved-record read-back.
+function recordReadbackOnly(run, manifest) {
+  return Boolean(run?.activityBatch && manifest && Array.isArray(run.requiredAssertions) && run.requiredAssertions.length && run.requiredAssertions.every(row => row.evidenceType === 'record-readback') && !manifest.financialExpectation && !manifest.incomeExpectation && !manifest.stockCostExpectation);
+}
+function recordSource(scope, run, clock = Date.now()) {
+  const at = new Date(clock).toISOString();
+  const source = { version: 4, kind: 'record-readback-only', scope: { realmId: scope.realmId, environment: scope.environment, connectionId: scope.connectionId }, period: { fromDate: run.fromDate, throughDate: run.throughDate }, accounts: [], startedAt: at, observedAt: at };
+  return { ...source, sourceHash: hash(source) };
+}
 const sameScope = (a, b) => ['realmId', 'environment', 'connectionId'].every(key => same(a?.[key], b?.[key]));
 // Internal collector and immutable proof store. No external verification flags or
 // caller-provided report results are accepted by prepareEvidence.
@@ -71,16 +80,19 @@ function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Eviden
     }
     const observed = await transaction(session => snapshot(scope, operationId, leaseToken, actor, session, true)); check();
     const stockSource = observed.manifest.stockCostExpectation ? (typeof readStock === 'function' ? await readStock(scope, require('./business-stock-evidence').startingStockState(observed.manifest.stockCostExpectation), { signal }) : fail('Current stock observation is unavailable.')) : null; check();
-    const run = observed.run, recordSetHash = hash(observed.records), sources = await readReports(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal }); check();
+    // Same-day activity (monthly close, 2026-11-06) is proved by reading back its own saved records only.
+    // No report reads: QuickBooks keeps the ledger, and the daily books check and monthly close review it.
+    const recordsOnly = recordReadbackOnly(observed.run, observed.manifest);
+    const run = observed.run, recordSetHash = hash(observed.records), sources = recordsOnly ? recordSource(scope, run, now()) : await readReports(scope, { fromDate: run.fromDate, throughDate: run.throughDate }, { signal }); check();
     const { sourceHash, evaluation: ignored, ...source } = sources || {};
     const start = Date.parse(source.startedAt), end = Date.parse(source.observedAt);
-    if (![2, 3].includes(source.version) || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || hash(source) !== sourceHash || !Number.isFinite(start) || !Number.isFinite(end) || end < start || end > now() || now() - start > 300000 || observed.records.some(row => Date.parse(row.observedAt) > start) || !Array.isArray(source.accounts)) fail('Report evidence does not follow these exact record observations.');
+    if (!(recordsOnly ? source.version === 4 : [2, 3].includes(source.version)) || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || hash(source) !== sourceHash || !Number.isFinite(start) || !Number.isFinite(end) || end < start || end > now() || now() - start > 300000 || observed.records.some(row => Date.parse(row.observedAt) > start) || !Array.isArray(source.accounts)) fail('Report evidence does not follow these exact record observations.');
     // Re-evaluate retained raw sources; a supplied passed flag is never authority.
-    const evaluation = evaluateReportSources(source, { allowExplicitZero: true });
+    const evaluation = recordsOnly ? { status: 'checks-passed', checks: [] } : evaluateReportSources(source, { allowExplicitZero: true });
     const financial = observed.manifest.financialExpectation ? compareFinancialMovements(observed.manifest.financialExpectation, observed.financialBasis, source) : null;
     if (stockSource && (Date.parse(stockSource.startedAt) < Math.max(...observed.records.map(row => Date.parse(row.observedAt)), 0) || Date.parse(stockSource.observedAt) > start || end - Date.parse(stockSource.startedAt) > 300000)) fail('Stock and report evidence must follow these exact record observations.');
     const stock = observed.manifest.stockCostExpectation ? require('./business-stock-evidence').compareStockCosts(observed.manifest.stockCostExpectation, observed.stockBasis, sources, stockSource) : null;
-    const completeReports = reportComplete(evaluation, source);
+    const completeReports = recordsOnly || reportComplete(evaluation, source);
     if (!completeReports && !financial) return { prepared: false, unavailable: ['complete-financial-reports'] };
     const income = completeReports && run.requiredAssertions.some(row => row.key === 'profit-and-loss') ? checkIncomeExpectation(observed.manifest.incomeExpectation, scope, source.period, unpackReport('ProfitAndLoss', source.reports.ProfitAndLoss, source.version), source.version) : null;
     const assertions = [], unavailable = [];
@@ -209,8 +221,9 @@ function createBusinessPeriodEvidenceImplementation({ Runs, Plans, Steps, Eviden
       if (!row || row.contractVersion !== 1 || !row.auditId || hash(row.proof) !== row.evidenceHash) fail('The exact retained period evidence is unavailable.');
       assertEvidenceCapacity(row, true);
       const { sourceHash, ...source } = row.sources || {};
-      if (![1, 2, 3].includes(source.version) || hash(source) !== sourceHash || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || !Array.isArray(source.accounts) || row.proof.assertions.some(check => check.sourceHash !== (check.evidenceType === 'record-readback' ? hash(row.proof.records) : sourceHash))) fail('The original retained report sources changed.');
-      if (run.status === 'awaiting-evidence' && ![2, 3].includes(source.version)) fail('A fresh seven-report observation is required before a new calendar advance.');
+      const recordsOnly = source.version === 4 && recordReadbackOnly(run, (await read(Plans, { _id: run.planId, ...scope, operationId, planHash: run.planHash }, session))?.manifest);
+      if (!(recordsOnly || [1, 2, 3].includes(source.version)) || hash(source) !== sourceHash || !sameScope(source.scope, scope) || canonical(source.period) !== canonical({ fromDate: run.fromDate, throughDate: run.throughDate }) || !Array.isArray(source.accounts) || row.proof.assertions.some(check => check.sourceHash !== (check.evidenceType === 'record-readback' ? hash(row.proof.records) : sourceHash))) fail('The original retained report sources changed.');
+      if (run.status === 'awaiting-evidence' && !recordsOnly && ![2, 3].includes(source.version)) fail('A fresh seven-report observation is required before a new calendar advance.');
       if ([2, 3].includes(source.version)) {
         const evaluation = evaluateReportSources(source, { allowExplicitZero: true });
         if (evaluation.status !== 'checks-passed' || !reportComplete(evaluation, source)) fail('The retained seven-report availability or accounting checks do not pass.');

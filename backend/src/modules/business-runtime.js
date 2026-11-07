@@ -91,6 +91,8 @@ function createBusinessRuntime({ scope, operationId, actorId, ownerId, models = 
     // A correction is sent only while no other operation holds any reversal of its original.
     if (plan.manifest.activityBatch) await require('./business-correction').assertCorrectionsDispatchable(models, scope, plan.manifest, operationId, async (entity, id) => (await verification.rawRecord(scope, entity, id, { signal })).record);
     if (await models.Steps.findOne({ ...scope, operationId, state: { $in: ['dispatched', 'unknown', 'saved', 'verified'] } }).maxTimeMS(3000).lean()) return;
+    // Same-day activity without report or stock expectations (monthly close, 2026-11-06) needs no opening report read.
+    if (plan.manifest.activityBatch && !plan.manifest.financialExpectation && !plan.manifest.incomeExpectation && !plan.manifest.stockCostExpectation && (plan.manifest.requiredAssertions || []).every(row => row.evidenceType === 'record-readback')) return;
     const before = await verification.readFence(scope, { signal });
     let stockSource = null;
     if (plan.manifest.stockCostExpectation) {

@@ -121,13 +121,9 @@ function checkGeneralWriteImplementation({ proposal, local, context }) {
   const protectDate = (ref, date, what, dirty = true) => {
     if (!DAY.test(date || '')) return;
     if (context.protectedThrough && date <= context.protectedThrough) say(ref, what + ' dated ' + date + ' is inside the closed or reconciled period through ' + context.protectedThrough + '; it cannot be changed.');
-    else if (dirty && context.verifiedThrough && date <= context.verifiedThrough) {
-      if (context.historyReverification?.available !== true) say(ref, 'Historical edits need retained managed accounting reports through the current cursor.');
-      else if (date < context.historyReverification.fromDate) say(ref, 'This date needs adopted-history or earlier fiscal-year accounting evidence before editing.');
-      if (date < context.historyReverification?.openingDate && context.historyReverification?.baseline !== true) say(ref, 'A pre-opening edit requires the retained opening baseline reports.');
-      reverify.add(date);
-      // The durable pre-send marker holds subsequent work until full history re-verification.
-    }
+    // Earlier open-day records are edited like any other (monthly close, 2026-11-06): only a closed or
+    // reconciled month is protected. No history re-verification marker holds later work.
+    void dirty;
   };
   ops.forEach((op, order) => {
     const ref = op?.ref;

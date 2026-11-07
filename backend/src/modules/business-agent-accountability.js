@@ -18,10 +18,10 @@ async function retainOutcome({store,row,scope,decision,result}){
  for(const run of [...fixed,...general]){
   const ids=run.items?Object.values(run.items).filter(i=>i.qboId).map(i=>({entity:i.entity,id:String(i.qboId),outcome:i.outcome})): (await savedSteps(store.models.Steps,scope,String(run._id))).map(i=>({entity:i.entity,id:String(i.qboId),outcome:i.state}));
   // Chunk results to stay inside the append-only event size limit. Never keep raw QBO payloads.
-  for(let offset=0;offset<Math.max(1,ids.length);offset+=100){const data={decisionId:d.id,decisionKey:d.decisionKey,operationId:String(run._id),status:run.status,checkedAt:new Date().toISOString().slice(0,16),offset,records:ids.slice(offset,offset+100)};await store.event(row,'accountant-write-outcome','Accountant write outcome',d.reason||'',data,null,'write-outcome:'+hash(data));}
+  for(let offset=0;offset<Math.max(1,ids.length);offset+=100){const data={decisionId:d.id,decisionKey:d.decisionKey,operationId:String(run._id),status:run.status,checkedAt:new Date().toISOString().slice(0,16),offset,records:ids.slice(offset,offset+100)};await store.event(row,'accountant-write-outcome','Accountant write outcome',d.reason||'',data,null,'write-outcome:'+hash({...data,checkedAt:null}));}
  }
- if(fixed.length||general.length){const runs=[...fixed,...general],terminal=runs.every(r=>['verified','retired','complete','needs-correction'].includes(r.status))&&fixed.length<20&&general.length<20;
- const done={decisionId:d.id,decisionKey:d.decisionKey,status:terminal?'complete':'pending',checkedAt:new Date().toISOString().slice(0,16)};await store.event(row,'accountant-write-outcome-complete','Accountant outcome observation complete',d.reason||'',done,null,'write-outcome-complete:'+hash(done));}
+ if(fixed.length||general.length){const runs=[...fixed,...general],terminal=runs.every(r=>['verified','retired','complete','needs-correction','expired-unsent'].includes(r.status))&&fixed.length<20&&general.length<20;
+ const done={decisionId:d.id,decisionKey:d.decisionKey,status:terminal?'complete':'pending',checkedAt:new Date().toISOString().slice(0,16)};await store.event(row,'accountant-write-outcome-complete','Accountant outcome observation complete',d.reason||'',done,null,'write-outcome-complete:'+hash({...done,checkedAt:null}));}
 }
 async function savedSteps(Steps,scope,operationId){
  const rows=[];let after=null;
@@ -33,7 +33,7 @@ function scorecard({day,today,snapshot,prior,blockers,business,decisions=[]}){
  const rows=snapshot?.weekly?.rows||[];
  return {day,asOf:snapshot?.asOf||null,records:today&&!today.unavailable?{saved:today.saved,verified:today.verified,proofCounts:today.proofCounts||null,target:today.target}:null,
   situations:{covered:covered.length,newlyCovered:Array.isArray(old)?covered.filter(k=>!old.includes(k)).length:null,baselineAvailable:Array.isArray(old),coveredKeys:covered,weeklyGaps:rows.filter(r=>r.status==='missing').length,unknown:rows.filter(r=>r.status==='unknown').length},
-  collections:snapshot?.collections||null,closes:{verifiedThrough:business?.verifiedThrough||null,manualReconciliation:'Not established by calendar close'},blockers:blockers?.unavailable?null:(blockers?.blockers||[]).length,decisions:decisions.length,
+  collections:snapshot?.collections||null,closes:{monthClosedThrough:business?.monthClosedThrough||null,dailyCheck:business?.dailyCheck?(business.dailyCheck.agrees?'agrees':'differences noted')+' ('+business.dailyCheck.day+')':null},blockers:blockers?.unavailable?null:(blockers?.blockers||[]).length,decisions:decisions.length,
   limits:'Records are saved outcomes, not a test count. New coverage compares with the previous saved daily baseline; unknown source data is never counted as a gap or proof. Collections are dated payments, not a claim that every overdue invoice was collected.'};
 }
 module.exports={WRITE_TOOLS,decisionData,retainOutcome,scorecard};

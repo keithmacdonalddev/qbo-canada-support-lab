@@ -28,7 +28,7 @@ export default function BusinessTodayPlan({ management }) {
     {scorecard && <div className="bpl-note" aria-label="Daily business scorecard">
       <strong>Business results today</strong>
       <p>{scorecard.records ? scorecard.records.saved + ' of ' + scorecard.records.target + ' records saved' : 'Saved record count unavailable'} · {scorecard.situations?.newlyCovered == null ? 'New situations: baseline pending' : scorecard.situations.newlyCovered + ' newly covered situations'} · {scorecard.collections ? scorecard.collections.count + ' customer payments' : 'Collections unavailable'} · {scorecard.blockers == null ? 'Blockers unavailable' : scorecard.blockers + ' current blockers'}</p>
-      <small>Calendar verified through {scorecard.closes?.verifiedThrough || 'no verified close'}. Reconciliation and filing require their own evidence.</small>
+      <small>Month closed through {scorecard.closes?.monthClosedThrough || 'no closed month yet'}{scorecard.closes?.dailyCheck ? ' · daily books check ' + scorecard.closes.dailyCheck : ''}.</small>
     </div>}
     {plan ? <>
       <p className="bpl-note"><strong>Assessment when the plan was set{plan.at ? ' at ' + timeOfDay(plan.at) : ''}.</strong> {plan.note}<small> These findings are retained from that review; current progress is shown above.</small></p>

@@ -439,7 +439,8 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     // downstream accounting or opening baseline remains unproved.
     const GeneralRuns = models.GeneralWriteRuns || require('../models/GeneralWriteRun');
     const dirty = await GeneralRuns.findOne({ environment: scope.environment, realmId: scope.realmId, connectionId: scope.connectionId, contract: 'general-write-v1', ...(runId ? { _id: { $ne: runId } } : {}), dirty: { $elemMatch: { date: { $lte: calendar.verifiedThrough } } } }).select('_id').session(session).maxTimeMS(3000).lean();
-    if (dirty) fail('General history invalidation is unresolved; downstream periods and the opening baseline must be re-proved before new general writes.');
+    // Older history markers are informational only (monthly close, 2026-11-06); they never hold new work.
+    void dirty;
     // The published business decides the tax codes (the same authority the fixed
     // workflows use); without it nothing can be guarded.
     const published = await require('./business-authority').readPublishedBusiness({ ...models, scope, session });
@@ -510,7 +511,7 @@ function createGeneralWriteContext({ models, now = () => Date.now(), readRate = 
     const { readCurrencyPolicy, currencyOf, TXNS } = require('./general-write-currency');
     const currency = await readCurrencyPolicy({ models, scope, session, readRate, requests: operations.filter(op => TXNS.has(op.entity) && (op.op === 'create' || op.payload?.ExchangeRate !== undefined || op.payload?.TxnDate !== undefined)).map(op => { const record = { ...(op.id ? local.get(op.entity, String(op.id)) : {}), ...op.payload }; return { currency: currencyOf(record), day: record.TxnDate }; }) });
     const estimateConversion = operations.some(op => require('./estimate-conversion-policy').estimateIds(op.payload).length) ? await require('./estimate-conversion-policy').readSyncedSupport({ Records: models.Records, scope, session, now: now() }) : null;
-    return { estimateConversion, currency, inventory, stock, historyReverification, day, calendarClosePending: calendar.verifiedThrough < shift(day, -1), verifiedThrough: calendar.verifiedThrough, taxByDate, protectedThrough: [control?.closedThrough, control?.reconciledThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
+    return { estimateConversion, currency, inventory, stock, historyReverification, day, calendarClosePending: calendar.verifiedThrough < shift(day, -1), verifiedThrough: calendar.verifiedThrough, taxByDate, protectedThrough: [control?.closedThrough, control?.reconciledThrough, calendar.monthClose?.closedThrough].filter(Boolean).sort().at(-1) || null, taxCodes, taxPercent };
   };
 }
 // Server composition: the synced copy through the hardened observation store (fresh

@@ -56,15 +56,16 @@ async function assertPublishedBusiness(input) {
   if (calendar.pendingCommit || (manifest && (calendar.baseline?.evidenceHash !== manifest.baselineHash || calendar.verifiedThrough !== manifest.expectedCursor))) fail('The active calendar differs from this reviewed operation.');
   if (manifest) {
     const required = manifest.requiredAssertions?.some(row => row.key === 'stock-costs');
-    if (Boolean(value.stockRoot) !== Boolean(required)) fail('The operation cannot omit or invent its published stock-cost requirement.');
+    // Same-day activity proved by record read-back alone carries no stock-cost proof (monthly close, 2026-11-06).
+    const recordsOnly = Array.isArray(manifest.requiredAssertions) && manifest.requiredAssertions.length > 0 && manifest.requiredAssertions.every(row => row.evidenceType === 'record-readback');
+    if (!recordsOnly && Boolean(value.stockRoot) !== Boolean(required)) fail('The operation cannot omit or invent its published stock-cost requirement.');
     if (manifest.records && required && !manifest.stockCostExpectation) fail('The operation lost its original stock-cost expectation.');
     if (manifest.stockCostExpectation && (manifest.stockCostExpectation.rootHash !== value.stockRoot?.rootHash || manifest.stockCostExpectation.policyHash !== value.stockRoot?.policyHash)) fail('The operation differs from its published stock-cost root.');
   }
   if (fence) {
     // Runtime compositions include general storage; isolated non-general stores do not.
     if (input.GeneralWriteRuns) {
-      const dirty = await input.GeneralWriteRuns.findOne({ ...scope, contract: 'general-write-v1', dirty: { $elemMatch: { date: { $lte: calendar.verifiedThrough } } } }).select('_id').session(session).maxTimeMS(3000).lean();
-      if (dirty) fail('General history is awaiting automatic accounting re-verification.');
+      // History edits no longer hold the business for re-verification (monthly close, 2026-11-06).
     }
     if (!session?.inTransaction?.()) fail('Active business authority requires a transaction fence.');
     const touched = await Calendars.findOneAndUpdate({ _id: calendar._id, ...scope, authorityHash: row.contentHash, revision: calendar.revision, writerRevision: calendar.writerRevision, currentOperationId: calendar.currentOperationId, pendingCommit: null }, { $inc: { authorityRevision: 1 } }, { new: true, session }).lean();

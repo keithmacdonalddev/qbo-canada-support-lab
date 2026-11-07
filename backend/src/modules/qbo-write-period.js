@@ -29,7 +29,8 @@ function linksIn(value) {
       if (key === 'LinkedTxn') {
         if (!Array.isArray(child)) throw denied('Transaction links must be explicit complete lists.');
         for (const link of child) {
-          const entity = typeof link?.TxnType === 'string' ? TRANSACTIONS.get(link.TxnType.toLowerCase()) : null;
+          // QuickBooks names bill payments by method in LinkedTxn (BillPaymentCheck, BillPaymentCreditCard).
+          const entity = typeof link?.TxnType === 'string' ? TRANSACTIONS.get(link.TxnType.toLowerCase()) || LINK_ALIASES.get(link.TxnType.toLowerCase()) || null : null;
           if (!entity || !ID.test(link?.TxnId || '')) throw denied('A linked transaction type or identity cannot be checked for protected dates.');
           found.set(entity + ':' + link.TxnId, { entity, id: link.TxnId });
         }
@@ -68,6 +69,9 @@ function settlementSources(request, payload) {
 function postingDates(request, payload, records, directDates) {
   return [...new Set([...directDates, ...(settlementSources(request, payload) ? [] : records.flatMap(row => row.dates))])].sort();
 }
+const LINK_ALIASES = new Map([['billpaymentcheck', 'BillPayment'], ['billpaymentcreditcard', 'BillPayment']]);
+const PREFERENCES_CACHE = new Map(), PREFERENCES_TTL_MS = 15 * 60 * 1000;
+function forgetPreferences() { PREFERENCES_CACHE.clear(); }
 async function readWritePeriodEvidence(request, client, now = () => Date.now(), coordination = null, observations = require('./business-observation-store').createBusinessObservationStore({ now })) {
   const scope = scoped(request.scope), payload = JSON.parse(request.body), financial = TRANSACTIONS.has(request.entity), creditControl = needsCreditControl(request, payload);
   if (!financial && !LISTS.has(request.entity)) throw denied('This write type has no reviewed protected-period contract.');
@@ -95,7 +99,11 @@ async function readWritePeriodEvidence(request, client, now = () => Date.now(), 
   // Closing dates and automatic-credit settings can change outside CDC. Keep
   // this independent live dispatch check even while the local mirror is current.
   if (affectedDates.length) {
-    const response = await runWithCaller('business-period-guard', () => client.query('SELECT * FROM Preferences MAXRESULTS 1')), preferences = response?.QueryResponse?.Preferences;
+    // One Preferences read per company per 15 minutes (owner limit: about 3 metered calls per saved record).
+    // The app is the only writer; an owner change of the closing date in QuickBooks is picked up within 15 minutes.
+    const cacheKey = typeof client.apiBase === 'string' && client.apiBase.startsWith('https://') ? scope.environment + ':' + scope.realmId + ':' + client.apiBase : null, cached = cacheKey ? PREFERENCES_CACHE.get(cacheKey) : null;
+    const response = cached && now() - cached.at >= 0 && now() - cached.at < PREFERENCES_TTL_MS ? cached.response : await runWithCaller('business-period-guard', () => client.query('SELECT * FROM Preferences MAXRESULTS 1')), preferences = response?.QueryResponse?.Preferences;
+    if (cacheKey && (!cached || cached.response !== response)) PREFERENCES_CACHE.set(cacheKey, { at: now(), response });
     if (!Array.isArray(preferences) || preferences.length !== 1 || !preferences[0]?.AccountingInfoPrefs || typeof preferences[0].AccountingInfoPrefs !== 'object') throw denied('QuickBooks closing preferences could not be verified. Nothing was sent.');
     if (creditControl && (!plain(preferences[0]) || !plain(preferences[0].AccountingInfoPrefs) || !plain(preferences[0].SalesFormsPrefs) || !own(preferences[0].SalesFormsPrefs, 'AutoApplyCredit') || preferences[0].SalesFormsPrefs.AutoApplyCredit !== false)) throw automaticCreditsBlocked();
     const raw = preferences[0].AccountingInfoPrefs.BookCloseDate;
@@ -142,4 +150,4 @@ function assertWritePeriod(request, evidence, controls, now = Date.now(), ownerI
   if (Buffer.byteLength(canonical(evidence)) > 65536) throw denied('Protected-period evidence exceeds its retained evidence budget.');
   return { evidenceHash, controlHash: controls.contentHash, protectedThrough: cutoff, affectedDates: [...source.affectedDates], evidence, controls: JSON.parse(canonical(controls)) };
 }
-module.exports = { readWritePeriodEvidence, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE };
+module.exports = { readWritePeriodEvidence, forgetPreferences, assertPeriodControl, assertWritePeriod, linksIn, TRANSACTIONS, AUTOMATIC_CREDITS_CODE, AUTOMATIC_CREDITS_MESSAGE, CREDIT_SOURCE_PROTECTED_CODE, CREDIT_SOURCE_PROTECTED_MESSAGE, CORRECTION_SOURCE_PROTECTED_CODE, CORRECTION_SOURCE_PROTECTED_MESSAGE, CORRECTION_INVOICE_SOURCE_PROTECTED_CODE, CORRECTION_INVOICE_SOURCE_PROTECTED_MESSAGE };

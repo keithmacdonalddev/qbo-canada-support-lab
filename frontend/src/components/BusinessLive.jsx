@@ -57,7 +57,6 @@ function nowLine(feed, rightNow, clock) {
 }
 // "Today (Fri Oct 30): 20 planned · 7 in QuickBooks", or the calendar catch-up state, from the server.
 function todayLine(rightNow) {
-  if (rightNow?.calendar) return 'Calendar closed through ' + (rightNow.calendar.closedThrough || 'its opening') + ' · closing ' + rightNow.calendar.closing
   return rightNow?.today?.line || ''
 }
 

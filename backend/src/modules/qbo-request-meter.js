@@ -115,7 +115,7 @@ const SOURCE_CALLERS = Object.freeze({
   "routes/qbo.js": "source-routes-qbo",
   "routes/seed.js": "source-routes-seed"
 });
-const CALLERS = Object.freeze(['qbo-direct', ...Object.values(SOURCE_CALLERS), 'untagged', 'business-reference', 'business-transaction', 'business-receivables', 'business-tax-policy', 'business-period-guard', 'business-stock', 'business-deposit-guard', 'business-report-operation', 'business-report-preparation', 'business-report-baseline', 'business-report-book', 'business-write', 'business-sync']);
+const CALLERS = Object.freeze(['qbo-direct', ...Object.values(SOURCE_CALLERS), 'untagged', 'business-reference', 'business-transaction', 'business-receivables', 'business-tax-policy', 'business-period-guard', 'business-stock', 'business-deposit-guard', 'business-report-operation', 'business-report-preparation', 'business-report-baseline', 'business-report-book', 'business-write', 'business-sync', 'business-daily-check', 'business-month-close']);
 const callerTag = value => CALLERS.includes(value) ? value : 'untagged';
 const context = new AsyncLocalStorage();
 const MAX_PENDING = 500;

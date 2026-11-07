@@ -507,8 +507,6 @@ function validateActivityBatch(batch, candidate) {
   if (!HASH.test(batch?.key || '') || !candidate.expectedCursor || candidate.fromDate !== batch.day || candidate.throughDate !== batch.day || candidate.expectedCursor >= batch.day) fail('Additional activity requires an open business day after the established history cursor.');
   const activity = buildBatchActivity(batch, candidate.scope, candidate.businessKey), entries = candidate.entries || candidate.steps?.map(step => ({ kind: 'create', step })), proposed = entries?.filter(entry => entry.kind === 'create');
   const required = activity.prerequisites;
-  if (required.some(row => row.txnDate > candidate.expectedCursor && row.txnDate < batch.day)) fail('Additional activity cannot change records or links from an earlier open and unverified day.');
-  if (candidate.expectedCursor < shift(batch.day, -1) && batch.activities.some(row => row.type === 'receive-purchase-order')) fail('Inventory receiving waits for earlier open days to establish stock-cost evidence.');
   if (entries?.some(entry => entry.kind !== 'create' && (entry.kind !== 'existing' || !required.some(row => row.logicalKey === entry.step.logicalKey && row.entity === entry.step.entity && row.txnDate === entry.step.txnDate))) || entries?.filter(entry => entry.kind === 'existing').length !== required.length) fail('Receiving retains only its exact original purchase order.');
   if (!Array.isArray(proposed) || proposed.length !== activity.events.length || proposed.some(entry => entry.kind !== 'create')) fail('Additional activity must contain its exact self-contained new records.');
   const expectedKeys = new Set(activity.events.map(event => event.logicalKey));
@@ -657,10 +655,7 @@ function correctionLifecycle(step, value, contract) {
 }
 function assertBatchPreparation(active, batch, now) {
   if (!active.calendar.verifiedThrough || batch.day !== businessDate(new Date(now)) || active.calendar.verifiedThrough >= batch.day) fail('Prepare additional activity only for today, after the established history cursor. Earlier open days remain unverified and close separately.');
-  if (active.calendar.verifiedThrough < shift(batch.day, -1)) {
-    if (batch.activities.some(row => row.type === 'receive-purchase-order')) fail('Inventory receiving waits for earlier open days to close and establish their stock-cost evidence.');
-    const sourceDates = batch.activities.flatMap(row => [row.source?.txnDate, ...(row.source?.sources || []).map(source => source.txnDate), row.correction?.original?.txnDate]);
-    if (sourceDates.some(day => day > active.calendar.verifiedThrough && day < batch.day)) fail('An earlier business day is still open and unverified. Activity changing its records or links waits for its close.');
-  }
+  // No wait on earlier days (monthly close, 2026-11-06): the open day is today and the daily books check
+  // moves it forward. Receiving and changes to earlier records never wait for a close.
 }
 module.exports = { ADDED, addedRoleKey, SAVED_POLICIES, TERMS_DAYS, OWN_SETTLEMENT, OWN_SOURCED, JOURNAL_ROLES, bankRoles, POLICY, POLICY_HASH, CORRECTION, CORRECTION_MODES, CORRECTION_TARGETS, correctionRuleKey, validateChoices, makeActivityBatch, buildBatchActivity, validateActivityBatch, batchLifecycle, assertBatchPreparation };

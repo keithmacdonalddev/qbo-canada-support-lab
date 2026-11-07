@@ -9,7 +9,7 @@
 // which re-validates every input against the tool's own schema.
 
 // Always sent: what nearly every review needs. Anything else is one searchTools away.
-const CORE = Object.freeze(['getBusinessState', 'getBusinessWork', 'queryCompanyData', 'getBusinessActivityChoices', 'prepareBusinessActivity', 'prepareBusinessPeriod', 'executeBusinessPeriod', 'recordBusinessDecision', 'rememberBusinessContext', 'manageQboRecord']);
+const CORE = Object.freeze(['getBusinessState', 'getBusinessWork', 'queryCompanyData', 'getBusinessActivityChoices', 'prepareBusinessActivity', 'executeBusinessPeriod', 'recordBusinessDecision', 'rememberBusinessContext', 'manageQboRecord']);
 const CATEGORIES = Object.freeze({
   'quickbooks-read': 'Live QuickBooks reads: records, links and reports',
   'business-read': 'The app’s own business state, work, obligations, saved plans and the local company copy',
@@ -62,7 +62,8 @@ const INFO = Object.freeze({
   getBusinessActivityChoices: { category: 'business-read', keywords: ['choices', 'roles', 'customers', 'suppliers', 'items', 'purchase orders', 'adopted', 'correctable', 'options'] },
   getBusinessDecision: { category: 'business-read', keywords: ['decision', 'owner', 'answer', 'evidence', 'response'] },
   prepareBusinessActivity: { category: 'quickbooks-write', keywords: ['prepare', 'batch', 'sale', 'expense', 'credit', 'refund', 'transfer', 'journal', 'receive', 'customer', 'supplier', 'item', 'correct', 'terms', 'collect', 'pay'] },
-  prepareBusinessPeriod: { category: 'quickbooks-write', keywords: ['period', 'calendar', 'close', 'month', 'prepare', 'scheduled'] },
+  reopenMonth: { category: 'quickbooks-write', keywords: ['reopen', 'month', 'close', 'late', 'period'] },
+  closeMonth: { category: 'quickbooks-write', keywords: ['close', 'month', 'month-end', 'period', 'books', 'reconciliation', 'hst'] },
   executeBusinessPeriod: { category: 'quickbooks-write', keywords: ['execute', 'approve', 'save', 'plan', 'queue', 'run'] },
   resumeBusinessOperation: { category: 'quickbooks-write', keywords: ['resume', 'recover', 'continue', 'interrupted', 'stopped', 'unfinished'] },
   repairEstimateConversion: {category:'quickbooks-write',keywords:['repair','estimate','invoice','saved','mismatch','native','recovery','linkedtxn']},

@@ -228,7 +228,6 @@ function createBusinessGovernanceService(dependencies = {}) {
     if (!batchChoices && generalGate) await generalGate.assertPeriodReady(scope, { fromDate, throughDate: request.throughDate, verifiedThrough: active.calendar.verifiedThrough, openingDate: active.value.openingDate, mappings: active.view.mappings || {}, readLedger: (from, through) => client.apiCall('GET', require('./general-write-day-close').ledgerEndpoint(from, through)) });
     // Retain only native stock-return proof before fixed stock reads. Independent
     // work does not wait for unrelated general ledger/needs-check failures.
-    if(batchChoices && active.value.stockRoot && generalGate?.retainStockReturns) await generalGate.retainStockReturns(scope,{day:input.throughDate,mappings:active.view.mappings||{}});
     let prepared;
     if (batchChoices) {
       const batchTools = require('./business-activity-batch');
@@ -316,7 +315,9 @@ function createBusinessGovernanceService(dependencies = {}) {
     prepared = await bindPreparedOperationReferences(prepared, { authorize: access.authorize, resolveClient: access.resolveClient, now, signal });
     const store = planStore(bound), history = await store.history(scope, operationHistoryRoots(prepared), { signal, ownerHistory: true });
     const context = { scope, authorityHash: active.authority.contentHash, businessKey: active.value.businessKey, blueprintId: active.value.blueprintId, blueprintHash: active.value.blueprintHash, baselineHash: active.value.baselineHash, openingDate: active.value.openingDate, expectedCursor: active.calendar.verifiedThrough, expectedRevision: active.calendar.revision,
-      requiredAssertions: [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, ...['trial-balance', 'balance-sheet', 'profit-and-loss'].map(key => ({ key, evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' })), ...['receivables', 'payables'].map(key => ({ key, evidenceType: 'open-balances-at-date', currency: 'CAD' }))] };
+      // Same-day activity is proved by reading back its own records (monthly close, 2026-11-06); reports are
+      // reviewed by the daily books check and the monthly close instead of before and after every batch.
+      requiredAssertions: batchChoices ? [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }] : [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, ...['trial-balance', 'balance-sheet', 'profit-and-loss'].map(key => ({ key, evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' })), ...['receivables', 'payables'].map(key => ({ key, evidenceType: 'open-balances-at-date', currency: 'CAD' }))] };
     const assembly = assembleBusinessOperation({ prepared, history, context, now: now() });
     const policies = await (dependencies.derivePolicies || deriveBusinessPolicies)(assembly, client, active.authority.contentHash, now());
     let boundCandidate = bindApprovedOperationPolicies(assembly, policies, now());
@@ -331,7 +332,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     }
     boundCandidate={...boundCandidate,candidate:{...boundCandidate.candidate,entries:fulfilledEntries}};
     let stockPreparation = null;
-    if (active.value.stockRoot) {
+    if (active.value.stockRoot && !batchChoices) {
       const { state, carry } = await require('./business-stock-history').readCommittedStockOpening(models, active);
       const priorActivityRows = await require('./business-stock-history').readSameDayStockRows(models, active);
       const startingState = require('./business-stock-cost').calculateStockCost(state, priorActivityRows, { fromDate, throughDate: input.throughDate }).closing;
@@ -342,13 +343,13 @@ function createBusinessGovernanceService(dependencies = {}) {
       stockPreparation = { opening: state, carry, purchaseOrigins, stockSource, priorActivityRows };
     }
     // Preparation retains the trial balance and income basis used by movement proofs.
-    const preparationReports = [...new Set([...approvalReportNames({ ...boundCandidate.candidate, activityBatch: prepared.activityBatch }), 'TrialBalance', 'BalanceSheet', 'ProfitAndLoss', 'GeneralLedger'])];
-    const startingReports = await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation', requiredReports: preparationReports }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
-    reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports, preparationReports);
-    const incomeExpectation = createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, unpackReport('ProfitAndLoss', startingReports.reports.ProfitAndLoss, startingReports.version), startingReports.observedAt, startingReports.version);
-    const financialExpectation = createFinancialExpectation(scope, { fromDate, throughDate: input.throughDate }, active.view.mappings, startingReports);
+    const preparationReports = batchChoices ? [] : [...new Set([...approvalReportNames({ ...boundCandidate.candidate, activityBatch: prepared.activityBatch }), 'TrialBalance', 'BalanceSheet', 'ProfitAndLoss', 'GeneralLedger'])];
+    const startingReports = batchChoices ? null : await (dependencies.readReports || createBusinessReportReader({ access, now, purpose: 'preparation', requiredReports: preparationReports }))(scope, { fromDate, throughDate: input.throughDate }, { signal });
+    if (!batchChoices) reportObservation(scope, { fromDate, throughDate: input.throughDate }, startingReports, preparationReports);
+    const incomeExpectation = batchChoices ? undefined : createIncomeExpectation(scope, { fromDate, throughDate: input.throughDate }, boundCandidate.candidate.entries, unpackReport('ProfitAndLoss', startingReports.reports.ProfitAndLoss, startingReports.version), startingReports.observedAt, startingReports.version);
+    const financialExpectation = batchChoices ? undefined : createFinancialExpectation(scope, { fromDate, throughDate: input.throughDate }, active.view.mappings, startingReports);
     const stockCostExpectation = stockPreparation ? require('./business-stock-evidence').createStockExpectation({ scope, period: { fromDate, throughDate: input.throughDate }, root: active.value.stockRoot, ...stockPreparation, reports: startingReports }) : null;
-    const candidate = { ...boundCandidate.candidate, ...(stockCostExpectation ? { stockCostExpectation } : {}), requiredAssertions: [...boundCandidate.candidate.requiredAssertions, ...(stockCostExpectation ? [{ key: 'stock-costs', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }] : []), { key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }], authorityHash: active.authority.contentHash, incomeExpectation, financialExpectation }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
+    const candidate = { ...boundCandidate.candidate, ...(stockCostExpectation ? { stockCostExpectation } : {}), requiredAssertions: [...boundCandidate.candidate.requiredAssertions, ...(stockCostExpectation ? [{ key: 'stock-costs', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }] : []), ...(batchChoices ? [] : [{ key: 'financial-movements', evidenceType: 'accrual-ledger', basis: 'Accrual', currency: 'CAD' }])], authorityHash: active.authority.contentHash, ...(incomeExpectation ? { incomeExpectation } : {}), ...(financialExpectation ? { financialExpectation } : {}) }, candidateHash = hash(candidate), auditId = hash({ candidateHash }).slice(0, 24);
     await transaction(async session => {
       await fence(bound, session, 'operations.preview');
       const latestBusiness = await assertPublishedBusiness({ ...models, scope, requireScheduleAcceptance: true, manifest: candidate, session, fence: true });
@@ -451,7 +452,8 @@ function createBusinessGovernanceService(dependencies = {}) {
     if(active.value.ownerId!==ownerId)fail('The accepted business belongs to another owner.',403);
     if(current.policy.state!=='active'||active.calendar.currentOperationId!==null)fail('Enable write coordination and finish the current operation first.');
     const through=active.calendar.verifiedThrough,day=businessDate(new Date(now()));
-    if(active.value.stockRoot&&through!==null&&day>shift(through,1))throw Object.assign(new Error('Stock-cost periods must be contiguous and stay within one calendar month.'),{status:409,code:'BUSINESS_STOCK_COST_UNVERIFIED'});
+    // Stock work no longer waits on stock-period proof (monthly close, 2026-11-06); QuickBooks keeps the FIFO cost.
+    void through; void day;
   }
   async function preflightActivityBatch(user,input) {
     const choices=require('./business-activity-batch').validateChoices(input),bound=await bind(user,'operations.preview',true);

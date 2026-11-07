@@ -32,6 +32,12 @@ const schema = new mongoose.Schema({
   lastVerifiedOperationId: { type: mongoose.Schema.Types.ObjectId, default: null },
   lastActivityOperationId: { type: mongoose.Schema.Types.ObjectId, default: null },
   lastActivityAt: { type: Date, default: null },
+  // Monthly close (owner decision 2026-11-06). cursorBasis 'daily-check': the open day moved forward
+  // by the daily books check, not by a verified close. dailyCheck: the latest non-blocking books check.
+  // monthClose: { closedThrough: 'YYYY-MM-DD', months: [...] } — the latest closed month.
+  cursorBasis: { type: String, default: null },
+  dailyCheck: { type: mongoose.Schema.Types.Mixed, default: null },
+  monthClose: { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true, autoIndex: false, autoCreate: false });
 schema.index({ environment: 1, realmId: 1 }, { unique: true });
 module.exports = mongoose.model('BusinessCalendar', schema);

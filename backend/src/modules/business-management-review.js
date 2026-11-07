@@ -22,7 +22,7 @@ const RESPONSIBILITIES = Object.freeze([
  {key:'inventory',responsibility:'Stock',tools:['getBusinessActivityChoices','getQboEntitySchema','manageQboRecord (inventory gate applies)'],missing:['Inventory adjustments and returns require supported tools and enabled gates']},
  {key:'banking',responsibility:'Banking',tools:['manageQboRecord','getCloseChecklist','recordCloseChecklistEvidence'],missing:['Native bank reconciliation requires manual evidence; never infer completion']},
  {key:'master-data',responsibility:'Lists, classes and locations',tools:['manageQboRecord','getQboEntitySchema'],missing:[]},
- {key:'close',responsibility:'Close and evidence',tools:['prepareBusinessPeriod','executeBusinessPeriod','getCloseChecklist','recordCloseChecklistEvidence'],missing:[]},
+ {key:'close',responsibility:'Close and evidence',tools:['closeMonth','getCloseChecklist','recordCloseChecklistEvidence'],missing:[]},
  {key:'planning',responsibility:'Planning, breadth and build list',tools:['getManagementReview','recordDailyPlan','requestCapability','reviewCapability','getCoverageSituations','getWeeklyCoverage','findBusinessOperation'],missing:[]}
 ]);
 
