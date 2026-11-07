@@ -82,7 +82,7 @@ test('an old prepared general plan that saves now still uses the current rolling
  const run={_id:'old-plan',status:'complete',decisionKey:'arbitrary-general-key',createdAt:new Date(now-2*3600000),updatedAt:new Date(now),plan:{operations:saved},items:Object.fromEntries(saved.map(row=>[row.ref,{entity:'Customer',outcome:'saved'}])),batches:[]};
  const store=createBusinessAgentStore({models:{Agents:{},Events:{},Runs:{find:()=>chain([])},Plans:{find:()=>chain([])},Receipts:{find:()=>chain([])},GeneralWriteRuns:{find:()=>chain([run])}},connection:{},transaction:async work=>work({}),now:()=>now});
  const raw=await store.todayActivity({environment:'production',realmId:'1',connectionId:'c'.repeat(24)},'a','2026-10-31');
- const cadence=require('../src/modules/business-agent-cadence'),today=cadence.summarizeToday({...raw,rhythm:cadence.dayRhythm('2026-10-31'),now});assert.equal(today.hourUsed,50);assert.equal(today.dueSlot.records,10,'only ten new creates remain in this hour');
+ const cadence=require('../src/modules/business-agent-cadence'),today=cadence.summarizeToday({...raw,rhythm:cadence.dayRhythm('2026-10-31'),now});assert.equal(today.hourUsed,50);assert.equal(today.hourCap-today.hourUsed,950,'the old plan counts in the current rolling hour');assert.equal(today.dueSlot.records,104,'v3 pace: 154 expected by 16:00, 50 saved');
 });
 
 test('an earlier completed batch receipt does not hide the current unsent sending batch',async()=>{

@@ -145,7 +145,7 @@ test('a durable gate response is ingested after a crash without another transpor
   assert.equal(result.status,'complete');assert.equal(h.sent.length,1);
 });
 
-test('unresolved pre-opening dirty markers refuse new general work against an old verified baseline', async () => {
+test('unresolved pre-opening dirty markers are informational and no longer refuse new general work', async () => {
   const { createGeneralWriteContext } = require('../src/modules/general-write-service');
   const session = {}, chain = value => ({ select() { return this; }, session(actual) { assert.equal(actual, session); return this; }, maxTimeMS() { return this; }, lean: async () => value });
   const context = createGeneralWriteContext({ now: () => Date.parse('2026-12-02T15:00:00Z'), models: {
@@ -153,7 +153,8 @@ test('unresolved pre-opening dirty markers refuse new general work against an ol
     Policies: { findOne: () => chain({ periodControl: {} }) },
     GeneralWriteRuns: { findOne: filter => { assert.equal(filter.dirty.$elemMatch.date.$lte, '2026-12-01'); return chain({ _id: 'old-dirty-run' }); } },
   } });
-  await assert.rejects(context(scope, { get: () => null }, { session }), /General history invalidation is unresolved/);
+  // It gets past the dirty-marker read and stops only at the (absent) published authority in this fixture.
+  await assert.rejects(context(scope, { get: () => null }, { session }), error => !/General history invalidation/.test(error.message) && /Published business authority storage is required/.test(error.message));
 });
 
 // Caller-to-classifier regression: the only transport and stores here are in-memory.

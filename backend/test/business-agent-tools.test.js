@@ -13,8 +13,10 @@ test('strict nested contracts reject authority injection and malformed values',(
  assert.throws(()=>validateArguments({filters:{type:'Invoice',realmId:'foreign'}},{type:'object',properties:{filters:{type:'object',properties:{type:{type:'string'}}}}}),/unsupported field/);
  assert.throws(()=>validateArguments({limit:NaN},{type:'object',properties:{limit:{type:'number'}}}),/numeric/);
 });
-test('retained population and calendar blockers prevent historical regeneration',async()=>{
- const h=fixture();h.business.blockers=[{detail:'Verify original populated history; do not rebuild.'}];await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-23'}),/do not rebuild/);assert.equal(h.prepared,0);
+test('the daily period-preparation tool is retired; closeMonth and reopenMonth replace it',async()=>{
+ const h=fixture(),names=h.tools.definitions.map(tool=>tool.name);
+ assert.equal(names.includes('prepareBusinessPeriod'),false);assert.ok(names.includes('closeMonth'));assert.ok(names.includes('reopenMonth'));
+ await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-23'}),/cannot use/);assert.equal(h.prepared,0);
 });
 test('same-owner plan approval retains agent decision before queuing work',async()=>{
  const h=fixture();await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'The due published work is ready.'});assert.equal(h.approved,1);assert.equal(h.queued,1);assert.ok(h.events.some(e=>e[1]==='plan-decision'));assert.equal(h.events[0][1],'accountant-write-decision');assert.equal(h.events.find(e=>e[1]==='plan-decision')[4].approvalSource,'standing-owner-grant');
@@ -83,7 +85,7 @@ test('a same-day slice takes the due slot identity; duty and list batches keep t
  h.today={...h.today,open:[],dueSlot:null};
  await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/No same-day activity is due now: today is on schedule; more is due at 12:30 PM \(Halifax\)/);
  h.today={...h.today,hourResetAt:new Date(NOON+20*60000).toISOString()};
- await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/hourly limit of 60 new records is reached; work continues at 12:20 PM \(Halifax\)/);
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',sale),/hourly limit of 1000 new records is reached; work continues at 12:20 PM \(Halifax\)/);
  await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,4,'standing duties stay available between slots');
 });
 test('the daily ceiling, a day with no planned activity and an unreadable count stop new discretionary slices',async()=>{
@@ -101,16 +103,15 @@ test('obligations and other standing duties are never limited by the target or c
  h.run.activityBatch.activities=[{type:'collect-adopted-invoice'}];h.run.recordCount=3;
  await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Collect the adopted invoice the customer paid today.'});assert.equal(h.queued,1,'an obligation is approved past the discretionary ceiling');
 });
-test('an unfinished approved operation is recovered before any new period or batch',async()=>{
+test('an unfinished approved operation is recovered before any new batch',async()=>{
  const h=slotFixture({now:Date.parse('2026-10-31T04:10:00Z'),verifiedThrough:'2026-10-29'});
  h.owned=[{operationId:'7'.repeat(24),status:'approved',day:'2026-10-30',agentAuthority:{version:1,agentId,grantId,authorityHash,ownerId}}];
- await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/Finish your unfinished operation 7{24} \(approved, 2026-10-30\) first/);
- await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation/);
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation 7{24} \(approved, 2026-10-30\) first/);
  await assert.rejects(h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Approve another batch.'}),/Finish your unfinished operation/);
- assert.deepEqual([h.periods.length,h.prepared.length,h.approved],[0,0,0]);
+ assert.deepEqual([h.prepared.length,h.approved],[0,0]);
  h.owned=[{...h.owned[0],agentAuthority:{...h.owned[0].agentAuthority,grantId:'0'.repeat(64)}}];
- await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/Finish your unfinished operation/);
-  h.owned[0].agentAuthority.ownerId='9'.repeat(24);await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.deepEqual(h.periods,['2026-10-30'],'another owner is outside this lineage');
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation/);
+  h.owned[0].agentAuthority.ownerId='9'.repeat(24);await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1,'another owner is outside this lineage');
 });
 test('slice admission reads fresh counts and drops cached counts after preparing and queueing',async()=>{
  const h=slotFixture();
@@ -124,23 +125,17 @@ test('executing a new same-day batch must fit today’s ceiling; recovery is nev
  assert.equal(h.approved,0);assert.equal(h.queued,0);
  h.run.recordCount=5;await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute today’s slot batch.'});assert.equal(h.approved,1);assert.equal(h.queued,1);
 });
-test('calendar closes never cross a month-end',async()=>{
- const h=slotFixture({now:Date.parse('2026-11-03T15:00:00Z'),verifiedThrough:'2026-10-25'});
- await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-11-02'}),/one calendar month at a time: prepare through 2026-10-31 first/);
- await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-31'});assert.deepEqual(h.periods,['2026-10-31']);
-});
-
 // GPT-6.1 Sol round-2 review (2026-10-30) findings 1-3.
 test('only continuable or stranded work blocks new work; unsent work outside the slot does not',async()=>{
  const h=slotFixture({now:Date.parse('2026-10-31T04:10:00Z'),verifiedThrough:'2026-10-29'});
  const run={operationId:'7'.repeat(24),status:'stopped',day:'2026-10-30',agentAuthority:{version:1,agentId,grantId,authorityHash,ownerId},holdsSlot:false};
  h.owned=[{...run,disposition:'unsent'}];
- await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.deepEqual(h.periods,['2026-10-30'],'dead unsent work is retired by the worker, not left to deadlock the calendar');
+ await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1,'dead unsent work is retired by the worker, not left to deadlock new work');
  h.owned=[{...run,disposition:'stranded'}];
- await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/stopped outside the calendar after saving records/);
+ await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/stopped outside the calendar after saving records/);
  h.owned=[{...run,status:'approved',disposition:'continue'}];
  await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation/);
- assert.equal(h.periods.length,1);
+ assert.equal(h.prepared.length,1);
 });
 test('the unfinished-work query is filtered to the current owner, and governed calls carry the worker lease',async()=>{
  const h=slotFixture();
@@ -162,14 +157,14 @@ test('approval refuses a slice over the batch or rolling-hour limit; obligations
  await duty.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Pay the adopted bill that fell due today.'});assert.equal(duty.approved,1);
 });
 test('at the daily QuickBooks request budget new slices are refused; duties and recovery continue',async()=>{
- const h=slotFixture();let read=10000;
+ const h=slotFixture();let read=2000,monthRead=449900;// the default daily limit is the remaining monthly guard over the days left: at most 1,800 here on any day
  const tools=createBusinessAgentTools({row:{_id:agentId,ownerId,grant:{id:grantId,authorityHash},settings:{instructions:''}},passId:'budget-pass',scope,user:{id:ownerId},signal:new AbortController().signal,now:()=>NOON,
   store:{models:{},business:async()=>({scope,openingDate:'2026-01-01',verifiedThrough:'2026-10-29',blockers:[]}),run:async()=>h.run,event:async()=>({id:'2'.repeat(24)}),unfinishedRuns:async()=>[]},access:{},readTools:{toolDefinitions:[],toolHandlers:{}},guard:async()=>{},
-  governanceFor:()=>({prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},approve:async()=>{h.approved++;}}),execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async()=>h.today,requestsFor:async()=>{const attempts={sync:30000,report:0,query:0,read,write:5000};return {today:{attempts},month:{attempts}};}});
- await assert.rejects(tools.execute('prepareBusinessActivity',sale),/request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\)/);
- await assert.rejects(tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/request budget of 10,000 is used/);
+  governanceFor:()=>({prepareActivityBatch:async(user,input)=>{h.prepared.push(input);return {operationId,planHash};},approve:async()=>{h.approved++;}}),execution:{request:async()=>{h.queued++;return {accepted:true};}},todayFor:async()=>h.today,requestsFor:async()=>{return {today:{attempts:{sync:0,report:0,query:0,read,write:5000}},month:{attempts:{sync:0,report:0,query:0,read:monthRead,write:5000}}};}});
+ await assert.rejects(tools.execute('prepareBusinessActivity',sale),/request budget of [\d,]+ is used \(2,000 reads, queries and reports; sync and writes are not counted\)/);
+ await assert.rejects(tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute the slot batch under the standing grant.'}),/request budget of [\d,]+ is used/);
  await tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1,'list additions and obligations are not discretionary slices');
- read=500;await tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.length,2);
+ read=500;monthRead=500;await tools.execute('prepareBusinessActivity',sale);assert.equal(h.prepared.length,2);
 });
 
 test('independent general batches prepare beside recovery and the fourth operation is refused before saving',async()=>{
@@ -191,12 +186,10 @@ test('independent general batches prepare beside recovery and the fourth operati
  }finally{generalModule.createDefaultGeneralWrite=original;}
 });
 
-test('an unsent general credit plan does not block independent activity, but still holds calendar closing',async()=>{
+test('an unsent general credit plan does not block independent activity; specialized operations keep their fence',async()=>{
  const h=slotFixture();h.owned=[{operationId:'7'.repeat(24),contract:'general-write-v1',status:'prepared',day:'2026-10-30',disposition:'prepared',holdsSlot:false,agentAuthority:h.run.agentAuthority}];
  await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.prepared.length,1);
  await h.tools.execute('executeBusinessPeriod',{operationId,planHash,reason:'Execute independent regional service activity.'});assert.equal(h.approved,1);assert.equal(h.queued,1);
- await assert.rejects(h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'}),/Finish your unfinished operation/);
- assert.equal(h.periods.length,0);
  h.owned.push({operationId:'8'.repeat(24),status:'approved',day:'2026-10-30',disposition:'continue',agentAuthority:h.run.agentAuthority});
  await assert.rejects(h.tools.execute('prepareBusinessActivity',additions),/Finish your unfinished operation 8{24}/);
  assert.equal(h.prepared.length,1,'specialized operations keep their original calendar fence');
@@ -239,10 +232,9 @@ test('renewed-grant retained calendar slot allows independent activity under the
  try{const result=await tools.execute('manageQboRecord',{decisionKey:'renewed-calendar-slot',purpose:'Independent customer work while the original slot recovers.',operations:[{ref:'customer',op:'create',entity:'Customer',payload:{DisplayName:'Scratch example'}}]});assert.equal(result.refused,true);assert.equal(prepared,1);}finally{general.createDefaultGeneralWrite=original;}
 });
 
-test('fresh activity and period preparation use current published meaning after a policy change',async()=>{
+test('fresh activity preparation uses current published meaning after a policy change',async()=>{
  const h=slotFixture({now:Date.parse('2026-10-31T12:00:00Z'),verifiedThrough:'2026-10-29'});h.businessAuthorityHash='2'.repeat(64);
- await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.origin.authorityHash,h.businessAuthorityHash);assert.equal(h.origin.grantId,grantId);
- await h.tools.execute('prepareBusinessPeriod',{throughDate:'2026-10-30'});assert.equal(h.origin.authorityHash,h.businessAuthorityHash);assert.equal(h.origin.ownerId,ownerId);
+ await h.tools.execute('prepareBusinessActivity',additions);assert.equal(h.origin.authorityHash,h.businessAuthorityHash);assert.equal(h.origin.grantId,grantId);assert.equal(h.origin.ownerId,ownerId);
 });
 
 test('actual advisory sale and two quotations report exact missing added-item fields and retry the same slot safely',async()=>{

@@ -105,15 +105,16 @@ test('a journal entry cannot touch the bank, so it cannot create income or spend
  base.activities[0].lines[1].accountKey='serviceIncome';assert.doesNotThrow(()=>validateChoices(base));
 });
 
-test('pending earlier day permits independent activity but refuses a source from that open day', () => {
+test('pending earlier day permits independent activity, sources from that open day and receiving', () => {
   const { assertBatchPreparation } = require('../src/modules/business-activity-batch');
   const now = Date.parse('2026-12-02T15:00:00Z'), active = { calendar: { verifiedThrough: '2026-11-30' } };
   const batch = { day: '2026-12-02', activities: [{ type: 'settled-service-sale' }] };
   assert.doesNotThrow(() => assertBatchPreparation(active, batch, now));
   batch.activities = [{ type: 'collect-own-invoice', source: { txnDate: '2026-12-01', sources: [] } }];
-  assert.throws(() => assertBatchPreparation(active, batch, now), /open and unverified/);
+  assert.doesNotThrow(() => assertBatchPreparation(active, batch, now), 'no wait on earlier open days (monthly close)');
   batch.activities = [{ type: 'correct-own-record', correction: { original: { txnDate: '2026-12-01' } } }];
-  assert.throws(() => assertBatchPreparation(active, batch, now), /open and unverified/);
+  assert.doesNotThrow(() => assertBatchPreparation(active, batch, now));
   batch.activities = [{ type: 'receive-purchase-order', source: { txnDate: '2026-11-30' } }];
-  assert.throws(() => assertBatchPreparation(active, batch, now), /stock-cost evidence/);
+  assert.doesNotThrow(() => assertBatchPreparation(active, batch, now), 'receiving never waits for a close');
+  assert.throws(() => assertBatchPreparation(active, { ...batch, day: '2026-12-01' }, now), /only for today/);
 });

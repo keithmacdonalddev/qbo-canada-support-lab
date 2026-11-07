@@ -72,7 +72,7 @@ test('every generic guard refuses with a plain, per-operation reason', () => {
   refuse([{ ref: 'prefs', op: 'update', entity: 'Preferences', id: '1', payload: { CurrencyPrefs: { MultiCurrencyEnabled: true } } }], /not a supported Preferences field|cannot be changed|not in the synced/);
 });
 
-test('placeholders build dependency layers and history edits carry durable reproof dates', () => {
+test('placeholders build dependency layers; history edits no longer carry reproof dates', () => {
   const result = check([
     sale(),
     { ref: 'pay1', op: 'create', entity: 'Payment', payload: { TxnDate: DAY, CustomerRef: { value: '1' }, TotalAmt: 100, Line: [{ Amount: 100, LinkedTxn: [{ TxnId: { $ref: 'inv1' }, TxnType: 'Invoice' }] }] } },
@@ -81,7 +81,7 @@ test('placeholders build dependency layers and history edits carry durable repro
   assert.deepEqual(result.plan.layers, [['inv1'], ['pay1']]);
   assert.deepEqual(result.plan.reverifyDates, []);
   const held = check([{ ref: 'up1', op: 'update', entity: 'Invoice', id: '100', payload: { DueDate: '2026-12-20' } }]);
-  assert.equal(held.ok, true, messages(held)); assert.deepEqual(held.plan.reverifyDates, ['2026-11-20']);
+  assert.equal(held.ok, true, messages(held)); assert.deepEqual(held.plan.reverifyDates, [], 'no history re-verification markers (monthly close)');
   assert.deepEqual(result.plan.externalEdits, []);
 });
 

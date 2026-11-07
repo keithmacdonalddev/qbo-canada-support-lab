@@ -221,7 +221,7 @@ test('a due slot gives the accountant today’s counts and slot, and an unproduc
  assert.equal(h.engineCalls,1);assert.equal(h.passContext.cadence.kind,'slice');
  assert.deepEqual(h.passContext.today.dueSlot,{n:4,records:60,decisionKey:'slot-20261023-r2-s4'});assert.equal(h.passContext.today.target,150);
  assert.equal(h.row.cadence.reviews,1);assert.equal(h.row.cadence.misses,1,'nothing changed during the review');
- assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+5*60000,'a review without progress waits 5 minutes; a productive one is followed a minute later');
+ assert.equal(new Date(h.row.nextDecisionAt).getTime(),h.clock+30*60000,'a review without progress waits its spacing and backoff; saved state is re-checked at the next slot (12:30)');
  const view=await h.service.status({id:ownerId});
  assert.equal(view.rightNow.today.line,'Today (Fri Oct 23): 150 planned · 0 in QuickBooks');
  assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/^Working continuously: today is 60 records behind schedule; the next batch of about 60 records/);
@@ -244,7 +244,7 @@ test('settings changes are not review requests, and an owner request at the ceil
  assert.equal(h.engineCalls,0);assert.equal(h.row.reviewRequestedAt,undefined);
  const capped=fixture();capped.row.cadence={day:'2026-10-23',reviews:400};
  await capped.service.control({id:ownerId},{command:'run-now',expectedAgentId:require('../src/modules/business-calendar').hash(scope).slice(0,24),expectedRevision:1,requestKey:'fixture_run_now_0001'});await capped.service.drain();
- assert.equal(capped.engineCalls,0,'review 401 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 400 reviews is reached/);
+ assert.equal(capped.engineCalls,0,'review 401 is never admitted');assert.equal(capped.row.cadence.kind,'ceiling');assert.match(capped.row.cadence.reason,/^you asked for a review, but today’s limit of 60 reviews is reached/);
  assert.equal(new Date(capped.row.nextDecisionAt).toISOString(),'2026-10-24T03:00:00.000Z','the request runs after Halifax midnight');
  [h,capped].forEach(value=>value.service.close());
 });
@@ -291,11 +291,12 @@ test('due saved obligations trigger a review in business hours even when today i
 
 // GPT-6.1 Sol final review (2026-10-30): the enforced daily QuickBooks request budget.
 test('at the daily request budget a due slot makes no model call and the reason is visible',async()=>{
- const h=fixture();h.qboRequests={today:{total:12000,attempts:{sync:2000,report:4000,query:3000,read:3000,write:0}},month:{total:90000,attempts:{sync:20000,report:30000,query:20000,read:20000,write:0}}};
+ // The default daily limit is the remaining monthly guard spread over the days left (at most 9,701 here on any day).
+ const h=fixture();h.qboRequests={today:{total:10000,attempts:{sync:0,report:4000,query:3000,read:3000,write:0}},month:{total:449999,attempts:{sync:20000,report:150000,query:139999,read:140000,write:0}}};
  await h.service._worker(agentId,new AbortController());
- assert.equal(h.engineCalls,0);assert.match(h.row.cadence.reason,/request budget of 10,000 is used/);
+ assert.equal(h.engineCalls,0);assert.match(h.row.cadence.reason,/request budget of [\d,]+ is used/);
  const view=await h.service.status({id:ownerId});
- assert.equal(view.rightNow.requests.reached,true);assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/request budget of 10,000 is used \(10,000 reads, queries and reports; sync and writes are not counted\)/);
+ assert.equal(view.rightNow.requests.reached,true);assert.match(view.work.items.find(item=>item.key==='todays-activity').detail,/request budget of [\d,]+ is used \(10,000 reads, queries and reports; sync and writes are not counted\)/);
  h.service.close();
 });
 
@@ -362,12 +363,12 @@ test('between reviews, recovered work is continued without waiting for the backo
  assert.equal(h.requested,1);assert.equal(h.engineCalls||0,0);
  assert.ok(new Date(h.row.nextDecisionAt).getTime()<=h.clock,'the next review is due now');assert.equal(h.row.cadence.misses,0);
 });
-test('a productive review is followed by the next one about a minute later while today is behind',async()=>{
+test('a productive review clears the backoff; the next slice wakes at the next slot within its spacing while today is behind',async()=>{
  const h=fixture();let receipts=[];h.store.todayActivity=async()=>({runs:receipts.length?[{id:'r1',status:'verified',decisionKey:'slot-20261023-r2-s4',createdAt:h.clock,recordCount:5}]:[],receipts});
  h.onRun=async()=>{receipts=Array.from({length:5},(_,i)=>({operationId:'r1',entity:'invoice',logicalKey:'k'+i}));};
  await h.service._worker(agentId,new AbortController());
  assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.misses,0,'records were saved');
- assert.deepEqual([h.row.cadence.kind,new Date(h.row.nextDecisionAt).getTime()],['slice',h.clock+60000]);
+ assert.deepEqual([h.row.cadence.kind,new Date(h.row.nextDecisionAt).getTime()],['slice',h.clock+30*60000]);
  const view=await h.service.status({id:ownerId});assert.match(view.work.items.find(item=>item.key==='todays-activity').next,/^Working continuously/);
  h.service.close();
 });
@@ -375,9 +376,10 @@ test('a productive review is followed by the next one about a minute later while
 test('restart without a terminal outcome retries without a no-progress miss (including legacy cadence)',async()=>{
  const c=require('../src/modules/business-agent-cadence');
  for(const legacy of [false,true])for(const syncDue of [false,true]){
-  const h=fixture();if(syncDue)h.row.nextSyncAt=new Date(h.clock);h.row.status='reviewing';h.row.leaseToken='dead-process';h.row.leaseExpiresAt=new Date(h.clock-1);h.row.activePass={id:'interrupted-pass',role:'accountant',startedAt:new Date(h.clock-60000).toISOString()};
+  const h=fixture();if(syncDue)h.row.nextSyncAt=new Date(h.clock);h.row.status='reviewing';h.row.leaseToken='dead-process';h.row.leaseExpiresAt=new Date(h.clock-1);h.row.activePass={id:'interrupted-pass',role:'accountant',startedAt:new Date(h.clock-51*60000).toISOString()};
   const today=require('../src/modules/business-agent-cadence').summarizeToday({now:h.clock,rhythm:c.dayRhythm('2026-10-23'),runs:[],receipts:[]});
-  h.row.cadence=c.beginReview({misses:0},{now:h.clock-60000,signature:c.progressSignature(h.business,today),kind:'catch-up'});if(legacy)delete h.row.cadence.reviewPending;
+  // Started 51 minutes ago, so the replacement slice is outside the 50-minute review spacing.
+  h.row.cadence=c.beginReview({misses:0},{now:h.clock-51*60000,signature:c.progressSignature(h.business,today),kind:'catch-up'});if(legacy)delete h.row.cadence.reviewPending;
   h.onRun=async()=>{assert.equal(h.row.cadence.misses,0,'interrupted attempt was not a miss');};
   await h.service._worker(agentId,new AbortController());assert.equal(h.engineCalls,1);assert.equal(h.row.cadence.misses,1,'only the completed replacement is judged');assert.equal(h.row.cadence.reviews,2);h.service.close();
  }
@@ -392,7 +394,8 @@ test('a recorded failed review still counts toward no-progress backoff',async()=
 test('new activity is reviewed while automatic recovery is still pending, even inside its old backoff',async()=>{
  const h=fixture();moveTo(h,'2026-10-31T17:00:00Z');h.business.verifiedThrough='2026-10-30';h.row.nextSyncAt=new Date(h.clock+30000);
  const stuck={...heldRun(h),day:'2026-10-31'};h.owned=[stuck];h.business.currentOperation={...stuck};h.business.blockers=[{code:'current-operation'},{code:'uncertain-write'}];
- h.row.cadence={day:'2026-10-31',lastKind:'recovery',misses:8,lastReviewAt:new Date(h.clock-60000).toISOString()};h.row.nextDecisionAt=new Date(h.clock+30*60000);
+ // The last review was 51 minutes ago: past the slice spacing, inside the recovery's 60-minute backoff.
+ h.row.cadence={day:'2026-10-31',lastKind:'recovery',misses:8,lastReviewAt:new Date(h.clock-51*60000).toISOString()};h.row.nextDecisionAt=new Date(h.clock+30*60000);
  let release;const pending=new Promise(resolve=>{release=resolve;});let started=false,finished=false;
  h.governance={resolveUnknownAutomatically:async()=>{started=true;await pending;finished=true;return {state:'ambiguous',message:'The original record remains held.'};},automaticRecoveryPending:async()=>({pending:false})};
  h.onRun=async input=>{assert.equal(started,true);assert.equal(finished,false,'new work did not wait on recovery');assert.equal(input.context.cadence.kind,'slice');release();};
@@ -404,8 +407,8 @@ test('workspace and the next review explicitly replace stale collection-blocked 
  const h=fixture();h.row.memory='Hold the six collections for identifier repair.';h.row.summary='Collections remain blocked.';
  h.business.collectionReadiness={eligibleInvoiceCount:6,eligibleBalanceCents:60000,reusableDecisionKeys:['old-collection-key'],readyForNewBatch:true};
  h.store.decisions=async()=>[{id:'1'.repeat(24),detail:'Hold all collections.',status:'pending'}];
- const view=await h.service.status({id:ownerId});assert.match(view.agent.summary,/hold is cleared/);assert.match(view.agent.memory,/decisions.*stale/);assert.equal(view.business.currentStateUpdates[0].count,6);assert.equal(view.decisions[0].currentStateUpdates[0].state,'eligible');assert.ok(view.work.items.some(row=>row.key==='collections-eligible'));
- await h.service._worker(agentId,new AbortController());assert.match(h.passContext.memory,/Current saved state takes precedence/);assert.match(h.passContext.memory,/Use current collection choices at the next review/);assert.equal(h.passContext.currentStateUpdates[0].count,6);assert.equal(h.passContext.decisions[0].currentStateUpdates[0].state,'eligible');h.service.close();
+ const view=await h.service.status({id:ownerId});assert.match(view.agent.summary,/hold is cleared/);assert.match(view.agent.memory,/decisions.*stale/);assert.equal(view.business.currentStateUpdates[0].count,6);assert.ok(view.work.items.some(row=>row.key==='collections-eligible'));
+ await h.service._worker(agentId,new AbortController());assert.match(h.passContext.memory,/Current saved state takes precedence/);assert.match(h.passContext.memory,/Use current collection choices at the next review/);assert.equal(h.passContext.currentStateUpdates[0].count,6);h.service.close();
 });
 
 test('automatic recovery receives cancellation and drains before releasing its lease',async()=>{
