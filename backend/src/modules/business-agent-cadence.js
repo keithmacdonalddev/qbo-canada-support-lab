@@ -12,7 +12,11 @@ const ZONE = 'America/Halifax';
 // (online orders, evening jobs, overnight closing work), never zero. It applies from V3_FROM, which
 // switched mid-day: counts come from saved receipts, so nothing already done that day is repeated.
 // Earlier days keep v2 (150 per weekday in ten slices, 30 on Saturday, closed Sunday) or a frozen v1.
-const RHYTHM_VERSION = 3;
+// Rhythm v4 (owner direction 2026-11-07): a large national business. Volume is sized by the metered
+// QuickBooks read budget (about 3 calls per saved record), not a fixed count or a time-of-day weighting:
+// an even pace across all 24 hours, with catch-up up to HOURLY_CAP.
+const RHYTHM_VERSION = 4;
+const V4_FROM = '2026-11-07';
 const V3_FROM = '2026-10-31';
 // Relative share of each Halifax hour (00:00-23:00); 60 in all.
 const HOURLY_WEIGHTS = Object.freeze([1, 1, 1, 1, 1, 1, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 1, 1]);
@@ -34,7 +38,7 @@ const SPACING_MINUTES = Object.freeze({ poll: 2, recovery: 5, 'catch-up': 60, ma
 const PAUSE_RECHECK_MINUTES = 15;
 // Same-day slices may add at most this many new records in any rolling hour, on top of the daily ceiling,
 // so a business that fell behind catches up steadily instead of in one burst.
-const HOURLY_CAP = 60;
+const HOURLY_CAP = 300;
 // Under the all-day rhythm a review starts once at least this many records are due (or the rest of the day's
 // target, if fewer remain), so the accountant keeps pace through the hour instead of waiting for a slot.
 const MIN_DUE = 5;
@@ -157,6 +161,10 @@ function monthEnd(day) { const [y, m] = day.split('-').map(Number); return new D
 // change applies from the next business day and never resets counts mid-day.
 function dayRhythm(day, level = 1) {
   const scale = [0.5, 1, 2].includes(level) ? level : 1;
+  if (day >= V4_FROM) {
+    const target = roundHalfUp(Math.floor(DAILY_REQUEST_BUDGET / 3 * 0.9) * scale);
+    return { version: 4, day, level: scale, target, ceiling: roundHalfUp(target * 1.1), open: 0, close: 24 * 60, slots: SCHEDULES.everyDay.slots.map((minute, index) => ({ n: index + 1, minute, weight: 1 })) };
+  }
   if (day >= V3_FROM) {
     const every = SCHEDULES.everyDay, target = roundHalfUp(every.target * scale);
     return { version: 3, day, level: scale, target, ceiling: 2 * target, open: every.open, close: every.close, slots: every.slots.map((minute, index) => ({ n: index + 1, minute, weight: HOURLY_WEIGHTS[index] })) };
@@ -169,7 +177,7 @@ function frozenRhythm(state, day) {
   const saved = state?.rhythm;
   // A rhythm already frozen for this day is kept, so a code change never resets a day mid-way; the one
   // exception is the v3 switch, which replaces an earlier version from V3_FROM on.
-  if (saved && saved.day === day && Number.isSafeInteger(saved.version) && saved.version >= 1 && Array.isArray(saved.slots) && Number.isSafeInteger(saved.target) && !(saved.version < 3 && day >= V3_FROM)) return saved;
+  if (saved && saved.day === day && Number.isSafeInteger(saved.version) && saved.version >= 1 && Array.isArray(saved.slots) && Number.isSafeInteger(saved.target) && !(saved.version < 3 && day >= V3_FROM) && !(saved.version < 4 && day >= V4_FROM)) return saved;
   return dayRhythm(day);
 }
 const slotKey = (day, version, n, batch = 1) => 'slot-' + day.replace(/-/g, '') + '-r' + version + '-s' + n + (batch > 1 ? '-b' + batch : '');
