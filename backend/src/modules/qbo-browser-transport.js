@@ -173,7 +173,8 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
    await evaluate('navigate-home');await delay(3000);
    let proof=null;
    // A freshly opened browser can take well over ten seconds to render the homepage.
-   for(let n=0;n<60;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
+   // A restart can leave a blank or other page: go back to the homepage and look again.
+   for(let n=0;n<60;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;if(proof===null && n%10===9)try{await evaluate('navigate-home');}catch{/* the next poll reports where we are */}await delay(500);}
    if(proof?.name!=='My Business')return proof;
    // The page's own company record proves the ID without the focus-dependent shortcut.
    for(let n=0;n<10 && !proof?.realmId;n++){await delay(500);proof=await evaluate('company');}
