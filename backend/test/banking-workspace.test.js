@@ -749,11 +749,11 @@ test('complete independent activity totals remain private while public displays 
  for(const detail of [await h.service.accountDetail(user,'60'),(await h.service.accounts(user)).accounts[0]]){assert.equal(detail.pendingActivity.count,201);assert.equal(detail.pendingActivity.items.length,200);assert.equal(detail.pendingActivity.truncated,true);assert.equal(detail.independentActivity.totalCount,201);assert.equal(detail.independentActivity.shownCount,200);assert.equal(detail.independentActivity.events.length,200);assert.equal(detail.independentActivity.truncated,true);assert.equal(detail.independentActivity.pendingCount,201);assert.equal(detail.independentActivity.pendingNativeMinor,20100);assert.equal(detail.independentActivity.boundedBalanceMinor,5000);assert.equal(detail.independentActivity.postedShownCount,0);for(const source of [...detail.pendingActivity.items.map(i=>i.source),...detail.independentActivity.events.map(e=>e.source)]){assert.equal(source.record,undefined);assert.equal(source.request,undefined);assert.equal(source.ownerId,undefined);assert.equal(source.originalActorId,user.actorId);}}
  assert.equal(rows[0].payload.source.record.PrivateNote,'must remain private');
 });
-test('a month reconciled from the register needs no CSV import; a first reconciliation may start from QuickBooks beginning balance 0', async () => {
+test('a month reconciled from the register needs no CSV import; a first reconciliation starts from the beginning balance QuickBooks shows', async () => {
   const h = fixture(); const row = await h.service.register(user, h.input({ period: '2026-11', events: [], rows: [], openingMinor: 5000, closingMinor: 5000 }));
-  const wrong = h.reconciliation(row); wrong.openingMinor = 1; await assert.rejects(h.service.recordReconciliation(user, row.id, wrong));
-  const c = h.reconciliation(row); c.openingMinor = 0; const done = await h.service.recordReconciliation(user, row.id, c);
-  assert.equal(done.summary.reconciled, true); assert.equal(done.evidence.reconciled.openingMinor, 0);
+  const wrongEnd = h.reconciliation(row); wrongEnd.closingMinor = 1; await assert.rejects(h.service.recordReconciliation(user, row.id, wrongEnd));
+  const c = h.reconciliation(row); c.openingMinor = 4880500; const done = await h.service.recordReconciliation(user, row.id, c);
+  assert.equal(done.summary.reconciled, true); assert.equal(done.evidence.reconciled.openingMinor, 4880500);
   const next = await h.service.register(user, h.input({ period: '2026-12', events: [], rows: [], openingMinor: 5000, closingMinor: 5000 }));
   const zero = h.reconciliation(next); zero.openingMinor = 0; await assert.rejects(h.service.recordReconciliation(user, next.id, zero), /exact statement balances/);
 });

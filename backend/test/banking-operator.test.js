@@ -374,3 +374,27 @@ test('a flaky company check on a signed-in browser retries every two minutes wit
  const loop=L.createBankingOperatorLoop(deps);for(let i=0;i<5;i++){await loop.tick();h.advance(3*60000);}
  assert.equal(signins,5);assert.equal(pause,null);assert.equal(state.signInRetry.code,'QBO_COMPANY_MISMATCH');
 });
+test('a reconcile finished in QuickBooks but not recorded retries (the task only re-reads it); an unfinished one with actions does not',async()=>{
+ const R=require(path.join(modules,'banking-operator-resolution'));
+ const entry={runId:'bf7-y',packageId:'p',step:{type:'reconcile'},finishedAt:'2026-11-07T07:00:00.000Z',operatorVersion:R.OPERATOR_VERSION};
+ const done={status:'completed',actionLedger:[{action:'reconcile'}],reconciliation:{completed:true,statementEndingDate:'2026-10-31',openingMinor:0,closingMinor:3000,differenceMinor:0}};
+ const blockedBase={...entry,reason:'Unexpected/duplicate persistent action in Terra ledger'};
+ // A ledger with undo/adjustment wording, another account, or a report without its numbers never auto-retries.
+ for(const bad of [{...done,actionLedger:[{action:'Added reconciliation adjustment'}]},{...done,actionLedger:[{action:'reconcile',accountId:'999'}]},{...done,actionLedger:[]},{...done,reconciliation:{completed:true}}])
+  assert.equal(R.retryPolicy({...blockedBase,accountId:'121',result:bad},[],'2026-11-07T07:20:00.000Z').eligible,false,JSON.stringify(bad.actionLedger));
+ const blocked={...entry,reason:'Unexpected/duplicate persistent action in Terra ledger'};
+ assert.equal(R.retryPolicy({...blocked,result:done},[],'2026-11-07T07:20:00.000Z').eligible,true);
+ assert.equal(R.retryPolicy({...blocked,result:done},[],'2026-11-07T07:05:00.000Z').eligible,false);
+ // Not for a run blocked by the process/model/cleanup check, nor for uploads.
+ assert.equal(R.retryPolicy({...entry,reason:'Terra process/model/cleanup is unconfirmed',result:done},[],'2026-11-07T07:20:00.000Z').eligible,false);
+ assert.equal(R.retryPolicy({...blocked,step:{type:'upload'},result:{status:'completed',actionLedger:[{action:'upload'}]}},[],'2026-11-07T07:20:00.000Z').eligible,false);
+});
+test('Terra replies naming the action in words and putting screenshots under the step are accepted',async()=>{
+ const scope={environment:'production',realmId:'9130357222392856',connectionId:'c'};
+ const data={runId:'bf7-z',packageId:'p',step:{type:'reconcile'},scope,account:{id:'121',currency:'CAD'},period:'2026-10'};
+ const reply=JSON.stringify({kind:'banking-operator-result',version:1,runId:'bf7-z',packageId:'p',step:'reconcile',scope,accountId:'121',accountCurrency:'CAD',period:'2026-10',status:'completed',companyVerified:{realmId:'9130357222392856',name:'My Business'},actionLedger:[{action:'Entered the statement and finished the reconciliation'}],reconciliation:{completed:true,completion:'complete.png'}});
+ const r=parseTerraReply(reply,{data});assert.equal(r.screenshot,'complete.png');assert.equal(r.actionLedger[0].action,'reconcile');
+ // Undo, adjustment and edit wording keeps its own text, so the reconcile step check fails.
+ for(const words of ['Unreconciled two prior items','Added reconciliation adjustment','Undo reconciliation for May','Edited beginning balance on reconcile screen']){
+  const bad=parseTerraReply(reply.replace('Entered the statement and finished the reconciliation',words),{data});assert.notEqual(bad.actionLedger[0].action,'reconcile',words);}
+});

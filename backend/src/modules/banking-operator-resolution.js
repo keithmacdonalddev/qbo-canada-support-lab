@@ -18,12 +18,17 @@ function noNativeEffect(entry,result){
     !entry.actionsCompletedAt && !entry.nativeAttempted &&
     !['upload','rows','reconciliation','attachment','rules'].some(k=>result[k] && (!Array.isArray(result[k]) || result[k].length>0));
 }
+// Only runs that QuickBooks finished but the app rejected for the shape of Terra's report.
+const FORMAT_BLOCKS=/^(Company check\/screenshot missing|Unexpected\/duplicate persistent action in Terra ledger)$/;
+// Every ledger line must be a plain reconcile for this account/period, and the report must
+// carry the ending date, whole-number balances and zero difference the verify-only retry needs.
+const finishedUnrecorded=(entry,result)=>{const r=result?.reconciliation;return entry.step?.type==='reconcile' && result?.status==='completed' && r?.completed===true && /^20[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(r.statementEndingDate || '') && Number.isSafeInteger(r.openingMinor) && Number.isSafeInteger(r.closingMinor) && r.differenceMinor===0 && Array.isArray(result.actionLedger) && result.actionLedger.length>0 && result.actionLedger.every(a=>a?.action==='reconcile' && (!a.accountId || a.accountId===entry.accountId) && (!a.period || a.period===entry.period)) && FORMAT_BLOCKS.test(entry.reason || '') && !Object.entries(entry).some(([k,v])=>/attempt/i.test(k) && v);};
 function retryPolicy(entry,runs,now){
   const attempts=runs.filter(r=>stepKey(r)===stepKey(entry)).reduce((n,r)=>n+(r.resolutions || []).filter(v=>v.mode==='automatic').length,0);
   const changed=(entry.operatorVersion || 'legacy')!==OPERATOR_VERSION;
   const retryAt=new Date(Date.parse(entry.finishedAt || entry.startedAt)+COOLDOWN_MS).toISOString();
-  const eligible=noNativeEffect(entry,entry.result) && attempts<MAX_AUTO_RETRIES && (changed || Date.parse(now)>=Date.parse(retryAt));
-  return {eligible,attempts,maxAttempts:MAX_AUTO_RETRIES,retryAt,operatorVersion:OPERATOR_VERSION,producedVersion:entry.operatorVersion || 'legacy',reason:attempts>=MAX_AUTO_RETRIES?'Three automatic retries used; owner resolution required':!noNativeEffect(entry,entry.result)?'Possible native effect; observed read-only inspection required':changed?'Operator contract changed; retry after process-exit verification':Date.parse(now)>=Date.parse(retryAt)?'Read-only stop cooldown elapsed; retry after process-exit verification':'Read-only stop will retry after cooldown and process-exit verification'};
+    const eligible=(noNativeEffect(entry,entry.result) || finishedUnrecorded(entry,entry.result)) && attempts<MAX_AUTO_RETRIES && (changed || Date.parse(now)>=Date.parse(retryAt));
+  return {eligible,attempts,maxAttempts:MAX_AUTO_RETRIES,retryAt,operatorVersion:OPERATOR_VERSION,producedVersion:entry.operatorVersion || 'legacy',reason:attempts>=MAX_AUTO_RETRIES?'Three automatic retries used; owner resolution required':finishedUnrecorded(entry,entry.result)?'Terra reported a finished reconciliation that was not recorded; the retry only re-reads it':!noNativeEffect(entry,entry.result)?'Possible native effect; observed read-only inspection required':changed?'Operator contract changed; retry after process-exit verification':Date.parse(now)>=Date.parse(retryAt)?'Read-only stop cooldown elapsed; retry after process-exit verification':'Read-only stop will retry after cooldown and process-exit verification'};
 }
 async function assertOwner({user,scope}){
   const member=await require('../models/CompanyMembership').findOne({userId:String(user.actorId || user.id),realmId:scope.realmId}).select('role status').maxTimeMS(3000).lean();
@@ -43,4 +48,4 @@ async function validateInspection(artifact,entry,pkg,readArtifact,now){
   await readArtifact(value.screenshot);
   return {artifact,observedAt:value.observedAt,summary:value.summary,outcome:value.outcome,screenshot:value.screenshot};
 }
-module.exports={OPERATOR_VERSION,COOLDOWN_MS,MAX_AUTO_RETRIES,settled,stepKey,noNativeEffect,retryPolicy,assertOwner,validateInspection};
+module.exports={OPERATOR_VERSION,COOLDOWN_MS,MAX_AUTO_RETRIES,settled,stepKey,noNativeEffect,finishedUnrecorded,retryPolicy,assertOwner,validateInspection};

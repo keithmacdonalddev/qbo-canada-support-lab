@@ -40,7 +40,7 @@ function rowTasks(pkg, resolutions=[], rowId=null) {
     return {...clone(row),action,amountMinor:e.amountMinor,date:e.actualPostingDate || e.expectedPostingDate,qboRefs:refs,nativeTask:result?.nativeTask || null};
   });
 }
-function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=[],desktopFallback=null,files}) {
+function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=[],desktopFallback=null,files,firstReconciliation=false,existing=null}) {
   assertReady(pkg,manifest,account); check(step && Object.keys(step).every(k=>['type','fileId','rowId'].includes(k)) && STEPS.includes(step.type) && (step.type==='upload' ? typeof step.fileId==='string' : step.fileId===undefined), 'Unsupported banking step');
   check(!desktopFallback || (desktopFallback.step===step.type && typeof desktopFallback.reason==='string' && desktopFallback.reason.trim()), 'Desktop fallback must name this step and its reason');
   const s=pkg.snapshot, file=s.files.find(f=>f.fileId===step.fileId && f.kind==='csv');
@@ -62,9 +62,10 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
     upload:'Only proceed after the separate fresh Banking > Rules preflight admitted this exact file. If any rules or account state changed since then, stop. Upload ONLY the named CSV file ONCE through Link account > Upload from file. Never upload a PDF, image or statement there: that route sends statements to a human review team. Confirm exact file SHA-256 from task metadata; preview Date,Description,Amount, dd/mm/yyyy, row count, account currency and signs. Stop on duplicates, unexpected pre-existing rows, ambiguous dates or card signs. Retain confirmation and unique row crosswalk.',
     rules:'Create/adjust ONLY the exact named rules. Auto-post defaults ON: set it deliberately to each specified boolean and capture it. Check the exact before values for adjustments. Stop if a rule would apply beyond the specified account/month or create unlisted bookkeeping. Do not alter other rules.',
     review:'Resolve the SINGLE named row exactly once, then STOP for the coordinator to check the complete synced copy before the next row: Match only the named QBO references; Add only the BF3 category/tax/amount/creator task; Exclude only the designated duplicate with its reason. Never expense returned principal, force a match or create a balancing adjustment. Record resulting QBO IDs and row-specific screenshots. A transfer creates one accounting transfer for both legs, never two expenses. Stop on ambiguity or any already posted item; do not repeat Add.',
-    reconcile:'Reconcile this exact account/month using the supplied ending date, opening balance and ending balance. Bank balances and card amount owed use the declared convention. If QuickBooks shows no earlier completed reconciliation for this account (beginning balance 0 and empty history), this is its first reconciliation: start from beginning balance 0 and mark every transaction dated on or before the ending date except the listed outstanding items. Otherwise stop if the beginning balance differs from the supplied opening balance, there is an existing completed reconciliation, or difference is not zero. Do not change prior R marks or force an adjustment. Finish only at zero difference. Open the completed native reconciliation report and retain a screenshot of the report and a DISTINCT zero-difference completion screenshot. Do not attach the statement yet.',
-    attach:'Open the just-completed reconciliation for this exact account/month and attach ONLY the named simulated statement PDF there, after completion. Never use Upload from file for the PDF. Stop if attachment cannot be made on completed reconciliation. Do not reconcile again. Retain a DISTINCT attachment confirmation screenshot.'
+    reconcile:'Reconcile this exact account/month using the supplied ending date, opening balance and ending balance. Bank balances and card amount owed use the declared convention. '+(firstReconciliation?"This app has not reconciled this account before, so QuickBooks' beginning balance may differ from the supplied opening (an account never reconciled starts at 0; one reconciled earlier outside this app starts at its last reconciled balance). Keep QuickBooks' beginning balance exactly as shown (never change it), enter the supplied ending date and ending balance, and mark every transaction dated on or before the ending date except the listed outstanding items; report the beginning balance QuickBooks showed as openingMinor. Stop if a completed reconciliation already exists for a date after the ending date, or the difference is not zero.":"Stop if the beginning balance differs from the supplied opening balance, a completed reconciliation exists for a later date, or difference is not zero.")+' Do not change prior R marks or force an adjustment. If QuickBooks already shows a completed reconciliation for exactly this ending date and ending balance (an earlier run finished it), do NOT reconcile again: open the report of that reconciliation and return it as completed, with actionLedger [{"action":"reconcile","note":"already completed"}]. Finish only at zero difference. Open the completed native reconciliation report and retain a screenshot of the report and a DISTINCT zero-difference completion screenshot. Do not attach the statement yet.',
+    attach:'Open the just-completed reconciliation for this exact account/month and attach ONLY the named simulated statement PDF there, after completion. Never use Upload from file for the PDF. Stop if attachment cannot be made on completed reconciliation. Do not reconcile again. If this exact statement PDF is already attached to that reconciliation, do not attach it again: screenshot it and return attachment confirmed with actionLedger [{"action":"attach","fileId":...,"fileHash":...,"note":"already attached"}]. Retain a DISTINCT attachment confirmation screenshot.'
   };
+  if(step.type==='reconcile' && existing)actions.reconcile='An earlier run already COMPLETED this reconciliation in QuickBooks (statement ending '+existing.statementEndingDate+', beginning '+money(existing.openingMinor)+', ending '+money(existing.closingMinor)+') but it was not recorded. Do NOT start, resume, undo or change any reconciliation. Open History by account for this account, open the completed reconciliation with exactly that ending date, and take a screenshot of its report (the report) and of the history row (the completion). Return it as completed with reconciliation fields read from that report and actionLedger [{"action":"reconcile","note":"already completed"}]. If no completed reconciliation with that ending date exists, stop.';
   const prompt=[
     'Operate ONLY the exact banking task below. Browser/Computer Use policies still apply; this task is not owner confirmation at a policy stop.',
     'Use only agent-browser session qbo-ops with persistent profile C:/Users/NewAdmin/.qbo-automation-profile, headless. Reuse the already signed-in QuickBooks session; never sign in, close this persistent session or touch another session.',
@@ -94,8 +95,16 @@ function parseTerraReply(reply,task) {
   check(value.kind==='banking-operator-result' && value.version===1 && value.runId===d.runId && value.packageId===d.packageId && value.step===d.step.type && sameScope(value.scope,d.scope) && value.accountId===d.account.id && value.accountCurrency===d.account.currency && value.period===d.period, 'Terra evidence scope/step mismatch');
   check(['completed','stopped'].includes(value.status) && Array.isArray(value.actionLedger), 'Terra status/action ledger missing');
   if(value.status==='stopped') return {...value,reason:value.reason || 'Terra stopped'};
-  check(value.companyVerified?.realmId===COMPANY.realmId && value.companyVerified?.name===COMPANY.name && value.screenshot, 'Company check/screenshot missing');
-  return value;
+  const screenshot=value.screenshot || value.reconciliation?.completion || value.attachment?.screenshot || value.upload?.screenshot;
+  check(value.companyVerified?.realmId===COMPANY.realmId && value.companyVerified?.name===COMPANY.name && screenshot, 'Company check/screenshot missing');
+  // Ledger entries name their action in words; normalise the step's own verb.
+  // Only plain forward wording is normalised; undo, adjustment, edit or removal wording
+  // keeps its own text and so fails the step's action check.
+  const verb={reconcile:/reconcil/i,attach:/attach/i,upload:/upload/i}[value.step];
+  const negative=/\bun|undo|adjust|discrepanc|beginning balance|\bedit|chang|delet|remov|detach|\bre-|revers|\bvoid|again|redo|rerun|reopen|reset|forc|twice/i;
+  // A line whose note uses that wording is not a plain step action either.
+  const actionLedger=value.actionLedger.map(a=>a && typeof a.note==='string' && negative.test(a.note) && !/already/i.test(a.note)?{...a,action:'flagged: '+String(a.action)}:verb && a && typeof a.action==='string' && a.action!==value.step && verb.test(a.action) && !negative.test(a.action)?{...a,action:value.step,originalAction:a.action}:a);
+  return {...value,screenshot,actionLedger};
 }
 /** Append-only on-disk execution journal. Unknown/stopped/verification-pending
  * runs deliberately block subsequent work; no automatic UI replay/recovery. */
@@ -162,7 +171,13 @@ function createBankingOperator(deps) {
         check(Array.isArray(resolutions) && resolutions.every(r=>r.mirrorHash===hash(before)), 'BF3 resolution must use this complete fresh mirror');
       }
       if(step.type==='review' && !step.rowId) step={...step,rowId:rowTasks(pkg,resolutions)[0]?.rowId};
-      const task=buildBankingTask({pkg,manifest,account,step,runId,resolutions,rules,desktopFallback,files});
+      // A reconcile that finished in QuickBooks but was not recorded is only re-read, never redone.
+      let existing=null;
+      if(step.type==='reconcile')for(const prior of journal.filter(j=>j.packageId===pkg.id && j.step?.type==='reconcile' && j.status!=='completed')){
+        let r=null;try{r=await retainedResult(prior,pkg);}catch{/* unreadable output proves nothing */}
+        if(r?.status==='completed' && r.reconciliation?.completed===true && r.reconciliation.statementEndingDate && Number.isSafeInteger(r.reconciliation.openingMinor))existing=r.reconciliation;
+      }
+      const task=buildBankingTask({pkg,manifest,account,step,runId,resolutions,rules,desktopFallback,files,firstReconciliation,existing});
       check(!task.data.rows.some(r=>r.nativeTask?.action==='Transfer') || deps.supportsNativeTransfer===true, 'Native transfer needs the paired-reservation and BF4 settlement verifier adapter before UI execution');
       entry={operatorVersion:resolution.OPERATOR_VERSION,runId,scope:s.scope,accountId:s.accountId,packageId:pkg.id,period:s.period,step:clone(step),status:'started',startedAt:now(),taskHash:hash(task),verification:{status:'Terra-reported only'}};
       await deps.journal.start(entry);
@@ -194,7 +209,10 @@ function createBankingOperator(deps) {
       }
       const ledger=result.actionLedger;
       const expectedActions={preflight:[],upload:['upload'],rules:rules.map(r=>r.action),review:task.data.rows.map(r=>r.action),reconcile:['reconcile'],attach:['attach']}[step.type];
-      check(ledger.length===expectedActions.length && ledger.every((a,i)=>a.action===expectedActions[i] && (!a.accountId || a.accountId===s.accountId) && (!a.period || a.period===s.period)), 'Unexpected/duplicate persistent action in Terra ledger');
+      // A reconciliation or attachment is one action that Terra may log in several lines
+      // (start, mark items, finish); every line must still belong to that step.
+      const oneAction=['reconcile','attach'].includes(step.type);
+      check((oneAction ? ledger.length>=1 && ledger.every(a=>a.action===step.type) : ledger.length===expectedActions.length && ledger.every((a,i)=>a.action===expectedActions[i])) && ledger.every(a=>(!a.accountId || a.accountId===s.accountId) && (!a.period || a.period===s.period)), 'Unexpected/duplicate persistent action in Terra ledger');
       if(step.type==='upload') {
         const file=s.files.find(f=>f.fileId===step.fileId), u=result.upload;
         check(u?.fileId===file.fileId && u.fileHash===file.sha256 && result.actionLedger.some(a=>a.action==='upload' && a.fileId===file.fileId), 'Exact upload confirmation/ledger required');
@@ -228,7 +246,7 @@ function createBankingOperator(deps) {
       }
       if(step.type==='rules') check(result.rules?.length===rules.length && rules.every((r,i)=>{const v=result.rules[i],a=ledger[i];return v?.ruleId && Object.keys(r).every(k=>same(r[k],v[k])) && a.name===r.name && a.ruleId===v.ruleId;}), 'Exact rule conditions/category/tax/Auto-post/ledger evidence missing');
       if(step.type==='reconcile') {
-        const r=result.reconciliation; check(r?.completed===true && r.statementEndingDate===task.data.statementEndingDate && (r.openingMinor===s.openingMinor || firstReconciliation && r.openingMinor===0) && r.closingMinor===s.closingMinor && r.differenceMinor===0 && same(r.outstandingItems,s.outstandingItems) && result.actionLedger.some(a=>a.action==='reconcile'), 'Exact zero-difference reconciliation evidence missing');
+        const r=result.reconciliation; check(r?.completed===true && r.statementEndingDate===task.data.statementEndingDate && (existing ? r.openingMinor===existing.openingMinor && r.statementEndingDate===existing.statementEndingDate && result.actionLedger.every(a=>/already/i.test(a.note||a.originalAction||'')) : r.openingMinor===s.openingMinor || firstReconciliation && Number.isSafeInteger(r.openingMinor)) && r.closingMinor===s.closingMinor && r.differenceMinor===0 && same(r.outstandingItems,s.outstandingItems) && result.actionLedger.some(a=>a.action==='reconcile'), 'Exact zero-difference reconciliation evidence missing');
         entry.completion=await screen(r.completion); entry.report=await screen(r.report,'Completed native reconciliation report','native report retained');
       }
       if(step.type==='attach') {
@@ -319,7 +337,7 @@ function createBankingOperator(deps) {
         const proof=await deps.verifyRunStopped?.(entry);
         check(proof?.processesVerifiedAbsent===true,'Fresh proof that this run and its helpers have exited is required');
         let inspection=null;
-        if(!resolution.noNativeEffect(candidate,result))inspection=await resolution.validateInspection(input?.inspection,entry,pkg,deps.readReportArtifact,now());
+        if(!resolution.noNativeEffect(candidate,result) && !resolution.finishedUnrecorded(candidate,result))inspection=await resolution.validateInspection(input?.inspection,entry,pkg,deps.readReportArtifact,now());
         check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)),'Recover the interrupted import evidence before resuming; do not repeat an uncertain upload');
         plans.push({entry,policy,inspection,result});
         if(automatic)plannedRuns.find(r=>r.runId===entry.runId).resolutions=[...(entry.resolutions || []),{mode:'automatic'}];
@@ -330,7 +348,7 @@ function createBankingOperator(deps) {
         entry.resolutions=[...(entry.resolutions || []),audit];entry.status='resolved-stop';entry.result=result || entry.result;entry.resolvedAt=now();await deps.journal.finish(entry);
       }
       await clearPause(pause);
-      return {resolved:true,packageId,reason:automatic?'Read-only stop resolved automatically':'Owner resolution recorded',automaticRetry:{attempts:plans.at(-1)?.policy.attempts+(automatic?1:0) || 0,maxAttempts:resolution.MAX_AUTO_RETRIES},resolvedAt:now()};
+      return {resolved:true,packageId,reason:automatic?(plans.some(p=>resolution.finishedUnrecorded(p.entry,p.result))?'Reported reconciliation will be re-read, not redone':'Read-only stop resolved automatically'):'Owner resolution recorded',automaticRetry:{attempts:plans.at(-1)?.policy.attempts+(automatic?1:0) || 0,maxAttempts:resolution.MAX_AUTO_RETRIES},resolvedAt:now()};
     }finally{await release();}
   }
   return {execute,status,recover,resolvePause,canResume};
