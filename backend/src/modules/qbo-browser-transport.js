@@ -12,7 +12,10 @@ function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=
   // daemon or Chrome (connect, socket, CDP, busy, CLI timeouts) leaves it possibly
   // still acting, so that stays uncertain. The error text is never returned here.
   const pageAnswered=()=>{if(parentExitCode===0)return true;try{const e=String(JSON.parse(output).error||'');return Boolean(e)&&!/daemon|connect|websocket|\bcdp\b|socket|not responding|proxy request|gateway|retries|failed to start|tool execution timed out|^timed out after|unresponsive|busy/i.test(e);}catch{return false;}};
-  const done=(error)=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(grace);if(error)reject(error);else resolve(output);output='';};
+  // Local diagnostic for 'uncertain' outcomes: which command, its exit code and the
+  // CLI's own short error (agent-browser messages, never page or credential data).
+  const note=error=>{if(!nativeCliCompletion||error?.code!=='QBO_SESSION_UNCERTAIN')return;let reply='';try{reply=String(JSON.parse(output).error||'').slice(0,160);}catch{reply=output?'non-json reply':'no reply';}const command=args.find((a,i)=>i>0&&!String(a).startsWith('-')&&!/[\\/:]/.test(String(a))&&!/^(qbo-ops)$/.test(String(a)))||'?';require('node:fs').appendFile(path.join(ROOT,'artifacts/banking/browser-uncertain.jsonl'),JSON.stringify({at:new Date().toISOString(),command,parentExited,exitCode:parentExitCode,failed,reply})+'\n',()=>{});};
+  const done=(error)=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(grace);if(error){try{note(error);}catch{}reject(error);}else resolve(output);output='';};
   const closeOwnedPipes=()=>{for(const stream of [child.stdin,child.stdout,child.stderr])try{stream.destroy?.();}catch{}};
   // The native CLI may leave its persistent browser daemon holding inherited
   // pipes. Only its successful parent exit plus a complete JSON protocol reply
