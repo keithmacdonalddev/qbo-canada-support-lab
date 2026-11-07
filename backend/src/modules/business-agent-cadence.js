@@ -89,7 +89,7 @@ function requestBudget(summary, { limit = null, monthlyLimit = MONTHLY_METERED_B
   // Owner direction 2026-11-07: no self-imposed daily cap. Today's share is what remains of Intuit's monthly
   // metered allowance (under the guard), spread over the days left in the UTC month, less the sync reserve.
   if (limit === null) {
-    const dayText = typeof summary.day === 'string' && /^d{4}-d{2}-d{2}$/.test(summary.day) ? summary.day : new Date().toISOString().slice(0, 10);
+    const dayText = typeof summary.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(summary.day) ? summary.day : new Date().toISOString().slice(0, 10);
     const [y, m, d] = dayText.split('-').map(Number), left = new Date(Date.UTC(y, m, 0)).getUTCDate() - d + 1;
     base.limit = limit = Math.max(0, Math.floor((monthlyLimit - (meteredMonth - meteredToday)) / Math.max(1, left)) - EXPECTED_DAILY_SYNC);
   }
@@ -265,7 +265,7 @@ function summarizeToday({ rhythm, runs = [], receipts = [], now }) {
   const due = elapsed && behind >= enough && !ceilingReached && hourLeft > 0 && inFlight < MAX_IN_FLIGHT
     ? { n: elapsed.n, records: Math.min(behind, rhythm.ceiling - used, hourLeft), decisionKey: slotKey(rhythm.day, rhythm.version, elapsed.n, elapsed.batches + 1) } : null;
   // Behind but at the hourly cap: work continues when the oldest slice of the hour leaves the window.
-  const hourResetAt = elapsed && behind >= enough && !ceilingReached && !hourLeft && Number.isFinite(hourFirst) ? new Date(hourFirst + 60 * MINUTE).toISOString() : null;
+  const hourResetAt = elapsed && (roomy || behind >= enough) && !ceilingReached && !hourLeft && Number.isFinite(hourFirst) ? new Date(hourFirst + 60 * MINUTE).toISOString() : null;
   // When more work is next due: under v3 the minute today's expected count first runs `enough` ahead of what is done.
   let next = null;
   if (hourly && nowMinute !== null && used < rhythm.target) { for (let m = Math.ceil(nowMinute); m < 24 * 60; m++) if (expectedAtMinute(m) - used >= enough) { next = { at: new Date(zonedTime(rhythm.day, m)).toISOString() }; break; } }
