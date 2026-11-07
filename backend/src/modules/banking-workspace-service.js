@@ -457,10 +457,16 @@ function createBankingWorkspaceService(dependencies = {}) {
   }
   async function recordReconciliation(user, packageId, command) {
     check(exact(command, ['requestId','expectedVersion','action','report','completion','statementAttachment','openingMinor','closingMinor','differenceMinor','outstandingItems','accountId','accountCurrency','period','evidence']), 'Unsupported reconciliation fields.');
+    // An account's first reconciliation starts from QuickBooks' beginning balance 0.
+    const family = await list(user, { accountId: command.accountId }); check(!family.truncated, 'Complete account history required.', 409);
+    const firstReconciliation = !family.packages.some(p => p.id !== packageId && p.summary.reconciled);
     return change(user, packageId, command, async (row, c, ev, bound) => {
       check(c.action === 'reconciled' && !row.snapshot.blockers.length && !row.state.needsReview, 'Resolve package blockers and revised history before reconciliation.', 409);
-      check(Object.values(row.state.rows).every(r => r.matched || r.added || r.excluded) && row.state.imports.every(r => !['started','interrupted'].includes(r.status)), 'Resolve every imported row and uncertain import before reconciliation.', 409);
-      check(c.openingMinor === row.snapshot.openingMinor && c.closingMinor === row.snapshot.closingMinor && c.differenceMinor === 0 && canonical(c.outstandingItems) === canonical(row.snapshot.outstandingItems), 'Native completion needs exact statement balances, zero difference and retained outstanding items.');
+      // Rows need review only when this month's own CSV was imported; normally lines
+      // arrive through the daily feed files and the month is reconciled from the register.
+      const imported = row.state.imports.some(r => r.status === 'uploaded');
+      check((!imported || Object.values(row.state.rows).every(r => r.matched || r.added || r.excluded)) && row.state.imports.every(r => !['started','interrupted'].includes(r.status)), 'Resolve every imported row and uncertain import before reconciliation.', 409);
+      check((c.openingMinor === row.snapshot.openingMinor || firstReconciliation && c.openingMinor === 0) && c.closingMinor === row.snapshot.closingMinor && c.differenceMinor === 0 && canonical(c.outstandingItems) === canonical(row.snapshot.outstandingItems), 'Native completion needs exact statement balances, zero difference and retained outstanding items.');
       check(c.accountId === row.accountId && c.accountCurrency === row.accountCurrency && c.period === row.period, 'Native reconciliation account/currency/period changed.', 403);
       const report = await evidence(c.report, bound), completion = await evidence(c.completion, bound), attachment = await evidence(c.statementAttachment, bound);
       check(report.strength === 'native report retained' && completion.strength === 'screen observed' && attachment.strength === 'screen observed', 'Retain the completed native report, zero-difference completion screen and statement-attachment screen.');

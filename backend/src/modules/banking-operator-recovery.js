@@ -6,7 +6,7 @@ const {execFile}=require('node:child_process');
 // Enumeration only. Never stop a process, and never treat age as death proof.
 async function scanBankingProcesses(){
   if(process.platform!=='win32')throw new Error('Banking lock recovery requires verified Windows process enumeration');
-  const command="$ErrorActionPreference='Stop'; $me=$PID; $rows=@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $me } | ForEach-Object { [pscustomobject]@{pid=[int]$_.ProcessId; parent=[int]$_.ParentProcessId; terra=[bool]($_.CommandLine -match 'terra_live_run=|terra-live[.]sh|terra-live-bf7-') } }); ConvertTo-Json -InputObject $rows -Compress";
+  const command="$ErrorActionPreference='Stop'; $me=$PID; $rows=@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $me } | ForEach-Object { [pscustomobject]@{pid=[int]$_.ProcessId; parent=[int]$_.ParentProcessId; terra=[bool]($_.CommandLine -match 'terra_live_run=|terra-live[.]sh|terra-live-bf7-'); daemon=[bool]($_.Name -like 'agent-browser-win32-*.exe' -and ([string]$_.CommandLine -replace [char]34,'').Trim() -match 'agent-browser-win32-[A-Za-z0-9]+[.]exe$'); started=[long]$(if($_.CreationDate){([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}else{0}) } }); ConvertTo-Json -InputObject $rows -Compress";
   const stdout=await new Promise((resolve,reject)=>execFile('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',command],{windowsHide:true,timeout:15000,maxBuffer:2000000},(e,out)=>e?reject(new Error('Cannot verify live banking processes; locks retained')):resolve(out)));
   const rows=JSON.parse(stdout.replace(/^\uFEFF/,''));
   if(!Array.isArray(rows)||!rows.length||rows.some(r=>!Number.isInteger(r.pid)||!Number.isInteger(r.parent)||typeof r.terra!=='boolean'))throw new Error('Incomplete banking process enumeration; locks retained');
@@ -19,18 +19,23 @@ async function recoverBankingLocks({temp=os.tmpdir(),root=path.resolve(__dirname
   if(t===null && o===null)return {busy:false,recovered:[]};
   let owner;try{owner=o===null?null:JSON.parse(o);}catch{throw new Error('Invalid banking lock owner; retain lock');}
   if(owner && (!Number.isInteger(owner.pid)||owner.pid<=0))throw new Error('Invalid banking owner PID; retain lock');
-  const sampled=new Set();
+  const sampled=new Set();let sampledAt=null;
   if(t!==null){
     const match=/^terra-live-(.+)-\d+-\d+\s*$/.exec(t);
     if(!match || !/^[A-Za-z0-9._-]+$/.test(match[1]))throw new Error('Unknown Terra lock marker; retain lock');
     const base=path.join(root,'artifacts/terra-live'),names=(await fs.readdir(base)).filter(n=>n.startsWith(match[1]+'-'));
     // Missing sampling evidence cannot prove that unmarked helpers have exited.
     if(names.length!==1)throw new Error('Exact Terra process sampling evidence required; lock retained');
-    const pids=await fs.readFile(path.join(base,names[0],'pids.txt'),'utf8');
+    const pids=await fs.readFile(path.join(base,names[0],'pids.txt'),'utf8');sampledAt=(await fs.stat(path.join(base,names[0],'pids.txt'))).mtimeMs;
     if(!pids.trim())throw new Error('Empty Terra process sampling evidence; lock retained');
     for(const line of pids.trim().split(/\r?\n/)){const m=/^(\d+)\s+\S+$/.exec(line.trim());if(!m)throw new Error('Invalid Terra process sampling evidence; lock retained');sampled.add(Number(m[1]));}
   }
-  const alive=rows=>rows.some(p=>p.terra || p.pid===owner?.pid || sampled.has(p.pid) || sampled.has(p.parent) || p.parent===owner?.pid);
+  // The bare agent-browser daemon hosts the shared persistent browser and outlives
+  // every task by design; it drives nothing itself, so it never holds the lock.
+  // Windows reuses PIDs. A process created after the sampling file was written
+  // cannot be a sampled process (nor can its new children); its identity differs.
+  const later=p=>sampledAt!==null && Number.isFinite(p.started) && p.started>sampledAt;
+  const alive=rows=>{const reused=new Set(rows.filter(p=>sampled.has(p.pid) && later(p)).map(p=>p.pid));return rows.some(p=>p.daemon!==true && (p.terra || p.pid===owner?.pid || (sampled.has(p.pid) && !reused.has(p.pid)) || (sampled.has(p.parent) && !(reused.has(p.parent) && later(p))) || p.parent===owner?.pid));};
   // PID is published atomically in the directory name: a crash cannot leave
   // an ownerless mutex between mkdir and writing an owner file.
   const token='qbo-banking-recovery.'+process.pid+'.'+require('node:crypto').randomUUID()+'.lock';

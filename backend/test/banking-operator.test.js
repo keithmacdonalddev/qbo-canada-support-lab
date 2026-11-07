@@ -76,7 +76,10 @@ test('not-ready manifest and changed event evidence are refused before Terra',as
 });
 test('write permission and earlier unfinished account periods stop before launch',async()=>{
   const h=await harness();h.deny();await assert.rejects(h.exec('preflight'),/Write denied/);assert.equal(h.calls,0);
-  const x=await harness(), list=x.workspace.list;x.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'older',period:'2023-07',summary:{reconciled:false}});return v;};await assert.rejects(x.exec('preflight'),/Earlier/);assert.equal(x.calls,0);
+  // After a completed reconciliation, an unfinished month between it and this one still blocks.
+  const x=await harness(), list=x.workspace.list;x.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'done',period:'2023-06',summary:{reconciled:true}},{...v.packages[0],id:'older',period:'2023-07',summary:{reconciled:false}});return v;};await assert.rejects(x.exec('preflight'),/Earlier/);assert.equal(x.calls,0);
+  // Before an account's first reconciliation, older months are covered by it and never block.
+  const y=await harness(), list2=y.workspace.list;y.workspace.list=async(...a)=>{const v=await list2(...a);v.packages.push({...v.packages[0],id:'older',period:'2023-07',summary:{reconciled:false}});return v;};await y.exec('preflight');assert.equal(y.calls,1);
 });
 test('superseded earlier revision does not block its reconciled replacement',async()=>{
   const h=await harness(), list=h.workspace.list;h.workspace.list=async(...a)=>{const v=await list(...a);v.packages.push({...v.packages[0],id:'old',period:'2023-07',revision:1,summary:{reconciled:false}},{...v.packages[0],id:'new',period:'2023-07',revision:2,summary:{reconciled:true}});return v;};await h.exec('preflight');assert.equal(h.calls,1);
@@ -201,7 +204,8 @@ test('BL exact stored Chequing stop replays through production execute and loop 
  const h=await harness(blInput());assert.equal(h.pkg.id,blStop.result.packageId);assert.equal(h.pkg.period,'2020-04');
  h.runner.run=async({task})=>({exitCode:null,cleanupConfirmed:false,reply:blStop.message.replaceAll(blStop.result.runId,task.data.runId),replyPath:blStop.source});
  const L=require(path.join(modules,'banking-operator-loop'));let pause=null,state=null;
- const loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=clone(v)},stateStore:{read:async()=>state,write:async v=>state=clone(v)},now:h.now});
+ const asPreflight={...h.operator,execute:(u,a)=>h.operator.execute(u,{...a,step:{type:'preflight'}})};
+ const loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:asPreflight,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{read:async()=>pause,write:async v=>pause=clone(v)},stateStore:{read:async()=>state,write:async v=>state=clone(v)},now:h.now});
  const result=await loop.tick();assert.equal(result.status,'blocked');assert.equal(pause.reason,'stopped at: '+blStop.result.reason);assert.equal(h.journals[0].result.screenshot,'preflight.png');assert.equal(h.journals[0].status,'blocked');assert.ok(state.lastTickAt);assert.ok(state.lastRunAt);assert.equal(state.lastOutcome.status,'blocked');assert.equal(h.leaseHeld,true);
  const restarted=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>{throw new Error('must pause before checking locks');},pauseStore:{read:async()=>pause},stateStore:{read:async()=>state,write:async v=>state=clone(v)},now:h.now});assert.equal((await restarted.tick()).status,'blocked');assert.equal(state.lastRunAt,h.now());
  t.diagnostic('Actual ce9526d1 / account60 / April2020 and real bf7-4cf19462 structured stop; fake native runner only.');
@@ -250,7 +254,8 @@ test('BL2 exact real retained stop auto-resolves audited after contract change, 
  const h=await harness(blInput());h.journals.push(clone(blStop.journal));const store=bl2Recovery(h),L=require(path.join(modules,'banking-operator-loop'));
  const loop=L.createBankingOperatorLoop({workspace:h.workspace,operator:h.operator,listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:store,now:h.now});
  assert.equal((await loop.tick()).status,'resolved');assert.equal(await store.read(),null);assert.equal(h.calls,0);assert.equal(h.journals[0].status,'resolved-stop');assert.equal(h.journals[0].resolutions[0].mode,'automatic');assert.equal(h.journals[0].result.reason,blStop.result.reason);
- assert.equal((await loop.tick()).status,'progress');assert.equal(h.calls,2);assert.equal(h.journals[1].step.type,'preflight');assert.equal(h.journals[2].step.type,'upload');assert.equal(h.pkg.summary.uploaded,false);assert.equal((await h.workspace.detail(user,h.pkg.id)).summary.uploaded,true);
+ // The month is reconciled from QuickBooks' register; its CSV is not uploaded again.
+ assert.equal((await loop.tick()).status,'progress');assert.equal(h.calls,1);assert.equal(h.journals[1].step.type,'reconcile');
 });
 test('BL2 cooldown and durable three-retry cap survive a restart and version changes',async()=>{
  const h=await harness(blInput()),R=require(path.join(modules,'banking-operator-resolution'));
@@ -311,7 +316,7 @@ test('login-only block survives restart and corrected sign-in resumes without a 
  assert.equal((await L.createBankingOperatorLoop(deps).tick()).requiresSignIn,true);assert.equal(pause,null);assert.equal(h.journals.length,0);assert.equal(h.calls,0);assert.equal(signins,1);assert.ok(!JSON.stringify(state).includes('private raw'));
  const restarted=L.createBankingOperatorLoop(deps);await restarted.tick();assert.equal(signins,1);
  broken=false;h.advance(1000);proof={status:'ready',identityVerified:true,companyVerified:true,at:h.now()};
- assert.equal((await restarted.tick()).status,'progress');assert.equal(h.calls,2);assert.equal(pause,null);assert.equal(signins,2);
+ assert.equal((await restarted.tick()).status,'progress');assert.equal(h.calls,1);assert.equal(pause,null);assert.equal(signins,2);
 });
 test('login-only retry cap and ordinary browser contention never create a native pause',async()=>{
  const h=await harness(),L=require(path.join(modules,'banking-operator-loop'));let pause=null,state=null,signins=0;
@@ -335,4 +340,20 @@ test('pending heartbeat and restart retain authentication retry history',async()
  const snapshot=clone(state);release();await pending;await heartbeat;assert.equal(state.signInRetry.attempts,2);
  state=snapshot;h.runner.withSession=async()=>{throw Object.assign(Error('login'),{code:'QBO_SIGNIN_REQUIRED'});};
  await L.createBankingOperatorLoop(deps).tick();assert.equal(state.signInRetry.attempts,2);assert.equal(pause,null);
+});
+test('a stop pauses only its own account; the newest workable month of another account still runs',async()=>{
+ const L=require(path.join(modules,'banking-operator-loop'));
+ const pkg=(id,accountId,period,reconciled=false)=>({id,accountId,period,revision:1,summary:{reconciled,needsReview:false},evidence:{imports:[],rows:{},supersededBy:null},snapshot:{files:[],rows:[],blockers:[]}});
+ const packages=[pkg('a60','60','2020-04'),pkg('b123old','123','2023-09'),pkg('b123','123','2026-10'),pkg('s9','1150040007','2026-09',true),pkg('s10','1150040007','2026-10')];
+ assert.deepEqual(L.workablePackages(packages).map(p=>p.id).sort(),['a60','b123','s10']);
+ packages.at(-1).period='2026-10';
+ const executed=[];
+ const loop=L.createBankingOperatorLoop({workspace:{list:async()=>({packages}),detail:async(_u,id)=>packages.find(p=>p.id===id)},operator:{status:async()=>({steps:[]}),execute:async(_u,a)=>{executed.push(a);return {runId:'r'};}},listUsers:async()=>[user],enabled:()=>true,isTerraBusy:async()=>false,pauseStore:{list:async()=>[{packageId:'a60',accountId:'60',reason:'opening differs',at:'2026-11-07T00:00:00Z'}],write:async()=>{}}});
+ const result=await loop.tick();
+ assert.equal(result.status,'progress');assert.deepEqual(executed.map(e=>[e.packageId,e.step.type]),[['b123','reconcile']]);
+});
+test('after a reconciled month the next month in date order is worked, never a later one',async()=>{
+ const L=require(path.join(modules,'banking-operator-loop'));
+ const pkg=(id,accountId,period,reconciled=false)=>({id,accountId,period,revision:1,summary:{reconciled}});
+ assert.deepEqual(L.workablePackages([pkg('a','7','2026-08',true),pkg('b','7','2026-09'),pkg('c','7','2026-10'),pkg('d','8','2026-05'),pkg('e','8','2026-10')]).map(p=>p.id).sort(),['b','e']);
 });

@@ -121,8 +121,10 @@ test('browser run checkpoints retain run/step/screenshot/outcome; failed evidenc
 });
 test('reconciliation requires retained native report, distinct zero-difference and statement-attachment evidence', async () => {
   const h = fixture(); let row = await h.service.register(user, h.input());
+  // Once this month's CSV is imported, every imported row must be resolved first.
+  row = await h.review(await h.upload(row));
   await assert.rejects(h.service.recordReconciliation(user, row.id, h.reconciliation(row)), /Resolve every/);
-  row = await h.resolve(await h.review(await h.upload(row)));
+  row = await h.resolve(row);
   for (const mutate of [c => c.report.strength = 'operator attested', c => c.differenceMinor = 1, c => c.accountCurrency = 'USD', c => c.report.artifact = row.snapshot.files.find(f => f.kind === 'statement'), c => c.statementAttachment = c.completion]) { const c = h.reconciliation(row); mutate(c); await assert.rejects(h.service.recordReconciliation(user, row.id, c)); }
   const c = h.reconciliation(row); row = await h.service.recordReconciliation(user, row.id, c); assert.equal(row.summary.reconciled, true); assert.equal(row.evidence.reconciled.report.strength, 'native report retained');
   assert.deepEqual(await h.service.recordReconciliation(user, row.id, c), row); await assert.rejects(h.review(row), /immutable/);
@@ -746,4 +748,12 @@ test('complete independent activity totals remain private while public displays 
  h.store.listInstructionActivity=async()=>({rows:clone(rows),revisions:[]});
  for(const detail of [await h.service.accountDetail(user,'60'),(await h.service.accounts(user)).accounts[0]]){assert.equal(detail.pendingActivity.count,201);assert.equal(detail.pendingActivity.items.length,200);assert.equal(detail.pendingActivity.truncated,true);assert.equal(detail.independentActivity.totalCount,201);assert.equal(detail.independentActivity.shownCount,200);assert.equal(detail.independentActivity.events.length,200);assert.equal(detail.independentActivity.truncated,true);assert.equal(detail.independentActivity.pendingCount,201);assert.equal(detail.independentActivity.pendingNativeMinor,20100);assert.equal(detail.independentActivity.boundedBalanceMinor,5000);assert.equal(detail.independentActivity.postedShownCount,0);for(const source of [...detail.pendingActivity.items.map(i=>i.source),...detail.independentActivity.events.map(e=>e.source)]){assert.equal(source.record,undefined);assert.equal(source.request,undefined);assert.equal(source.ownerId,undefined);assert.equal(source.originalActorId,user.actorId);}}
  assert.equal(rows[0].payload.source.record.PrivateNote,'must remain private');
+});
+test('a month reconciled from the register needs no CSV import; a first reconciliation may start from QuickBooks beginning balance 0', async () => {
+  const h = fixture(); const row = await h.service.register(user, h.input({ period: '2026-11', events: [], rows: [], openingMinor: 5000, closingMinor: 5000 }));
+  const wrong = h.reconciliation(row); wrong.openingMinor = 1; await assert.rejects(h.service.recordReconciliation(user, row.id, wrong));
+  const c = h.reconciliation(row); c.openingMinor = 0; const done = await h.service.recordReconciliation(user, row.id, c);
+  assert.equal(done.summary.reconciled, true); assert.equal(done.evidence.reconciled.openingMinor, 0);
+  const next = await h.service.register(user, h.input({ period: '2026-12', events: [], rows: [], openingMinor: 5000, closingMinor: 5000 }));
+  const zero = h.reconciliation(next); zero.openingMinor = 0; await assert.rejects(h.service.recordReconciliation(user, next.id, zero), /exact statement balances/);
 });

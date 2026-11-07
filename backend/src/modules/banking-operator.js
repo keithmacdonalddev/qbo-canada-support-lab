@@ -48,8 +48,9 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
   const rows=step.type==='review' ? pendingRows.filter(r=>!step.rowId || r.rowId===step.rowId).slice(0,1) : [];
   check(step.type==='review' ? rows.length===1 : step.rowId===undefined, 'Review needs one exact pending row');
   if(step.type==='upload') check(file && !pkg.evidence.imports.some(i=>i.fileId===file.fileId && i.status!=='not-imported'), 'Exact CSV is missing, uploaded or uncertain');
-  if(['rules','review','reconcile','attach'].includes(step.type)) check(s.files.filter(f=>f.kind==='csv').every(f=>pkg.evidence.imports.some(i=>i.fileId===f.fileId && i.status==='uploaded')), 'Upload all exact CSV files first');
-  if(['reconcile','attach'].includes(step.type)) check(pkg.summary.pending===0, 'Resolve all feed rows first');
+  // Feed lines arrive through the daily current-feed uploads; a statement month is
+  // reconciled from QuickBooks' own register. Zero difference is the check.
+  if(['rules','review'].includes(step.type)) check(s.files.filter(f=>f.kind==='csv').every(f=>pkg.evidence.imports.some(i=>i.fileId===f.fileId && i.status==='uploaded')), 'Upload all exact CSV files first');
   if(step.type==='rules') {
     check(rules.length>0 && rules.length<=20, 'Explicit bank rule specifications required');
     for(const r of rules) check(['create','adjust'].includes(r.action) && r.name && r.accountId===s.accountId && r.period===s.period && typeof r.autoPost==='boolean' && r.conditions?.length && r.categoryId && r.taxTreatment && (r.action!=='adjust' || (r.ruleId && r.before)), 'Rule requires exact account/period/conditions/category/tax and deliberate Auto-post');
@@ -61,7 +62,7 @@ function buildBankingTask({pkg,manifest,account,step,runId,resolutions=[],rules=
     upload:'Only proceed after the separate fresh Banking > Rules preflight admitted this exact file. If any rules or account state changed since then, stop. Upload ONLY the named CSV file ONCE through Link account > Upload from file. Never upload a PDF, image or statement there: that route sends statements to a human review team. Confirm exact file SHA-256 from task metadata; preview Date,Description,Amount, dd/mm/yyyy, row count, account currency and signs. Stop on duplicates, unexpected pre-existing rows, ambiguous dates or card signs. Retain confirmation and unique row crosswalk.',
     rules:'Create/adjust ONLY the exact named rules. Auto-post defaults ON: set it deliberately to each specified boolean and capture it. Check the exact before values for adjustments. Stop if a rule would apply beyond the specified account/month or create unlisted bookkeeping. Do not alter other rules.',
     review:'Resolve the SINGLE named row exactly once, then STOP for the coordinator to check the complete synced copy before the next row: Match only the named QBO references; Add only the BF3 category/tax/amount/creator task; Exclude only the designated duplicate with its reason. Never expense returned principal, force a match or create a balancing adjustment. Record resulting QBO IDs and row-specific screenshots. A transfer creates one accounting transfer for both legs, never two expenses. Stop on ambiguity or any already posted item; do not repeat Add.',
-    reconcile:'Reconcile this exact account/month using the supplied ending date, opening balance and ending balance. Bank balances and card amount owed use the declared convention. Stop if the beginning balance differs, there is an existing completed reconciliation, or difference is not zero. Do not change prior R marks or force an adjustment. Finish only at zero difference. Open the completed native reconciliation report and retain a screenshot of the report and a DISTINCT zero-difference completion screenshot. Do not attach the statement yet.',
+    reconcile:'Reconcile this exact account/month using the supplied ending date, opening balance and ending balance. Bank balances and card amount owed use the declared convention. If QuickBooks shows no earlier completed reconciliation for this account (beginning balance 0 and empty history), this is its first reconciliation: start from beginning balance 0 and mark every transaction dated on or before the ending date except the listed outstanding items. Otherwise stop if the beginning balance differs from the supplied opening balance, there is an existing completed reconciliation, or difference is not zero. Do not change prior R marks or force an adjustment. Finish only at zero difference. Open the completed native reconciliation report and retain a screenshot of the report and a DISTINCT zero-difference completion screenshot. Do not attach the statement yet.',
     attach:'Open the just-completed reconciliation for this exact account/month and attach ONLY the named simulated statement PDF there, after completion. Never use Upload from file for the PDF. Stop if attachment cannot be made on completed reconciliation. Do not reconcile again. Retain a DISTINCT attachment confirmation screenshot.'
   };
   const prompt=[
@@ -134,7 +135,10 @@ function createBankingOperator(deps) {
       const manifest=JSON.parse((await deps.workspace.download(user,packageId,mf.fileId)).bytes.toString());
       const account=await deps.getAccount(s.scope,s.accountId); assertReady(pkg,manifest,account);
       const family=await deps.workspace.list(user,{accountId:s.accountId}); check(!family.truncated, 'Complete account history required');
-      check(!family.packages.some(p=>p.id!==pkg.id && p.period<=pkg.period && !p.summary.reconciled && !family.packages.some(newer=>newer.period===p.period && newer.revision>p.revision)), 'Earlier account period is unfinished');
+      // Before an account's first reconciliation, older months are covered by it.
+      const lastDone=family.packages.filter(p=>p.summary.reconciled).map(p=>p.period).sort().at(-1);
+      const firstReconciliation=!lastDone;
+      check(firstReconciliation || !family.packages.some(p=>p.id!==pkg.id && p.period>lastDone && p.period<=pkg.period && !p.summary.reconciled && !family.packages.some(newer=>newer.period===p.period && newer.revision>p.revision)), 'Earlier account period is unfinished');
       const journal=await deps.journal.list(s.scope,s.accountId);
       check(!journal.some(j=>!resolution.settled(j)), 'Account has a stopped, uncertain or unverified earlier step');
       check(!pkg.evidence.imports.some(i=>['started','interrupted'].includes(i.status)), 'Unfinished native import requires observed recovery');
@@ -224,7 +228,7 @@ function createBankingOperator(deps) {
       }
       if(step.type==='rules') check(result.rules?.length===rules.length && rules.every((r,i)=>{const v=result.rules[i],a=ledger[i];return v?.ruleId && Object.keys(r).every(k=>same(r[k],v[k])) && a.name===r.name && a.ruleId===v.ruleId;}), 'Exact rule conditions/category/tax/Auto-post/ledger evidence missing');
       if(step.type==='reconcile') {
-        const r=result.reconciliation; check(r?.completed===true && r.statementEndingDate===task.data.statementEndingDate && r.openingMinor===s.openingMinor && r.closingMinor===s.closingMinor && r.differenceMinor===0 && same(r.outstandingItems,s.outstandingItems) && result.actionLedger.some(a=>a.action==='reconcile'), 'Exact zero-difference reconciliation evidence missing');
+        const r=result.reconciliation; check(r?.completed===true && r.statementEndingDate===task.data.statementEndingDate && (r.openingMinor===s.openingMinor || firstReconciliation && r.openingMinor===0) && r.closingMinor===s.closingMinor && r.differenceMinor===0 && same(r.outstandingItems,s.outstandingItems) && result.actionLedger.some(a=>a.action==='reconcile'), 'Exact zero-difference reconciliation evidence missing');
         entry.completion=await screen(r.completion); entry.report=await screen(r.report,'Completed native reconciliation report','native report retained');
       }
       if(step.type==='attach') {

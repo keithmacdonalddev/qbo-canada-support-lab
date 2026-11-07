@@ -54,8 +54,8 @@ function createBankingWorkspaceRouter(dependencies = {}) {
     const body=req.body;
     if(!body || Object.keys(body).some(k=>!['packageId','resolution'].includes(k)) || !/^[a-f0-9]{64}$/.test(body.packageId || ''))throw Object.assign(new Error('Exact packageId and resolution required'),{code:'BANKING_INVALID',status:400});
     const L=require('../modules/banking-operator-loop');
-    const store=dependencies.pauseStore || L.filePauseStore(require('node:path').resolve(__dirname,'../../../artifacts/banking/operator-loop-paused.json'));
-    return operator().resolvePause(req.user,{packageId:body.packageId,resolution:body.resolution,pause:await store.read(),clearPause:value=>store.clear(value)});
+    const store=dependencies.pauseStore || L.defaultPauseStore(require('node:path').resolve(__dirname,'../../..'));
+    return operator().resolvePause(req.user,{packageId:body.packageId,resolution:body.resolution,pause:await store.read(body.packageId),clearPause:value=>store.clear(value)});
   }));
   router.post('/packages', action(req => service().register(req.user, req.body)));
   router.get('/packages/:id', action(async req => {

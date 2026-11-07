@@ -7,12 +7,18 @@ function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=
  return new Promise((resolve,reject)=>{
   let child,output='',outputBytes=0,closed=false,failed=false,timer,grace,parentExited=false,parentExitCode=null,completionQueued=false;
   const terminalJson=()=>{try{const value=JSON.parse(output);return value!==null&&!Array.isArray(value)&&typeof value==='object'&&typeof value.success==='boolean';}catch{return false;}};
+  // A failed command is finished only when the browser itself answered (for example a
+  // page script error). CLI-side waits, timeouts and daemon trouble leave the daemon
+  // possibly still acting, so they stay uncertain. The error text is never returned here.
+  const pageAnswered=()=>{if(parentExitCode===0)return true;try{const e=String(JSON.parse(output).error||'');return /^(Evaluation error|Element not found|No element|Unknown key)/i.test(e)&&!/time(?:d)?\s*out|timeout|daemon|ipc|connect|busy|unresponsive|pipe/i.test(e);}catch{return false;}};
   const done=(error)=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(grace);if(error)reject(error);else resolve(output);output='';};
   const closeOwnedPipes=()=>{for(const stream of [child.stdin,child.stdout,child.stderr])try{stream.destroy?.();}catch{}};
   // The native CLI may leave its persistent browser daemon holding inherited
   // pipes. Only its successful parent exit plus a complete JSON protocol reply
   // can release our pipe handles; generic subprocesses still require close.
-  const completeNative=()=>{if(!nativeCliCompletion||closed||failed||!parentExited||parentExitCode!==0||!terminalJson()||completionQueued)return;completionQueued=true;setImmediate(()=>{completionQueued=false;if(closed||failed||!parentExited||parentExitCode!==0||!terminalJson())return;done(null);closeOwnedPipes();});};
+  // A command that fails still exits and prints its JSON reply ({success:false});
+  // the caller reads that. Only a still-running command is uncertain.
+  const completeNative=()=>{if(!nativeCliCompletion||closed||failed||!parentExited||!terminalJson()||!pageAnswered()||completionQueued)return;completionQueued=true;setImmediate(()=>{completionQueued=false;if(closed||failed||!parentExited||!terminalJson()||!pageAnswered())return;done(null);closeOwnedPipes();});};
   try{child=spawnProcess(file,args,{cwd:ROOT,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});onChild(child.pid,path.basename(file));}catch{if(child?.pid){if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');}done(failure(child?.pid?'QBO_SESSION_UNCERTAIN':'QBO_BROWSER_UNAVAILABLE'));return;}
   const stop=()=>{if(failed||closed)return;failed=true;if(nativeCliCompletion&&parentExited){done(failure('QBO_SESSION_UNCERTAIN'));closeOwnedPipes();return;}grace=setTimeout(()=>done(failure('QBO_SESSION_UNCERTAIN')),3000);if(process.platform==='win32')exec('taskkill.exe',['/T','/F','/PID',String(child.pid)],{windowsHide:true,timeout:2000},()=>{});else child.kill('SIGTERM');};
   timer=setTimeout(stop,timeoutMs);
@@ -20,7 +26,7 @@ function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=
   child.stdout.on('data',b=>{if(closed)return;if((nativeCliCompletion?outputBytes:output.length)+b.length>65536)stop();else{outputBytes+=b.length;output+=b.toString();completeNative();}});
   child.stderr.on('data',()=>{}); // Never expose provider/credential/browser diagnostics.
   child.once('exit',code=>{parentExited=true;parentExitCode=code;completeNative();});
-  child.once('close',code=>done(failed?failure('QBO_SESSION_UNCERTAIN'):nativeCliCompletion?parentExited&&parentExitCode===0&&code===0&&terminalJson()?null:failure('QBO_SESSION_UNCERTAIN'):code===0?null:failure('QBO_BROWSER_UNAVAILABLE')));
+  child.once('close',code=>done(failed?failure('QBO_SESSION_UNCERTAIN'):nativeCliCompletion?parentExited&&terminalJson()&&pageAnswered()?null:failure('QBO_SESSION_UNCERTAIN'):code===0?null:failure('QBO_BROWSER_UNAVAILABLE')));
   child.stdin.on('error',()=>{});child.stdin.end(input);
  });
 }
@@ -156,10 +162,16 @@ function createBrowserTransport({root=ROOT,run=privateRun,onChild=()=>{},delay=m
   verifyCompany:async()=>{
    await evaluate('navigate-home');
    let proof=null;
-   for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
+   // A freshly opened browser can take well over ten seconds to render the homepage.
+   for(let n=0;n<60;n++){proof=await evaluate('company');if(proof?.name==='My Business')break;await delay(500);}
    if(proof?.name!=='My Business')return proof;
-   await command(['press','Control+Alt+Shift+/']);
-   for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}
+   // The shortcut is ignored until the freshly loaded homepage registers it,
+   // so press it again (bounded) rather than falling back immediately.
+   for(let press=0;press<4 && !proof?.realmId;press++){
+    await command(['press','Control+Alt+Shift+/']);
+    for(let n=0;n<10;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}
+    if(!proof?.realmId){await command(['press','Escape']);await delay(1500);}
+   }
    if(!proof?.realmId){await command(['press','Escape']);await evaluate('navigate-billing');for(let n=0;n<20;n++){proof=await evaluate('company');if(proof?.realmId)break;await delay(500);}}
    await command(['press','Escape']);await evaluate('navigate-home');return proof;
   }

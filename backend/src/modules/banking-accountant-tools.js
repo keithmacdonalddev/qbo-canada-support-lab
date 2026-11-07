@@ -135,7 +135,7 @@ function createBankingRuntime({root=path.resolve(__dirname,'../../..'),workspace
     return pkg.snapshot.events.filter(e=>e.source?.entity==='BankOrigin').map(event=>require('./bank-origin-resolution').prepareBankOriginResolution({event,accounts,reservations:reservations.map(r=>r.payload),mirrorSnapshot:before,asOf:new Date().toISOString()}));
   }});
  const L=require('./banking-operator-loop');
- const loop=L.createBankingOperatorLoop({workspace,operator,enabled,isTerraBusy:L.terraBusy,pauseStore:L.filePauseStore(path.join(root,'artifacts/banking/operator-loop-paused.json')),stateStore:L.fileStateStore(path.join(root,'artifacts/banking/operator-loop-state.json')),listUsers:async()=>{
+ const loop=L.createBankingOperatorLoop({workspace,operator,enabled,isTerraBusy:L.terraBusy,pauseStore:L.defaultPauseStore(root),stateStore:L.fileStateStore(path.join(root,'artifacts/banking/operator-loop-state.json')),listUsers:async()=>{
    const agents=await Agents.find({'settings.monitoring':true,'settings.autonomous':true,environment:'production',realmId:'9130357222392856','grant.id':{$type:'string'}}).limit(3).maxTimeMS(5000).lean();
    const users=[];for(const a of agents){const u=await Users.findOne({_id:a.ownerId}).select('role').maxTimeMS(5000).lean();if(u)users.push({id:String(u._id),actorId:String(u._id),role:u.role});}return users;
  }});

@@ -166,3 +166,12 @@ test('after the password, an intermediate redirect page is waited through, never
  index=0;const before=[{url:'https://accounts-tax.intuit.com/redirect',phase:'transition'}];
  const early=loginHarness({inspect:async()=>before[0]});await assert.rejects(early.run(),e=>e.code==='QBO_SIGNIN_REQUIRED');assert.deepEqual(early.calls,['open']);
 });
+test('a native browser command that fails returns its own error reply instead of an uncertain session',async()=>{
+ const {EventEmitter}=require('node:events'),{PassThrough}=require('node:stream');
+ const fake=(code,reply)=>()=>{const child=new EventEmitter();child.pid=32124;child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();setTimeout(()=>{if(reply)child.stdout.write(reply);child.emit('exit',code);},5);return child;};
+ const raw=await T.privateRun('agent-browser.exe',['eval'],{nativeCliCompletion:true,timeoutMs:2000,spawnProcess:fake(1,JSON.stringify({success:false,error:'Evaluation error'})),exec:(_f,_a,_o,cb)=>cb(null)});
+ assert.equal(JSON.parse(raw).success,false);
+ // A killed CLI, or the CLI's own wait timing out, leaves the daemon possibly acting: uncertain.
+ await assert.rejects(T.privateRun('agent-browser.exe',['eval'],{nativeCliCompletion:true,timeoutMs:300,spawnProcess:fake(1,''),exec:(_f,_a,_o,cb)=>cb(null)}),e=>e.code==='QBO_SESSION_UNCERTAIN');
+ await assert.rejects(T.privateRun('agent-browser.exe',['open'],{nativeCliCompletion:true,timeoutMs:300,spawnProcess:fake(1,JSON.stringify({success:false,error:'Read timed out waiting for daemon'})),exec:(_f,_a,_o,cb)=>cb(null)}),e=>e.code==='QBO_SESSION_UNCERTAIN');
+});
