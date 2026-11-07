@@ -33,7 +33,8 @@ async function replaceReceivedOrderBills({ models, scope, prepared, activity, hi
     const saved = await models.Steps.findOne({ ...scope, logicalKey: intent.logicalKey, entity: 'Bill', state: 'verified' }).maxTimeMS(3000).lean();
     const run = saved && await models.Runs.findOne({ ...scope, _id: saved.operationId, status: 'verified' }).maxTimeMS(3000).lean();
     if (!run) continue;
-    const original = (await history(scope, [intent.logicalKey])).entries.find(row => row.logicalKey === intent.logicalKey);
+    // Close assembly only (the sole caller): earlier owner-route receipts are parent evidence.
+    const original = (await history(scope, [intent.logicalKey], { ownerHistory: true })).entries.find(row => row.logicalKey === intent.logicalKey);
     if (!original || original.fingerprint !== intent.fingerprint || original.qboId !== saved.qboId) throw Error('The earlier receiving bill lost its original ownership.');
     for (const event of scheduled) {
       if (replacements.has(event.logicalKey)) throw Error('Several receiving bills claim the same scheduled purchase order.');

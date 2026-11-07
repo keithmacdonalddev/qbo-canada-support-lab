@@ -158,7 +158,10 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     return result.id;
   }
   // Stored origin remains exact evidence; current grants may renew for the same accountant.
-  async function read(scope, operationId, session, check = () => {}) {
+  // Only close-assembly history may also read the same owner's owner-route runs (no agent
+  // origin) as existing parent evidence; corrections, settlement, receiving, approval,
+  // paging, intent loading and resume reads stay strict.
+  async function read(scope, operationId, session, check = () => {}, { ownerHistoryActor = null } = {}) {
     check();
     if (typeof operationId !== 'string' || !ID.test(operationId)) fail('A valid operation identifier is required', 400);
     const run = await Runs.findOne({ _id: operationId, ...scope }).session(session).maxTimeMS(3000).lean();
@@ -166,7 +169,8 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
     const plan = await Plans.findOne({ _id: run.planId, ...scope }).session(session).maxTimeMS(3000).lean();
     check(); if (!plan || plan.contractVersion !== 1 || plan.planHash !== run.planHash || hash(plan.manifest) !== plan.planHash || !sameScope(plan.manifest.scope, scope) || String(plan.operationId) !== operationId || !plan.auditId) fail('The immutable saved operation plan is missing or changed');
     if (Boolean(run.agentAuthority) !== Boolean(plan.agentAuthority) || (run.agentAuthority && canonical(run.agentAuthority) !== canonical(plan.agentAuthority))) fail('The immutable agent origin changed.');
-    if (agentAuthority && (!run.agentAuthority || agentAuthority.agentId !== run.agentAuthority.agentId || agentAuthority.ownerId !== run.agentAuthority.ownerId)) {
+    const ownerOrigin = Boolean(agentAuthority && ownerHistoryActor) && !run.agentAuthority && !plan.agentAuthority && String(run.createdBy) === String(agentAuthority.ownerId) && String(plan.createdBy) === String(agentAuthority.ownerId) && String(run.createdBy) === String(ownerHistoryActor);
+    if (agentAuthority && !ownerOrigin && (!run.agentAuthority || agentAuthority.agentId !== run.agentAuthority.agentId || agentAuthority.ownerId !== run.agentAuthority.ownerId)) {
       fail('The immutable agent origin changed.');
     }
     const expected = runFields(plan.manifest, String(plan._id), String(plan.createdBy));
@@ -294,7 +298,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
   }
   // Local saved history only. Missing entries do not establish QBO absence.
   // Query across connection IDs first so reconnects cannot hide existing work.
-  async function history(scope, logicalKeys, { signal } = {}) {
+  async function history(scope, logicalKeys, { signal, ownerHistory = false } = {}) {
     scope = scopeOf(scope);
     if (!Steps || !Array.isArray(logicalKeys) || logicalKeys.length > MAX_RECORDS || new Set(logicalKeys).size !== logicalKeys.length || logicalKeys.some(key => !validHash(key))) fail('History needs at most 1,000 distinct activity identities', 400);
     const roots = [...logicalKeys].sort(), started = now(), controller = new AbortController();
@@ -340,7 +344,7 @@ function createBusinessOperationPlanStore({ Plans, Intents, Runs, Steps, Authori
           }
           const operationId = String(row.operationId);
           if (!plans.has(operationId)) {
-            const saved = await call(() => read(scope, operationId, session, check)); check(); assertRunApproval(saved.run);
+            const saved = await call(() => read(scope, operationId, session, check, { ownerHistoryActor: ownerHistory === true ? actorId : null })); check(); assertRunApproval(saved.run);
             if (saved.run.status === 'previewed') fail('Saved activity has no approved originating operation');
             retainSize(saved.plan.manifest);
             plans.set(operationId, { ...saved, byKey: new Map(saved.plan.manifest.records.map((value, ordinal) => [value.logicalKey, { value, ordinal }])) });

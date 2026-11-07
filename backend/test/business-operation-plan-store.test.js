@@ -373,6 +373,46 @@ test('history from a different accountant or owner and tampered stored origin is
   await assert.rejects(storeFor(earlier).history(scope, [bill.step.logicalKey]), /origin changed/);
 });
 
+// Production incident 2026-11-07: the November 1 and 2 closes were executed through the
+// owner route (no agentAuthority). The accountant's November 3 preparation reads them as
+// history and must not fail with "immutable agent origin"; execution reads stay strict.
+async function ownerOriginHistory(status = 'verified') {
+  const h = harness(), saved = await h.prepare(); await h.store.approve(scope, saved.operationId, saved.planHash);
+  const page = await h.store.page(scope, saved.operationId);
+  for (const [index, entry] of page.entries.entries()) {
+    const step = entry.step;
+    h.steps.set(step.logicalKey, { contractVersion: 1, ...scope, operationId: saved.operationId, planHash: saved.planHash, logicalKey: step.logicalKey, fingerprint: hash(step), entity: step.entity, dependencies: step.dependencies.map(link => ({ logicalKey: link.logicalKey, fingerprint: link.fingerprint, entity: link.entity })), state: 'verified', revision: 4, qboId: String(1000 + index) });
+  }
+  h.runs.get(saved.operationId).status = status;
+  const authority = { version: 1, agentId: 'a'.repeat(24), ownerId: actorId, grantId: hash('standing owner grant'), authorityHash: hash('published business') };
+  const store = (change = {}) => createBusinessOperationPlanStore({ ...h.deps, agentAuthority: { ...authority, ...change } });
+  return { h, saved, store, bill: page.entries.find(entry => entry.step.entity === 'Bill') };
+}
+test('the accountant reads its owner\'s owner-route history without adopting it', async () => {
+  const { h, saved, store, bill } = await ownerOriginHistory();
+  assert.equal(h.runs.get(saved.operationId).agentAuthority, undefined);
+  const before = canonical([...h.steps.values()]);
+  const result = await store().history(scope, [bill.step.logicalKey], { ownerHistory: true });
+  assert.equal(result.entries.length, 2); assert.ok(result.entries.every(row => row.operationId === saved.operationId && row.runStatus === 'verified')); assert.deepEqual(result.missing, []);
+  // Corrections, own settlement and receiving use the default strict history.
+  await assert.rejects(store().history(scope, [bill.step.logicalKey]), /origin changed/);
+  assert.equal(canonical([...h.steps.values()]), before);
+  assert.equal(h.runs.get(saved.operationId).agentAuthority, undefined);
+});
+test('owner-route runs stay outside accountant execution and another owner\'s history is refused', async () => {
+  const { saved, store, bill } = await ownerOriginHistory('approved');
+  await assert.rejects(store().page(scope, saved.operationId), /origin changed/);
+  await assert.rejects(store().loadIntent(scope, saved.operationId, bill.step.logicalKey), /origin changed/);
+  await assert.rejects(store().approve(scope, saved.operationId, saved.planHash), /origin changed/);
+  await assert.rejects(store({ ownerId: 'e'.repeat(24) }).history(scope, [bill.step.logicalKey], { ownerHistory: true }), /origin changed/);
+  const other = await ownerOriginHistory(); other.h.runs.get(other.saved.operationId).createdBy = 'e'.repeat(24);
+  await assert.rejects(other.store().history(scope, [other.bill.step.logicalKey], { ownerHistory: true }), /origin changed|differs from its saved plan/);
+  const actor = await ownerOriginHistory(); actor.h.actorId = 'e'.repeat(24);
+  await assert.rejects(actor.store().history(scope, [actor.bill.step.logicalKey], { ownerHistory: true }), /origin changed/);
+  const mixed = await ownerOriginHistory(); [...mixed.h.plans.values()][0].agentAuthority = { version: 1, agentId: 'a'.repeat(24), ownerId: actorId, grantId: hash('g'), authorityHash: hash('p') };
+  await assert.rejects(mixed.store().history(scope, [mixed.bill.step.logicalKey], { ownerHistory: true }), /origin changed/);
+});
+
 test('standing-agent approval does not replay old report proofs and still fences current authority', async () => {
   const h = harness(); withAgent(h); const saved = await h.prepare();
   h.deps.verifyApproval = async () => { throw Error('historical report proof must not authorize this run'); };

@@ -314,7 +314,7 @@ function createBusinessGovernanceService(dependencies = {}) {
     }
     const sign = () => { const { operationHash, preparedAt, readyToExecute, persisted, summary, limitations, ...body } = prepared; prepared.operationHash = hash(body); }; sign();
     prepared = await bindPreparedOperationReferences(prepared, { authorize: access.authorize, resolveClient: access.resolveClient, now, signal });
-    const store = planStore(bound), history = await store.history(scope, operationHistoryRoots(prepared), { signal });
+    const store = planStore(bound), history = await store.history(scope, operationHistoryRoots(prepared), { signal, ownerHistory: true });
     const context = { scope, authorityHash: active.authority.contentHash, businessKey: active.value.businessKey, blueprintId: active.value.blueprintId, blueprintHash: active.value.blueprintHash, baselineHash: active.value.baselineHash, openingDate: active.value.openingDate, expectedCursor: active.calendar.verifiedThrough, expectedRevision: active.calendar.revision,
       requiredAssertions: [{ key: 'records', evidenceType: 'record-readback', currency: 'CAD' }, ...['trial-balance', 'balance-sheet', 'profit-and-loss'].map(key => ({ key, evidenceType: 'accrual-ledger', currency: 'CAD', basis: 'Accrual' })), ...['receivables', 'payables'].map(key => ({ key, evidenceType: 'open-balances-at-date', currency: 'CAD' }))] };
     const assembly = assembleBusinessOperation({ prepared, history, context, now: now() });
