@@ -7,10 +7,11 @@ function privateRun(file,args,{input='',timeoutMs=45000,spawnProcess=spawn,exec=
  return new Promise((resolve,reject)=>{
   let child,output='',outputBytes=0,closed=false,failed=false,timer,grace,parentExited=false,parentExitCode=null,completionQueued=false;
   const terminalJson=()=>{try{const value=JSON.parse(output);return value!==null&&!Array.isArray(value)&&typeof value==='object'&&typeof value.success==='boolean';}catch{return false;}};
-  // A failed command is finished only when the browser itself answered (for example a
-  // page script error). CLI-side waits, timeouts and daemon trouble leave the daemon
-  // possibly still acting, so they stay uncertain. The error text is never returned here.
-  const pageAnswered=()=>{if(parentExitCode===0)return true;try{const e=String(JSON.parse(output).error||'');return /^(Evaluation error|Element not found|No element|Unknown key)/i.test(e)&&!/time(?:d)?\s*out|timeout|daemon|ipc|connect|busy|unresponsive|pipe/i.test(e);}catch{return false;}};
+  // A failed command is finished when the browser answered it (element not found,
+  // unknown ref, a page wait that timed out, a script error). Trouble reaching the
+  // daemon or Chrome (connect, socket, CDP, busy, CLI timeouts) leaves it possibly
+  // still acting, so that stays uncertain. The error text is never returned here.
+  const pageAnswered=()=>{if(parentExitCode===0)return true;try{const e=String(JSON.parse(output).error||'');return Boolean(e)&&!/daemon|connect|websocket|\bcdp\b|socket|not responding|proxy request|gateway|retries|failed to start|tool execution timed out|^timed out after|unresponsive|busy/i.test(e);}catch{return false;}};
   const done=(error)=>{if(closed)return;closed=true;clearTimeout(timer);clearTimeout(grace);if(error)reject(error);else resolve(output);output='';};
   const closeOwnedPipes=()=>{for(const stream of [child.stdin,child.stdout,child.stderr])try{stream.destroy?.();}catch{}};
   // The native CLI may leave its persistent browser daemon holding inherited

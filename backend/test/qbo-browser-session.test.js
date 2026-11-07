@@ -182,3 +182,9 @@ test('a large native reply such as a QuickBooks page snapshot completes normally
  const raw=await T.privateRun('agent-browser.exe',['snapshot'],{nativeCliCompletion:true,timeoutMs:2000,spawnProcess,exec:(_f,_a,_o,cb)=>cb(null)});
  assert.equal(JSON.parse(raw).data.snapshot.length,300000);
 });
+test('page-side failures finish; daemon and CDP trouble stays uncertain',async()=>{
+ const {EventEmitter}=require('node:events'),{PassThrough}=require('node:stream');
+ const run=error=>T.privateRun('agent-browser.exe',['click'],{nativeCliCompletion:true,timeoutMs:300,exec:(_f,_a,_o,cb)=>cb(null),spawnProcess:()=>{const child=new EventEmitter();child.pid=32127;child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();setTimeout(()=>{child.stdout.write(JSON.stringify({success:false,error}));child.emit('exit',1);},5);return child;}});
+ for(const e of ['Unknown ref: e99','Element not found: #x. Verify the selector','No element found by text zzz','Wait timed out after 2000ms'])assert.equal(JSON.parse(await run(e)).success,false,e);
+ for(const e of ['Failed to connect to daemon: x','CDP command timed out: Input.dispatch','tab is not responding','(3 retries - daemon may be busy or unresponsive)','Timed out after 30s'])await assert.rejects(run(e),x=>x.code==='QBO_SESSION_UNCERTAIN',e);
+});

@@ -6,10 +6,13 @@ const settled=entry=>['completed','recovered-read-only','resolved-stop'].include
 const stepKey=entry=>hash({packageId:entry.packageId,step:entry.step});
 const check=(ok,message)=>{if(!ok)throw Object.assign(new Error(message),{code:'BANKING_RESUME_BLOCKED',status:409});};
 function noNativeEffect(entry,result){
-  // Only preflight is read-only in today's operator. Rules and row review write.
+  // Preflight is read-only. A reconcile or attach that stopped with an empty action
+  // ledger and no reported reconciliation/attachment did nothing that a retry could
+  // repeat (an unfinished QuickBooks reconciliation is only a draft). Upload, rules and
+  // row review write, so they always need an observed inspection.
   const fields=['kind','version','runId','packageId','step','scope','accountId','accountCurrency','period','status','reason','companyVerified','screenshot','actionLedger','rulesInspection'];
   const attempts=Object.entries(entry).some(([key,value])=>/attempt/i.test(key) && value!==false && value!==null && value!==0 && !(Array.isArray(value) && value.length===0));
-  return !attempts && result && Object.keys(result).every(k=>fields.includes(k)) && entry.step?.type==='preflight' && result?.status==='stopped' &&
+  return !attempts && result && Object.keys(result).every(k=>fields.includes(k)) && ['preflight','reconcile','attach'].includes(entry.step?.type) && result?.status==='stopped' &&
     Array.isArray(result.actionLedger) && result.actionLedger.length===0 &&
     (!entry.actionLedger || Array.isArray(entry.actionLedger) && entry.actionLedger.length===0) &&
     !entry.actionsCompletedAt && !entry.nativeAttempted &&

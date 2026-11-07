@@ -269,7 +269,8 @@ test('BL2 cooldown and durable three-retry cap survive a restart and version cha
  assert.equal(h.journals.flatMap(r=>r.resolutions || []).filter(r=>r.mode==='automatic').length,3);assert.ok(await store.read());
 });
 test('BL2 live or unverifiable processes, missing ledger and every writable step stay paused',async()=>{
- for(const mode of ['live','unknown','ledger','upload','review','reconcile','rules','attach','attempt','nativeAttempted','uploadAttempted','addAttempted','matchAttempted','reconcileAttempted','attemptedActions']){
+ // A reconcile/attach with an empty ledger now retries (tested separately); writing steps still pause.
+ for(const mode of ['live','unknown','ledger','upload','review','rules','attempt','nativeAttempted','uploadAttempted','addAttempted','matchAttempted','reconcileAttempted','attemptedActions']){
   const h=await harness(blInput()),store=bl2Recovery(h),entry={...clone(blStop.journal),status:'blocked',result:clone(blStop.result)};h.journals.push(entry);
   if(mode==='live')h.deps.verifyRunStopped=async()=>{throw new Error('process still live');};
   if(mode==='unknown')h.deps.verifyRunStopped=async()=>undefined;
@@ -356,4 +357,13 @@ test('after a reconciled month the next month in date order is worked, never a l
  const L=require(path.join(modules,'banking-operator-loop'));
  const pkg=(id,accountId,period,reconciled=false)=>({id,accountId,period,revision:1,summary:{reconciled}});
  assert.deepEqual(L.workablePackages([pkg('a','7','2026-08',true),pkg('b','7','2026-09'),pkg('c','7','2026-10'),pkg('d','8','2026-05'),pkg('e','8','2026-10')]).map(p=>p.id).sort(),['b','e']);
+});
+test('a reconcile that stopped before any action retries automatically; one that reported a reconciliation does not',async()=>{
+ const R=require(path.join(modules,'banking-operator-resolution'));
+ const base={runId:'bf7-x',packageId:'p',step:{type:'reconcile'},actionLedger:[],status:'blocked'};
+ const result={kind:'banking-operator-result',version:1,runId:'bf7-x',packageId:'p',step:'reconcile',scope:{},accountId:'121',accountCurrency:'CAD',period:'2026-10',status:'stopped',reason:'company not verified',actionLedger:[]};
+ assert.equal(R.noNativeEffect(base,result),true);
+ assert.equal(R.noNativeEffect(base,{...result,reconciliation:{completed:false}}),false);
+ assert.equal(R.noNativeEffect(base,{...result,actionLedger:[{action:'reconcile'}]}),false);
+ assert.equal(R.noNativeEffect({...base,step:{type:'upload'}},{...result,step:'upload'}),false);
 });
