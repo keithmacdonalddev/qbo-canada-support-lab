@@ -1,6 +1,6 @@
 ---
 name: running-a-medium-sized-business-day
-description: How to run the business continuously at the volume you choose: sizing work by records, using the request budget, putting volume through general writes, keeping activity believable and covering record types, classes, locations and accounts. Use before planning or creating same-day activity.
+description: How to run the business continuously at the volume you choose: sizing work by records, using the request budget, putting volume through general writes, keeping activity believable and covering record types, classes, locations and accounts. Use in the daily management review or when planning unfamiliar work; routine reviews do not need to reload it.
 ---
 
 # Run the business continuously
@@ -55,4 +55,4 @@ End each day with actual saved counts by family, open promises, next renewals an
 
 ## Account rotation
 
-Load banking-and-deposits before each plan. Deliberately distribute weekly activity across **every active bank, card and cash account**, using Account.<id> situations in getWeeklyCoverage and last-7/30-day evidence in getCoverageSituations. Choose due business obligations and intentional support scenarios for unused accounts; each needs a believable role, amount, correct currency and funds. Include monthly card payments, savings interest/sweeps, USD supplier payments, CNY/AUD activity, Square deposits net of fees, petty cash and tips receipt/payout. Review saved IDs after execution. Opening/inactive/zero-balance and reconciliation situations are deliberate support coverage too, subject to the documented setup/UI boundaries. A count of 220 concentrated in one bank is not account coverage.
+Deliberately distribute weekly activity across **every active bank, card and cash account**, using Account.<id> situations in getWeeklyCoverage and last-7/30-day evidence in getCoverageSituations. Choose due business obligations and intentional support scenarios for unused accounts; each needs a believable role, amount, correct currency and funds. Include monthly card payments, savings interest/sweeps, USD supplier payments, CNY/AUD activity, Square deposits net of fees, petty cash and tips receipt/payout. Review saved IDs after execution. Opening/inactive/zero-balance and reconciliation situations are deliberate support coverage too, subject to the documented setup/UI boundaries. A count of 220 concentrated in one bank is not account coverage.
