@@ -366,6 +366,12 @@ class QBOClient {
         err.intuitTid || err.intuit_tid
       );
 
+      // A local admission wait (another operation holds the same company resources) sent nothing to
+      // QuickBooks: it is queued work, not an API failure.
+      if (err.code === 'QBO_RESOURCE_BUSY' && !reachedApiCall) {
+        console.info('[qbo-client] write waiting for company resources', { method, endpoint: endpointType, stage: err.qboStage });
+        throw err;
+      }
       console.error('[qbo-client] API call failed', {
         method,
         endpoint: endpointType,
