@@ -214,6 +214,7 @@ Root:
 Backend:
 
 - `npm run dev --workspace=backend` - starts nodemon. Explicit request only.
+- Backend reload (since 2026-11-07, so coding edits stop cutting off accountant reviews): nodemon restarts only when `backend/reload.trigger` changes, not on every save. After a coherent batch of `backend/src` edits, run `node scripts/agent-harness/reload-backend.mjs`; it waits (up to 15 minutes) for a running accountant review to finish, then reloads. Do not assume a saved change is live until you have run it.
 - `npm run start --workspace=backend` - starts server. Explicit request only.
 - `npm run test --workspace=backend` - safe non-live backend unit/contract tests.
 - Safe default syntax check: `node scripts/agent-harness/check-backend-syntax.mjs` (also run by the test-runner subagent).

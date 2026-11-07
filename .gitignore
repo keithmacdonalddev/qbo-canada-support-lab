@@ -12,3 +12,4 @@ logs/
 .claude/settings.local.json
 .claude/worktrees/
 tmp/
+backend/reload.trigger

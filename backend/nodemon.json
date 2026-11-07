@@ -1,6 +1,5 @@
 {
-  "watch": ["src"],
-  "ext": "js,json",
-  "ignore": ["src/accountant-skills/**"],
-  "delay": 3000
+  "watch": ["reload.trigger"],
+  "ext": "trigger",
+  "delay": 1000
 }
